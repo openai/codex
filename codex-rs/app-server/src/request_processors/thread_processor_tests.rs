@@ -1,3 +1,30 @@
+#[test]
+fn persisted_terminal_turn_wins_over_stale_active_snapshot() {
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnItemsView;
+    use codex_app_server_protocol::TurnStatus;
+    let persisted = Turn {
+        id: "turn-1".to_string(),
+        items: Vec::new(),
+        items_view: TurnItemsView::Full,
+        status: TurnStatus::Completed,
+        error: None,
+        started_at: Some(1),
+        completed_at: Some(2),
+        duration_ms: Some(1_000),
+    };
+    let mut stale = persisted.clone();
+    stale.status = TurnStatus::InProgress;
+    stale.completed_at = None;
+    stale.duration_ms = None;
+    let mut turns = vec![persisted];
+
+    assert!(
+        !super::super::thread_lifecycle::merge_turn_history_with_active_turn(&mut turns, stale,)
+    );
+    assert_eq!(turns[0].status, TurnStatus::Completed);
+}
+
 mod thread_list_cwd_filter_tests {
     use super::super::normalize_thread_list_cwd_filters;
     use codex_app_server_protocol::ThreadListCwdFilter;
@@ -314,7 +341,7 @@ mod thread_processor_behavior_tests {
             duration_ms: None,
         };
 
-        let (turns, _) = reconstruct_thread_turns_for_turns_list(
+        let turns = reconstruct_thread_turns_for_turns_list(
             &persisted_items,
             ThreadStatus::Idle,
             /*has_live_running_thread*/ false,

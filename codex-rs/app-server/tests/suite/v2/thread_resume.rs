@@ -30,7 +30,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -48,7 +47,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
-use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -1139,203 +1137,6 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_resume_after_server_restart_replays_completed_goal_with_original_turn_id()
--> Result<()> {
-    let update_goal_arguments = serde_json::to_string(&json!({ "status": "complete" }))?;
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        responses::sse(vec![
-            responses::ev_response_created("complete-goal"),
-            responses::ev_function_call(
-                "call-complete-goal",
-                "update_goal",
-                &update_goal_arguments,
-            ),
-            responses::ev_completed("complete-goal"),
-        ]),
-        responses::sse(vec![
-            responses::ev_response_created("finish-turn"),
-            responses::ev_assistant_message("finished", "Goal complete"),
-            responses::ev_completed("finish-turn"),
-        ]),
-    ])
-    .await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
-
-    let mut first_mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, first_mcp.initialize()).await??;
-
-    let start_id = first_mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
-
-    let goal_id = first_mcp
-        .send_raw_request(
-            "thread/goal/set",
-            Some(json!({
-                "threadId": thread.id,
-                "objective": "preserve completed goal attribution",
-            })),
-        )
-        .await?;
-    let goal_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
-    )
-    .await??;
-    let _: ThreadGoalSetResponse = to_response(goal_response)?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_notification_message("thread/goal/updated"),
-    )
-    .await??;
-
-    let turn_start_id = first_mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "Complete the active goal".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let _: TurnStartResponse = to_response(turn_start_response)?;
-    let turn_started = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_notification_message("turn/started"),
-    )
-    .await??;
-    let turn_started: ServerNotification = turn_started.try_into()?;
-    let ServerNotification::TurnStarted(turn_started) = turn_started else {
-        anyhow::bail!("expected turn started notification");
-    };
-    let live_goal_update = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_matching_notification(
-            "completed thread goal update",
-            |notification| {
-                notification.method == "thread/goal/updated"
-                    && notification
-                        .params
-                        .as_ref()
-                        .is_some_and(|params| params["goal"]["status"].as_str() == Some("complete"))
-            },
-        ),
-    )
-    .await??;
-    let live_goal_update: ServerNotification = live_goal_update.try_into()?;
-    let ServerNotification::ThreadGoalUpdated(live_goal_update) = live_goal_update else {
-        anyhow::bail!("expected completed thread goal update notification");
-    };
-    assert_eq!(live_goal_update.goal.status, ThreadGoalStatus::Complete);
-    assert_eq!(
-        live_goal_update.turn_id.as_deref(),
-        Some(turn_started.turn.id.as_str()),
-    );
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    drop(first_mcp);
-
-    let mut second_mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, second_mcp.initialize()).await??;
-    let resume_id = second_mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id.clone(),
-            exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: Some(5),
-                sort_direction: Some(SortDirection::Desc),
-                items_view: Some(TurnItemsView::Full),
-            }),
-            ..Default::default()
-        })
-        .await?;
-    let resume_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        second_mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    let _: ThreadResumeResponse = to_response(resume_response)?;
-    let replayed_goal_update = timeout(
-        DEFAULT_READ_TIMEOUT,
-        second_mcp.read_stream_until_notification_message("thread/goal/updated"),
-    )
-    .await??;
-    let replayed_goal_update: ServerNotification = replayed_goal_update.try_into()?;
-    let ServerNotification::ThreadGoalUpdated(replayed_goal_update) = replayed_goal_update else {
-        anyhow::bail!("expected replayed thread goal update notification");
-    };
-
-    assert_eq!(replayed_goal_update, live_goal_update);
-
-    let loaded_resume_id = second_mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
-            exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: Some(5),
-                sort_direction: Some(SortDirection::Desc),
-                items_view: Some(TurnItemsView::Full),
-            }),
-            ..Default::default()
-        })
-        .await?;
-    let loaded_resume_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        second_mcp.read_stream_until_response_message(RequestId::Integer(loaded_resume_id)),
-    )
-    .await??;
-    let _: ThreadResumeResponse = to_response(loaded_resume_response)?;
-    let replayed_loaded_goal_update = timeout(
-        DEFAULT_READ_TIMEOUT,
-        second_mcp.read_stream_until_matching_notification(
-            "loaded completed thread goal update",
-            |notification| {
-                notification.method == "thread/goal/updated"
-                    && notification.params.as_ref().is_some_and(|params| {
-                        params["turnId"].as_str() == live_goal_update.turn_id.as_deref()
-                    })
-            },
-        ),
-    )
-    .await??;
-    let replayed_loaded_goal_update: ServerNotification = replayed_loaded_goal_update.try_into()?;
-    let ServerNotification::ThreadGoalUpdated(replayed_loaded_goal_update) =
-        replayed_loaded_goal_update
-    else {
-        anyhow::bail!("expected replayed loaded thread goal update notification");
-    };
-    assert_eq!(replayed_loaded_goal_update, live_goal_update);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1878,7 +1679,7 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
 }
 
 #[tokio::test]
-async fn thread_resume_replays_restored_token_usage_with_initial_turns_page() -> Result<()> {
+async fn thread_resume_skips_restored_token_usage_when_turns_are_excluded() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -1897,12 +1698,6 @@ async fn thread_resume_replays_restored_token_usage_with_initial_turns_page() ->
     let first_resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id.clone(),
-            exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: Some(5),
-                sort_direction: Some(SortDirection::Desc),
-                items_view: Some(TurnItemsView::Full),
-            }),
             ..Default::default()
         })
         .await?;
@@ -1911,19 +1706,9 @@ async fn thread_resume_replays_restored_token_usage_with_initial_turns_page() ->
         mcp.read_stream_until_response_message(RequestId::Integer(first_resume_id)),
     )
     .await??;
-    let ThreadResumeResponse {
-        thread,
-        initial_turns_page,
-        ..
-    } = to_response::<ThreadResumeResponse>(first_resume_resp)?;
-    assert!(thread.turns.is_empty());
-    let expected_turn_id = initial_turns_page
-        .expect("resume should include the requested initial turns page")
-        .data
-        .into_iter()
-        .next()
-        .expect("initial turns page should include the token usage owner")
-        .id;
+    let ThreadResumeResponse { thread, .. } =
+        to_response::<ThreadResumeResponse>(first_resume_resp)?;
+    let expected_turn_id = thread.turns[0].id.clone();
 
     let first_note = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -1931,20 +1716,15 @@ async fn thread_resume_replays_restored_token_usage_with_initial_turns_page() ->
     )
     .await??;
     let parsed: ServerNotification = first_note.try_into()?;
-    let ServerNotification::ThreadTokenUsageUpdated(first_notification) = parsed else {
+    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
         panic!("expected thread/tokenUsage/updated notification");
     };
-    assert_eq!(first_notification.turn_id, expected_turn_id);
+    assert_eq!(notification.turn_id, expected_turn_id);
 
     let second_resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id,
             exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: Some(5),
-                sort_direction: Some(SortDirection::Desc),
-                items_view: Some(TurnItemsView::Full),
-            }),
             ..Default::default()
         })
         .await?;
@@ -1955,30 +1735,19 @@ async fn thread_resume_replays_restored_token_usage_with_initial_turns_page() ->
     .await??;
     let ThreadResumeResponse {
         thread: resumed_again,
-        initial_turns_page,
         ..
     } = to_response::<ThreadResumeResponse>(second_resume_resp)?;
     assert!(resumed_again.turns.is_empty());
-    assert_eq!(
-        initial_turns_page
-            .expect("resume should include the requested initial turns page")
-            .data
-            .into_iter()
-            .map(|turn| turn.id)
-            .collect::<Vec<_>>(),
-        vec![expected_turn_id.clone()],
-    );
 
     let second_note = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/tokenUsage/updated"),
     )
-    .await??;
-    let parsed: ServerNotification = second_note.try_into()?;
-    let ServerNotification::ThreadTokenUsageUpdated(notification) = parsed else {
-        panic!("expected thread/tokenUsage/updated notification");
-    };
-    assert_eq!(notification, first_notification);
+    .await;
+    assert!(
+        second_note.is_err(),
+        "excludeTurns=true should not replay token usage"
+    );
 
     Ok(())
 }
@@ -3857,100 +3626,6 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     assert_eq!(model_provider, "mock_provider");
     assert_eq!(resumed.preview, history_text);
     assert_eq!(resumed.status, ThreadStatus::Idle);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_resume_after_server_restart_preserves_failed_turn_status_and_error() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let _response_mock = responses::mount_sse_once(
-        &server,
-        responses::sse_failed("resp-1", "server_error", "simulated failure"),
-    )
-    .await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let mut first_mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, first_mcp.initialize()).await??;
-
-    let start_id = first_mcp
-        .send_thread_start_request(ThreadStartParams::default())
-        .await?;
-    let start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
-
-    let turn_start_id = first_mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "Fail before app-server restarts".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
-    )
-    .await??;
-    let TurnStartResponse { turn, .. } = to_response(turn_start_response)?;
-    let completed = timeout(
-        DEFAULT_READ_TIMEOUT,
-        first_mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    let TurnCompletedNotification {
-        turn: live_turn, ..
-    } = serde_json::from_value(
-        completed
-            .params
-            .expect("turn/completed should include notification params"),
-    )?;
-    assert_eq!(live_turn.id, turn.id);
-    assert_eq!(live_turn.status, TurnStatus::Failed);
-    let live_error = live_turn
-        .error
-        .expect("live failed turn should include its error");
-
-    drop(first_mcp);
-
-    let mut second_mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, second_mcp.initialize()).await??;
-    let resume_id = second_mcp
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
-            exclude_turns: true,
-            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                limit: Some(5),
-                sort_direction: Some(SortDirection::Desc),
-                items_view: Some(TurnItemsView::Full),
-            }),
-            ..Default::default()
-        })
-        .await?;
-    let resume_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        second_mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    let ThreadResumeResponse {
-        initial_turns_page, ..
-    } = to_response(resume_response)?;
-    let resumed_turn = initial_turns_page
-        .expect("resume should include the requested initial turns page")
-        .data
-        .into_iter()
-        .find(|resumed| resumed.id == turn.id)
-        .expect("resume should reconstruct the failed turn after restart");
-    assert_eq!(resumed_turn.status, TurnStatus::Failed);
-    assert_eq!(resumed_turn.error, Some(live_error));
 
     Ok(())
 }

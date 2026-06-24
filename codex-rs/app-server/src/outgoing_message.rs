@@ -7,7 +7,6 @@ use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result;
@@ -15,7 +14,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ServerResponse;
-use codex_app_server_protocol::Turn;
 use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
@@ -27,7 +25,6 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::warn;
 
-use self::active_item_lifecycle::ActiveItemLifecycleTracker;
 use crate::error_code::internal_error;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 pub(crate) use codex_app_server_transport::ConnectionId;
@@ -35,8 +32,6 @@ pub(crate) use codex_app_server_transport::OutgoingError;
 pub(crate) use codex_app_server_transport::OutgoingMessage;
 pub(crate) use codex_app_server_transport::OutgoingResponse;
 pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
-
-mod active_item_lifecycle;
 
 #[cfg(test)]
 use codex_protocol::account::PlanType;
@@ -106,8 +101,6 @@ pub(crate) struct OutgoingMessageSender {
     /// We keep them here because this is where responses, errors, and
     /// disconnect cleanup all get handled.
     request_contexts: Mutex<HashMap<ConnectionRequestId, RequestContext>>,
-    /// Live typed item lifecycles used to restore client-only in-progress identity on reconnect.
-    active_item_lifecycles: Mutex<ActiveItemLifecycleTracker>,
     analytics_events_client: AnalyticsEventsClient,
 }
 
@@ -166,9 +159,6 @@ impl ThreadScopedOutgoingMessageSender {
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         self.outgoing
-            .note_thread_item_lifecycle(self.thread_id, &notification)
-            .await;
-        self.outgoing
             .analytics_events_client
             .track_notification(notification.clone());
         if self.connection_ids.is_empty() {
@@ -226,32 +216,8 @@ impl OutgoingMessageSender {
             sender,
             request_id_to_callback: Mutex::new(HashMap::new()),
             request_contexts: Mutex::new(HashMap::new()),
-            active_item_lifecycles: Mutex::new(ActiveItemLifecycleTracker::default()),
             analytics_events_client,
         }
-    }
-
-    async fn note_thread_item_lifecycle(
-        &self,
-        thread_id: ThreadId,
-        notification: &ServerNotification,
-    ) {
-        self.active_item_lifecycles
-            .lock()
-            .await
-            .note_notification(thread_id, notification);
-    }
-
-    /// Builds the active item starts that must follow a running-thread resume response.
-    pub(crate) async fn active_item_starts_for_turn(
-        &self,
-        thread_id: ThreadId,
-        active_turn: &Turn,
-    ) -> Vec<ItemStartedNotification> {
-        self.active_item_lifecycles
-            .lock()
-            .await
-            .active_starts_for_turn(thread_id, active_turn)
     }
 
     pub(crate) async fn register_request_context(&self, request_context: RequestContext) {

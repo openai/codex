@@ -9,7 +9,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
-use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -459,10 +458,21 @@ async fn websocket_reconnect_resumes_in_progress_agent_message_deltas() -> Resul
     drop(ws1);
 
     let mut ws2 = connect_websocket(bind_addr).await?;
-    send_initialize_request_with_experimental_api(
+    send_request(
         &mut ws2,
+        "initialize",
         /*id*/ 5,
-        "codex_chatgpt_ios_remote",
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: "codex_chatgpt_ios_remote".to_string(),
+                title: Some("WebSocket Test Client".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        })?),
     )
     .await?;
     read_response_for_id(&mut ws2, /*id*/ 5).await?;
@@ -531,35 +541,6 @@ async fn websocket_reconnect_resumes_in_progress_agent_message_deltas() -> Resul
     assert!(active_turn.items.iter().any(|item| {
         matches!(item, ThreadItem::AgentMessage { id, text, .. } if id == "msg-1" && text == "hello")
     }));
-
-    let replayed_started = timeout(
-        Duration::from_secs(5),
-        read_notification_for_method(&mut ws2, "item/started"),
-    )
-    .await
-    .context("resume did not replay the active item lifecycle")??;
-    let replayed_started: ItemStartedNotification = serde_json::from_value(
-        replayed_started
-            .params
-            .context("replayed item/started notification should include params")?,
-    )?;
-    assert_eq!(
-        (
-            replayed_started.thread_id,
-            replayed_started.turn_id,
-            replayed_started.item,
-        ),
-        (
-            thread_id.clone(),
-            active_turn.id,
-            ThreadItem::AgentMessage {
-                id: "msg-1".to_string(),
-                text: "hello".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        )
-    );
 
     complete_turn_tx
         .send(())
@@ -799,31 +780,6 @@ pub(super) async fn send_initialize_request(
             version: "0.1.0".to_string(),
         },
         capabilities: None,
-    };
-    send_request(
-        stream,
-        "initialize",
-        id,
-        Some(serde_json::to_value(params)?),
-    )
-    .await
-}
-
-async fn send_initialize_request_with_experimental_api(
-    stream: &mut WsClient,
-    id: i64,
-    client_name: &str,
-) -> Result<()> {
-    let params = InitializeParams {
-        client_info: ClientInfo {
-            name: client_name.to_string(),
-            title: Some("WebSocket Test Client".to_string()),
-            version: "0.1.0".to_string(),
-        },
-        capabilities: Some(InitializeCapabilities {
-            experimental_api: true,
-            ..Default::default()
-        }),
     };
     send_request(
         stream,

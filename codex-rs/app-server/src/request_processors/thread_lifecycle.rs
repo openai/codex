@@ -493,20 +493,6 @@ pub(super) async fn handle_thread_listener_command(
                 ))
                 .await;
         }
-        ThreadListenerCommand::PersistAndEmitThreadGoalUpdated(event) => {
-            let thread_id = event.thread_id;
-            let notification = crate::extensions::thread_goal_updated_notification(&event);
-            if let Err(err) = conversation
-                .append_rollout_items(&[RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event))])
-                .await
-            {
-                tracing::error!("failed to persist extension goal update for {thread_id}: {err}");
-                return;
-            }
-            outgoing
-                .send_server_notification(ServerNotification::ThreadGoalUpdated(notification))
-                .await;
-        }
         ThreadListenerCommand::EmitThreadGoalCleared => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalCleared(
@@ -552,23 +538,32 @@ pub(super) async fn handle_pending_thread_resume_request(
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
     // Read persisted history in listener order so the resume snapshot cannot be older than a
-    // terminal event that already cleared the listener's active-turn projection.
-    let history_items = match conversation.load_history(/*include_archived*/ true).await {
-        Ok(history) => history.items,
-        Err(err) => {
-            outgoing
-                .send_error(
-                    pending.request_id,
-                    super::thread_processor::thread_store_resume_read_error(err),
-                )
-                .await;
-            return;
+    // terminal event that already reached the rollout writer.
+    let history_items = if pending.include_turns || pending.initial_turns_page.is_some() {
+        match conversation.load_history(/*include_archived*/ true).await {
+            Ok(history) => history.items,
+            Err(err) => {
+                outgoing
+                    .send_error(
+                        pending.request_id,
+                        super::thread_processor::thread_store_resume_read_error(err),
+                    )
+                    .await;
+                return;
+            }
         }
+    } else {
+        Vec::new()
     };
     let active_turn = {
         let state = thread_state.lock().await;
         state.active_turn_snapshot()
     };
+    let mut reconstructed_turns = build_api_turns_from_rollout_items(&history_items);
+    let active_turn_is_current = active_turn.as_ref().is_none_or(|active_turn| {
+        merge_turn_history_with_active_turn(&mut reconstructed_turns, active_turn.clone())
+    });
+    let active_turn = active_turn.filter(|_| active_turn_is_current);
     tracing::debug!(
         thread_id = %conversation_id,
         request_id = ?pending.request_id,
@@ -577,17 +572,17 @@ pub(super) async fn handle_pending_thread_resume_request(
         active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
         "composing running thread resume response"
     );
-    let has_live_in_progress_turn =
-        matches!(conversation.agent_status().await, AgentStatus::Running)
+    let has_live_in_progress_turn = active_turn_is_current
+        && (matches!(conversation.agent_status().await, AgentStatus::Running)
             || active_turn
                 .as_ref()
-                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
+                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress)));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
     if pending.include_turns {
-        populate_thread_turns_from_history(&mut thread, &history_items, active_turn.as_ref());
+        thread.turns = reconstructed_turns;
     }
 
     let thread_status = thread_watch_manager
@@ -599,24 +594,16 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
-    let initial_turns_sort_direction = pending
-        .initial_turns_page
-        .as_ref()
-        .and_then(|params| params.sort_direction)
-        .unwrap_or(SortDirection::Desc);
-    let mut initial_turns_page_token_usage_turn_id = None;
+    let token_usage_thread = pending.include_turns.then(|| thread.clone());
     let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
             &history_items,
             thread.status.clone(),
             has_live_in_progress_turn,
-            active_turn.clone(),
+            active_turn,
             params,
         ) {
-            Ok((page, token_usage_turn_id)) => {
-                initial_turns_page_token_usage_turn_id = token_usage_turn_id;
-                Some(page)
-            }
+            Ok(page) => Some(page),
             Err(error) => {
                 outgoing.send_error(request_id, error).await;
                 return;
@@ -624,26 +611,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     } else {
         None
-    };
-    let token_usage_thread = pending.include_turns.then(|| thread.clone()).or_else(|| {
-        initial_turns_page.as_ref().map(|page| {
-            let mut token_usage_thread = thread.clone();
-            token_usage_thread.turns = page.data.clone();
-            if initial_turns_sort_direction == SortDirection::Desc {
-                token_usage_thread.turns.reverse();
-            }
-            token_usage_thread
-        })
-    });
-    let token_usage_turn_id = if initial_turns_page.is_some() {
-        initial_turns_page_token_usage_turn_id
-    } else {
-        token_usage_thread.as_ref().and_then(|token_usage_thread| {
-            latest_token_usage_turn_id_from_rollout_items(
-                &history_items,
-                token_usage_thread.turns.as_slice(),
-            )
-        })
     };
     if pending.redact_resume_payloads {
         redact_thread_resume_payloads(&mut thread.turns);
@@ -718,24 +685,13 @@ pub(super) async fn handle_pending_thread_resume_request(
         initial_turns_page,
     };
     outgoing.send_response(request_id, response).await;
-    if let Some(active_turn) = active_turn.as_ref()
-        && matches!(active_turn.status, TurnStatus::InProgress)
-    {
-        for started in outgoing
-            .active_item_starts_for_turn(conversation_id, active_turn)
-            .await
-        {
-            outgoing
-                .send_server_notification_to_connection_and_wait(
-                    connection_id,
-                    ServerNotification::ItemStarted(started),
-                )
-                .await;
-        }
-    }
-    // An initial turns page already paid the reconstruction cost and provides the bounded turn
-    // identities needed for usage attribution. Metadata-only resume remains cheap.
+    // Match cold resume: metadata-only resume should attach the listener without
+    // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {
+        let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+            &history_items,
+            token_usage_thread.turns.as_slice(),
+        );
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
         // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
@@ -748,14 +704,6 @@ pub(super) async fn handle_pending_thread_resume_request(
         )
         .await;
     }
-    send_persisted_side_state_to_connection(
-        outgoing,
-        connection_id,
-        conversation_id,
-        &history_items,
-        pending.emit_thread_goal_update,
-    )
-    .await;
     if pending.emit_thread_goal_update {
         if let Some(state_db) = pending.thread_goal_state_db {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
@@ -848,9 +796,22 @@ pub(super) async fn resolve_pending_server_request(
         .await;
 }
 
-pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
+/// Merges a current listener snapshot unless persisted terminal state proves it is stale.
+/// Returns whether the active snapshot was accepted.
+pub(super) fn merge_turn_history_with_active_turn(
+    turns: &mut Vec<Turn>,
+    active_turn: Turn,
+) -> bool {
+    if matches!(active_turn.status, TurnStatus::InProgress)
+        && turns
+            .iter()
+            .any(|turn| turn.id == active_turn.id && !matches!(turn.status, TurnStatus::InProgress))
+    {
+        return false;
+    }
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
+    true
 }
 
 pub(super) fn set_thread_status_and_interrupt_stale_turns(

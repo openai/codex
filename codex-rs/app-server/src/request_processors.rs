@@ -496,7 +496,6 @@ mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
-mod persisted_side_state_replay;
 mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;
@@ -537,8 +536,6 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
-use persisted_side_state_replay::send_persisted_side_state_to_connection;
-use token_usage_replay::TokenUsageTurnOwner;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 

@@ -26,7 +26,6 @@ use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -35,13 +34,10 @@ use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
-use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -345,7 +341,8 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
     .await
     .context("waiting for turn/started before pausing resume history")?;
 
-    let mut snapshot_pause = thread_store.pause_next_read_thread_after_snapshot().await;
+    let (snapshot_taken, release_snapshot) =
+        thread_store.pause_next_read_thread_after_snapshot().await;
     let resume = tokio::spawn({
         let sender = client.sender();
         let thread_id = thread.id.clone();
@@ -355,12 +352,8 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
                     request_id: RequestId::Integer(3),
                     params: ThreadResumeParams {
                         thread_id,
-                        exclude_turns: true,
-                        initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                            limit: None,
-                            sort_direction: None,
-                            items_view: Some(TurnItemsView::Full),
-                        }),
+                        exclude_turns: false,
+                        initial_turns_page: None,
                         ..Default::default()
                     },
                 })
@@ -368,21 +361,9 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
         }
     });
 
-    if timeout(
-        DEFAULT_READ_TIMEOUT,
-        snapshot_pause.wait_until_snapshot_taken(),
-    )
-    .await
-    .is_err()
-    {
-        if resume.is_finished() {
-            let response = resume.await?;
-            anyhow::bail!(
-                "thread/resume finished before capturing its initial history: {response:?}"
-            );
-        }
-        anyhow::bail!("timed out waiting for thread/resume to capture its initial history");
-    }
+    timeout(DEFAULT_READ_TIMEOUT, snapshot_taken)
+        .await
+        .context("waiting for thread/resume to capture its initial history")??;
     complete_turn_tx
         .send(())
         .expect("streaming response should still be waiting for completion");
@@ -391,19 +372,18 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
     })
     .await
     .context("waiting for turn/completed while the resume history read is paused")?;
-    snapshot_pause.release();
+    release_snapshot
+        .send(())
+        .expect("paused history read should still be waiting for release");
 
     let response = timeout(DEFAULT_READ_TIMEOUT, resume)
         .await
         .context("waiting for thread/resume after releasing its initial history read")??
         .expect("thread/resume transport should succeed")
         .expect("thread/resume should succeed");
-    let ThreadResumeResponse {
-        initial_turns_page, ..
-    } = serde_json::from_value(response)?;
-    let resumed_turn = initial_turns_page
-        .expect("resume should include the requested initial turns page")
-        .data
+    let ThreadResumeResponse { thread, .. } = serde_json::from_value(response)?;
+    let resumed_turn = thread
+        .turns
         .into_iter()
         .find(|turn| {
             turn.items.iter().any(|item| {
@@ -422,97 +402,6 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
 
     client.shutdown().await?;
     server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn running_thread_resume_preserves_failed_turn_status_and_error() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let _response_mock = responses::mount_sse_once(
-        &server,
-        responses::sse_failed("resp-1", "server_error", "simulated failure"),
-    )
-    .await;
-    let codex_home = TempDir::new()?;
-    let store_id = Uuid::new_v4().to_string();
-    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
-
-    let _in_memory_store = InMemoryThreadStoreId {
-        store_id: store_id.clone(),
-    };
-    let _thread_store = InMemoryThreadStore::for_id(store_id);
-    let mut client = start_in_process_server(codex_home.path()).await?;
-
-    let response = client
-        .request(ClientRequest::ThreadStart {
-            request_id: RequestId::Integer(1),
-            params: ThreadStartParams::default(),
-        })
-        .await?
-        .expect("thread/start should succeed");
-    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
-    let response = client
-        .request(ClientRequest::TurnStart {
-            request_id: RequestId::Integer(2),
-            params: TurnStartParams {
-                thread_id: thread.id.clone(),
-                client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: "Fail this turn".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                ..Default::default()
-            },
-        })
-        .await?
-        .expect("turn/start should succeed");
-    let turn_id = serde_json::from_value::<codex_app_server_protocol::TurnStartResponse>(response)?
-        .turn
-        .id;
-    let notification = wait_for_thread_notification(&mut client, &thread.id, |notification| {
-        matches!(notification, ServerNotification::TurnCompleted(_))
-    })
-    .await?;
-    let ServerNotification::TurnCompleted(TurnCompletedNotification {
-        turn: live_turn, ..
-    }) = notification
-    else {
-        unreachable!("notification predicate accepts only turn/completed");
-    };
-    assert_eq!(live_turn.id, turn_id);
-    assert_eq!(live_turn.status, TurnStatus::Failed);
-    let live_error = live_turn
-        .error
-        .expect("live failed turn should include its error");
-
-    let response = client
-        .request(ClientRequest::ThreadResume {
-            request_id: RequestId::Integer(3),
-            params: ThreadResumeParams {
-                thread_id: thread.id,
-                exclude_turns: true,
-                initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
-                    limit: None,
-                    sort_direction: None,
-                    items_view: Some(TurnItemsView::Full),
-                }),
-                ..Default::default()
-            },
-        })
-        .await?
-        .expect("thread/resume should succeed");
-    let response: ThreadResumeResponse = serde_json::from_value(response)?;
-    let resumed_turn = response
-        .initial_turns_page
-        .expect("resume should include the requested initial turns page")
-        .data
-        .into_iter()
-        .find(|turn| turn.id == turn_id)
-        .expect("resume should include the failed turn");
-    assert_eq!(resumed_turn.status, TurnStatus::Failed);
-    assert_eq!(resumed_turn.error, Some(live_error));
-
-    client.shutdown().await?;
     Ok(())
 }
 
@@ -581,10 +470,7 @@ async fn start_in_process_client(
                 title: None,
                 version: "0.1.0".to_string(),
             },
-            capabilities: Some(InitializeCapabilities {
-                experimental_api: true,
-                ..Default::default()
-            }),
+            capabilities: None,
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

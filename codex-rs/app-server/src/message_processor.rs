@@ -357,7 +357,6 @@ impl MessageProcessor {
                         event_sink: app_server_extension_event_sink(
                             outgoing.clone(),
                             thread_state_manager.clone(),
-                            Arc::clone(&thread_store),
                         ),
                         auth_manager: auth_manager.clone(),
                         state_db: state_db.clone(),

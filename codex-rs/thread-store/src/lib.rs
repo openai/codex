@@ -14,7 +14,6 @@ mod types;
 
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
-pub use in_memory::InMemoryReadThreadSnapshotPause;
 pub use in_memory::InMemoryThreadStore;
 pub use in_memory::InMemoryThreadStoreCalls;
 pub use live_thread::LiveThread;

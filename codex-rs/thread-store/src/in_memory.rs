@@ -233,30 +233,6 @@ pub struct InMemoryThreadStore {
     state: tokio::sync::Mutex<InMemoryThreadStoreState>,
 }
 
-/// Controls a one-shot pause after [`InMemoryThreadStore::read_thread`] has captured its result.
-///
-/// This lets integration tests advance concurrent appends while a reader still owns an older
-/// snapshot, without holding the store lock and preventing those appends.
-pub struct InMemoryReadThreadSnapshotPause {
-    snapshot_taken: oneshot::Receiver<()>,
-    release: oneshot::Sender<()>,
-}
-
-impl InMemoryReadThreadSnapshotPause {
-    /// Waits until the paused read has captured its result and released the store lock.
-    pub async fn wait_until_snapshot_taken(&mut self) {
-        assert!(
-            (&mut self.snapshot_taken).await.is_ok(),
-            "paused in-memory thread read should signal its snapshot"
-        );
-    }
-
-    /// Allows the paused read to return its captured result.
-    pub fn release(self) {
-        let _ = self.release.send(());
-    }
-}
-
 struct PendingReadThreadSnapshotPause {
     snapshot_taken: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
@@ -295,7 +271,9 @@ impl InMemoryThreadStore {
     }
 
     /// Pauses the next `read_thread` call after it captures a snapshot.
-    pub async fn pause_next_read_thread_after_snapshot(&self) -> InMemoryReadThreadSnapshotPause {
+    pub async fn pause_next_read_thread_after_snapshot(
+        &self,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (snapshot_taken_tx, snapshot_taken) = oneshot::channel();
         let (release, release_rx) = oneshot::channel();
         let mut state = self.state.lock().await;
@@ -307,10 +285,7 @@ impl InMemoryThreadStore {
             snapshot_taken: snapshot_taken_tx,
             release: release_rx,
         });
-        InMemoryReadThreadSnapshotPause {
-            snapshot_taken,
-            release,
-        }
+        (snapshot_taken, release)
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {

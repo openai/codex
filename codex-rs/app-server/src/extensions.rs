@@ -21,12 +21,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_rollout::state_db::StateDbHandle;
-use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::ThreadStore;
-use tokio::sync::mpsc;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
@@ -103,23 +99,16 @@ where
 pub(crate) fn app_server_extension_event_sink(
     outgoing: Arc<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
-    thread_store: Arc<dyn ThreadStore>,
 ) -> Arc<dyn ExtensionEventSink> {
-    let (fallback_goal_update_tx, fallback_goal_update_rx) = mpsc::unbounded_channel();
-    tokio::spawn(run_fallback_goal_update_worker(
-        Arc::downgrade(&outgoing),
-        thread_store,
-        fallback_goal_update_rx,
-    ));
     Arc::new(AppServerExtensionEventSink {
+        outgoing,
         thread_state_manager,
-        fallback_goal_update_tx,
     })
 }
 
 struct AppServerExtensionEventSink {
+    outgoing: Arc<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
-    fallback_goal_update_tx: mpsc::UnboundedSender<ThreadGoalUpdatedEvent>,
 }
 
 impl ExtensionEventSink for AppServerExtensionEventSink {
@@ -127,13 +116,16 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
         match event.msg {
             EventMsg::ThreadGoalUpdated(thread_goal_event) => {
                 let thread_id = thread_goal_event.thread_id;
+                let turn_id = thread_goal_event.turn_id;
+                let goal: ThreadGoal = thread_goal_event.goal.into();
                 if let Some(listener_command_tx) = self
                     .thread_state_manager
                     .current_listener_command_tx(thread_id)
                 {
-                    let command = ThreadListenerCommand::PersistAndEmitThreadGoalUpdated(
-                        thread_goal_event.clone(),
-                    );
+                    let command = ThreadListenerCommand::EmitThreadGoalUpdated {
+                        turn_id: turn_id.clone(),
+                        goal: goal.clone(),
+                    };
                     if listener_command_tx.send(command).is_ok() {
                         return;
                     }
@@ -141,61 +133,23 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                         "failed to enqueue extension goal update for {thread_id}: listener command channel is closed"
                     );
                 }
-                if self
-                    .fallback_goal_update_tx
-                    .send(thread_goal_event)
-                    .is_err()
-                {
-                    tracing::error!(
-                        "failed to enqueue fallback extension goal update for {thread_id}: fallback worker is closed"
-                    );
-                }
+                let outgoing = Arc::clone(&self.outgoing);
+                tokio::spawn(async move {
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                            ThreadGoalUpdatedNotification {
+                                thread_id: thread_id.to_string(),
+                                turn_id,
+                                goal,
+                            },
+                        ))
+                        .await;
+                });
             }
             msg => {
                 tracing::debug!(event_id = %event.id, ?msg, "dropping unsupported extension event");
             }
         }
-    }
-}
-
-async fn run_fallback_goal_update_worker(
-    outgoing: Weak<OutgoingMessageSender>,
-    thread_store: Arc<dyn ThreadStore>,
-    mut goal_updates: mpsc::UnboundedReceiver<ThreadGoalUpdatedEvent>,
-) {
-    while let Some(event) = goal_updates.recv().await {
-        let thread_id = event.thread_id;
-        let notification = thread_goal_updated_notification(&event);
-        let item = RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event));
-        if let Err(err) = thread_store
-            .append_items(AppendThreadItemsParams {
-                thread_id,
-                items: vec![item],
-            })
-            .await
-        {
-            tracing::error!(
-                "failed to persist fallback extension goal update for {thread_id}: {err}"
-            );
-            continue;
-        }
-        let Some(outgoing) = outgoing.upgrade() else {
-            return;
-        };
-        outgoing
-            .send_server_notification(ServerNotification::ThreadGoalUpdated(notification))
-            .await;
-    }
-}
-
-/// Converts a core goal event without losing its persisted turn attribution.
-pub(crate) fn thread_goal_updated_notification(
-    event: &ThreadGoalUpdatedEvent,
-) -> ThreadGoalUpdatedNotification {
-    ThreadGoalUpdatedNotification {
-        thread_id: event.thread_id.to_string(),
-        turn_id: event.turn_id.clone(),
-        goal: ThreadGoal::from(event.goal.clone()),
     }
 }
 
@@ -224,15 +178,11 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal as CoreThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
-    use codex_thread_store::InMemoryThreadStore;
-    use codex_thread_store::LoadThreadHistoryParams;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
 
     use super::*;
-    use crate::outgoing_message::OutgoingEnvelope;
-    use crate::outgoing_message::OutgoingMessage;
 
     #[tokio::test]
     async fn app_server_event_sink_uses_listener_fifo_for_goal_updates_and_clears() {
@@ -245,11 +195,7 @@ mod tests {
         let thread_id = ThreadId::default();
         let (listener_command_tx, mut listener_command_rx) = mpsc::unbounded_channel();
         thread_state_manager.register_listener_command_tx(thread_id, listener_command_tx.clone());
-        let sink = app_server_extension_event_sink(
-            outgoing,
-            thread_state_manager,
-            Arc::new(InMemoryThreadStore::default()),
-        );
+        let sink = app_server_extension_event_sink(outgoing, thread_state_manager);
 
         for turn_id in ["turn-1", "turn-2"] {
             sink.emit(thread_goal_updated_event(thread_id, turn_id));
@@ -265,12 +211,8 @@ mod tests {
                 .expect("timed out waiting for listener command")
                 .expect("listener command channel closed unexpectedly");
             match command {
-                ThreadListenerCommand::PersistAndEmitThreadGoalUpdated(event) => {
-                    observed.push(
-                        event
-                            .turn_id
-                            .expect("extension goal updates should include turn ids"),
-                    );
+                ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, .. } => {
+                    observed.push(turn_id.expect("extension goal updates should include turn ids"));
                 }
                 ThreadListenerCommand::EmitThreadGoalCleared => {
                     observed.push("cleared".to_string())
@@ -287,86 +229,6 @@ mod tests {
             ],
             observed
         );
-    }
-
-    #[tokio::test]
-    async fn app_server_event_sink_fallback_persists_goal_updates_before_broadcast_in_order() {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
-        let outgoing = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            AnalyticsEventsClient::disabled(),
-        ));
-        let thread_store = Arc::new(InMemoryThreadStore::default());
-        let thread_id = ThreadId::default();
-        let sink = app_server_extension_event_sink(
-            outgoing.clone(),
-            ThreadStateManager::new(),
-            thread_store.clone(),
-        );
-
-        for turn_id in ["turn-1", "turn-2"] {
-            sink.emit(thread_goal_updated_event(thread_id, turn_id));
-        }
-
-        let mut notified_turn_ids = Vec::new();
-        for _ in 0..2 {
-            let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
-                .await
-                .expect("timed out waiting for fallback goal update")
-                .expect("outgoing channel closed unexpectedly");
-            let OutgoingEnvelope::Broadcast { message } = envelope else {
-                panic!("expected broadcast goal update");
-            };
-            let OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(
-                notification,
-            )) = message
-            else {
-                panic!("expected thread goal update notification");
-            };
-            notified_turn_ids.push(
-                notification
-                    .turn_id
-                    .expect("extension goal updates should include turn ids"),
-            );
-        }
-
-        let history = thread_store
-            .load_history(LoadThreadHistoryParams {
-                thread_id,
-                include_archived: true,
-            })
-            .await
-            .expect("fallback goal updates should be persisted");
-        let persisted_turn_ids = history
-            .items
-            .into_iter()
-            .filter_map(|item| match item {
-                RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(event)) => event.turn_id,
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(notified_turn_ids, vec!["turn-1", "turn-2"]);
-        assert_eq!(persisted_turn_ids, notified_turn_ids);
-        assert_eq!(thread_store.calls().await.append_items, 2);
-    }
-
-    #[tokio::test]
-    async fn app_server_event_sink_fallback_worker_does_not_own_outgoing_lifetime() {
-        let (outgoing_tx, _outgoing_rx) = mpsc::channel(1);
-        let outgoing = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            AnalyticsEventsClient::disabled(),
-        ));
-        let weak_outgoing = Arc::downgrade(&outgoing);
-
-        let _sink = app_server_extension_event_sink(
-            outgoing,
-            ThreadStateManager::new(),
-            Arc::new(InMemoryThreadStore::default()),
-        );
-
-        assert!(weak_outgoing.upgrade().is_none());
     }
 
     fn thread_goal_updated_event(thread_id: ThreadId, turn_id: &str) -> Event {
