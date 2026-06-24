@@ -212,12 +212,13 @@ impl ChatWidget {
 
             let has_workspace_credits = snapshot.credits.as_ref().is_some_and(|credits| {
                 credits.has_credits
-                    && credits.balance.as_deref().is_some_and(|balance| {
-                        balance
-                            .trim()
-                            .parse::<f64>()
-                            .is_ok_and(|balance| balance > 0.0)
-                    })
+                    && (credits.unlimited
+                        || credits.balance.as_deref().is_some_and(|balance| {
+                            balance
+                                .trim()
+                                .parse::<f64>()
+                                .is_ok_and(|balance| balance > 0.0)
+                        }))
             });
             let should_warn_about_rate_limit_usage = is_codex_limit && !has_workspace_credits;
             let warnings = if should_warn_about_rate_limit_usage {
