@@ -2,6 +2,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -907,11 +908,13 @@ impl ModelsRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewThreadModelDefaultsToml {
     pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub service_tier: Option<String>,
 }
 
 impl NewThreadModelDefaultsToml {
     fn is_empty(&self) -> bool {
-        self.model.is_none()
+        self.model.is_none() && self.model_reasoning_effort.is_none() && self.service_tier.is_none()
     }
 }
 
@@ -1831,11 +1834,13 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_new_thread_model_default() -> Result<()> {
+    fn deserialize_new_thread_model_defaults() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
                 [models.new_thread]
                 model = "managed-model"
+                model_reasoning_effort = "medium"
+                service_tier = "fast"
             "#,
         )?;
 
@@ -1844,6 +1849,8 @@ mod tests {
             Some(ModelsRequirementsToml {
                 new_thread: Some(NewThreadModelDefaultsToml {
                     model: Some("managed-model".to_string()),
+                    model_reasoning_effort: Some(ReasoningEffort::Medium),
+                    service_tier: Some("fast".to_string()),
                 }),
             })
         );
@@ -1876,6 +1883,8 @@ mod tests {
         let models = ModelsRequirementsToml {
             new_thread: Some(NewThreadModelDefaultsToml {
                 model: Some("managed-model".to_string()),
+                model_reasoning_effort: Some(ReasoningEffort::Medium),
+                service_tier: Some("fast".to_string()),
             }),
         };
         let enforce_residency = ResidencyRequirement::Us;

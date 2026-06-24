@@ -41,6 +41,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
@@ -243,6 +244,16 @@ fn apply_managed_new_thread_defaults(
 
     if let Some(model) = defaults.model.as_ref() {
         config.model = Some(model.clone());
+    }
+    if let Some(model_reasoning_effort) = defaults.model_reasoning_effort.as_ref() {
+        config.model_reasoning_effort = Some(model_reasoning_effort.clone());
+    }
+    if let Some(service_tier) = defaults.service_tier.as_ref() {
+        config.service_tier = Some(
+            ServiceTier::from_request_value(service_tier)
+                .map(|tier| tier.request_value().to_string())
+                .unwrap_or_else(|| service_tier.clone()),
+        );
     }
 }
 

@@ -27,6 +27,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
+use codex_core::test_support::all_model_presets;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -200,16 +201,30 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_uses_managed_new_thread_model() -> Result<()> {
+async fn thread_start_uses_managed_new_thread_model_defaults() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let managed_model = all_model_presets()
+        .iter()
+        .find(|preset| {
+            preset
+                .service_tiers
+                .iter()
+                .any(|tier| tier.id == "priority")
+        })
+        .context("expected a model with the fast service tier")?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
-        r#"
+        format!(
+            r#"
 [models.new_thread]
-model = "gpt-managed"
+model = "{}"
+model_reasoning_effort = "medium"
+service_tier = "fast"
 "#,
+            managed_model.id
+        ),
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -228,7 +243,9 @@ model = "gpt-managed"
     .await??;
     let response: ThreadStartResponse = to_response(response)?;
 
-    assert_eq!(response.model, "gpt-managed");
+    assert_eq!(response.model, managed_model.id);
+    assert_eq!(response.reasoning_effort, Some(ReasoningEffort::Medium));
+    assert_eq!(response.service_tier.as_deref(), Some("priority"));
     Ok(())
 }
 

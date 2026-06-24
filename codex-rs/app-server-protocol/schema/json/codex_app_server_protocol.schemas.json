@@ -12967,6 +12967,22 @@
               "string",
               "null"
             ]
+          },
+          "modelReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"

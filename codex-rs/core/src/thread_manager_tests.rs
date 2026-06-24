@@ -16,6 +16,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
@@ -82,6 +83,8 @@ impl codex_agent_graph_store::AgentGraphStore for FakeAgentGraphStore {
 async fn managed_new_thread_defaults_only_apply_to_root_new_threads() {
     let mut base_config = test_config().await;
     base_config.model = Some("local-model".to_string());
+    base_config.model_reasoning_effort = Some(ReasoningEffort::Low);
+    base_config.service_tier = Some("flex".to_string());
     base_config.config_layer_stack = codex_config::ConfigLayerStack::new(
         Vec::new(),
         codex_config::ConfigRequirements::default(),
@@ -89,6 +92,8 @@ async fn managed_new_thread_defaults_only_apply_to_root_new_threads() {
             models: Some(codex_config::ModelsRequirementsToml {
                 new_thread: Some(codex_config::NewThreadModelDefaultsToml {
                     model: Some("managed-model".to_string()),
+                    model_reasoning_effort: Some(ReasoningEffort::Medium),
+                    service_tier: Some("fast".to_string()),
                 }),
             }),
             ..Default::default()
@@ -97,28 +102,34 @@ async fn managed_new_thread_defaults_only_apply_to_root_new_threads() {
     .expect("build managed requirements stack");
 
     let cases = [
-        (InitialHistory::New, SessionSource::VSCode, "managed-model"),
+        (
+            InitialHistory::New,
+            SessionSource::VSCode,
+            ("managed-model", ReasoningEffort::Medium, "priority"),
+        ),
         (
             InitialHistory::Cleared,
             SessionSource::VSCode,
-            "managed-model",
+            ("managed-model", ReasoningEffort::Medium, "priority"),
         ),
         (
             InitialHistory::Forked(Vec::new()),
             SessionSource::VSCode,
-            "local-model",
+            ("local-model", ReasoningEffort::Low, "flex"),
         ),
         (
             InitialHistory::New,
             SessionSource::SubAgent(SubAgentSource::Review),
-            "local-model",
+            ("local-model", ReasoningEffort::Low, "flex"),
         ),
     ];
 
-    for (history, source, expected) in cases {
+    for (history, source, (expected_model, expected_effort, expected_service_tier)) in cases {
         let mut config = base_config.clone();
         apply_managed_new_thread_defaults(&mut config, &history, &source);
-        assert_eq!(config.model.as_deref(), Some(expected));
+        assert_eq!(config.model.as_deref(), Some(expected_model));
+        assert_eq!(config.model_reasoning_effort, Some(expected_effort));
+        assert_eq!(config.service_tier.as_deref(), Some(expected_service_tier));
     }
 }
 

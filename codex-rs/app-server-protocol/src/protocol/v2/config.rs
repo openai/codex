@@ -405,6 +405,8 @@ pub struct ModelsRequirements {
 #[ts(export_to = "v2/")]
 pub struct NewThreadModelDefaults {
     pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub service_tier: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
