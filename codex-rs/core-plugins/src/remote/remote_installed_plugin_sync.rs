@@ -83,6 +83,7 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
+    local_competitor_plugin_names: HashSet<String>,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
     let Some(auth) = auth else {
@@ -96,8 +97,13 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     }
 
     tokio::spawn(async move {
-        let result =
-            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
+        let result = sync_remote_installed_plugin_bundles_once(
+            codex_home,
+            &config,
+            Some(&auth),
+            &local_competitor_plugin_names,
+        )
+        .await;
         match result {
             Ok(outcome) => {
                 if outcome.changed_local_cache()
@@ -127,6 +133,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     codex_home: PathBuf,
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    local_competitor_plugin_names: &HashSet<String>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let global = async {
@@ -201,7 +208,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
                     continue;
                 }
             };
-            if has_active_local_competitor(&store, &plugin_id)? {
+            if local_competitor_plugin_names.contains(&plugin.name) {
                 continue;
             }
             installed_plugin_names_by_marketplace
@@ -257,11 +264,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
             .await
             {
                 Ok(result) => {
-                    if !has_active_local_competitor(&store, &result.plugin_id)? {
-                        installed_plugin_ids.insert(result.plugin_id.as_key());
-                    } else {
-                        store.uninstall(&result.plugin_id)?;
-                    }
+                    installed_plugin_ids.insert(result.plugin_id.as_key());
                 }
                 Err(err) => {
                     warn!(
@@ -293,15 +296,6 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     })
 }
 
-fn has_active_local_competitor(
-    store: &PluginStore,
-    plugin_id: &PluginId,
-) -> Result<bool, PluginStoreError> {
-    Ok(store
-        .other_sources(plugin_id, /*active_only*/ true)?
-        .iter()
-        .any(|other| RemotePluginScope::from_marketplace_name(&other.marketplace_name).is_none()))
-}
 pub fn mark_remote_plugin_cache_mutation_in_flight(
     codex_home: &Path,
     marketplace_name: &str,
@@ -495,7 +489,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_backfills_metadata_and_keeps_local_same_name_install_canonical() {
+    async fn sync_uses_configured_local_competitors_not_stale_local_caches() {
         let server = MockServer::start().await;
         let codex_home = tempfile::tempdir().expect("create codex home");
         let cached_manifest = codex_home
@@ -510,7 +504,13 @@ mod tests {
             .expect("create cached plugin manifest parent");
         std::fs::write(&cached_manifest, r#"{"name":"linear","version":"1.2.3"}"#)
             .expect("write cached plugin manifest");
-        assert!(fs::create_dir_all(codex_home.path().join("plugins/cache/debug/linear")).is_ok());
+        let local_manifest = codex_home
+            .path()
+            .join("plugins/cache/debug/linear/local/.codex-plugin/plugin.json");
+        std::fs::create_dir_all(local_manifest.parent().expect("manifest parent"))
+            .expect("create local plugin manifest parent");
+        std::fs::write(&local_manifest, r#"{"name":"linear"}"#)
+            .expect("write stale local plugin manifest");
         let stale_remote = codex_home
             .path()
             .join("plugins/cache/workspace-shared-with-me-private/linear/local");
@@ -572,6 +572,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             &config,
             Some(&auth),
+            &HashSet::new(),
         )
         .await
         .expect("sync current remote plugin bundle");
@@ -601,18 +602,12 @@ mod tests {
                 "remote_plugin_id": remote_plugin_id,
             })
         );
-        let local_manifest = codex_home
-            .path()
-            .join("plugins/cache/debug/linear/local/.codex-plugin/plugin.json");
-        std::fs::create_dir_all(local_manifest.parent().expect("manifest parent"))
-            .expect("create local plugin manifest parent");
-        std::fs::write(&local_manifest, r#"{"name":"linear"}"#)
-            .expect("write local plugin manifest");
         store.uninstall(&plugin_id).expect("remove remote cache");
         let outcome = sync_remote_installed_plugin_bundles_once(
             codex_home.path().to_path_buf(),
             &config,
             Some(&auth),
+            &HashSet::from(["linear".to_string()]),
         )
         .await
         .expect("sync after local plugin becomes canonical");

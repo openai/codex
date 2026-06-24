@@ -25,8 +25,10 @@ pub(crate) fn fingerprint_plugin_tree(
     root: &Path,
     manifest_override: Option<&str>,
 ) -> Result<String, PluginStoreError> {
+    let traversal_root = fs::canonicalize(root)
+        .map_err(|error| PluginStoreError::io("failed to resolve plugin source", error))?;
     let mut entries = BTreeMap::new();
-    for entry in WalkDir::new(root)
+    for entry in WalkDir::new(&traversal_root)
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| entry.depth() != 1 || entry.file_name() != ".git")
@@ -38,9 +40,12 @@ pub(crate) fn fingerprint_plugin_tree(
                 std::io::Error::other(error),
             )
         })?;
-        let relative = entry.path().strip_prefix(root).map_err(|error| {
-            PluginStoreError::Invalid(format!("failed to fingerprint plugin path: {error}"))
-        })?;
+        let relative = entry
+            .path()
+            .strip_prefix(&traversal_root)
+            .map_err(|error| {
+                PluginStoreError::Invalid(format!("failed to fingerprint plugin path: {error}"))
+            })?;
         let tree_entry = if entry.file_type().is_dir() {
             TreeEntry::Directory
         } else if entry.file_type().is_file() {
@@ -69,7 +74,7 @@ pub(crate) fn fingerprint_plugin_tree(
         hash_contents(&mut hasher, path.as_os_str().as_encoded_bytes());
         match entry {
             TreeEntry::Directory => {}
-            TreeEntry::File => hash_file(&mut hasher, &root.join(path))?,
+            TreeEntry::File => hash_file(&mut hasher, &traversal_root.join(path))?,
             TreeEntry::VirtualFile(contents) => hash_contents(&mut hasher, &contents),
         }
     }

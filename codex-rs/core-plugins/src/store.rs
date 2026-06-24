@@ -386,49 +386,6 @@ impl PluginStore {
         remove_existing_target(self.plugin_base_root(plugin_id).as_path())
     }
 
-    pub(crate) fn other_sources(
-        &self,
-        canonical_plugin_id: &PluginId,
-        active_only: bool,
-    ) -> Result<Vec<PluginId>, PluginStoreError> {
-        let mut installed = Vec::new();
-        let marketplaces = match fs::read_dir(self.root.as_path()) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(installed),
-            Err(err) => {
-                return Err(PluginStoreError::io(
-                    "failed to enumerate plugin cache marketplaces",
-                    err,
-                ));
-            }
-        };
-        for marketplace in marketplaces.filter_map(Result::ok) {
-            let Ok(file_type) = marketplace.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-            let Ok(marketplace_name) = marketplace.file_name().into_string() else {
-                continue;
-            };
-            let Ok(plugin_id) =
-                PluginId::new(canonical_plugin_id.plugin_name.clone(), marketplace_name)
-            else {
-                continue;
-            };
-            if &plugin_id == canonical_plugin_id
-                || (active_only && !self.is_installed(&plugin_id))
-                || (!active_only && !self.plugin_base_root(&plugin_id).as_path().is_dir())
-            {
-                continue;
-            }
-            installed.push(plugin_id);
-        }
-        installed.sort_unstable_by_key(PluginId::as_key);
-        Ok(installed)
-    }
-
     fn remote_plugin_install_metadata_path(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
         self.plugin_base_root(plugin_id)
             .join(REMOTE_PLUGIN_INSTALL_METADATA_FILE)

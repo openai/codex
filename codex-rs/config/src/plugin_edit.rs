@@ -47,7 +47,7 @@ pub async fn reconcile_user_plugin_registrations(
     plugin_key: String,
     plugin_name: String,
     enable_canonical: bool,
-) -> std::io::Result<()> {
+) -> std::io::Result<Vec<String>> {
     let target_path = codex_home.join(CONFIG_TOML_FILE);
     let mut paths = BTreeSet::new();
     if let Some(config_layer_stack) = config_layer_stack {
@@ -62,10 +62,24 @@ pub async fn reconcile_user_plugin_registrations(
     }
     paths.remove(&target_path);
     task::spawn_blocking(move || {
+        let mut removed_plugin_keys = BTreeSet::new();
         for path in paths {
-            reconcile_plugin_config_path(&path, &plugin_key, &plugin_name, /*enable*/ false)?;
+            removed_plugin_keys.extend(reconcile_plugin_config_path(
+                &path,
+                &plugin_key,
+                &plugin_name,
+                enable_canonical,
+                /*is_target*/ false,
+            )?);
         }
-        reconcile_plugin_config_path(&target_path, &plugin_key, &plugin_name, enable_canonical)
+        removed_plugin_keys.extend(reconcile_plugin_config_path(
+            &target_path,
+            &plugin_key,
+            &plugin_name,
+            enable_canonical,
+            /*is_target*/ true,
+        )?);
+        Ok(removed_plugin_keys.into_iter().collect())
     })
     .await
     .map_err(|err| std::io::Error::other(format!("config persistence task panicked: {err}")))?
@@ -112,19 +126,24 @@ fn reconcile_plugin_config_path(
     config_path: &Path,
     plugin_key: &str,
     plugin_name: &str,
-    enable: bool,
-) -> std::io::Result<()> {
+    enable_canonical: bool,
+    is_target: bool,
+) -> std::io::Result<Vec<String>> {
     let write_paths = resolve_symlink_write_paths(config_path)?;
     let mut doc = read_or_create_document(write_paths.read_path.as_deref())?;
-    let mutated = if enable {
-        set_plugin_enabled_exclusively(&mut doc, plugin_key, plugin_name)
+    let removed_plugin_keys = remove_other_plugin_registrations(&mut doc, plugin_key, plugin_name);
+    let canonical_mutated = if enable_canonical && is_target {
+        set_plugin_enabled(&mut doc, plugin_key, /*enabled*/ true)
+    } else if enable_canonical {
+        clear_plugin_enabled(&mut doc, plugin_key)
     } else {
-        remove_other_plugin_registrations(&mut doc, plugin_key, plugin_name)
+        false
     };
+    let mutated = canonical_mutated || !removed_plugin_keys.is_empty();
     if mutated {
         write_atomically(&write_paths.write_path, &doc.to_string())?;
     }
-    Ok(())
+    Ok(removed_plugin_keys)
 }
 
 fn read_or_create_document(config_path: Option<&Path>) -> std::io::Result<DocumentMut> {
@@ -155,26 +174,17 @@ fn set_plugin_enabled(doc: &mut DocumentMut, plugin_key: &str, enabled: bool) ->
     true
 }
 
-fn set_plugin_enabled_exclusively(
-    doc: &mut DocumentMut,
-    plugin_key: &str,
-    plugin_name: &str,
-) -> bool {
-    let removed_duplicate = remove_other_plugin_registrations(doc, plugin_key, plugin_name);
-    set_plugin_enabled(doc, plugin_key, /*enabled*/ true) || removed_duplicate
-}
-
 fn remove_other_plugin_registrations(
     doc: &mut DocumentMut,
     plugin_key: &str,
     plugin_name: &str,
-) -> bool {
+) -> Vec<String> {
     let Some(plugins) = doc
         .as_table_mut()
         .get_mut("plugins")
         .and_then(ensure_table_for_read)
     else {
-        return false;
+        return Vec::new();
     };
     let duplicate_keys = plugins
         .iter()
@@ -187,9 +197,26 @@ fn remove_other_plugin_registrations(
         })
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let mut removed = false;
-    for key in duplicate_keys {
-        removed |= plugins.remove(&key).is_some();
+    duplicate_keys
+        .into_iter()
+        .filter(|key| plugins.remove(key).is_some())
+        .collect()
+}
+
+fn clear_plugin_enabled(doc: &mut DocumentMut, plugin_key: &str) -> bool {
+    let Some(plugins) = doc
+        .as_table_mut()
+        .get_mut("plugins")
+        .and_then(ensure_table_for_read)
+    else {
+        return false;
+    };
+    let Some(plugin) = plugins.get_mut(plugin_key).and_then(ensure_table_for_read) else {
+        return false;
+    };
+    let removed = plugin.remove("enabled").is_some();
+    if removed && plugin.is_empty() {
+        plugins.remove(plugin_key);
     }
     removed
 }
@@ -341,7 +368,13 @@ source = "/tmp/plugin"
         let base_path = codex_home.path().join(CONFIG_TOML_FILE);
         let profile_path = codex_home.path().join("work.config.toml");
         let base_config = "[plugins.\"structure-viewer@openai-internal-testing\"]\nenabled = true\n[plugins.\"sequence-viewer@openai-internal-testing\"]\nenabled = true\n";
-        let profile_config = "[plugins.\"structure-viewer@debug\"]\nenabled = true\n";
+        let profile_config = r#"[plugins."structure-viewer@debug"]
+enabled = true
+[plugins."structure-viewer@openai-monorepo"]
+enabled = false
+[plugins."structure-viewer@openai-monorepo".mcp_servers.structure]
+enabled = false
+"#;
         fs::write(&base_path, base_config).unwrap();
         fs::write(&profile_path, profile_config).unwrap();
         let layer = |file: &Path, profile: Option<&str>, config: &str| {
@@ -362,7 +395,7 @@ source = "/tmp/plugin"
             ConfigRequirementsToml::default(),
         )
         .unwrap();
-        reconcile_user_plugin_registrations(
+        let removed_plugin_keys = reconcile_user_plugin_registrations(
             codex_home.path(),
             Some(&stack),
             "structure-viewer@openai-monorepo".to_string(),
@@ -371,6 +404,13 @@ source = "/tmp/plugin"
         )
         .await
         .unwrap();
+        assert_eq!(
+            removed_plugin_keys,
+            vec![
+                "structure-viewer@debug".to_string(),
+                "structure-viewer@openai-internal-testing".to_string(),
+            ]
+        );
         let parse = |path: &Path| {
             toml::from_str::<toml::Value>(&fs::read_to_string(path).unwrap()).unwrap()
         };
@@ -383,7 +423,10 @@ source = "/tmp/plugin"
         );
         assert_eq!(
             parse(&profile_path),
-            toml::from_str::<toml::Value>("").unwrap(),
+            toml::from_str::<toml::Value>(
+                "[plugins.\"structure-viewer@openai-monorepo\".mcp_servers.structure]\nenabled = false\n"
+            )
+            .unwrap(),
         );
     }
 

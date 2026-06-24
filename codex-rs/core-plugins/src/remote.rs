@@ -414,7 +414,7 @@ impl RemotePluginScope {
         }
     }
 
-    fn from_marketplace_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_marketplace_name(name: &str) -> Option<Self> {
         match name {
             REMOTE_GLOBAL_MARKETPLACE_NAME => Some(Self::Global),
             REMOTE_CREATED_BY_ME_MARKETPLACE_NAME => Some(Self::User),

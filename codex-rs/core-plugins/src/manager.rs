@@ -42,6 +42,7 @@ use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -982,6 +983,7 @@ impl PluginsManager {
             self.codex_home.clone(),
             remote_plugin_service_config(config),
             auth,
+            enabled_local_plugin_names(&config.config_layer_stack),
             Some(on_local_cache_changed),
         );
     }
@@ -1515,7 +1517,7 @@ impl PluginsManager {
         config_layer_stack: Option<&ConfigLayerStack>,
         enable_canonical: bool,
     ) -> Result<(), PluginInstallError> {
-        reconcile_user_plugin_registrations(
+        let removed_plugin_keys = reconcile_user_plugin_registrations(
             &self.codex_home,
             config_layer_stack,
             plugin_id.as_key(),
@@ -1527,10 +1529,26 @@ impl PluginsManager {
         let store = self.store.clone();
         let canonical_plugin_id = plugin_id.clone();
         let removed_plugin_ids = tokio::task::spawn_blocking(move || {
-            let removed = store.other_sources(&canonical_plugin_id, /*active_only*/ false)?;
-            removed
-                .iter()
-                .try_for_each(|plugin_id| store.uninstall(plugin_id))?;
+            let mut removed = Vec::new();
+            for plugin_key in removed_plugin_keys {
+                let Ok(removed_plugin_id) = PluginId::parse(&plugin_key) else {
+                    tracing::warn!(
+                        plugin = %plugin_key,
+                        "skipping cache cleanup for invalid reconciled plugin key"
+                    );
+                    continue;
+                };
+                if removed_plugin_id == canonical_plugin_id
+                    || !store
+                        .plugin_base_root(&removed_plugin_id)
+                        .as_path()
+                        .is_dir()
+                {
+                    continue;
+                }
+                store.uninstall(&removed_plugin_id)?;
+                removed.push(removed_plugin_id);
+            }
             Ok::<_, PluginStoreError>(removed)
         })
         .await
@@ -2676,6 +2694,18 @@ pub(crate) fn configured_plugins_from_stack(
         return HashMap::new();
     };
     configured_plugins_from_user_config_value(&user_config)
+}
+
+fn enabled_local_plugin_names(config_layer_stack: &ConfigLayerStack) -> HashSet<String> {
+    configured_plugins_from_stack(config_layer_stack)
+        .into_iter()
+        .filter_map(|(plugin_key, config)| config.enabled.then_some(plugin_key))
+        .filter_map(|plugin_key| PluginId::parse(&plugin_key).ok())
+        .filter(|plugin_id| {
+            RemotePluginScope::from_marketplace_name(&plugin_id.marketplace_name).is_none()
+        })
+        .map(|plugin_id| plugin_id.plugin_name)
+        .collect()
 }
 
 fn configured_plugins_from_user_config_value(
