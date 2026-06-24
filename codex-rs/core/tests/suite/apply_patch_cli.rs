@@ -50,6 +50,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_target_windows;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local;
@@ -649,7 +650,7 @@ async fn apply_patch_cli_delete_directory_reports_verification_error() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_rejects_path_traversal_outside_workspace() -> Result<()> {
     // TODO(anp): Remove after apply_patch path handling supports target-native Windows paths.
-    skip_if_target_windows!(Ok(()), "asserts POSIX path traversal behavior");
+    skip_if_wine_exec!(Ok(()), "asserts POSIX path traversal behavior");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;
@@ -979,7 +980,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects() -> Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
-    skip_if_target_windows!(Ok(()), "uses a POSIX shell heredoc and cd command");
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
@@ -1263,7 +1264,7 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
-    skip_if_target_windows!(Ok(()), "uses a POSIX shell heredoc and cd command");
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
@@ -1327,7 +1328,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nested() -> Result<()> {
     // TODO(anp): Remove after apply_patch diff fixtures use target-native paths.
-    skip_if_target_windows!(Ok(()), "asserts POSIX repository paths");
+    skip_if_wine_exec!(Ok(()), "asserts POSIX repository paths");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| {
@@ -1400,7 +1401,7 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
-    skip_if_target_windows!(Ok(()), "uses a POSIX shell heredoc");
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
@@ -1459,7 +1460,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_accepts_lenient_heredoc_wrapped_patch() -> Result<()> {
     // TODO(anp): Remove after apply_patch shell fixtures use target-native commands.
-    skip_if_target_windows!(Ok(()), "uses a POSIX shell heredoc");
+    skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     skip_if_no_network!(Ok(()));
 
     let harness = apply_patch_harness().await?;

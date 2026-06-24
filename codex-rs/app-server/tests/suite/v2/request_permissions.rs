@@ -16,7 +16,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use core_test_support::skip_if_target_windows;
+use core_test_support::skip_if_wine_exec;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -24,7 +24,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_permissions_round_trip() -> Result<()> {
     // TODO(anp): Remove after tool routing accepts a target-native cwd on a different host OS.
-    skip_if_target_windows!(
+    skip_if_wine_exec!(
         Ok(()),
         "request_permissions currently rejects the target-native Windows cwd on the Linux host"
     );
