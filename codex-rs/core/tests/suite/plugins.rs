@@ -346,7 +346,8 @@ async fn agent_context_uses_only_configured_same_name_plugin_install() -> Result
     )?;
     let mut builder = test_codex()
         .with_home(codex_home)
-        .with_auth(CodexAuth::from_api_key("Test API Key"));
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false);
     let codex = builder.build(&server).await?.codex;
     wait_for_mcp_server(&codex, "canonical").await?;
 
