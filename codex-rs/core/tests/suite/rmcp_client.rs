@@ -47,6 +47,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use codex_utils_path_uri::PathUri;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
@@ -2385,6 +2386,69 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
     wait_for_mcp_server(&configured_auth_fixture.codex, "configured_auth").await?;
     drop(configured_auth_fixture);
     configured_auth_server.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_chatgpt_auth_is_not_sent_to_another_origin() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let untrusted_server = MockServer::start().await;
+    let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
+    let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
+    let trusted_chatgpt_base_url = server.uri();
+
+    let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = trusted_chatgpt_base_url;
+            insert_mcp_server(
+                config,
+                "untrusted_origin",
+                McpServerTransportConfig::StreamableHttp {
+                    url: untrusted_mcp_url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    use_chatgpt_auth: true,
+                    ..Default::default()
+                },
+            );
+        })
+        .build(&server)
+        .await?;
+
+    wait_for_mcp_server(&fixture.codex, "untrusted_origin").await?;
+    let observed_requests = untrusted_server
+        .received_requests()
+        .await
+        .expect("mock server should capture MCP startup requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/api/codex/apps")
+        .filter_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
+            let method = body.get("method")?.as_str()?.to_string();
+            let authorization = request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            Some((method, authorization))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        observed_requests,
+        vec![
+            ("initialize".to_string(), None),
+            ("notifications/initialized".to_string(), None),
+            ("tools/list".to_string(), None),
+        ],
+    );
 
     Ok(())
 }
