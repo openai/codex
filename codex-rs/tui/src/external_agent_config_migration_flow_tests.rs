@@ -166,7 +166,10 @@ fn external_agent_config_migration_messages_snapshot() {
 #[test]
 fn external_agent_config_migration_status_lines_use_semantic_colors() {
     assert_eq!(
-        external_agent_config_migration_started_lines(&selected_items(), 0),
+        external_agent_config_migration_started_lines(
+            &selected_items(),
+            /*remaining_item_count*/ 0,
+        ),
         vec![
             Line::from(vec![
                 "• ".dim(),
