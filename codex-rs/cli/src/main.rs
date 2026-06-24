@@ -645,6 +645,10 @@ struct AppServerProxyCommand {
     /// Path to the app-server Unix domain socket to connect to.
     #[arg(long = "sock", value_name = "SOCKET_PATH", value_parser = parse_socket_path)]
     socket_path: Option<AbsolutePathBuf>,
+
+    /// Start the CODEX_HOME app-server listener if it is not healthy before proxying.
+    #[arg(long = "ensure-listener")]
+    ensure_listener: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1192,6 +1196,15 @@ async fn cli_main(
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
+                    if proxy_cli.ensure_listener {
+                        let codex_home = find_codex_home()?;
+                        let default_socket_path =
+                            codex_app_server::app_server_control_socket_path(&codex_home)?;
+                        if socket_path != default_socket_path {
+                            anyhow::bail!("--ensure-listener only supports the CODEX_HOME socket");
+                        }
+                        codex_app_server_daemon::ensure_listener_started_with_current_exe().await?;
+                    }
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
                 }
                 Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
@@ -3742,7 +3755,43 @@ mod tests {
         assert!(matches!(
             app_server.subcommand,
             Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
-                socket_path: None
+                socket_path: None,
+                ensure_listener: false,
+            }))
+        ));
+    }
+
+    #[test]
+    fn app_server_proxy_ensure_listener_flag_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "proxy", "--ensure-listener"].as_ref());
+        assert!(matches!(
+            app_server.subcommand,
+            Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
+                socket_path: None,
+                ensure_listener: true,
+            }))
+        ));
+    }
+
+    #[test]
+    fn app_server_proxy_ensure_listener_accepts_sock() {
+        let app_server = app_server_from_args(
+            [
+                "codex",
+                "app-server",
+                "proxy",
+                "--ensure-listener",
+                "--sock",
+                "/tmp/codex.sock",
+            ]
+            .as_ref(),
+        );
+        assert!(matches!(
+            app_server.subcommand,
+            Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
+                socket_path: Some(_),
+                ensure_listener: true,
             }))
         ));
     }
@@ -3829,7 +3878,10 @@ mod tests {
 
     #[test]
     fn reject_remote_auth_token_env_for_app_server_proxy() {
-        let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand { socket_path: None });
+        let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand {
+            socket_path: None,
+            ensure_listener: false,
+        });
         let err = reject_remote_mode_for_app_server_subcommand(
             /*remote*/ None,
             Some("CODEX_REMOTE_AUTH_TOKEN"),
