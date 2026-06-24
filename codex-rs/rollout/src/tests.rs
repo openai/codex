@@ -7,6 +7,7 @@ use std::fs::File;
 use std::fs::FileTimes;
 use std::io::Write;
 use std::path::Path;
+use std::time::Instant;
 
 use chrono::TimeZone;
 use pretty_assertions::assert_eq;
@@ -22,6 +23,7 @@ use crate::INTERACTIVE_SESSION_SOURCES;
 use crate::find_thread_path_by_id_str;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
+use crate::list::ThreadListLayout;
 use crate::list::ThreadSortKey;
 use crate::list::ThreadsPage;
 use crate::list::get_threads;
@@ -37,6 +39,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -523,6 +526,367 @@ fn write_session_file_with_meta_payload(
     file.set_times(times)?;
 
     Ok(())
+}
+
+fn write_thread_list_benchmark_fixture(home: &Path) {
+    let timestamp = "2025-01-01T12-00-00";
+    for index in 0..5_000_u128 {
+        write_session_file(
+            home,
+            timestamp,
+            Uuid::from_u128(10_000 + index),
+            /*num_records*/ 0,
+            Some(SessionSource::SubAgent(SubAgentSource::Review)),
+        )
+        .unwrap();
+    }
+    for index in 0..100_u128 {
+        write_session_file(
+            home,
+            timestamp,
+            Uuid::from_u128(index + 1),
+            /*num_records*/ 0,
+            Some(SessionSource::Cli),
+        )
+        .unwrap();
+    }
+}
+
+fn write_interactive_thread_list_fixture(home: &Path, count: u128, compressed: bool) {
+    let timestamp = "2025-01-01T12-00-00";
+    for index in 0..count {
+        let uuid = Uuid::from_u128(index + 1);
+        write_session_file(
+            home,
+            timestamp,
+            uuid,
+            /*num_records*/ 0,
+            Some(SessionSource::Cli),
+        )
+        .unwrap();
+        if compressed {
+            compress_session_file(home, timestamp, uuid);
+        }
+    }
+}
+
+fn compress_session_file(home: &Path, timestamp: &str, uuid: Uuid) {
+    let path = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("01")
+        .join(format!("rollout-{timestamp}-{uuid}.jsonl"));
+    let compressed_path = crate::compression::compressed_rollout_path(path.as_path());
+    let input = File::open(path.as_path()).unwrap();
+    let output = File::create(compressed_path).unwrap();
+    zstd::stream::copy_encode(input, output, 1).unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+async fn benchmark_thread_list_fixture(
+    label: &str,
+    home: &Path,
+    expected_work: crate::list_test_support::ThreadListWork,
+) {
+    for sort_key in [ThreadSortKey::CreatedAt, ThreadSortKey::UpdatedAt] {
+        let mut durations = Vec::with_capacity(20);
+        let mut last_work = None;
+        for _ in 0..20 {
+            let started = Instant::now();
+            let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+                home,
+                /*page_size*/ 50,
+                /*cursor*/ None,
+                sort_key,
+                INTERACTIVE_SESSION_SOURCES.as_slice(),
+                /*model_providers*/ None,
+                /*cwd_filters*/ None,
+                TEST_PROVIDER,
+            ))
+            .await;
+            assert_eq!(result.unwrap().items.len(), 50);
+            durations.push(started.elapsed());
+            last_work = Some(work);
+        }
+        durations.sort_unstable();
+        let p50 = durations[durations.len() / 2];
+        let p95 = durations[durations.len() * 95 / 100];
+        let max = *durations.last().unwrap();
+        let last_work = last_work.unwrap();
+        eprintln!(
+            "{label} {sort_key:?} benchmark: p50={p50:?} p95={p95:?} max={max:?} work={last_work:?}"
+        );
+        assert_eq!(last_work, expected_work);
+    }
+}
+
+#[tokio::test]
+async fn thread_list_filters_source_before_reading_summary() {
+    let temp = TempDir::new().unwrap();
+    write_session_file(
+        temp.path(),
+        "2025-01-01T12-00-00",
+        Uuid::from_u128(9_001),
+        /*num_records*/ 3,
+        Some(SessionSource::SubAgent(SubAgentSource::Review)),
+    )
+    .unwrap();
+
+    let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+        temp.path(),
+        /*page_size*/ 50,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    ))
+    .await;
+
+    assert_eq!(result.unwrap().items, Vec::new());
+    assert_eq!(work.rollout_opens, 1);
+    assert_eq!(work.session_meta_records, 1);
+    assert_eq!(work.full_head_summaries, 0);
+}
+
+#[test]
+fn thread_candidate_collection_caps_directory_entries() {
+    for layout in [ThreadListLayout::NestedByDate, ThreadListLayout::Flat] {
+        let temp = TempDir::new().unwrap();
+        let root = match layout {
+            ThreadListLayout::NestedByDate => temp.path().join("2025").join("01").join("01"),
+            ThreadListLayout::Flat => temp.path().to_path_buf(),
+        };
+        fs::create_dir_all(root.as_path()).unwrap();
+        for index in 0..100_u128 {
+            File::create(root.join(format!("unrelated-{index}.tmp"))).unwrap();
+        }
+        let collection_root = match layout {
+            ThreadListLayout::NestedByDate => temp.path(),
+            ThreadListLayout::Flat => root.as_path(),
+        };
+
+        assert_eq!(
+            crate::list::collect_thread_candidate_stats_for_test(
+                collection_root,
+                layout,
+                /*entry_limit*/ 64,
+            )
+            .unwrap(),
+            (0, 64, true)
+        );
+    }
+}
+
+#[tokio::test]
+async fn thread_list_skips_metadata_pre_read_without_metadata_filters() {
+    let temp = TempDir::new().unwrap();
+    write_session_file(
+        temp.path(),
+        "2025-01-01T12-00-00",
+        Uuid::from_u128(9_001),
+        /*num_records*/ 3,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+
+    let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+        temp.path(),
+        /*page_size*/ 50,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    ))
+    .await;
+
+    assert_eq!(result.unwrap().items.len(), 1);
+    assert_eq!(work.rollout_opens, 1);
+    assert_eq!(work.session_meta_records, 0);
+    assert_eq!(work.full_head_summaries, 1);
+}
+
+#[tokio::test]
+async fn updated_at_thread_list_builds_remaining_page_plus_lookahead() {
+    let temp = TempDir::new().unwrap();
+    write_interactive_thread_list_fixture(
+        temp.path(),
+        /*count*/ 100,
+        /*compressed*/ false,
+    );
+
+    let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+        temp.path(),
+        /*page_size*/ 25,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    ))
+    .await;
+
+    assert_eq!(result.unwrap().items.len(), 25);
+    assert_eq!(
+        work,
+        crate::list_test_support::ThreadListWork {
+            rollout_opens: 26,
+            session_meta_records: 26,
+            full_head_summaries: 26,
+        }
+    );
+}
+
+#[tokio::test]
+async fn created_at_thread_list_stops_before_older_day() {
+    let temp = TempDir::new().unwrap();
+    for index in 0..500_u128 {
+        write_session_file(
+            temp.path(),
+            "2025-01-01T12-00-00",
+            Uuid::from_u128(10_000 + index),
+            /*num_records*/ 0,
+            Some(SessionSource::SubAgent(SubAgentSource::Review)),
+        )
+        .unwrap();
+    }
+    for index in 0..100_u128 {
+        write_session_file(
+            temp.path(),
+            "2025-01-02T12-00-00",
+            Uuid::from_u128(index + 1),
+            /*num_records*/ 0,
+            Some(SessionSource::Cli),
+        )
+        .unwrap();
+    }
+
+    let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+        temp.path(),
+        /*page_size*/ 50,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        TEST_PROVIDER,
+    ))
+    .await;
+    let page = result.unwrap();
+    let thread_ids = page
+        .items
+        .iter()
+        .map(|item| item.thread_id)
+        .collect::<Vec<_>>();
+    let expected_thread_ids = (51_u128..=100)
+        .rev()
+        .map(|id| Some(thread_id_from_uuid(Uuid::from_u128(id))))
+        .collect::<Vec<_>>();
+
+    assert_eq!(thread_ids, expected_thread_ids);
+    assert_eq!(page.num_scanned_files, 100);
+    assert_eq!(work.rollout_opens, 51);
+    assert_eq!(work.session_meta_records, 51);
+    assert_eq!(work.full_head_summaries, 51);
+}
+
+#[tokio::test]
+async fn thread_list_bounds_summary_work_for_rejected_sources() {
+    let temp = TempDir::new().unwrap();
+    write_thread_list_benchmark_fixture(temp.path());
+
+    for sort_key in [ThreadSortKey::CreatedAt, ThreadSortKey::UpdatedAt] {
+        let (result, work) = crate::list_test_support::record_thread_list_work(get_threads(
+            temp.path(),
+            /*page_size*/ 50,
+            /*cursor*/ None,
+            sort_key,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            /*model_providers*/ None,
+            /*cwd_filters*/ None,
+            TEST_PROVIDER,
+        ))
+        .await;
+        let page = result.unwrap();
+        let thread_ids = page
+            .items
+            .iter()
+            .map(|item| item.thread_id)
+            .collect::<Vec<_>>();
+        let expected_thread_ids = (51_u128..=100)
+            .rev()
+            .map(|id| Some(thread_id_from_uuid(Uuid::from_u128(id))))
+            .collect::<Vec<_>>();
+
+        assert_eq!(thread_ids, expected_thread_ids);
+        assert_eq!(work.rollout_opens, 5_051);
+        assert_eq!(work.session_meta_records, 5_051);
+        assert_eq!(work.full_head_summaries, 51);
+    }
+}
+
+#[tokio::test]
+#[ignore = "release benchmark"]
+async fn thread_list_benchmark_5_100_rollouts() {
+    let temp = TempDir::new().unwrap();
+    write_thread_list_benchmark_fixture(temp.path());
+    benchmark_thread_list_fixture(
+        "5,100-rollout stress",
+        temp.path(),
+        crate::list_test_support::ThreadListWork {
+            rollout_opens: 5_051,
+            session_meta_records: 5_051,
+            full_head_summaries: 51,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "release benchmark"]
+async fn thread_list_benchmark_all_interactive_rollouts() {
+    let temp = TempDir::new().unwrap();
+    write_interactive_thread_list_fixture(
+        temp.path(),
+        /*count*/ 200,
+        /*compressed*/ false,
+    );
+    benchmark_thread_list_fixture(
+        "200 interactive rollouts",
+        temp.path(),
+        crate::list_test_support::ThreadListWork {
+            rollout_opens: 51,
+            session_meta_records: 51,
+            full_head_summaries: 51,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "release benchmark"]
+async fn thread_list_benchmark_compressed_rollouts() {
+    let temp = TempDir::new().unwrap();
+    write_interactive_thread_list_fixture(
+        temp.path(),
+        /*count*/ 200,
+        /*compressed*/ true,
+    );
+    benchmark_thread_list_fixture(
+        "200 compressed interactive rollouts",
+        temp.path(),
+        crate::list_test_support::ThreadListWork {
+            rollout_opens: 51,
+            session_meta_records: 51,
+            full_head_summaries: 51,
+        },
+    )
+    .await;
 }
 
 #[tokio::test]

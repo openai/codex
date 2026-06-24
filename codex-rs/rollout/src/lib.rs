@@ -7,6 +7,8 @@ use codex_protocol::protocol::SessionSource;
 pub(crate) mod compression;
 pub(crate) mod config;
 pub(crate) mod list;
+#[cfg(test)]
+pub(crate) mod list_test_support;
 pub(crate) mod metadata;
 mod persistence_metrics;
 pub(crate) mod policy;

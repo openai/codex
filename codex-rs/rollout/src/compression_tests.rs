@@ -353,6 +353,25 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
     Ok(())
 }
 
+#[test]
+fn blocking_file_modified_time_resolves_compressed_sibling() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(12);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = archived_rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "compressed mtime")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    set_old_mtime(&compressed_path)?;
+    let expected = fs::metadata(&compressed_path)?.modified()?;
+
+    assert_eq!(
+        file_modified_time_blocking(&rollout_path)?,
+        Some(time::OffsetDateTime::from(expected))
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn worker_skips_when_fresh_run_marker_exists() -> anyhow::Result<()> {
     let home = TempDir::new()?;
