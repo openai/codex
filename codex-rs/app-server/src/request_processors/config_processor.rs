@@ -380,6 +380,8 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         models: requirements.models.map(|models| ModelsRequirements {
             new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
                 model: new_thread.model,
+                model_reasoning_effort: new_thread.model_reasoning_effort,
+                service_tier: new_thread.service_tier,
             }),
         }),
     }
@@ -578,6 +580,7 @@ mod tests {
     use codex_config::ModelsRequirementsToml;
     use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
@@ -638,23 +641,28 @@ mod tests {
     }
 
     #[test]
-    fn requirements_api_includes_new_thread_model() {
+    fn requirements_api_includes_new_thread_model_defaults() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             models: Some(ModelsRequirementsToml {
                 new_thread: Some(NewThreadModelDefaultsToml {
                     model: Some("gpt-managed".to_string()),
+                    model_reasoning_effort: Some(ReasoningEffort::Medium),
+                    service_tier: Some("fast".to_string()),
                 }),
             }),
             ..ConfigRequirementsToml::default()
         });
 
+        let defaults = mapped
+            .models
+            .and_then(|models| models.new_thread)
+            .expect("new-thread defaults");
+        assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
         assert_eq!(
-            mapped
-                .models
-                .and_then(|models| models.new_thread)
-                .and_then(|new_thread| new_thread.model),
-            Some("gpt-managed".to_string())
+            defaults.model_reasoning_effort,
+            Some(ReasoningEffort::Medium)
         );
+        assert_eq!(defaults.service_tier.as_deref(), Some("fast"));
     }
 
     #[test]

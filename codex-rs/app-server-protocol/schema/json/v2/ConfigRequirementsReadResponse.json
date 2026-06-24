@@ -516,9 +516,30 @@
             "string",
             "null"
           ]
+        },
+        "modelReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
+    },
+    "ReasoningEffort": {
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
+      "type": "string"
     },
     "ResidencyRequirement": {
       "enum": [

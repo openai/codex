@@ -110,7 +110,7 @@ allow_remote_control = false
 }
 
 #[test]
-fn new_thread_model_default_uses_toml_priority() {
+fn new_thread_model_defaults_use_toml_priority() {
     let composed = compose(vec![
         layer(
             "req_low",
@@ -118,6 +118,8 @@ fn new_thread_model_default_uses_toml_priority() {
             r#"
 [models.new_thread]
 model = "low-priority-model"
+model_reasoning_effort = "low"
+service_tier = "flex"
 "#,
         ),
         layer(
@@ -126,6 +128,8 @@ model = "low-priority-model"
             r#"
 [models.new_thread]
 model = "high-priority-model"
+model_reasoning_effort = "high"
+service_tier = "fast"
 "#,
         ),
     ])
@@ -138,6 +142,8 @@ model = "high-priority-model"
             r#"
 [models.new_thread]
 model = "high-priority-model"
+model_reasoning_effort = "high"
+service_tier = "fast"
 "#
         )
     );

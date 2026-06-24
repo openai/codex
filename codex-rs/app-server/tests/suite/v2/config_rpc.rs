@@ -76,13 +76,15 @@ async fn config_requirements_read_includes_allow_remote_control() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_new_thread_model() -> Result<()> {
+async fn config_requirements_read_includes_new_thread_model_defaults() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
         r#"
 [models.new_thread]
 model = "gpt-managed"
+model_reasoning_effort = "medium"
+service_tier = "fast"
 "#,
     )?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -96,15 +98,17 @@ model = "gpt-managed"
     .await??;
     let response: ConfigRequirementsReadResponse = to_response(response)?;
 
+    let defaults = response
+        .requirements
+        .and_then(|requirements| requirements.models)
+        .and_then(|models| models.new_thread)
+        .expect("managed new-thread defaults");
+    assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
     assert_eq!(
-        response
-            .requirements
-            .and_then(|requirements| requirements.models)
-            .and_then(|models| models.new_thread)
-            .and_then(|new_thread| new_thread.model)
-            .as_deref(),
-        Some("gpt-managed")
+        defaults.model_reasoning_effort,
+        Some(ReasoningEffort::Medium)
     );
+    assert_eq!(defaults.service_tier.as_deref(), Some("fast"));
     Ok(())
 }
 
