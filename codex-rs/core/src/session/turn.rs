@@ -532,6 +532,9 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
+    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+        loaded_plugins.capability_summaries(),
+    );
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
@@ -553,10 +556,10 @@ async fn build_skills_and_plugins(
     };
     let available_connectors = if turn_context.apps_enabled() {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
+            connector_snapshot
+                .connector_ids()
                 .into_iter()
-                .map(|connector_id| connector_id.0),
+                .map(|connector_id| connector_id.0.clone()),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
         connectors::with_app_enabled_state(connectors, &turn_context.config)
@@ -1177,6 +1180,9 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
+    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+        loaded_plugins.capability_summaries(),
+    );
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
@@ -1187,10 +1193,10 @@ pub(crate) async fn built_tools(
         });
     let connectors = if apps_enabled {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            loaded_plugins
-                .effective_apps()
+            connector_snapshot
+                .connector_ids()
                 .into_iter()
-                .map(|connector_id| connector_id.0),
+                .map(|connector_id| connector_id.0.clone()),
             accessible_connectors.clone().unwrap_or_default(),
         );
         Some(connectors::with_app_enabled_state(
@@ -1228,10 +1234,10 @@ pub(crate) async fn built_tools(
                 presentation: ToolSuggestPresentation::RecommendationContext,
             })
         } else {
-            let loaded_plugin_app_connector_ids = loaded_plugins
-                .effective_apps()
+            let loaded_plugin_app_connector_ids = connector_snapshot
+                .connector_ids()
                 .into_iter()
-                .map(|connector_id| connector_id.0)
+                .map(|connector_id| connector_id.0.clone())
                 .collect::<Vec<_>>();
             async {
                 if apps_enabled && tool_suggest_is_enabled {

@@ -15,6 +15,8 @@ mod directory_cache;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
+mod plugin_config;
+mod snapshot;
 
 pub use app_info::AppBranding;
 pub use app_info::AppInfo;
@@ -27,6 +29,10 @@ pub use app_tool_policy::AppToolPolicyInput;
 pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
 pub use directory_cache::ConnectorDirectoryCacheContext;
+pub use plugin_config::parse_plugin_app_config;
+pub use plugin_config::parse_plugin_app_config_value;
+pub use snapshot::ConnectorSnapshot;
+pub use snapshot::PluginConnectorSource;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 

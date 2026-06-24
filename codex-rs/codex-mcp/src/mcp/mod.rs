@@ -24,8 +24,8 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_connectors::ConnectorSnapshot;
 use codex_login::CodexAuth;
-use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
@@ -142,9 +142,9 @@ pub struct McpConfig {
     pub client_elicitation_capability: ElicitationCapability,
     /// Resolved MCP registrations keyed by logical server name.
     pub mcp_server_catalog: ResolvedMcpCatalog,
-    /// Plugin metadata used to attribute connector tools to plugin display names.
+    /// Plugin declarations used to attribute connector tools to plugin display names.
     /// MCP registrations retain their own package attribution in the catalog.
-    pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
+    pub connector_snapshot: ConnectorSnapshot,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -182,14 +182,16 @@ impl ToolPluginProvenance {
 
     fn from_config(config: &McpConfig) -> Self {
         let mut tool_plugin_provenance = Self::default();
-        for plugin in &config.plugin_capability_summaries {
-            for connector_id in &plugin.app_connector_ids {
-                tool_plugin_provenance
-                    .plugin_display_names_by_connector_id
-                    .entry(connector_id.0.clone())
-                    .or_default()
-                    .push(plugin.display_name.clone());
-            }
+        for connector_id in config.connector_snapshot.connector_ids() {
+            tool_plugin_provenance
+                .plugin_display_names_by_connector_id
+                .insert(
+                    connector_id.0.clone(),
+                    config
+                        .connector_snapshot
+                        .plugin_display_names_for_connector_id(&connector_id.0)
+                        .to_vec(),
+                );
         }
 
         for (server_name, attribution) in config

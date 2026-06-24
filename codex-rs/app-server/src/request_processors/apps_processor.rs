@@ -183,10 +183,14 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
-        let plugin_apps = plugins_manager
+        let loaded_plugins = plugins_manager
             .plugins_for_config(&config.plugins_config_input())
-            .await
-            .effective_apps();
+            .await;
+        let connector_snapshot =
+            codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+                loaded_plugins.capability_summaries(),
+            );
+        let plugin_apps = connector_snapshot.connector_ids().to_vec();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
             connectors::list_cached_all_connectors(&config, &plugin_apps)
