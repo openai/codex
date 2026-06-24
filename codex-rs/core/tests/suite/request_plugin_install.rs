@@ -38,6 +38,8 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use serde_json::Value;
 use serde_json::json;
+use std::time::Duration;
+use std::time::Instant;
 use wiremock::Mock;
 use wiremock::MockGuard;
 use wiremock::ResponseTemplate;
@@ -473,6 +475,52 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
     };
     assert_eq!(meta["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(meta["app_connector_ids"], json!([APP_CONNECTOR_ID]));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let analytics_event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == "codex_plugin_install_requested")
+                        .cloned()
+                })
+            })
+        {
+            break event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for plugin install request analytics");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let thread_id = analytics_event["event_params"]["thread_id"].clone();
+    let turn_id = analytics_event["event_params"]["turn_id"].clone();
+    assert_eq!(
+        analytics_event,
+        json!({
+            "event_type": "codex_plugin_install_requested",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_install-github",
+                "plugins": [{
+                    "plugin_id": "github@openai-curated-remote",
+                    "remote_plugin_id": REMOTE_PLUGIN_ID,
+                    "plugin_name": "GitHub",
+                    "connector_ids": [APP_CONNECTOR_ID],
+                }],
+                "source": "endpoint_recommendation",
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "model_slug": "gpt-5.4",
+                "product_client_id": codex_login::default_client::originator().value,
+            }
+        })
+    );
 
     resolve_install_elicitation(&test, elicitation, ElicitationAction::Decline).await?;
 

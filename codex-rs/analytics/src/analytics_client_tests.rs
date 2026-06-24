@@ -62,6 +62,10 @@ use crate::facts::HookRunInput;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
+use crate::facts::PluginInstallRequestSource;
+use crate::facts::PluginInstallRequested;
+use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginInstallRequestedPlugin;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -3442,6 +3446,66 @@ async fn reducer_ingests_plugin_state_changed_fact() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_requested_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = test_tracking_context("thread-1", "turn-1");
+    let request = PluginInstallRequested {
+        suggestion_id: "request_plugin_install_call-1".to_string(),
+        plugins: vec![
+            PluginInstallRequestedPlugin {
+                plugin_id: "calendar@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugin_calendar".to_string()),
+                plugin_name: "Calendar".to_string(),
+                connector_ids: vec!["connector_calendar".to_string()],
+            },
+            PluginInstallRequestedPlugin {
+                plugin_id: "github@openai-curated-remote".to_string(),
+                remote_plugin_id: None,
+                plugin_name: "GitHub".to_string(),
+                connector_ids: vec!["connector_github".to_string()],
+            },
+        ],
+        source: PluginInstallRequestSource::EndpointRecommendation,
+    };
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallRequested(
+                PluginInstallRequestedInput { tracking, request },
+            )),
+            &mut events,
+        )
+        .await;
+
+    assert_eq!(
+        serde_json::to_value(&events).expect("serialize events"),
+        json!([{
+            "event_type": "codex_plugin_install_requested",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_call-1",
+                "plugins": [{
+                    "plugin_id": "calendar@openai-curated-remote",
+                    "remote_plugin_id": "plugin_calendar",
+                    "plugin_name": "Calendar",
+                    "connector_ids": ["connector_calendar"],
+                }, {
+                    "plugin_id": "github@openai-curated-remote",
+                    "remote_plugin_id": null,
+                    "plugin_name": "GitHub",
+                    "connector_ids": ["connector_github"],
+                }],
+                "source": "endpoint_recommendation",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "model_slug": "gpt-5",
+                "product_client_id": originator().value,
             }
         }])
     );
