@@ -726,13 +726,14 @@ async fn sleep_tool_follows_feature_gate() {
         set_feature(turn, Feature::SleepTool, /*enabled*/ false);
     })
     .await;
-    disabled.assert_visible_lacks(&["sleep"]);
+    disabled.assert_visible_lacks(&["clock"]);
 
     let enabled = probe(|turn| {
         set_feature(turn, Feature::SleepTool, /*enabled*/ true);
     })
     .await;
-    enabled.assert_visible_contains(&["sleep"]);
+    enabled.assert_visible_contains(&["clock"]);
+    assert_eq!(enabled.namespace_function_names("clock"), ["sleep"]);
 }
 
 #[tokio::test]
