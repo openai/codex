@@ -558,7 +558,7 @@ async fn build_skills_and_plugins(
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             connector_snapshot
                 .connector_ids()
-                .into_iter()
+                .iter()
                 .map(|connector_id| connector_id.0.clone()),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
@@ -1195,7 +1195,7 @@ pub(crate) async fn built_tools(
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             connector_snapshot
                 .connector_ids()
-                .into_iter()
+                .iter()
                 .map(|connector_id| connector_id.0.clone()),
             accessible_connectors.clone().unwrap_or_default(),
         );
@@ -1236,7 +1236,7 @@ pub(crate) async fn built_tools(
         } else {
             let loaded_plugin_app_connector_ids = connector_snapshot
                 .connector_ids()
-                .into_iter()
+                .iter()
                 .map(|connector_id| connector_id.0.clone())
                 .collect::<Vec<_>>();
             async {
