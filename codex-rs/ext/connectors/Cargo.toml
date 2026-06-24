@@ -15,13 +15,7 @@ workspace = true
 [dependencies]
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
-codex-exec-server = { workspace = true }
 codex-plugin = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
-pretty_assertions = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
