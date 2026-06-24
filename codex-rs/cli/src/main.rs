@@ -1200,7 +1200,11 @@ async fn cli_main(
                         let codex_home = find_codex_home()?;
                         let default_socket_path =
                             codex_app_server::app_server_control_socket_path(&codex_home)?;
-                        if socket_path != default_socket_path {
+                        if !is_default_app_server_socket(
+                            socket_path.as_path(),
+                            default_socket_path.as_path(),
+                            codex_home.as_path(),
+                        ) {
                             anyhow::bail!("--ensure-listener only supports the CODEX_HOME socket");
                         }
                         codex_app_server_daemon::ensure_listener_started_with_current_exe().await?;
@@ -1684,6 +1688,33 @@ fn profile_v2_for_subcommand<'a>(
             "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
         ),
     }
+}
+
+fn is_default_app_server_socket(
+    socket_path: &std::path::Path,
+    default_socket_path: &std::path::Path,
+    codex_home: &std::path::Path,
+) -> bool {
+    if socket_path == default_socket_path {
+        return true;
+    }
+
+    let Some(socket_dir) = socket_path.parent() else {
+        return false;
+    };
+    let Some(default_socket_dir) = default_socket_path.parent() else {
+        return false;
+    };
+    if socket_path.file_name() != default_socket_path.file_name()
+        || socket_dir.file_name() != default_socket_dir.file_name()
+    {
+        return false;
+    }
+
+    socket_dir
+        .parent()
+        .and_then(|candidate_home| candidate_home.canonicalize().ok())
+        .is_some_and(|candidate_home| candidate_home == codex_home)
 }
 
 async fn run_exec_server_command(
