@@ -1037,7 +1037,7 @@ pub struct Config {
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
-    /// Current-time reminder configuration, when enabled.
+    /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
@@ -1117,6 +1117,8 @@ pub struct RolloutBudgetConfig {
 pub struct CurrentTimeReminderConfig {
     pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
+    /// Whether to expose the input-interruptible `clock.sleep` tool.
+    pub sleep_tool: bool,
 }
 
 impl Default for CurrentTimeReminderConfig {
@@ -1124,6 +1126,7 @@ impl Default for CurrentTimeReminderConfig {
         Self {
             reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
+            sleep_tool: false,
         }
     }
 }
@@ -2675,6 +2678,9 @@ fn resolve_current_time_reminder_config(
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
+        sleep_tool: base
+            .and_then(|config| config.sleep_tool)
+            .unwrap_or(default.sleep_tool),
     }))
 }
 

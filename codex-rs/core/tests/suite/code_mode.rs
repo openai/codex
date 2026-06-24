@@ -883,6 +883,7 @@ text(JSON.stringify(result));
             config.current_time_reminder = Some(CurrentTimeReminderConfig {
                 reminder_interval_seconds: 3_000,
                 clock_source: CurrentTimeSource::System,
+                ..CurrentTimeReminderConfig::default()
             });
         },
     )
