@@ -40,6 +40,7 @@ const SAMPLE_PLUGIN_APP_NAMESPACE: &str = "mcp__codex_apps__google_calendar";
 const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
 const PLUGIN_MCP_SEARCH_CALL_ID: &str = "plugin-mcp-search";
+const PLUGIN_AGENT_SEARCH_CALL_ID: &str = "plugin-agent-search";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
@@ -317,9 +318,19 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 async fn plugin_agent_roles_are_available_to_spawn_agent() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(
+    let resp_mock = mount_sse_sequence(
         &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_tool_search_call(
+                    PLUGIN_AGENT_SEARCH_CALL_ID,
+                    &serde_json::json!({"query": "spawn agent"}),
+                ),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
     )
     .await;
 
@@ -337,9 +348,16 @@ async fn plugin_agent_roles_are_available_to_spawn_agent() -> Result<()> {
 
     test_codex.submit_turn("hello").await?;
 
-    let body = resp_mock.single_request().body_json();
-    let spawn_agent = namespace_child_tool(&body, MULTI_AGENT_V1_NAMESPACE, SPAWN_AGENT_TOOL_NAME)
-        .expect("spawn_agent should be available");
+    let request = resp_mock
+        .last_request()
+        .expect("tool search follow-up request");
+    let tool_search_output = request.tool_search_output(PLUGIN_AGENT_SEARCH_CALL_ID);
+    let spawn_agent = namespace_child_tool(
+        &tool_search_output,
+        MULTI_AGENT_V1_NAMESPACE,
+        SPAWN_AGENT_TOOL_NAME,
+    )
+    .expect("spawn_agent should be available");
     let agent_type_description = tool_parameter_description(spawn_agent, "agent_type")
         .expect("spawn_agent agent_type description");
     assert!(
