@@ -1730,10 +1730,11 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
     let mut expected_fresh_item = fresh_item;
     expected_fresh_item.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_items = vec![expected_fresh_item, existing_item];
-    assert_eq!(
-        session.clone_history().await.raw_items(),
-        expected_items.as_slice()
-    );
+    let mut actual_items = session.clone_history().await.into_raw_items();
+    for item in &mut actual_items {
+        item.set_id(/*new_id*/ None);
+    }
+    assert_eq!(actual_items, expected_items);
 }
 
 #[tokio::test]
@@ -1754,8 +1755,14 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_inter_agent_communication(&turn_context, communication)
         .await;
 
+    let live_history = session.clone_history().await;
+    let [live_item] = live_history.raw_items() else {
+        panic!("expected exactly one live history item");
+    };
+    expected_item.set_id(live_item.id().map(ToString::to_string));
+
     assert_eq!(
-        session.clone_history().await.raw_items(),
+        live_history.raw_items(),
         std::slice::from_ref(&expected_item)
     );
 
@@ -1782,9 +1789,7 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |config| {
-            let _ = config.features.enable(Feature::ItemIds);
-        },
+        |_config| {},
     )
     .await;
     let rollout_path =
@@ -1831,9 +1836,7 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
-            |config| {
-                let _ = config.features.enable(Feature::ItemIds);
-            },
+            |_config| {},
         )
         .await;
     resumed_session
@@ -1851,9 +1854,7 @@ async fn prepares_image_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |config| {
-            let _ = config.features.enable(Feature::ItemIds);
-        },
+        |_config| {},
     )
     .await;
     let item = ResponseItem::FunctionCallOutput {
@@ -2691,9 +2692,7 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |config| {
-            let _ = config.features.enable(Feature::ItemIds);
-        },
+        |_config| {},
     )
     .await;
     let rollout_path =
@@ -2734,6 +2733,52 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
         persisted_replacement_history.map(Vec::as_slice),
         Some(live_history.raw_items())
     );
+}
+
+#[tokio::test]
+async fn record_initial_history_assigns_and_persists_id_for_forked_response_item() {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let response_item = crate::context_manager::updates::build_developer_update_item(vec![
+        "Subagent guidance.".to_string(),
+    ])
+    .expect("developer message");
+    let mut expected_item = response_item.clone();
+
+    session
+        .record_initial_history(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            response_item,
+        )]))
+        .await;
+
+    let live_history = session.clone_history().await;
+    let [live_item] = live_history.raw_items() else {
+        panic!("expected one forked response item");
+    };
+    let live_item_id = live_item
+        .id()
+        .expect("forked response item should have an id")
+        .to_string();
+    assert!(live_item_id.starts_with("msg_"));
+    expected_item.set_id(Some(live_item_id.clone()));
+    assert_eq!(live_history.raw_items(), &[expected_item]);
+
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let persisted_item_id = resumed.history.iter().find_map(|item| match item {
+        RolloutItem::ResponseItem(response_item) => response_item.id(),
+        RolloutItem::SessionMeta(_)
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::EventMsg(_) => None,
+    });
+    assert_eq!(persisted_item_id, Some(live_item_id.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
