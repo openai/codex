@@ -28,6 +28,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local_selections;
@@ -62,6 +63,8 @@ fn image_generation_extensions(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Make the local filesystem sandbox work in the bwrap-exec test configuration.
+    skip_if_bwrap_exec!(Ok(()), "exercises the local filesystem sandbox");
 
     let server = responses::start_mock_server().await;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();

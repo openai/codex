@@ -46,6 +46,7 @@ use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_remote;
@@ -1585,6 +1586,8 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
         Ok(()),
         "requires a cwd valid in local POSIX and remote Windows environments"
     );
+    // TODO(anp): Cover multi-environment turn diffs in bwrap-exec with a dedicated fixture.
+    skip_if_bwrap_exec!(Ok(()), "uses a shared local and remote fixture path");
     skip_if_no_network!(Ok(()));
     skip_if_no_remote_env!(Ok(()));
 

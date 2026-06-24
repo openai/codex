@@ -16,6 +16,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::local_selections;
@@ -50,6 +51,8 @@ async fn write_repo_skill(
 async fn user_turn_includes_skill_instructions() -> Result<()> {
     // TODO(anp): Remove after skill-path helpers use target-native paths.
     skip_if_target_windows!(Ok(()), "requires native cross-OS skill paths");
+    // TODO(anp): Make explicit local skill selection work in the bwrap-exec test configuration.
+    skip_if_bwrap_exec!(Ok(()), "selects the local skill environment explicitly");
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

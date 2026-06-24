@@ -19,6 +19,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use core_test_support::skip_if_bwrap_exec;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -1045,6 +1046,11 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
 #[tokio::test]
 async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminates_process()
 -> Result<()> {
+    // TODO(anp): Package a target-native long-running fixture for bwrap-exec.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "relies on Python being installed in the remote environment"
+    );
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
