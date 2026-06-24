@@ -59,6 +59,7 @@ use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
+use codex_core_api::local_agent_graph_store_from_state_db;
 use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
@@ -133,7 +134,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         user_instructions_provider,
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
-        state_db,
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
