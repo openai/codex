@@ -25,6 +25,7 @@ mod fs;
 mod hooks_list;
 mod imagegen_extension;
 mod initialize;
+mod legacy_multi_agent_v2_namespace_repair;
 mod marketplace_add;
 mod marketplace_remove;
 mod marketplace_upgrade;
