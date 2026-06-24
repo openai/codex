@@ -390,10 +390,8 @@ async fn file_system_walk_returns_a_bounded_tree(
     let source_dir = tmp.path().join("source");
     let nested_dir = source_dir.join("nested");
     std::fs::create_dir_all(&nested_dir)?;
-    std::fs::create_dir(source_dir.join(".hidden"))?;
     std::fs::write(source_dir.join("root.txt"), "root")?;
     std::fs::write(nested_dir.join("note.txt"), "nested")?;
-    std::fs::write(source_dir.join(".hidden").join("secret.txt"), "hidden")?;
 
     let source_uri = PathUri::from_host_native_path(&source_dir)?;
     let outcome = file_system

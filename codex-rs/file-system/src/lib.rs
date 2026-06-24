@@ -70,7 +70,7 @@ pub struct WalkOptions {
     pub max_depth: usize,
     /// Maximum number of directories that may be traversed, including the root.
     pub max_directories: usize,
-    /// Maximum number of non-hidden directory entries that may be examined.
+    /// Maximum number of directory entries that may be examined.
     pub max_entries: usize,
 }
 
@@ -82,7 +82,7 @@ pub enum WalkEntryKind {
     File,
 }
 
-/// One non-hidden, non-symlink entry returned by a walk.
+/// One non-symlink entry returned by a walk.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalkEntry {
@@ -300,7 +300,7 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>>;
 
-    /// Recursively lists descendants, skipping hidden entries and symlinks.
+    /// Recursively lists descendants, skipping symlinks.
     fn walk<'a>(
         &'a self,
         path: &'a PathUri,
@@ -379,9 +379,6 @@ async fn walk<F: ExecutorFileSystem + ?Sized>(
         entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
 
         for entry in entries {
-            if entry.file_name.starts_with('.') {
-                continue;
-            }
             if entry_count == options.max_entries {
                 outcome.truncated = true;
                 return Ok(outcome);
