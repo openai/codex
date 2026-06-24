@@ -9,9 +9,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::project_roots_glob_pattern;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::TurnContextItem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -209,58 +207,6 @@ fn serialize_environment_context_with_full_filesystem_profile() {
     );
 
     assert_eq!(context.render(), expected);
-}
-
-#[test]
-fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
-    let repo = test_abs_path("/repo");
-    let other_repo = test_abs_path("/other-repo");
-    let repo_private = repo.join("private");
-    let item = TurnContextItem {
-        turn_id: None,
-        cwd: test_abs_path("/not-the-workspace"),
-        workspace_roots: Some(vec![repo.clone(), other_repo.clone()]),
-        current_date: None,
-        timezone: None,
-        approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(workspace_write_permission_profile_with_private_denials()),
-        network: None,
-        file_system_sandbox_policy: None,
-        model: "gpt-5".to_string(),
-        comp_hash: None,
-        personality: None,
-        collaboration_mode: None,
-        multi_agent_version: None,
-        multi_agent_mode: None,
-        realtime_active: None,
-        effort: None,
-        summary: codex_protocol::config_types::ReasoningSummary::Auto,
-    };
-
-    let context = EnvironmentsState::from_turn_context_item(&item).render();
-
-    assert!(
-        context.contains(&format!(
-            "<root>{}</root><root>{}</root>",
-            repo.to_string_lossy(),
-            other_repo.to_string_lossy()
-        )),
-        "{context}"
-    );
-    assert!(
-        context.contains(&format!("<path>{}</path>", repo_private.to_string_lossy())),
-        "{context}"
-    );
-    assert!(
-        !context.contains(
-            test_abs_path("/not-the-workspace")
-                .join("private")
-                .to_string_lossy()
-                .as_ref()
-        ),
-        "{context}"
-    );
 }
 
 #[test]

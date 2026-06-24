@@ -1,6 +1,7 @@
 use super::*;
-use crate::context::world_state::EnvironmentsState;
+use crate::context::UserInstructions;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSection;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
@@ -75,13 +76,34 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
+struct TestWorldStateSection;
+
+impl WorldStateSection for TestWorldStateSection {
+    const ID: &'static str = "test";
+    type Snapshot = bool;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        true
+    }
+
+    fn render_diff(
+        &self,
+        previous: Option<&Self::Snapshot>,
+    ) -> Option<Box<dyn crate::context::ContextualUserFragment>> {
+        (previous != Some(&true)).then(|| {
+            Box::new(UserInstructions {
+                directory: None,
+                text: "test".to_string(),
+            }) as Box<dyn crate::context::ContextualUserFragment>
+        })
+    }
+}
+
 #[test]
 fn world_state_baseline_deduplicates_until_history_is_replaced() {
     let world_state = || {
         let mut state = WorldState::default();
-        state.add_section(EnvironmentsState::from_turn_context_item(
-            &reference_context_item(),
-        ));
+        state.add_section(TestWorldStateSection);
         state
     };
     let mut history = ContextManager::new();
