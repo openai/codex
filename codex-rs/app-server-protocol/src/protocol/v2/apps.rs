@@ -83,6 +83,8 @@ pub struct AppInfo {
     pub description: Option<String>,
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
+    pub icon_assets: Option<HashMap<String, String>>,
+    pub icon_dark_assets: Option<HashMap<String, String>>,
     pub distribution_channel: Option<String>,
     pub branding: Option<AppBranding>,
     pub app_metadata: Option<AppMetadata>,
