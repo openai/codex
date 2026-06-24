@@ -48,11 +48,6 @@ impl PluginConnectorSource {
         }
     }
 
-    /// Returns the package ID that contributed these connectors.
-    pub fn plugin_id(&self) -> &str {
-        &self.plugin_id
-    }
-
     /// Returns the package name shown in connector provenance.
     pub fn plugin_display_name(&self) -> &str {
         &self.plugin_display_name
@@ -120,11 +115,6 @@ impl ConnectorSnapshot {
     /// Returns the connector IDs in source contribution order.
     pub fn connector_ids(&self) -> &[AppConnectorId] {
         &self.connector_ids
-    }
-
-    /// Returns the packages that contributed connector declarations.
-    pub fn plugin_sources(&self) -> &[PluginConnectorSource] {
-        &self.sources
     }
 
     /// Returns the package display names associated with one connector.
