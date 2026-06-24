@@ -1730,11 +1730,10 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
     let mut expected_fresh_item = fresh_item;
     expected_fresh_item.set_turn_id_if_missing(&turn_context.sub_id);
     let expected_items = vec![expected_fresh_item, existing_item];
-    let mut actual_items = session.clone_history().await.into_raw_items();
-    for item in &mut actual_items {
-        item.set_id(/*new_id*/ None);
-    }
-    assert_eq!(actual_items, expected_items);
+    assert_eq!(
+        session.clone_history().await.raw_items(),
+        expected_items.as_slice()
+    );
 }
 
 #[tokio::test]
@@ -1755,14 +1754,8 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_inter_agent_communication(&turn_context, communication)
         .await;
 
-    let live_history = session.clone_history().await;
-    let [live_item] = live_history.raw_items() else {
-        panic!("expected exactly one live history item");
-    };
-    expected_item.set_id(live_item.id().map(ToString::to_string));
-
     assert_eq!(
-        live_history.raw_items(),
+        session.clone_history().await.raw_items(),
         std::slice::from_ref(&expected_item)
     );
 
@@ -1789,7 +1782,9 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |_config| {},
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
     )
     .await;
     let rollout_path =
@@ -1836,7 +1831,9 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
-            |_config| {},
+            |config| {
+                let _ = config.features.enable(Feature::ItemIds);
+            },
         )
         .await;
     resumed_session
@@ -1854,7 +1851,9 @@ async fn prepares_image_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |_config| {},
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
     )
     .await;
     let item = ResponseItem::FunctionCallOutput {
@@ -2695,7 +2694,9 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |_config| {},
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
     )
     .await;
     let rollout_path =

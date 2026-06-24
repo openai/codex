@@ -2715,7 +2715,11 @@ impl Session {
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        Self::assign_missing_response_item_ids(items)
+        if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(items)
+        } else {
+            items
+        }
     }
 
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
@@ -2920,13 +2924,17 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
-        _turn_context: &TurnContext,
+        turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         compacted_item: CompactedItem,
     ) {
-        let items = Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned();
+        let items = if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
+        } else {
+            items
+        };
         let compacted_item = CompactedItem {
             replacement_history: Some(items.clone()),
             ..compacted_item
