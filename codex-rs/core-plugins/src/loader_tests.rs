@@ -260,7 +260,7 @@ async fn duplicate_mcp_diagnostic_names_the_stable_winner_and_remediation() {
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
     )
     .await;
     assert_eq!(plugins.len(), 3);
