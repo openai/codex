@@ -73,7 +73,6 @@ use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntimeContext;
@@ -433,6 +432,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
+    pub(crate) originator: String,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) metrics_service_name: Option<String>,
@@ -522,6 +522,7 @@ impl Codex {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            originator,
             agent_control,
             dynamic_tools,
             metrics_service_name,
@@ -654,6 +655,7 @@ impl Codex {
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
+            originator,
             dynamic_tools,
             user_shell_override,
         };
@@ -3913,7 +3915,7 @@ pub(crate) fn emit_subagent_session_started(
         forked_from_thread_id: thread_config
             .forked_from_thread_id
             .map(|thread_id| thread_id.to_string()),
-        product_client_id: client_name.clone(),
+        product_client_id: thread_config.originator.clone(),
         client_name,
         client_version,
         model: thread_config.model,

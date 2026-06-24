@@ -33,6 +33,7 @@ pub(super) async fn create_thread(
             params.parent_thread_id,
             params.source,
             params.thread_source,
+            params.originator,
             params.base_instructions,
             params.dynamic_tools,
         )

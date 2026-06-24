@@ -971,6 +971,7 @@ async fn maybe_track_codex_app_used(
         turn_context.model_info.slug.clone(),
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
+        turn_context.originator.clone(),
     );
     sess.services.analytics_events_client.track_app_used(
         tracking,

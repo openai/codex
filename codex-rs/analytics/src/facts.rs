@@ -41,17 +41,20 @@ pub struct TrackEventsContext {
     pub model_slug: String,
     pub thread_id: String,
     pub turn_id: String,
+    pub product_client_id: String,
 }
 
 pub fn build_track_events_context(
     model_slug: String,
     thread_id: String,
     turn_id: String,
+    product_client_id: String,
 ) -> TrackEventsContext {
     TrackEventsContext {
         model_slug,
         thread_id,
         turn_id,
+        product_client_id,
     }
 }
 

@@ -479,6 +479,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         thread_id,
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
+        "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -3485,6 +3486,7 @@ async fn set_rate_limits_retains_previous_credits() {
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -3592,6 +3594,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -3841,6 +3844,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
+            originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
@@ -4122,13 +4126,14 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     }
 }
 
 #[tokio::test]
-async fn emit_subagent_session_started_includes_fork_lineage_from_session_configuration() {
+async fn emit_subagent_session_started_includes_fork_lineage_and_originator() {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -4203,6 +4208,10 @@ async fn emit_subagent_session_started_includes_fork_lineage_from_session_config
     assert_eq!(
         event["event_params"]["forked_from_thread_id"],
         forked_from_thread_id.to_string()
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["product_client_id"],
+        "test_originator"
     );
 }
 
@@ -4989,6 +4998,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -5118,6 +5128,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -5220,6 +5231,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
+            session_configuration.originator.clone(),
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
@@ -5364,6 +5376,7 @@ async fn make_session_with_config_and_rx(
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -5471,6 +5484,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -6713,6 +6727,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
+            originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
@@ -7194,6 +7209,7 @@ where
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools,
         user_shell_override: None,
     };
@@ -7295,6 +7311,7 @@ where
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
+            session_configuration.originator.clone(),
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
