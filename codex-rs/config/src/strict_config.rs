@@ -10,7 +10,6 @@ use crate::diagnostics::span_for_config_path;
 use crate::diagnostics::span_for_toml_key_path;
 use crate::diagnostics::text_range_from_span;
 use codex_features::is_known_feature_key;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -58,26 +57,6 @@ pub(crate) fn config_error_from_config_toml_layer_for_source_name(
         contents,
         value,
     )
-}
-
-/// Validate one config layer without requiring an MCP server fragment to
-/// contain a transport. MCP server definitions are merged recursively across
-/// config layers, so transport completeness is validated on the effective
-/// config after composition.
-pub fn validate_config_toml_layer(
-    mut value: TomlValue,
-    base_dir: &Path,
-) -> Result<(), toml::de::Error> {
-    let _guard = AbsolutePathBufGuard::new(base_dir);
-    let mcp_servers = value
-        .as_table_mut()
-        .and_then(|table| table.remove("mcp_servers"));
-
-    let _: ConfigToml = value.try_into()?;
-    if let Some(mcp_servers) = mcp_servers {
-        let _: ConfigTomlMcpServersLayer = mcp_servers_layer(mcp_servers).try_into()?;
-    }
-    Ok(())
 }
 
 /// Strictly validate one config layer while allowing MCP server fragments to
