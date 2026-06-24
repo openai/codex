@@ -18,7 +18,10 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod absolute_path_normalization;
 mod api_path_string;
+
+use absolute_path_normalization::path_uri_from_segments;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
@@ -32,8 +35,7 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// URL, and the URI cannot be mutated after construction. [`Self::basename`],
 /// [`Self::parent`], and [`Self::join`] operate on URI path segments without
 /// interpreting them using the operating system running Codex. Fallback URIs
-/// used for native paths without a lossless canonical URL representation are
-/// opaque to these lexical operations.
+/// created by [`Self::from_abs_path`] are opaque to these lexical operations.
 ///
 /// `file:` paths retain their URI spelling so they can be parsed independently
 /// of the current host. A local POSIX `file:` URI can also retain
@@ -209,7 +211,7 @@ impl PathUri {
     /// Returns the lexical parent without crossing the inferred native path root.
     ///
     /// POSIX `/`, Windows drive roots, Windows UNC share roots, and opaque fallback
-    /// URIs have no parent.
+    /// URIs created by [`Self::from_abs_path`] have no parent.
     pub fn parent(&self) -> Option<Self> {
         if decode_bad_path_uri(&self.0).is_some() {
             return None;
@@ -249,7 +251,8 @@ impl PathUri {
     /// Containment is computed using URI authority and path-segment boundaries,
     /// without consulting the host filesystem. Percent-encoded native path
     /// separators fail closed because native path conversion may interpret them
-    /// as segment boundaries. Opaque fallback URIs only contain themselves.
+    /// as segment boundaries. Opaque fallback URIs created by
+    /// [`Self::from_abs_path`] only contain themselves.
     pub fn starts_with(&self, base: &Self) -> bool {
         if self == base {
             return true;
@@ -289,8 +292,8 @@ impl PathUri {
     /// `%`, `?`, and `#` characters are percent-encoded as filename text. Paths
     /// containing a null character are rejected because they cannot be safely
     /// converted to native paths.
-    /// Opaque fallback base URIs reject non-empty relative joins; absolute paths
-    /// replace them normally.
+    /// Opaque fallback URIs created by [`Self::from_abs_path`] reject non-empty
+    /// joins.
     pub fn join(&self, path: &str) -> Result<Self, PathUriParseError> {
         if path.contains('\0') {
             return Err(PathUriParseError::InvalidFileUriPath {
@@ -633,59 +636,6 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
     }
 
     None
-}
-
-fn path_uri_from_segments<'a>(
-    convention: PathConvention,
-    host: Option<&str>,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<PathUri> {
-    let mut url = Url::parse("file:///").ok()?;
-    if let Some(host) = host {
-        url.set_host(Some(host)).ok()?;
-    }
-    let segments = segments.collect::<Vec<_>>();
-    let preserve_posix_double_slash = convention == PathConvention::Posix
-        && host.is_none()
-        && (segments.as_slice() == ["", ""]
-            || matches!(segments.as_slice(), ["", segment, ..] if !segment.is_empty()));
-    let anchor_depth = usize::from(convention == PathConvention::Windows);
-    let mut depth = 0;
-    let mut normalized_segments = Vec::new();
-    let mut has_trailing_separator = false;
-    for segment in segments
-        .into_iter()
-        .skip(usize::from(preserve_posix_double_slash))
-    {
-        match segment {
-            "" => has_trailing_separator = true,
-            "." => has_trailing_separator = false,
-            ".." => {
-                has_trailing_separator = false;
-                if depth > anchor_depth {
-                    normalized_segments.pop();
-                    depth -= 1;
-                }
-            }
-            segment => {
-                normalized_segments.push(segment);
-                depth += 1;
-                has_trailing_separator = false;
-            }
-        }
-    }
-    if has_trailing_separator {
-        normalized_segments.push("");
-    }
-    if preserve_posix_double_slash {
-        let path = format!("//{}", normalized_segments.join("/"));
-        return Some(PathUri::from_opaque_path_bytes(path.as_bytes()));
-    }
-    {
-        let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear().extend(normalized_segments);
-    }
-    PathUri::try_from(url).ok()
 }
 
 fn windows_opaque_path_uri(path: &str) -> PathUri {

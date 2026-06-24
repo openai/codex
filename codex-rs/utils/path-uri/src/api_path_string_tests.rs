@@ -467,23 +467,6 @@ fn converts_absolute_api_paths_using_the_inferred_convention() {
 }
 
 #[test]
-fn posix_double_slash_root_round_trips_through_path_uri() {
-    let path = LegacyAppPathString("//server/share/file.rs".to_string());
-    let uri = path
-        .to_path_uri(PathConvention::Posix)
-        .expect("double-slash POSIX path should convert");
-
-    assert_eq!(
-        uri.opaque_fallback_bytes().as_deref(),
-        Some(path.as_str().as_bytes())
-    );
-    assert_eq!(
-        LegacyAppPathString::from_path_uri(&uri, PathConvention::Posix),
-        Ok(path)
-    );
-}
-
-#[test]
 fn converts_native_api_path_to_inferred_absolute_path() {
     #[cfg(windows)]
     let raw_path = r"C:\workspace\file.rs";
