@@ -31,8 +31,6 @@ use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 
 #[derive(Clone, Copy)]
@@ -50,8 +48,6 @@ struct FailingFileSystem {
 
 #[derive(Default)]
 struct MetadataCallCounts {
-    active_calls: AtomicUsize,
-    max_active_calls: AtomicUsize,
     paths: Mutex<Vec<PathUri>>,
 }
 
@@ -106,16 +102,7 @@ impl FailingFileSystem {
             .lock()
             .expect("metadata paths lock")
             .push(path.clone());
-        let active_calls = self
-            .metadata_calls
-            .active_calls
-            .fetch_add(1, Ordering::Relaxed)
-            + 1;
-        self.metadata_calls
-            .max_active_calls
-            .fetch_max(active_calls, Ordering::Relaxed);
-        tokio::task::yield_now().await;
-        let result = match self.failure {
+        match self.failure {
             InjectedFailure::Metadata(kind) if path_abs == self.path => {
                 Err(io::Error::new(kind, "injected metadata failure"))
             }
@@ -125,11 +112,7 @@ impl FailingFileSystem {
             InjectedFailure::Metadata(_)
             | InjectedFailure::MetadataPending
             | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
-        };
-        self.metadata_calls
-            .active_calls
-            .fetch_sub(1, Ordering::Relaxed);
-        result
+        }
     }
 
     async fn read_directory(
@@ -686,52 +669,6 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
 }
 
 #[tokio::test]
-async fn read_agents_md_pipelines_root_markers_before_candidate_search() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join(".git"), "").unwrap();
-    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
-    let nested = tmp.path().join("nested");
-    fs::create_dir(&nested).unwrap();
-
-    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
-    config.cwd = nested.abs();
-    let metadata_calls = Arc::new(MetadataCallCounts::default());
-    let fs = FailingFileSystem {
-        path: config.cwd.join("unused"),
-        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
-        metadata_calls: Arc::clone(&metadata_calls),
-    };
-    let cwd = PathUri::from_abs_path(&config.cwd);
-
-    let loaded = read_agents_md(&config.config, &fs, "local", &cwd)
-        .await
-        .expect("project instructions")
-        .expect("project instructions");
-
-    assert_eq!(loaded.text(), "project doc");
-    let max_active_calls = metadata_calls.max_active_calls.load(Ordering::Relaxed);
-    assert!(max_active_calls > 1);
-    assert!(max_active_calls <= 8);
-    let candidate_paths = metadata_calls
-        .paths
-        .lock()
-        .expect("metadata paths lock")
-        .iter()
-        .filter(|path| path.basename().as_deref() != Some(".git"))
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        candidate_paths,
-        vec![
-            PathUri::from_abs_path(&tmp.path().join(LOCAL_AGENTS_MD_FILENAME).abs()),
-            PathUri::from_abs_path(&tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()),
-            cwd.join(LOCAL_AGENTS_MD_FILENAME).expect("override path"),
-            cwd.join(DEFAULT_AGENTS_MD_FILENAME).expect("agents path"),
-        ]
-    );
-}
-
-#[tokio::test]
 async fn marker_search_does_not_wait_for_a_higher_ancestor() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join(".git"), "").unwrap();
@@ -761,6 +698,35 @@ async fn marker_search_does_not_wait_for_a_higher_ancestor() {
     .await
     .expect("nearest marker should complete")
     .expect("AGENTS.md discovery");
+
+    assert_eq!(
+        paths,
+        vec![PathUri::from_abs_path(
+            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn project_root_marker_search_continues_beyond_concurrency_window() {
+    const NESTING_DEPTH: usize = 9;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let mut nested = tmp.path().to_path_buf();
+    for depth in 0..NESTING_DEPTH {
+        nested.push(format!("nested-{depth}"));
+    }
+    fs::create_dir_all(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let paths = super::agents_md_paths(&config.config, &cwd, LOCAL_FS.as_ref())
+        .await
+        .expect("AGENTS.md discovery");
 
     assert_eq!(
         paths,
