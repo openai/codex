@@ -13,8 +13,6 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use ratatui::prelude::Stylize as _;
-use ratatui::text::Line;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -118,18 +116,9 @@ impl App {
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
-                    let lines = crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification)
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, line)| {
-                            if idx == 0 {
-                                Line::from(vec!["• ".dim(), line.into()])
-                            } else {
-                                Line::from(vec!["  ".into(), line.into()])
-                            }
-                        })
-                        .collect();
-                    self.chat_widget.add_plain_history_lines(lines);
+                    self.chat_widget.add_plain_history_lines(
+                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
+                    );
                 }
                 return;
             }

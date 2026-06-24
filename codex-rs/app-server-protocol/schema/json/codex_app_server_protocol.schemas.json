@@ -12392,6 +12392,13 @@
             },
             "type": "array"
           },
+          "skills": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/v2/SkillMigration"
+            },
+            "type": "array"
+          },
           "subagents": {
             "default": [],
             "items": {
@@ -16335,6 +16342,17 @@
           "name",
           "path",
           "scope"
+        ],
+        "type": "object"
+      },
+      "SkillMigration": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },

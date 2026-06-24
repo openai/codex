@@ -116,40 +116,7 @@ pub(crate) fn external_agent_config_migration_count_summary<'a>(
 ) -> String {
     let mut counts = Vec::<(ExternalAgentConfigMigrationItemType, usize)>::new();
     for item in items {
-        let count = match item.item_type {
-            ExternalAgentConfigMigrationItemType::Plugins => {
-                item.details.as_ref().map_or(1, |details| {
-                    details
-                        .plugins
-                        .iter()
-                        .map(|plugin_group| plugin_group.plugin_names.len())
-                        .sum()
-                })
-            }
-            ExternalAgentConfigMigrationItemType::McpServerConfig => item
-                .details
-                .as_ref()
-                .map_or(1, |details| details.mcp_servers.len()),
-            ExternalAgentConfigMigrationItemType::Subagents => item
-                .details
-                .as_ref()
-                .map_or(1, |details| details.subagents.len()),
-            ExternalAgentConfigMigrationItemType::Hooks => item
-                .details
-                .as_ref()
-                .map_or(1, |details| details.hooks.len()),
-            ExternalAgentConfigMigrationItemType::Commands => item
-                .details
-                .as_ref()
-                .map_or(1, |details| details.commands.len()),
-            ExternalAgentConfigMigrationItemType::Sessions => item
-                .details
-                .as_ref()
-                .map_or(1, |details| details.sessions.len()),
-            ExternalAgentConfigMigrationItemType::AgentsMd
-            | ExternalAgentConfigMigrationItemType::Config
-            | ExternalAgentConfigMigrationItemType::Skills => 1,
-        };
+        let count = external_agent_config_migration_item_count(item);
         if let Some((_, type_count)) = counts
             .iter_mut()
             .find(|(item_type, _)| *item_type == item.item_type)
@@ -172,12 +139,59 @@ pub(crate) fn external_agent_config_migration_count_summary<'a>(
         .join(", ")
 }
 
+pub(crate) fn external_agent_config_migration_item_count(
+    item: &ExternalAgentConfigMigrationItem,
+) -> usize {
+    match item.item_type {
+        ExternalAgentConfigMigrationItemType::Plugins => {
+            item.details.as_ref().map_or(1, |details| {
+                details
+                    .plugins
+                    .iter()
+                    .map(|plugin_group| plugin_group.plugin_names.len())
+                    .sum()
+            })
+        }
+        ExternalAgentConfigMigrationItemType::McpServerConfig => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.mcp_servers.len()),
+        ExternalAgentConfigMigrationItemType::Subagents => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.subagents.len()),
+        ExternalAgentConfigMigrationItemType::Hooks => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.hooks.len()),
+        ExternalAgentConfigMigrationItemType::Commands => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.commands.len()),
+        ExternalAgentConfigMigrationItemType::Sessions => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.sessions.len()),
+        ExternalAgentConfigMigrationItemType::Skills => item
+            .details
+            .as_ref()
+            .map_or(1, |details| details.skills.len()),
+        ExternalAgentConfigMigrationItemType::AgentsMd
+        | ExternalAgentConfigMigrationItemType::Config => 1,
+    }
+}
+
 pub(crate) fn external_agent_config_migration_item_detail(
     item: &ExternalAgentConfigMigrationItem,
 ) -> Option<String> {
     let details = item.details.as_ref()?;
     match item.item_type {
         ExternalAgentConfigMigrationItemType::Plugins => None,
+        ExternalAgentConfigMigrationItemType::Skills => Some(format_counted_details(
+            "skill",
+            details.skills.len(),
+            details.skills.iter().map(|skill| skill.name.as_str()),
+        )),
         ExternalAgentConfigMigrationItemType::McpServerConfig => Some(format_counted_details(
             "MCP server",
             details.mcp_servers.len(),
@@ -210,8 +224,7 @@ pub(crate) fn external_agent_config_migration_item_detail(
                 .filter_map(|session| session.title.as_deref()),
         )),
         ExternalAgentConfigMigrationItemType::AgentsMd
-        | ExternalAgentConfigMigrationItemType::Config
-        | ExternalAgentConfigMigrationItemType::Skills => None,
+        | ExternalAgentConfigMigrationItemType::Config => None,
     }
 }
 
