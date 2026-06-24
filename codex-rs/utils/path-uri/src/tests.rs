@@ -685,6 +685,11 @@ fn join_collapses_redundant_absolute_separators() {
     for (base, path, expected) in [
         ("file:///workspace", "/tmp///", "file:///tmp/"),
         ("file:///workspace", "///", "file:///"),
+        (
+            "file:///workspace",
+            "///server/share///",
+            "file:///server/share/",
+        ),
         ("file:///C:/workspace", r"D:\tmp\\\", "file:///D:/tmp/"),
         ("file:///C:/workspace", r"D:\\\", "file:///D:/"),
         (
@@ -701,6 +706,28 @@ fn join_collapses_redundant_absolute_separators() {
         let base = PathUri::parse(base).expect("valid base URI");
         let expected = PathUri::parse(expected).expect("valid expected URI");
         assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_preserves_posix_double_slash_roots() {
+    let base = PathUri::parse("file:///workspace").expect("valid base URI");
+
+    for (path, expected) in [
+        ("//server//share/a/../b", "//server/share/b"),
+        ("//server/share///", "//server/share/"),
+        ("//", "//"),
+        ("//../../b", "//b"),
+    ] {
+        let joined = base.join(path).expect("absolute path should join");
+        let expected = serde_json::from_value::<LegacyAppPathString>(serde_json::json!(expected))
+            .expect("expected path should deserialize");
+
+        assert_eq!(
+            LegacyAppPathString::from_path_uri(&joined, PathConvention::Posix),
+            Ok(expected),
+            "joining {path}"
+        );
     }
 }
 
