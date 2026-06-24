@@ -689,6 +689,13 @@ fn join_normalizes_absolute_parent_segments() {
 #[test]
 fn join_absolute_parent_segments_stop_at_native_path_roots() {
     for (base, path, expected) in [
+        ("file:///workspace", "/a/..", "file:///"),
+        ("file:///C:/workspace", r"D:\a\..", "file:///D:/"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\..",
+            "file://server/share",
+        ),
         ("file:///workspace", "/../../b", "file:///b"),
         ("file:///C:/workspace", r"D:\..\..\b", "file:///D:/b"),
         (

@@ -33,7 +33,9 @@ pub(super) fn path_uri_from_segments<'a>(
             }
         }
     }
-    if has_trailing_separator {
+    if has_trailing_separator
+        || (convention == PathConvention::Windows && host.is_none() && depth == anchor_depth)
+    {
         normalized_segments.push("");
     }
     {
