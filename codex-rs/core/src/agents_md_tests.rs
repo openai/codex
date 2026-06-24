@@ -30,6 +30,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tempfile::TempDir;
@@ -37,6 +38,7 @@ use tempfile::TempDir;
 #[derive(Clone, Copy)]
 enum InjectedFailure {
     Metadata(io::ErrorKind),
+    MetadataPending,
     Read(io::ErrorKind),
 }
 
@@ -50,7 +52,7 @@ struct FailingFileSystem {
 struct MetadataCallCounts {
     active_calls: AtomicUsize,
     max_active_calls: AtomicUsize,
-    scalar_calls: AtomicUsize,
+    paths: Mutex<Vec<PathUri>>,
 }
 
 impl FailingFileSystem {
@@ -100,8 +102,10 @@ impl FailingFileSystem {
     ) -> io::Result<FileMetadata> {
         let path_abs = path.to_abs_path()?;
         self.metadata_calls
-            .scalar_calls
-            .fetch_add(1, Ordering::Relaxed);
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .push(path.clone());
         let active_calls = self
             .metadata_calls
             .active_calls
@@ -111,12 +115,16 @@ impl FailingFileSystem {
             .max_active_calls
             .fetch_max(active_calls, Ordering::Relaxed);
         tokio::task::yield_now().await;
-        let result = if path_abs == self.path
-            && let InjectedFailure::Metadata(kind) = self.failure
-        {
-            Err(io::Error::new(kind, "injected metadata failure"))
-        } else {
-            LOCAL_FS.get_metadata(path, sandbox).await
+        let result = match self.failure {
+            InjectedFailure::Metadata(kind) if path_abs == self.path => {
+                Err(io::Error::new(kind, "injected metadata failure"))
+            }
+            InjectedFailure::MetadataPending if path_abs == self.path => {
+                std::future::pending().await
+            }
+            InjectedFailure::Metadata(_)
+            | InjectedFailure::MetadataPending
+            | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
         };
         self.metadata_calls
             .active_calls
@@ -678,7 +686,7 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
 }
 
 #[tokio::test]
-async fn read_agents_md_pipelines_all_lexical_metadata_probes() {
+async fn read_agents_md_pipelines_root_markers_before_candidate_search() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join(".git"), "").unwrap();
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
@@ -700,13 +708,107 @@ async fn read_agents_md_pipelines_all_lexical_metadata_probes() {
         .expect("project instructions")
         .expect("project instructions");
 
-    let expected_probe_count = cwd.ancestors().count() * 3;
     assert_eq!(loaded.text(), "project doc");
+    let max_active_calls = metadata_calls.max_active_calls.load(Ordering::Relaxed);
+    assert!(max_active_calls > 1);
+    assert!(max_active_calls <= 8);
+    let candidate_paths = metadata_calls
+        .paths
+        .lock()
+        .expect("metadata paths lock")
+        .iter()
+        .filter(|path| path.basename().as_deref() != Some(".git"))
+        .cloned()
+        .collect::<Vec<_>>();
     assert_eq!(
-        metadata_calls.scalar_calls.load(Ordering::Relaxed),
-        expected_probe_count
+        candidate_paths,
+        vec![
+            PathUri::from_abs_path(&tmp.path().join(LOCAL_AGENTS_MD_FILENAME).abs()),
+            PathUri::from_abs_path(&tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()),
+            cwd.join(LOCAL_AGENTS_MD_FILENAME).expect("override path"),
+            cwd.join(DEFAULT_AGENTS_MD_FILENAME).expect("agents path"),
+        ]
     );
-    assert!(metadata_calls.max_active_calls.load(Ordering::Relaxed) > 1);
+}
+
+#[tokio::test]
+async fn marker_search_does_not_wait_for_a_higher_ancestor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let nested = tmp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let pending_marker = tmp
+        .path()
+        .parent()
+        .expect("tempdir parent")
+        .join(".git")
+        .abs();
+    let fs = FailingFileSystem {
+        path: pending_marker,
+        failure: InjectedFailure::MetadataPending,
+        metadata_calls: Arc::default(),
+    };
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let paths = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        super::agents_md_paths(&config.config, &cwd, &fs),
+    )
+    .await
+    .expect("nearest marker should complete")
+    .expect("AGENTS.md discovery");
+
+    assert_eq!(
+        paths,
+        vec![PathUri::from_abs_path(
+            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn empty_project_root_markers_only_probe_cwd_candidates() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "parent doc").unwrap();
+    let nested = tmp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "cwd doc").unwrap();
+
+    let mut config = make_config_with_project_root_markers(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &[],
+    )
+    .await;
+    config.cwd = nested.abs();
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: config.cwd.join("unused"),
+        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let paths = super::agents_md_paths(&config.config, &cwd, &fs)
+        .await
+        .expect("AGENTS.md discovery");
+
+    let override_path = cwd.join(LOCAL_AGENTS_MD_FILENAME).expect("override path");
+    let agents_path = cwd.join(DEFAULT_AGENTS_MD_FILENAME).expect("agents path");
+    assert_eq!(paths, vec![agents_path.clone()]);
+    assert_eq!(
+        metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .clone(),
+        vec![override_path, agents_path]
+    );
 }
 
 /// When `cwd` is nested inside a repo, the search should locate AGENTS.md

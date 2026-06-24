@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_file_system::ExecutorFileSystem;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::future::join_all;
@@ -47,28 +49,23 @@ pub async fn get_git_repo_root_with_fs(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let ancestors = cwd.ancestors().collect::<Vec<_>>();
-    let mut probes = Vec::with_capacity(ancestors.len() + 1);
-    probes.push(PathUri::from_abs_path(cwd));
-    probes.extend(
-        ancestors
-            .iter()
-            .map(|ancestor| PathUri::from_abs_path(&ancestor.join(".git"))),
-    );
-
-    let mut metadata = join_all(
-        probes
-            .iter()
-            .map(|path| fs.get_metadata(path, /*sandbox*/ None)),
+    let cwd_uri = PathUri::from_abs_path(cwd);
+    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+    let base_uri = PathUri::from_abs_path(&base);
+    find_nearest_ancestor_with_markers(
+        fs,
+        &base_uri,
+        vec![".git".to_string()],
+        FindUpErrorPolicy::Ignore,
+        /*sandbox*/ None,
     )
     .await
-    .into_iter();
-    let cwd_is_directory = matches!(metadata.next()?, Ok(metadata) if metadata.is_directory);
-    ancestors
-        .into_iter()
-        .zip(metadata)
-        .skip(usize::from(!cwd_is_directory))
-        .find_map(|(ancestor, metadata)| metadata.is_ok().then_some(ancestor))
+    .ok()??
+    .to_abs_path()
+    .ok()
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
