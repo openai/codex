@@ -35,7 +35,7 @@ enum CellRoute {
 enum CellMessage {
     Delegate {
         id: DelegateRequestId,
-        message: HostToClient,
+        request: DelegateRequest,
     },
     Closed,
 }
@@ -74,14 +74,7 @@ impl HostPeer {
         };
         self.route_cell_message(
             (session_id.clone(), cell_id.into()),
-            CellMessage::Delegate {
-                id,
-                message: HostToClient::DelegateRequest {
-                    id,
-                    session_id,
-                    request,
-                },
-            },
+            CellMessage::Delegate { id, request },
         );
 
         tokio::select! {
@@ -169,9 +162,18 @@ impl HostPeer {
         }
     }
 
-    async fn send_delegate_if_pending(&self, id: DelegateRequestId, message: HostToClient) {
+    async fn send_delegate_if_pending(
+        &self,
+        id: DelegateRequestId,
+        session_id: SessionId,
+        request: DelegateRequest,
+    ) {
         if self.pending.lock().await.contains_key(&id) {
-            self.send(message);
+            self.send(HostToClient::DelegateRequest {
+                id,
+                session_id,
+                request,
+            });
         }
     }
 }
@@ -196,8 +198,8 @@ async fn drive_cell(
                 break false;
             }
             message = messages_rx.recv() => match message {
-                Some(CellMessage::Delegate { id, message }) => {
-                    peer.send_delegate_if_pending(id, message).await;
+                Some(CellMessage::Delegate { id, request }) => {
+                    peer.send_delegate_if_pending(id, key.0.clone(), request).await;
                 }
                 Some(CellMessage::Closed) | None => break true,
             },
@@ -214,8 +216,8 @@ async fn drive_cell(
         loop {
             tokio::select! {
                 message = messages_rx.recv() => match message {
-                    Some(CellMessage::Delegate { id, message }) => {
-                        peer.send_delegate_if_pending(id, message).await;
+                    Some(CellMessage::Delegate { id, request }) => {
+                        peer.send_delegate_if_pending(id, key.0.clone(), request).await;
                     }
                     Some(CellMessage::Closed) | None => break,
                 },
