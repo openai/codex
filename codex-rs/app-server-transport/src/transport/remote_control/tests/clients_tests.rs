@@ -128,6 +128,10 @@ async fn remote_control_handle_revokes_client_while_disabled() {
             "DELETE /backend-api/wham/remote/control/environments/env%20%2F%3F/clients/client%20%2F%3F HTTP/1.1"
         );
         assert_eq!(
+            request.headers.get("authorization"),
+            Some(&"Bearer Access Token".to_string())
+        );
+        assert_eq!(
             request.headers.get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
             vec!["account_id"]
         );
@@ -159,12 +163,24 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
             stale_request.headers.get("authorization"),
             Some(&"Bearer stale-token".to_string())
         );
+        assert_eq!(
+            stale_request
+                .headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
+        );
         respond_with_status(stale_request.stream, "401 Unauthorized", "").await;
 
         let recovered_request = accept_http_request(&listener).await;
         assert_eq!(
             recovered_request.headers.get("authorization"),
             Some(&"Bearer fresh-token".to_string())
+        );
+        assert_eq!(
+            recovered_request
+                .headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
         );
         respond_with_json(recovered_request.stream, empty_client_list()).await;
     });
@@ -239,12 +255,24 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
             stale_request.headers.get("authorization"),
             Some(&"Bearer stale-token".to_string())
         );
+        assert_eq!(
+            stale_request
+                .headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
+        );
         respond_with_status(stale_request.stream, "401 Unauthorized", "").await;
 
         let recovered_request = accept_http_request(&listener).await;
         assert_eq!(
             recovered_request.headers.get("authorization"),
             Some(&"Bearer fresh-token".to_string())
+        );
+        assert_eq!(
+            recovered_request
+                .headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
         );
         respond_with_status(recovered_request.stream, "401 Unauthorized", "").await;
 
@@ -315,6 +343,14 @@ async fn revoke_remote_control_client_does_not_retry_forbidden() {
     let remote_control_url = remote_control_url_for_listener(&listener);
     let server_task = tokio::spawn(async move {
         let request = accept_http_request(&listener).await;
+        assert_eq!(
+            request.headers.get("authorization"),
+            Some(&"Bearer Access Token".to_string())
+        );
+        assert_eq!(
+            request.headers.get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            vec!["account_id"]
+        );
         respond_with_status_and_headers(
             request.stream,
             "403 Forbidden",

@@ -124,3 +124,100 @@ pub(super) fn mark_recovery_auth_change_seen(
         auth_change_rx.borrow_and_update();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_api::AuthProvider;
+    use pretty_assertions::assert_eq;
+
+    #[derive(Debug)]
+    struct TestAuthProvider {
+        account_ids: Vec<&'static str>,
+    }
+
+    impl AuthProvider for TestAuthProvider {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-token"),
+            );
+            headers.insert("x-openai-fedramp", HeaderValue::from_static("true"));
+            for account_id in &self.account_ids {
+                headers.append("ChatGPT-Account-ID", HeaderValue::from_static(account_id));
+            }
+        }
+    }
+
+    fn remote_control_auth(
+        account_id: &str,
+        provider_account_ids: Vec<&'static str>,
+    ) -> RemoteControlConnectionAuth {
+        RemoteControlConnectionAuth {
+            auth_provider: Arc::new(TestAuthProvider {
+                account_ids: provider_account_ids,
+            }),
+            account_id: account_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn request_headers_adds_account_header_when_provider_omits_it() {
+        let headers = remote_control_auth("selected-account", Vec::new())
+            .request_headers()
+            .expect("request headers should build");
+
+        assert_eq!(
+            headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER)
+                .iter()
+                .map(|value| value.to_str().expect("account header should be text"))
+                .collect::<Vec<_>>(),
+            vec!["selected-account"]
+        );
+    }
+
+    #[test]
+    fn request_headers_replaces_provider_accounts_and_preserves_other_headers() {
+        let headers = remote_control_auth(
+            "selected-account",
+            vec!["provider-account-a", "provider-account-b"],
+        )
+        .request_headers()
+        .expect("request headers should build");
+
+        assert_eq!(
+            headers
+                .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER)
+                .iter()
+                .map(|value| value.to_str().expect("account header should be text"))
+                .collect::<Vec<_>>(),
+            vec!["selected-account"]
+        );
+        assert_eq!(
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        assert_eq!(
+            headers
+                .get("x-openai-fedramp")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn request_headers_rejects_invalid_account_header_value() {
+        let err = remote_control_auth("invalid\naccount", Vec::new())
+            .request_headers()
+            .expect_err("invalid account header should fail");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .starts_with("invalid remote control account id header:")
+        );
+    }
+}

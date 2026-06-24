@@ -1481,8 +1481,8 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     assert_eq!(
         enroll_request
             .headers
-            .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
-        Some(&TEST_INSTALLATION_ID.to_string())
+            .get_all(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        vec![TEST_INSTALLATION_ID]
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&enroll_request.body)
@@ -1727,6 +1727,12 @@ async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecti
             .headers
             .get_all(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
         vec!["account_id"]
+    );
+    assert_eq!(
+        refresh_request
+            .headers
+            .get_all(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+        vec![TEST_INSTALLATION_ID]
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&refresh_request.body)
