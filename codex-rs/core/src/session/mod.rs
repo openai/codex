@@ -1337,8 +1337,15 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(rollout_items) => {
+            InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
+                if turn_context.config.features.enabled(Feature::ItemIds) {
+                    for rollout_item in &mut rollout_items {
+                        if let RolloutItem::ResponseItem(response_item) = rollout_item {
+                            Self::assign_missing_response_item_id(response_item);
+                        }
+                    }
+                }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -2723,29 +2730,33 @@ impl Session {
         }
         let mut items = items;
         for item in items.to_mut() {
-            if item.id().is_some() {
-                continue;
-            }
-            let prefix = match item {
-                ResponseItem::AdditionalTools { .. } => "at",
-                ResponseItem::Message { .. } => "msg",
-                ResponseItem::Reasoning { .. } => "rs",
-                ResponseItem::LocalShellCall { .. } => "lsh",
-                ResponseItem::FunctionCall { .. } => "fc",
-                ResponseItem::ToolSearchCall { .. } => "tsc",
-                ResponseItem::FunctionCallOutput { .. } => "fco",
-                ResponseItem::CustomToolCall { .. } => "ctc",
-                ResponseItem::CustomToolCallOutput { .. } => "ctco",
-                ResponseItem::ToolSearchOutput { .. } => "tso",
-                ResponseItem::WebSearchCall { .. } => "ws",
-                ResponseItem::ImageGenerationCall { .. } => "ig",
-                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-                ResponseItem::AgentMessage { .. } => "amsg",
-                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
-            };
-            item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
+            Self::assign_missing_response_item_id(item);
         }
         items
+    }
+
+    fn assign_missing_response_item_id(item: &mut ResponseItem) {
+        if item.id().is_some() {
+            return;
+        }
+        let prefix = match item {
+            ResponseItem::AdditionalTools { .. } => "at",
+            ResponseItem::Message { .. } => "msg",
+            ResponseItem::Reasoning { .. } => "rs",
+            ResponseItem::LocalShellCall { .. } => "lsh",
+            ResponseItem::FunctionCall { .. } => "fc",
+            ResponseItem::ToolSearchCall { .. } => "tsc",
+            ResponseItem::FunctionCallOutput { .. } => "fco",
+            ResponseItem::CustomToolCall { .. } => "ctc",
+            ResponseItem::CustomToolCallOutput { .. } => "ctco",
+            ResponseItem::ToolSearchOutput { .. } => "tso",
+            ResponseItem::WebSearchCall { .. } => "ws",
+            ResponseItem::ImageGenerationCall { .. } => "ig",
+            ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
+            ResponseItem::AgentMessage { .. } => "amsg",
+            ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => return,
+        };
+        item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
