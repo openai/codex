@@ -377,7 +377,8 @@ fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn image_generation_tool_enabled(turn_context: &TurnContext) -> bool {
-    image_generation_runtime_enabled(turn_context)
+    turn_context.provider.info().requires_openai_auth
+        && image_generation_runtime_enabled(turn_context)
         && turn_context
             .config
             .features
@@ -386,11 +387,10 @@ fn image_generation_tool_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
-    (turn_context
-        .provider
-        .info()
-        .uses_openai_actor_authorization()
-        || (turn_context.provider.info().requires_openai_auth
+    let provider_info = turn_context.provider.info();
+    (provider_info.uses_openai_actor_authorization()
+        || (provider_info.is_openai()
+            && provider_info.requires_openai_auth
             && turn_context
                 .auth_manager
                 .as_deref()
