@@ -404,6 +404,17 @@ Example:
 
 When `nextCursor` is `null`, you’ve reached the final page.
 
+To keep a paginated catalog current, call `threadCatalog/subscribe` before the initial
+`thread/list`. The response only acknowledges future notifications; it does not replay existing
+threads. Registration completes before the response is sent, so clients should buffer catalog
+notifications until their list request completes and apply `threadCatalog/changed` summaries
+idempotently. Its `upsert` variant contains the complete row, `delete` removes a row, and
+`invalidate` means the client fell behind and must refetch its catalog view. Reconnects require
+another subscribe and list sequence.
+
+`threadCatalog/changed` contains persisted sidebar metadata only. It never contains turns, items,
+messages, deltas, tool state, or loaded runtime status.
+
 ### Example: List descendant threads
 
 Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `ancestorThreadId` to page through every spawned descendant of a thread from persisted spawn-edge state. The ancestor itself is excluded, and each result's `parentThreadId` remains its immediate parent. Use `parentThreadId` instead when only direct children are wanted; sending both filters is invalid. Review and Guardian threads are not included because they do not participate in the spawn-edge lifecycle. When `modelProviders` or `sourceKinds` is omitted, relationship-filtered requests include every provider or source kind, respectively. Explicit filters retain the ordinary `thread/list` behavior, including the interactive-only default for an empty `sourceKinds` list.

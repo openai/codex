@@ -64,6 +64,7 @@ mod selected_environment;
 mod skills_list;
 mod sleep;
 mod thread_archive;
+mod thread_catalog_subscription;
 mod thread_delete;
 mod thread_fork;
 mod thread_inject_items;

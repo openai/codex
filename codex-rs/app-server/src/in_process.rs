@@ -107,6 +107,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
         notification,
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::ThreadCatalogChanged(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
 }
@@ -743,6 +744,7 @@ mod tests {
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadCatalogChangedNotification;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -913,6 +915,9 @@ mod tests {
                     item_type_results: Vec::new(),
                 },
             )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ThreadCatalogChanged(ThreadCatalogChangedNotification::Invalidate,)
         ));
     }
 }
