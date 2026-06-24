@@ -3373,13 +3373,13 @@ mod tests {
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
                 item_id: "msg-1".to_string(),
-                delta: "hel".to_string(),
+                delta: "hello ".to_string(),
             }),
             EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
                 item_id: "msg-1".to_string(),
-                delta: "lo".to_string(),
+                delta: "world".to_string(),
             }),
         ] {
             builder.handle_event(&event);
@@ -3389,7 +3389,7 @@ mod tests {
             builder.active_turn_snapshot().expect("active turn").items,
             vec![ThreadItem::AgentMessage {
                 id: "msg-1".to_string(),
-                text: "hello".to_string(),
+                text: "hello world".to_string(),
                 phase: None,
                 memory_citation: None,
             }]

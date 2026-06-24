@@ -406,14 +406,14 @@ async fn websocket_reconnect_resumes_in_progress_agent_message_deltas() -> Resul
         StreamingSseChunk {
             gate: Some(emit_deltas_rx),
             body: responses::sse(vec![
-                responses::ev_output_text_delta("hel"),
-                responses::ev_output_text_delta("lo"),
+                responses::ev_output_text_delta("hello "),
+                responses::ev_output_text_delta("world"),
             ]),
         },
         StreamingSseChunk {
             gate: Some(complete_turn_rx),
             body: responses::sse(vec![
-                responses::ev_assistant_message("msg-1", "hello"),
+                responses::ev_assistant_message("msg-1", "hello world"),
                 responses::ev_completed("resp-1"),
             ]),
         },
@@ -502,7 +502,7 @@ async fn websocket_reconnect_resumes_in_progress_agent_message_deltas() -> Resul
         if data.iter().any(|turn| {
             turn.status == TurnStatus::InProgress
                 && turn.items.iter().any(|item| {
-                    matches!(item, ThreadItem::AgentMessage { id, text, .. } if id == "msg-1" && text == "hello")
+                    matches!(item, ThreadItem::AgentMessage { id, text, .. } if id == "msg-1" && text == "hello world")
                 })
         }) {
             break;
@@ -539,7 +539,7 @@ async fn websocket_reconnect_resumes_in_progress_agent_message_deltas() -> Resul
         .find(|turn| turn.status == TurnStatus::InProgress)
         .expect("resume should include the in-progress turn");
     assert!(active_turn.items.iter().any(|item| {
-        matches!(item, ThreadItem::AgentMessage { id, text, .. } if id == "msg-1" && text == "hello")
+        matches!(item, ThreadItem::AgentMessage { id, text, .. } if id == "msg-1" && text == "hello world")
     }));
 
     complete_turn_tx
