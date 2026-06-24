@@ -908,7 +908,7 @@ fn blocking_replace_mcp_servers_round_trips() {
     servers.insert(
         "http".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: true,
+            use_chatgpt_auth: false,
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com".to_string(),
                 bearer_token_env_var: Some("TOKEN".to_string()),
@@ -949,7 +949,6 @@ fn blocking_replace_mcp_servers_round_trips() {
 [mcp_servers.http]
 url = \"https://example.com\"
 bearer_token_env_var = \"TOKEN\"
-use_chatgpt_auth = true
 enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]

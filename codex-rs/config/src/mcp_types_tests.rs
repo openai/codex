@@ -252,19 +252,6 @@ fn deserialize_streamable_http_server_config() {
 }
 
 #[test]
-fn deserialize_streamable_http_server_config_with_chatgpt_auth() {
-    let cfg: McpServerConfig = toml::from_str(
-        r#"
-            url = "https://example.com/mcp"
-            use_chatgpt_auth = true
-        "#,
-    )
-    .expect("should deserialize http config with ChatGPT auth");
-
-    assert!(cfg.use_chatgpt_auth);
-}
-
-#[test]
 fn deserialize_streamable_http_server_config_with_env_var() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
