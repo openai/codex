@@ -264,6 +264,7 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn = true;
                 }
+                RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
 
@@ -320,6 +321,7 @@ impl Session {
                         turn_context.model_info.truncation_policy.into(),
                     );
                 }
+                RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
                         // This should actually never happen, because the reverse loop above (to build rollout_suffix)

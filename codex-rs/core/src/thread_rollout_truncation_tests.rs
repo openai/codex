@@ -242,6 +242,46 @@ fn fork_turn_positions_use_inter_agent_delivery_metadata() {
 }
 
 #[test]
+fn fork_turn_positions_use_canonical_agent_messages_and_delivery_metadata() {
+    let queued = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "queued during user turn".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let triggered = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "follow-up task".to_string(),
+        /*trigger_turn*/ true,
+    );
+    let mut rollout = vec![
+        RolloutItem::ResponseItem(user_msg("user task")),
+        RolloutItem::InterAgentCommunicationMetadata {
+            trigger_turn: false,
+        },
+        RolloutItem::ResponseItem(queued.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("first answer")),
+        RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+        RolloutItem::ResponseItem(triggered.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("second answer")),
+        RolloutItem::ResponseItem(user_msg("next user task")),
+    ];
+
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 4, 7]);
+
+    rollout.insert(
+        7,
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    );
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 8]);
+}
+
+#[test]
 fn truncates_rollout_to_last_n_fork_turns_drops_startup_prefix_even_when_under_limit() {
     let rollout = vec![
         RolloutItem::ResponseItem(developer_msg("startup developer context")),
