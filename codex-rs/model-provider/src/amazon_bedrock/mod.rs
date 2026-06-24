@@ -305,30 +305,4 @@ mod tests {
             AMAZON_BEDROCK_GPT_5_4_MODEL_ID
         );
     }
-
-    #[tokio::test]
-    async fn unsupported_model_falls_back_to_bedrock_gpt_5_4() {
-        let provider = AmazonBedrockModelProvider::new(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            /*auth_manager*/ None,
-        );
-        let models_manager =
-            provider.models_manager(PathBuf::new(), /*config_model_catalog*/ None);
-
-        assert_eq!(
-            models_manager
-                .resolve_model(
-                    &Some("gpt-5.4-mini".to_string()),
-                    codex_models_manager::manager::RefreshStrategy::Offline,
-                )
-                .await,
-            codex_models_manager::ModelResolution {
-                model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
-                fallback: Some(codex_models_manager::UnsupportedModelFallback {
-                    requested_model: "gpt-5.4-mini".to_string(),
-                    fallback_model: AMAZON_BEDROCK_GPT_5_4_MODEL_ID.to_string(),
-                }),
-            }
-        );
-    }
 }

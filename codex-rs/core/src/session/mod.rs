@@ -215,7 +215,6 @@ mod handlers;
 mod inject;
 mod input_queue;
 mod mcp;
-mod model_resolution;
 pub(crate) mod multi_agents;
 mod review;
 mod rollout_budget;
@@ -568,6 +567,7 @@ impl Codex {
             )
         };
 
+        let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -581,13 +581,9 @@ impl Codex {
         {
             let _ = models_manager.list_models(refresh_strategy).await;
         }
-        let model = model_resolution::resolve_configured_model(
-            &mut config,
-            &models_manager,
-            refresh_strategy,
-        )
-        .await;
-        let config = Arc::new(config);
+        let model = models_manager
+            .get_default_model(&config.model, refresh_strategy)
+            .await;
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -1484,9 +1480,8 @@ impl Session {
 
     pub(crate) async fn update_settings(
         &self,
-        mut updates: SessionSettingsUpdate,
+        updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        self.resolve_settings_update_model(&mut updates).await;
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let (previous_config, new_config, permission_profile_changed) = {
             let mut state = self.state.lock().await;

@@ -1,5 +1,4 @@
 use super::cache::ModelsCacheManager;
-use crate::ModelResolution;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
@@ -145,8 +144,8 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
-    /// If `model` is provided, returns it directly. Otherwise selects the default based on
-    /// auth mode and available models.
+    /// If `model` is provided, returns it directly unless the implementation applies an explicit
+    /// provider fallback. Otherwise selects the default based on auth mode and available models.
     fn get_default_model<'a>(
         &'a self,
         model: &'a Option<String>,
@@ -165,21 +164,6 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
                 refresh_strategy = %refresh_strategy
             )),
         )
-    }
-
-    /// Resolve a requested model, applying provider-specific fallback policy when configured.
-    ///
-    /// Implementations with an open-ended model namespace should preserve explicit model names.
-    /// Implementations backed by an authoritative catalog may replace unsupported names with a
-    /// provider-owned fallback.
-    fn resolve_model<'a>(
-        &'a self,
-        model: &'a Option<String>,
-        refresh_strategy: RefreshStrategy,
-    ) -> ModelsManagerFuture<'a, ModelResolution> {
-        Box::pin(async move {
-            ModelResolution::exact(self.get_default_model(model, refresh_strategy).await)
-        })
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
@@ -466,29 +450,35 @@ impl ModelsManager for StaticModelsManager {
         builtin_collaboration_mode_presets()
     }
 
-    fn resolve_model<'a>(
+    fn get_default_model<'a>(
         &'a self,
         model: &'a Option<String>,
         refresh_strategy: RefreshStrategy,
-    ) -> ModelsManagerFuture<'a, ModelResolution> {
-        Box::pin(async move {
-            let Some(requested_model) = model.as_ref() else {
-                return ModelResolution::exact(
-                    self.get_default_model(model, refresh_strategy).await,
-                );
-            };
-            let Some(fallback_model) = self.unsupported_model_fallback.as_ref() else {
-                return ModelResolution::exact(requested_model.clone());
-            };
-            if self
-                .remote_models
-                .iter()
-                .any(|candidate| candidate.slug == *requested_model)
-            {
-                return ModelResolution::exact(requested_model.clone());
+    ) -> ModelsManagerFuture<'a, String> {
+        Box::pin(
+            async move {
+                let Some(requested_model) = model.as_ref() else {
+                    return default_model_from_available(self.list_models(refresh_strategy).await);
+                };
+                let Some(fallback_model) = self.unsupported_model_fallback.as_ref() else {
+                    return requested_model.clone();
+                };
+                if self
+                    .remote_models
+                    .iter()
+                    .any(|candidate| candidate.slug == *requested_model)
+                {
+                    requested_model.clone()
+                } else {
+                    fallback_model.clone()
+                }
             }
-            ModelResolution::fallback(requested_model.clone(), fallback_model.clone())
-        })
+            .instrument(tracing::info_span!(
+                "get_default_model",
+                model.provided = model.is_some(),
+                refresh_strategy = %refresh_strategy
+            )),
+        )
     }
 
     fn refresh_if_new_etag(&self, _etag: String) -> ModelsManagerFuture<'_, ()> {

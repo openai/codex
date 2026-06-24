@@ -4,13 +4,10 @@ pub(crate) mod config;
 pub mod manager;
 pub mod model_info;
 pub mod model_presets;
-mod resolution;
 pub mod test_support;
 
 pub use codex_protocol::auth::AuthMode;
 pub use config::ModelsManagerConfig;
-pub use resolution::ModelResolution;
-pub use resolution::UnsupportedModelFallback;
 
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()
