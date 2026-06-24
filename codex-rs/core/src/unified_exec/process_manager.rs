@@ -183,6 +183,7 @@ fn exec_server_params_for_request(
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
         managed_network: request.exec_server_managed_network.clone(),
+        bash_env_snapshot: None,
     }
 }
 

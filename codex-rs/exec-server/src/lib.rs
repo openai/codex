@@ -1,3 +1,4 @@
+mod bash_env_snapshot;
 mod client;
 mod client_api;
 mod client_transport;
@@ -88,6 +89,7 @@ pub use process::ExecProcessEvent;
 pub use process::ExecProcessEventReceiver;
 pub use process::ExecProcessFuture;
 pub use process::StartedExecProcess;
+pub use protocol::BashEnvSnapshotParams;
 pub use protocol::ByteChunk;
 pub use protocol::EnvironmentInfo;
 pub use protocol::ExecClosedNotification;

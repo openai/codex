@@ -151,6 +151,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })

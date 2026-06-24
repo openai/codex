@@ -33,6 +33,8 @@ reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true, features = [
@@ -67,6 +69,5 @@ ctor = { workspace = true }
 http = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
 test-case = "3.3.1"
 wiremock = { workspace = true }

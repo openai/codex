@@ -248,6 +248,7 @@ impl SessionHandle {
         if !self.entry.detach(self.connection_id) {
             return;
         }
+        self.entry.process.clear_bash_env_snapshots();
 
         let registry = Arc::clone(&self.registry);
         let session_id = self.entry.session_id.clone();

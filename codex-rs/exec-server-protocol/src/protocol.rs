@@ -144,6 +144,21 @@ pub struct ExecParams {
     /// continue to fail closed. This preserves compatibility with older clients.
     #[serde(default)]
     pub managed_network: Option<ManagedNetworkSandboxContext>,
+    /// Optional request to reuse a workspace-scoped Bash environment snapshot on the executor.
+    /// Older exec-server peers ignore this field, so callers must treat reuse as opportunistic.
+    #[serde(default)]
+    pub bash_env_snapshot: Option<BashEnvSnapshotParams>,
+}
+
+/// Parameters for executor-owned Bash environment snapshot capture and replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BashEnvSnapshotParams {
+    /// Workspace root that owns the captured environment. The command cwd must remain inside it.
+    /// Direct `BASH_ENV` startup must not be command-dependent, trap-setting, or builtin-shadowing.
+    pub workspace_root: PathUri,
+    /// Process environment keys that must win after the snapshot is sourced.
+    pub preserve_env_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -549,6 +564,7 @@ mod base64_bytes {
 
 #[cfg(test)]
 mod tests {
+    use super::BashEnvSnapshotParams;
     use super::EnvironmentInfo;
     use super::ExecParams;
     use super::FsReadFileParams;
@@ -563,14 +579,14 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+    fn exec_params_optional_context_round_trips_and_defaults_for_legacy_peers() {
         let cwd =
             PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                 .expect("cwd URI");
         let params = ExecParams {
             process_id: ProcessId::from("managed-network"),
             argv: vec!["true".to_string()],
-            cwd,
+            cwd: cwd.clone(),
             env_policy: None,
             env: HashMap::new(),
             tty: false,
@@ -581,6 +597,10 @@ mod tests {
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
+            }),
+            bash_env_snapshot: Some(BashEnvSnapshotParams {
+                workspace_root: cwd,
+                preserve_env_keys: vec!["PATH".to_string()],
             }),
         };
 
@@ -600,10 +620,15 @@ mod tests {
             .as_object_mut()
             .expect("exec params object")
             .remove("managedNetwork");
+        serialized
+            .as_object_mut()
+            .expect("exec params object")
+            .remove("bashEnvSnapshot");
         let legacy: ExecParams =
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
         assert!(legacy.enforce_managed_network);
         assert_eq!(legacy.managed_network, None);
+        assert_eq!(legacy.bash_env_snapshot, None);
     }
 
     #[test]
