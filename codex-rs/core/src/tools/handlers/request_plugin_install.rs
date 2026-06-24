@@ -173,15 +173,14 @@ impl RequestPluginInstallHandler {
         let tool_type = tool.tool_type();
 
         let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
-        let params = build_request_plugin_install_elicitation_request(
-            CODEX_APPS_MCP_SERVER_NAME,
-            session.thread_id.to_string(),
-            turn.sub_id.clone(),
-            suggest_reason,
-            &tool,
-        );
+        let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
-            .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
+            .request_mcp_server_elicitation(
+                turn.as_ref(),
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                request_id,
+                request,
+            )
             .await;
         let response = elicitation.response;
         if let Some(response) = response.as_ref() {

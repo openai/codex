@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::Instant;
@@ -26,10 +25,6 @@ use crate::turn_metadata::McpTurnMetadataContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
-use codex_app_server_protocol::McpElicitationObjectType;
-use codex_app_server_protocol::McpElicitationSchema;
-use codex_app_server_protocol::McpServerElicitationRequest;
-use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::ConfigLayerSource;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
@@ -46,6 +41,7 @@ use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -653,19 +649,19 @@ async fn maybe_request_codex_apps_auth_elicitation(
     };
 
     let request_id = rmcp::model::RequestId::String(plan.elicitation.elicitation_id.clone().into());
-    let params = McpServerElicitationRequestParams {
-        thread_id: sess.thread_id.to_string(),
-        turn_id: Some(turn_context.sub_id.clone()),
-        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        request: McpServerElicitationRequest::Url {
-            meta: Some(plan.elicitation.meta),
-            message: plan.elicitation.message,
-            url: plan.elicitation.url,
-            elicitation_id: plan.elicitation.elicitation_id,
-        },
+    let request = ElicitationRequest::Url {
+        meta: Some(plan.elicitation.meta),
+        message: plan.elicitation.message,
+        url: plan.elicitation.url,
+        elicitation_id: plan.elicitation.elicitation_id,
     };
     let response = sess
-        .request_mcp_server_elicitation(turn_context, request_id, params)
+        .request_mcp_server_elicitation(
+            turn_context,
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            request_id,
+            request,
+        )
         .await
         .response;
     if !response
@@ -1309,10 +1305,8 @@ async fn maybe_request_mcp_tool_approval(
         let request_id = rmcp::model::RequestId::String(
             format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
         );
-        let params = build_mcp_tool_approval_elicitation_request(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            McpToolApprovalElicitationRequest {
+        let request =
+            build_mcp_tool_approval_elicitation_request(McpToolApprovalElicitationRequest {
                 server: &invocation.server,
                 metadata,
                 tool_params: rendered_template
@@ -1325,12 +1319,16 @@ async fn maybe_request_mcp_tool_approval(
                     .as_ref()
                     .map(|rendered_template| rendered_template.elicitation_message.as_str()),
                 prompt_options,
-            },
-        );
+            });
         let decision = parse_mcp_tool_approval_elicitation_response(
-            sess.request_mcp_server_elicitation(turn_context.as_ref(), request_id, params)
-                .await
-                .response,
+            sess.request_mcp_server_elicitation(
+                turn_context.as_ref(),
+                invocation.server.clone(),
+                request_id,
+                request,
+            )
+            .await
+            .response,
             &question_id,
         );
         let decision = normalize_approval_decision_for_mode(decision, approval_mode);
@@ -1658,35 +1656,26 @@ fn build_mcp_tool_approval_fallback_message(
 }
 
 fn build_mcp_tool_approval_elicitation_request(
-    sess: &Session,
-    turn_context: &TurnContext,
     request: McpToolApprovalElicitationRequest<'_>,
-) -> McpServerElicitationRequestParams {
+) -> ElicitationRequest {
     let message = request
         .message_override
         .map(ToString::to_string)
         .unwrap_or_else(|| request.question.question.clone());
 
-    McpServerElicitationRequestParams {
-        thread_id: sess.thread_id.to_string(),
-        turn_id: Some(turn_context.sub_id.clone()),
-        server_name: request.server.to_string(),
-        request: McpServerElicitationRequest::Form {
-            meta: build_mcp_tool_approval_elicitation_meta(
-                request.server,
-                request.metadata,
-                request.tool_params,
-                request.tool_params_display,
-                request.prompt_options,
-            ),
-            message,
-            requested_schema: McpElicitationSchema {
-                schema_uri: None,
-                type_: McpElicitationObjectType::Object,
-                properties: BTreeMap::new(),
-                required: None,
-            },
-        },
+    ElicitationRequest::Form {
+        meta: build_mcp_tool_approval_elicitation_meta(
+            request.server,
+            request.metadata,
+            request.tool_params,
+            request.tool_params_display,
+            request.prompt_options,
+        ),
+        message,
+        requested_schema: serde_json::json!({
+            "type": "object",
+            "properties": {},
+        }),
     }
 }
 

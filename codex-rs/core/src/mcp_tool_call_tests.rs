@@ -653,9 +653,8 @@ fn truncates_strings_on_char_boundaries() {
     );
 }
 
-#[tokio::test]
-async fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
-    let (session, turn_context) = make_session_and_context().await;
+#[test]
+fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
     let question = build_mcp_tool_approval_question(
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
@@ -667,86 +666,75 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
         Some("Allow Calendar to create an event?"),
     );
 
-    let request = build_mcp_tool_approval_elicitation_request(
-        &session,
-        &turn_context,
-        McpToolApprovalElicitationRequest {
-            server: CODEX_APPS_MCP_SERVER_NAME,
-            metadata: Some(&approval_metadata(
-                Some("calendar"),
-                Some("Calendar"),
-                Some("Manage events and schedules."),
-                Some("Create Event"),
-                Some("Create a calendar event."),
-            )),
-            tool_params: Some(&serde_json::json!({
-                "calendar_id": "primary",
-                "title": "Roadmap review",
-            })),
-            tool_params_display: Some(&[
-                RenderedMcpToolApprovalParam {
-                    name: "calendar_id".to_string(),
-                    value: serde_json::json!("primary"),
-                    display_name: "Calendar".to_string(),
-                },
-                RenderedMcpToolApprovalParam {
-                    name: "title".to_string(),
-                    value: serde_json::json!("Roadmap review"),
-                    display_name: "Title".to_string(),
-                },
-            ]),
-            question,
-            message_override: Some("Allow Calendar to create an event?"),
-            prompt_options: prompt_options(
-                /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
-            ),
-        },
-    );
+    let request = build_mcp_tool_approval_elicitation_request(McpToolApprovalElicitationRequest {
+        server: CODEX_APPS_MCP_SERVER_NAME,
+        metadata: Some(&approval_metadata(
+            Some("calendar"),
+            Some("Calendar"),
+            Some("Manage events and schedules."),
+            Some("Create Event"),
+            Some("Create a calendar event."),
+        )),
+        tool_params: Some(&serde_json::json!({
+            "calendar_id": "primary",
+            "title": "Roadmap review",
+        })),
+        tool_params_display: Some(&[
+            RenderedMcpToolApprovalParam {
+                name: "calendar_id".to_string(),
+                value: serde_json::json!("primary"),
+                display_name: "Calendar".to_string(),
+            },
+            RenderedMcpToolApprovalParam {
+                name: "title".to_string(),
+                value: serde_json::json!("Roadmap review"),
+                display_name: "Title".to_string(),
+            },
+        ]),
+        question,
+        message_override: Some("Allow Calendar to create an event?"),
+        prompt_options: prompt_options(
+            /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
+        ),
+    });
 
     assert_eq!(
         request,
-        McpServerElicitationRequestParams {
-            thread_id: session.thread_id.to_string(),
-            turn_id: Some(turn_context.sub_id),
-            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            request: McpServerElicitationRequest::Form {
-                meta: Some(serde_json::json!({
-                    MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
-                    MCP_TOOL_APPROVAL_PERSIST_KEY: [
-                        MCP_TOOL_APPROVAL_PERSIST_SESSION,
-                        MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
-                    ],
-                    MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
-                    MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
-                    MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
-                    MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
-                    MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Create Event",
-                    MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Create a calendar event.",
-                    MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: {
-                        "calendar_id": "primary",
-                        "title": "Roadmap review",
-                    },
-                    MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: [
-                        {
-                            "name": "calendar_id",
-                            "value": "primary",
-                            "display_name": "Calendar",
-                        },
-                        {
-                            "name": "title",
-                            "value": "Roadmap review",
-                            "display_name": "Title",
-                        },
-                    ],
-                })),
-                message: "Allow Calendar to create an event?".to_string(),
-                requested_schema: McpElicitationSchema {
-                    schema_uri: None,
-                    type_: McpElicitationObjectType::Object,
-                    properties: BTreeMap::new(),
-                    required: None,
+        ElicitationRequest::Form {
+            meta: Some(serde_json::json!({
+                MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+                MCP_TOOL_APPROVAL_PERSIST_KEY: [
+                    MCP_TOOL_APPROVAL_PERSIST_SESSION,
+                    MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
+                ],
+                MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
+                MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
+                MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
+                MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
+                MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Create Event",
+                MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Create a calendar event.",
+                MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: {
+                    "calendar_id": "primary",
+                    "title": "Roadmap review",
                 },
-            },
+                MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: [
+                    {
+                        "name": "calendar_id",
+                        "value": "primary",
+                        "display_name": "Calendar",
+                    },
+                    {
+                        "name": "title",
+                        "value": "Roadmap review",
+                        "display_name": "Title",
+                    },
+                ],
+            })),
+            message: "Allow Calendar to create an event?".to_string(),
+            requested_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
         }
     );
 }
