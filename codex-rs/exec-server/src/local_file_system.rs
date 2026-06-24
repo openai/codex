@@ -22,6 +22,8 @@ use crate::FileSystemResult;
 use crate::FileSystemSandboxContext;
 use crate::ReadDirectoryEntry;
 use crate::RemoveOptions;
+use crate::WalkOptions;
+use crate::WalkOutcome;
 use crate::regular_file;
 use crate::sandboxed_file_system::SandboxedFileSystem;
 
@@ -170,6 +172,16 @@ impl LocalFileSystem {
         file_system.read_directory(path, sandbox).await
     }
 
+    async fn walk(
+        &self,
+        path: &PathUri,
+        options: WalkOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<WalkOutcome> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.walk(path, options, sandbox).await
+    }
+
     async fn remove(
         &self,
         path: &PathUri,
@@ -253,6 +265,15 @@ impl ExecutorFileSystem for LocalFileSystem {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         Box::pin(LocalFileSystem::read_directory(self, path, sandbox))
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        Box::pin(LocalFileSystem::walk(self, path, options, sandbox))
     }
 
     fn remove<'a>(

@@ -33,6 +33,8 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWalkParams;
+use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
@@ -196,6 +198,16 @@ impl FileSystemHandler {
             })
             .collect();
         Ok(FsReadDirectoryResponse { entries })
+    }
+
+    pub(crate) async fn walk(
+        &self,
+        params: FsWalkParams,
+    ) -> Result<FsWalkResponse, JSONRPCErrorError> {
+        self.file_system
+            .walk(&params.path, params.options, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)
     }
 
     pub(crate) async fn remove(
