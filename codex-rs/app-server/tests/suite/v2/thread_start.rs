@@ -37,6 +37,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -201,17 +202,18 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_uses_managed_new_thread_model_defaults() -> Result<()> {
+async fn thread_start_treats_managed_new_thread_model_settings_as_defaults() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
     let managed_model = all_model_presets()
         .iter()
         .find(|preset| {
-            preset
-                .service_tiers
-                .iter()
-                .any(|tier| tier.id == "priority")
+            preset.id != "gpt-5.2"
+                && preset
+                    .service_tiers
+                    .iter()
+                    .any(|tier| tier.id == "priority")
         })
         .context("expected a model with the fast service tier")?;
     std::fs::write(
@@ -230,22 +232,59 @@ service_tier = "fast"
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
+    let default_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let default_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(default_request_id)),
+    )
+    .await??;
+    let default_response: ThreadStartResponse = to_response(default_response)?;
+
+    assert_eq!(
+        (
+            default_response.model.as_str(),
+            default_response.reasoning_effort,
+            default_response.service_tier.as_deref(),
+        ),
+        (
+            managed_model.id.as_str(),
+            Some(ReasoningEffort::Medium),
+            Some("priority"),
+        )
+    );
+
+    let explicit_request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-requested".to_string()),
+            model: Some("gpt-5.2".to_string()),
+            service_tier: Some(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
+            config: Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                json!("low"),
+            )])),
             ..Default::default()
         })
         .await?;
-    let response: JSONRPCResponse = timeout(
+    let explicit_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(explicit_request_id)),
     )
     .await??;
-    let response: ThreadStartResponse = to_response(response)?;
+    let explicit_response: ThreadStartResponse = to_response(explicit_response)?;
 
-    assert_eq!(response.model, managed_model.id);
-    assert_eq!(response.reasoning_effort, Some(ReasoningEffort::Medium));
-    assert_eq!(response.service_tier.as_deref(), Some("priority"));
+    assert_eq!(
+        (
+            explicit_response.model.as_str(),
+            explicit_response.reasoning_effort,
+            explicit_response.service_tier.as_deref(),
+        ),
+        (
+            "gpt-5.2",
+            Some(ReasoningEffort::Low),
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE),
+        )
+    );
     Ok(())
 }
 
