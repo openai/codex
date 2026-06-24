@@ -241,13 +241,38 @@ for (;;) {
     .expect("initial response");
     let RuntimeResponse::Yielded {
         cell_id: yielded_cell_id,
-        content_items,
+        mut content_items,
     } = initial_response
     else {
         panic!("expected the output loop to yield");
     };
     assert_eq!(yielded_cell_id, running_cell_id);
-    assert!(!content_items.is_empty());
+    if content_items.is_empty() {
+        content_items = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let outcome = session
+                    .wait(WaitRequest {
+                        cell_id: running_cell_id.clone(),
+                        yield_time_ms: 100,
+                    })
+                    .await
+                    .expect("wait for output loop");
+                let WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+                    cell_id,
+                    content_items,
+                }) = outcome
+                else {
+                    panic!("expected the output loop to remain live: {outcome:?}");
+                };
+                assert_eq!(cell_id, running_cell_id);
+                if !content_items.is_empty() {
+                    break content_items;
+                }
+            }
+        })
+        .await
+        .expect("output timeout");
+    }
     assert!(content_items.iter().all(|item| {
         item == &FunctionCallOutputContentItem::InputText {
             text: "lots of output".to_string(),
