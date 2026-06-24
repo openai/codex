@@ -525,6 +525,20 @@ impl PluginRequestProcessor {
         }
     }
 
+    async fn force_refresh_codex_apps_for_plugin_list(&self, config: &Config) {
+        let environment_manager = self.thread_manager.environment_manager();
+        if let Err(err) = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+            config,
+            /*force_refetch*/ true,
+            Arc::clone(&environment_manager),
+            self.thread_manager.mcp_manager(),
+        )
+        .await
+        {
+            warn!("failed to force-refresh Codex Apps state for plugin/list: {err:#}");
+        }
+    }
+
     async fn plugin_list_response(
         &self,
         params: PluginListParams,
@@ -533,6 +547,7 @@ impl PluginRequestProcessor {
         let PluginListParams {
             cwds,
             marketplace_kinds,
+            force_refetch,
         } = params;
         let roots = cwds.unwrap_or_default();
         let explicit_marketplace_kinds = marketplace_kinds.is_some();
@@ -560,6 +575,11 @@ impl PluginRequestProcessor {
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
         plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
+
+        if force_refetch {
+            self.force_refresh_codex_apps_for_plugin_list(&config).await;
+        }
+
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
         let include_created_by_me_remote = marketplace_kinds
