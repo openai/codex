@@ -53,7 +53,7 @@ use codex_core_api::TuiPetAnchor;
 use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
-use codex_core_api::agent_graph_store_from_state_db;
+use codex_core_api::agent_graph_store_from_config;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::empty_extension_registry;
@@ -134,7 +134,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         user_instructions_provider,
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
-        agent_graph_store_from_state_db(state_db.as_ref()),
+        agent_graph_store_from_config(&config, state_db.as_ref()),
         state_db,
         installation_id,
         /*attestation_provider*/ None,

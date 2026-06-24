@@ -638,6 +638,7 @@ impl AgentControl {
 
     async fn persist_thread_spawn_edge_for_source(
         &self,
+        child_thread: &crate::CodexThread,
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
     ) {
@@ -645,6 +646,9 @@ impl AgentControl {
         else {
             return;
         };
+        if child_thread.config_snapshot().await.ephemeral {
+            return;
+        }
         let Ok(state) = self.upgrade() else {
             return;
         };

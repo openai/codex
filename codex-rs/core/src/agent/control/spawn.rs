@@ -353,6 +353,7 @@ impl AgentControl {
         state.notify_thread_created(new_thread.thread_id);
 
         self.persist_thread_spawn_edge_for_source(
+            new_thread.thread.as_ref(),
             new_thread.thread_id,
             notification_source.as_ref(),
         )
@@ -706,6 +707,7 @@ impl AgentControl {
             );
         }
         self.persist_thread_spawn_edge_for_source(
+            resumed_thread.thread.as_ref(),
             resumed_thread.thread_id,
             Some(&notification_source),
         )

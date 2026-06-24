@@ -17,6 +17,7 @@ use crate::session::resolve_multi_agent_version;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
+use codex_agent_graph_store::InMemoryAgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -285,12 +286,25 @@ pub fn thread_store_from_config(
     }
 }
 
-pub fn agent_graph_store_from_state_db(
+fn local_agent_graph_store_from_state_db(
     state_db: Option<&StateDbHandle>,
 ) -> Option<Arc<dyn AgentGraphStore>> {
     state_db.map(|state_db| {
         Arc::new(LocalAgentGraphStore::new(Arc::clone(state_db))) as Arc<dyn AgentGraphStore>
     })
+}
+
+/// Construct the agent graph store matching a config-selected local thread store.
+pub fn agent_graph_store_from_config(
+    config: &Config,
+    state_db: Option<&StateDbHandle>,
+) -> Option<Arc<dyn AgentGraphStore>> {
+    match &config.experimental_thread_store {
+        ThreadStoreConfig::Local => local_agent_graph_store_from_state_db(state_db),
+        ThreadStoreConfig::InMemory { id } => {
+            Some(InMemoryAgentGraphStore::for_id(id) as Arc<dyn AgentGraphStore>)
+        }
+    }
 }
 
 impl ThreadManager {
@@ -431,7 +445,7 @@ impl ThreadManager {
             },
             state_db.clone(),
         ));
-        let agent_graph_store = agent_graph_store_from_state_db(state_db.as_ref());
+        let agent_graph_store = local_agent_graph_store_from_state_db(state_db.as_ref());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),

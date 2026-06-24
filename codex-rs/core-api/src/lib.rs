@@ -34,7 +34,7 @@ pub use codex_core::StartThreadOptions;
 pub use codex_core::StateDbHandle;
 pub use codex_core::ThreadManager;
 pub use codex_core::ThreadShutdownReport;
-pub use codex_core::agent_graph_store_from_state_db;
+pub use codex_core::agent_graph_store_from_config;
 pub use codex_core::config::Config;
 pub use codex_core::config::Constrained;
 pub use codex_core::config::ExtraConfig;

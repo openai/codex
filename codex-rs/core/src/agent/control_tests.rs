@@ -850,6 +850,42 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
+async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
+    let (home, mut config) = test_config().await;
+    config.ephemeral = true;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("spawned"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("ephemeral agent spawn should succeed");
+
+    let persisted_children = harness
+        .state_db
+        .as_ref()
+        .expect("manager should retain state db")
+        .list_thread_spawn_children(parent_thread_id)
+        .await
+        .expect("persisted child list should load");
+    assert_eq!(persisted_children, Vec::<ThreadId>::new());
+    assert!(
+        harness.manager.get_thread(child_thread_id).await.is_ok(),
+        "ephemeral child should remain live"
+    );
+}
+
+#[tokio::test]
 async fn spawn_thread_subagent_uses_supplied_initial_multi_agent_mode_without_history() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
