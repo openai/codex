@@ -5,12 +5,18 @@ use super::Capability;
 use super::CapabilitySet;
 use super::ClientHello;
 use super::ClientToHost;
+use super::DelegateRequest;
+use super::DelegateResponse;
 use super::HandshakeRejectReason;
 use super::HostHello;
+use super::HostRequest;
+use super::HostResponse;
 use super::HostToClient;
 use super::ProtocolVersion;
 use super::SessionId;
 use super::SupportedProtocolVersions;
+use super::WireResult;
+use crate::CellId;
 
 fn session_id() -> SessionId {
     SessionId::new("session-1").expect("valid session ID")
@@ -94,16 +100,36 @@ fn handshake_wire_contract_is_explicit_and_round_trips() {
 fn session_lifecycle_wire_contract_is_explicit_and_round_trips() {
     let client_messages = [
         (
-            ClientToHost::OpenSession {
-                session_id: session_id(),
+            ClientToHost::Request {
+                id: 7,
+                request: HostRequest::OpenSession {
+                    session_id: session_id(),
+                },
             },
-            json!({ "type": "session/open", "sessionId": "session-1" }),
+            json!({
+                "type": "operation/request",
+                "id": 7,
+                "request": {
+                    "method": "session/open",
+                    "sessionId": "session-1",
+                },
+            }),
         ),
         (
-            ClientToHost::CloseSession {
-                session_id: session_id(),
+            ClientToHost::Request {
+                id: 8,
+                request: HostRequest::ShutdownSession {
+                    session_id: session_id(),
+                },
             },
-            json!({ "type": "session/close", "sessionId": "session-1" }),
+            json!({
+                "type": "operation/request",
+                "id": 8,
+                "request": {
+                    "method": "session/shutdown",
+                    "sessionId": "session-1",
+                },
+            }),
         ),
     ];
     for (message, encoded) in client_messages {
@@ -116,16 +142,46 @@ fn session_lifecycle_wire_contract_is_explicit_and_round_trips() {
 
     let host_messages = [
         (
-            HostToClient::SessionReady {
-                session_id: session_id(),
+            HostToClient::Response {
+                id: 7,
+                result: WireResult::Ok {
+                    value: HostResponse::SessionReady {
+                        session_id: session_id(),
+                    },
+                },
             },
-            json!({ "type": "session/ready", "sessionId": "session-1" }),
+            json!({
+                "type": "operation/response",
+                "id": 7,
+                "result": {
+                    "status": "ok",
+                    "value": {
+                        "type": "session/ready",
+                        "sessionId": "session-1",
+                    },
+                },
+            }),
         ),
         (
-            HostToClient::SessionClosed {
-                session_id: session_id(),
+            HostToClient::Response {
+                id: 8,
+                result: WireResult::Ok {
+                    value: HostResponse::SessionClosed {
+                        session_id: session_id(),
+                    },
+                },
             },
-            json!({ "type": "session/closed", "sessionId": "session-1" }),
+            json!({
+                "type": "operation/response",
+                "id": 8,
+                "result": {
+                    "status": "ok",
+                    "value": {
+                        "type": "session/closed",
+                        "sessionId": "session-1",
+                    },
+                },
+            }),
         ),
     ];
     for (message, encoded) in host_messages {
@@ -135,6 +191,61 @@ fn session_lifecycle_wire_contract_is_explicit_and_round_trips() {
             message
         );
     }
+}
+
+#[test]
+fn delegate_wire_contract_is_explicit_and_round_trips() {
+    let request = HostToClient::DelegateRequest {
+        id: 11,
+        session_id: session_id(),
+        request: DelegateRequest::Notify {
+            call_id: "call-1".to_string(),
+            cell_id: CellId::new("cell-1".to_string()),
+            text: "hello".to_string(),
+        },
+    };
+    let request_json = json!({
+        "type": "delegate/request",
+        "id": 11,
+        "sessionId": "session-1",
+        "request": {
+            "type": "notification/send",
+            "callId": "call-1",
+            "cellId": "cell-1",
+            "text": "hello",
+        },
+    });
+    assert_eq!(
+        serde_json::to_value(&request).expect("serialize"),
+        request_json
+    );
+    assert_eq!(
+        serde_json::from_value::<HostToClient>(request_json).expect("deserialize"),
+        request
+    );
+
+    let response = ClientToHost::DelegateResponse {
+        id: 11,
+        result: WireResult::Ok {
+            value: DelegateResponse::NotificationDelivered,
+        },
+    };
+    let response_json = json!({
+        "type": "delegate/response",
+        "id": 11,
+        "result": {
+            "status": "ok",
+            "value": { "type": "notification/delivered" },
+        },
+    });
+    assert_eq!(
+        serde_json::to_value(&response).expect("serialize"),
+        response_json
+    );
+    assert_eq!(
+        serde_json::from_value::<ClientToHost>(response_json).expect("deserialize"),
+        response
+    );
 }
 
 #[test]
@@ -168,7 +279,11 @@ fn invalid_protocol_states_cannot_be_constructed_or_decoded() {
     );
 
     for invalid in [
-        json!({ "type": "session/open", "sessionId": "" }),
+        json!({
+            "type": "operation/request",
+            "id": 1,
+            "request": { "method": "session/open", "sessionId": "" },
+        }),
         json!({
             "type": "connection/hello",
             "supportedVersions": [],
@@ -190,16 +305,21 @@ fn invalid_protocol_states_cannot_be_constructed_or_decoded() {
 fn unknown_fields_are_rejected() {
     assert!(
         serde_json::from_value::<ClientToHost>(json!({
-            "type": "session/open",
-            "sessionId": "session-1",
+            "type": "operation/request",
+            "id": 1,
+            "request": { "method": "session/open", "sessionId": "session-1" },
             "unexpected": true,
         }))
         .is_err()
     );
     assert!(
         serde_json::from_value::<HostToClient>(json!({
-            "type": "session/ready",
-            "sessionId": "session-1",
+            "type": "operation/response",
+            "id": 1,
+            "result": {
+                "status": "ok",
+                "value": { "type": "session/ready", "sessionId": "session-1" },
+            },
             "unexpected": true,
         }))
         .is_err()

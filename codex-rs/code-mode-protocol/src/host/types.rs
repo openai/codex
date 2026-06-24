@@ -8,6 +8,9 @@ use serde::Serialize;
 use serde::Serializer;
 use serde::de::Error as _;
 
+pub type RequestId = u64;
+pub type DelegateRequestId = u64;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ProtocolVersion(NonZeroU32);
