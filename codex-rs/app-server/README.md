@@ -1410,7 +1410,6 @@ There are additional item-specific events:
 
 - `item/commandExecution/outputDelta` — streams stdout/stderr for the command; append deltas in order to render live output alongside `aggregatedOutput` in the final item.
   Final `commandExecution` items include parsed `commandActions`, `status`, `exitCode`, and `durationMs` so the UI can summarize what ran and whether it succeeded.
-- Resolved read paths in `commandActions` use the selected execution environment's native path syntax.
 
 #### fileChange
 
