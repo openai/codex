@@ -34,7 +34,7 @@ foo = "bar"
 
 #[cfg(target_os = "windows")]
 #[test]
-fn non_strict_config_rejects_unelevated_windows_sandbox_with_network_proxy() -> Result<()> {
+fn non_strict_config_falls_back_for_unelevated_windows_sandbox_with_network_proxy() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -64,12 +64,7 @@ enabled = true
         .args(["--listen", "off"])
         .output()?;
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr)?;
-    assert!(
-        stderr.contains("The network proxy requires the elevated Windows sandbox backend"),
-        "expected Windows sandbox/network proxy config error in stderr, got: {stderr}"
-    );
+    assert!(output.status.success());
 
     Ok(())
 }

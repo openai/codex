@@ -515,7 +515,7 @@ pub async fn run_main_with_transport_options(
     {
         Ok(config) => (config, true),
         Err(err) => {
-            if strict_config || is_unrecoverable_config_error(&err) {
+            if strict_config {
                 return Err(err);
             }
 
