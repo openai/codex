@@ -262,12 +262,13 @@ mod tests {
                 agent_private_key: key_material.private_key_pkcs8_base64,
                 account_id: "account-1".to_string(),
                 chatgpt_user_id: "user-1".to_string(),
-                email: "agent@example.com".to_string(),
+                email: Some("agent@example.com".to_string()),
                 plan_type: PlanType::Plus,
                 chatgpt_account_is_fedramp,
                 task_id: Some("task-run-1".to_string()),
             },
             "https://auth.openai.com/api/accounts",
+            /*auth_route_config*/ None,
         )
         .await
         .expect("agent identity auth record should include task id")
@@ -324,6 +325,7 @@ mod tests {
             /*forced_chatgpt_workspace_id*/ None,
             /*chatgpt_base_url*/ None,
             AuthKeyringBackendKind::default(),
+            /*auth_route_config*/ None,
         )
         .await;
         let auth = auth_manager.auth().await.expect("auth should load");
