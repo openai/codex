@@ -422,7 +422,7 @@ impl ElicitationRoundTripFixture {
             AuthCredentialsStoreMode::File,
         )?;
 
-        let mut mcp = TestAppServer::new(codex_home.path()).await?;
+        let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.initialize_with_capabilities(
@@ -441,7 +441,7 @@ impl ElicitationRoundTripFixture {
         .await??;
 
         let thread_start_id = mcp
-            .send_thread_start_request(ThreadStartParams {
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("mock-model".to_string()),
                 ..Default::default()
             })
