@@ -175,6 +175,7 @@ SELECT
     threads.rollout_path,
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
     threads.source,
     threads.thread_source,
     threads.agent_path,
@@ -210,6 +211,7 @@ FROM threads
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            /*include_thread_id_tiebreaker*/ false,
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
@@ -545,6 +547,7 @@ SELECT
     threads.rollout_path,
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
+    threads.recency_at_ms AS recency_at,
     threads.source,
     threads.thread_source,
     threads.agent_nickname,

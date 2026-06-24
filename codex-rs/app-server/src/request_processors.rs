@@ -29,7 +29,6 @@ use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AdditionalContextEntry;
 use codex_app_server_protocol::AdditionalContextKind;
-use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppTemplateSummary;
@@ -76,6 +75,7 @@ use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
+use codex_app_server_protocol::GetWorkspaceMessagesResponse;
 use codex_app_server_protocol::GitDiffToRemoteParams;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
@@ -210,6 +210,8 @@ use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListParams;
+use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -255,7 +257,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
@@ -282,10 +283,16 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::WorkspaceMessage;
+use codex_app_server_protocol::WorkspaceMessageType;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
+use codex_backend_client::CodexWorkspaceMessage as BackendWorkspaceMessage;
+use codex_backend_client::CodexWorkspaceMessageType as BackendWorkspaceMessageType;
+use codex_backend_client::CodexWorkspaceMessagesResponse as BackendWorkspaceMessagesResponse;
 use codex_backend_client::ConsumeRateLimitResetCreditCode as BackendConsumeRateLimitResetCreditCode;
+use codex_backend_client::RequestError as BackendRequestError;
 use codex_backend_client::TokenUsageProfile;
 use codex_chatgpt::connectors;
 use codex_chatgpt::workspace_settings;
@@ -294,6 +301,7 @@ use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::ConfigLayerStack;
 use codex_config::loader::project_trust_key;
 use codex_config::types::McpServerTransportConfig;
+use codex_connectors::AppInfo;
 use codex_core::CodexThread;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::ForkSnapshot;
@@ -330,7 +338,6 @@ use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::loader::load_plugin_apps;
 use codex_core_plugins::loader::load_plugin_mcp_servers;
-use codex_core_plugins::loader::plugin_telemetry_metadata_from_root;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
@@ -390,9 +397,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
-use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 #[cfg(test)]
@@ -433,6 +437,7 @@ use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_thread_store::DeleteThreadParams as StoreDeleteThreadParams;
 use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
+use codex_thread_store::ListItemsParams as StoreListItemsParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadByRolloutPathParams as StoreReadThreadByRolloutPathParams;
@@ -441,6 +446,7 @@ use codex_thread_store::SearchThreadsParams as StoreSearchThreadsParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
+use codex_thread_store::ThreadRelationFilter as StoreThreadRelationFilter;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
@@ -539,6 +545,36 @@ fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, 
             .map_err(|err| invalid_request(format!("invalid cwd: {err}")))
     })
     .transpose()
+}
+
+fn resolve_turn_environment_selections(
+    thread_manager: &ThreadManager,
+    environments: Option<Vec<TurnEnvironmentParams>>,
+) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
+    let Some(environments) = environments else {
+        return Ok(None);
+    };
+    let mut selections = Vec::with_capacity(environments.len());
+    for environment in environments {
+        let environment_id = environment.environment_id;
+        let cwd = environment
+            .cwd
+            .to_inferred_path_uri()
+            .ok_or_else(|| {
+                invalid_request(format!(
+                    "invalid cwd for environment `{environment_id}`: path `{}` does not use absolute POSIX or Windows path syntax",
+                    environment.cwd
+                ))
+            })?;
+        selections.push(TurnEnvironmentSelection {
+            environment_id,
+            cwd,
+        });
+    }
+    thread_manager
+        .validate_environment_selections(&selections)
+        .map_err(environment_selection_error)?;
+    Ok(Some(selections))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

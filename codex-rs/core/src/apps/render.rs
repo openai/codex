@@ -1,6 +1,6 @@
+use crate::connectors::AppInfo;
 use crate::context::AppsInstructions;
 use crate::context::ContextualUserFragment;
-use codex_app_server_protocol::AppInfo;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 

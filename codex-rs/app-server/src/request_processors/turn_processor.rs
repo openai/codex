@@ -1,13 +1,70 @@
 use super::*;
+use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_utils_path_uri::PathUri;
+
+use crate::image_url::REMOTE_IMAGE_URL_ERROR;
+use crate::image_url::is_remote_image_url;
 
 const DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR: &str =
     "direct app-server input is not allowed for multi-agent v2 sub-agents";
+
+fn validate_user_input_image_urls(input: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+    if input.iter().any(|item| {
+        matches!(
+            item,
+            V2UserInput::Image { url, .. } if is_remote_image_url(url)
+        )
+    }) {
+        return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
+    }
+    Ok(())
+}
+
+fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONRPCErrorError> {
+    if items.iter().any(|item| match item {
+        ResponseItem::Message { content, .. } => content.iter().any(|item| {
+            matches!(
+                item,
+                ContentItem::InputImage { image_url, .. } if is_remote_image_url(image_url)
+            )
+        }),
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            output.content_items().is_some_and(|content| {
+                content.iter().any(|item| {
+                    matches!(
+                        item,
+                        FunctionCallOutputContentItem::InputImage { image_url, .. }
+                            if is_remote_image_url(image_url)
+                    )
+                })
+            })
+        }
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::AgentMessage { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::AdditionalTools { .. }
+        | ResponseItem::Other => false,
+    }) {
+        return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -61,6 +118,7 @@ struct ThreadSettingsBuildParams {
     effort: Option<ReasoningEffort>,
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
+    multi_agent_mode: Option<MultiAgentMode>,
     personality: Option<Personality>,
 }
 
@@ -102,12 +160,15 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            /*supports_openai_form_elicitation*/ supports_openai_form_elicitation,
         )
         .await
         .map(|response| Some(response.into()))
@@ -137,6 +198,7 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        validate_user_input_image_urls(&params.input)?;
         self.turn_steer_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
@@ -341,27 +403,6 @@ impl TurnRequestProcessor {
         Ok((review_request, hint))
     }
 
-    fn parse_environment_selections(
-        &self,
-        environments: Option<Vec<TurnEnvironmentParams>>,
-    ) -> Result<Option<Vec<TurnEnvironmentSelection>>, JSONRPCErrorError> {
-        let environment_selections = environments.map(|environments| {
-            environments
-                .into_iter()
-                .map(|environment| TurnEnvironmentSelection {
-                    environment_id: environment.environment_id,
-                    cwd: PathUri::from_abs_path(&environment.cwd),
-                })
-                .collect::<Vec<_>>()
-        });
-        if let Some(environment_selections) = environment_selections.as_ref() {
-            self.thread_manager
-                .validate_environment_selections(environment_selections)
-                .map_err(environment_selection_error)?;
-        }
-        Ok(environment_selections)
-    }
-
     async fn request_trace_context(
         &self,
         request_id: &ConnectionRequestId,
@@ -406,6 +447,7 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        supports_openai_form_elicitation: bool,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
@@ -432,8 +474,17 @@ impl TurnRequestProcessor {
         .inspect_err(|error| {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
+        thread
+            .set_openai_form_elicitation_support(supports_openai_form_elicitation)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to update OpenAI form elicitation support: {err}"
+                ))
+            })?;
 
-        let environment_selections = self.parse_environment_selections(params.environments)?;
+        let environment_selections =
+            resolve_turn_environment_selections(self.thread_manager.as_ref(), params.environments)?;
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -464,6 +515,7 @@ impl TurnRequestProcessor {
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )
@@ -570,6 +622,7 @@ impl TurnRequestProcessor {
             effort,
             summary,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         } = params;
 
@@ -603,6 +656,7 @@ impl TurnRequestProcessor {
             || effort.is_some()
             || summary.is_some()
             || collaboration_mode.is_some()
+            || multi_agent_mode.is_some()
             || personality.is_some();
 
         let runtime_workspace_roots =
@@ -679,6 +733,7 @@ impl TurnRequestProcessor {
                     summary,
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
+                    multi_agent_mode,
                     personality,
                 })
                 .await
@@ -702,6 +757,7 @@ impl TurnRequestProcessor {
             summary,
             service_tier,
             collaboration_mode,
+            multi_agent_mode,
             personality,
         })
     }
@@ -732,6 +788,7 @@ impl TurnRequestProcessor {
                     effort: params.effort,
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    multi_agent_mode: params.multi_agent_mode,
                     personality: params.personality,
                 },
             )
@@ -766,6 +823,7 @@ impl TurnRequestProcessor {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(invalid_request)?;
+        validate_response_item_image_urls(&items)?;
 
         thread
             .inject_response_items(items)
@@ -951,9 +1009,10 @@ impl TurnRequestProcessor {
             request_id,
             thread.as_ref(),
             Op::RealtimeConversationStart(ConversationStartParams {
-                architecture: params.architecture,
+                client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
                 codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
                 codex_response_item_prefix: params.codex_response_item_prefix,
+                codex_response_handoff_prefix: params.codex_response_handoff_prefix,
                 model: params.model,
                 output_modality: params.output_modality,
                 include_startup_context: params.include_startup_context.unwrap_or(true),
@@ -1178,11 +1237,12 @@ impl TurnRequestProcessor {
                 config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: parent_thread_id,
-                    history: parent_history.items,
+                    history: Arc::new(parent_history.items),
                     rollout_path: parent_thread.rollout_path(),
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                /*supports_openai_form_elicitation*/ false,
             )
             .await
             .map_err(|err| {

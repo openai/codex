@@ -5,6 +5,7 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 
 pub(super) const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
+pub(super) const RATE_LIMIT_SWITCH_PROMPT_VIEW_ID: &str = "rate-limit-switch-prompt";
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const PRIMARY_LIMIT_FALLBACK_LABEL: &str = "usage";
@@ -209,7 +210,19 @@ impl ChatWidget {
             {
                 self.codex_rate_limit_reached_type = Some(rate_limit_reached_type);
             }
-            let warnings = if is_codex_limit {
+
+            let has_workspace_credits = snapshot.credits.as_ref().is_some_and(|credits| {
+                credits.has_credits
+                    && (credits.unlimited
+                        || credits.balance.as_deref().is_some_and(|balance| {
+                            balance
+                                .trim()
+                                .parse::<f64>()
+                                .is_ok_and(|balance| balance > 0.0)
+                        }))
+            });
+            let should_warn_about_rate_limit_usage = is_codex_limit && !has_workspace_credits;
+            let warnings = if should_warn_about_rate_limit_usage {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
                         .secondary
@@ -243,12 +256,6 @@ impl ChatWidget {
                         .as_ref()
                         .map(|w| f64::from(w.used_percent) >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
                         .unwrap_or(false));
-
-            let has_workspace_credits = snapshot
-                .credits
-                .as_ref()
-                .map(|credits| credits.has_credits)
-                .unwrap_or(false);
 
             if high_usage
                 && !has_workspace_credits
@@ -399,6 +406,7 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID),
             title: Some("Approaching rate limits".to_string()),
             subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
             footer_hint: Some(standard_popup_hint_line()),

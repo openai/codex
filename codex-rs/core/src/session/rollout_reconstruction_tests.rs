@@ -9,8 +9,12 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionContextWindow;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -20,7 +24,7 @@ fn user_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -32,7 +36,7 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -51,7 +55,7 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
             text: serde_json::to_string(&communication).unwrap(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -69,7 +73,9 @@ async fn record_initial_history_reconstructs_typed_inter_agent_message() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: vec![RolloutItem::InterAgentCommunication(communication.clone())],
+            history: Arc::new(vec![RolloutItem::InterAgentCommunication(
+                communication.clone(),
+            )]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -88,7 +94,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -102,6 +108,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -111,7 +118,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -128,7 +135,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
     let mut previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -142,6 +149,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -187,7 +195,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -755,7 +763,7 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -826,6 +834,9 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -836,7 +847,7 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -866,7 +877,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_seed_referenc
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -883,6 +894,9 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -890,13 +904,123 @@ async fn record_initial_history_resumed_does_not_seed_reference_context_item_aft
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn reconstruct_history_restores_initial_window_from_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+        meta: SessionMeta {
+            session_id: thread_id.into(),
+            id: thread_id,
+            context_window: Some(SessionContextWindow {
+                window_id: initial_window_id.to_string(),
+            }),
+            ..SessionMeta::default()
+        },
+        git: None,
+    })];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 0);
+    assert_eq!(reconstructed.first_window_id, Some(initial_window_id));
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, Some(initial_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let compacted_first_window_id = Uuid::now_v7();
+    let compacted_previous_window_id = Uuid::now_v7();
+    let compacted_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: String::new(),
+            replacement_history: Some(Vec::new()),
+            window_number: Some(2),
+            first_window_id: Some(compacted_first_window_id.to_string()),
+            previous_window_id: Some(compacted_previous_window_id.to_string()),
+            window_id: Some(compacted_window_id.to_string()),
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 2);
+    assert_eq!(
+        reconstructed.first_window_id,
+        Some(compacted_first_window_id)
+    );
+    assert_eq!(
+        reconstructed.previous_window_id,
+        Some(compacted_previous_window_id)
+    );
+    assert_eq!(reconstructed.window_id, Some(compacted_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta_window() {
+    let (session, turn_context) = make_session_and_context().await;
+    let thread_id = ThreadId::default();
+    let initial_window_id = Uuid::now_v7();
+    let rollout_items = vec![
+        RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: thread_id.into(),
+                id: thread_id,
+                context_window: Some(SessionContextWindow {
+                    window_id: initial_window_id.to_string(),
+                }),
+                ..SessionMeta::default()
+            },
+            git: None,
+        }),
+        RolloutItem::Compacted(CompactedItem {
+            message: "legacy summary".to_string(),
+            replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.window_number, 1);
+    assert_eq!(reconstructed.first_window_id, None);
+    assert_eq!(reconstructed.previous_window_id, None);
+    assert_eq!(reconstructed.window_id, None);
 }
 
 #[tokio::test]
@@ -909,6 +1033,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
         RolloutItem::Compacted(CompactedItem {
             message: "legacy summary".to_string(),
             replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -941,6 +1068,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
         RolloutItem::Compacted(CompactedItem {
             message: "legacy summary".to_string(),
             replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -989,7 +1119,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -1003,6 +1133,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1035,6 +1166,9 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         RolloutItem::TurnContext(previous_context_item),
@@ -1052,7 +1186,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1071,7 +1205,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         serde_json::to_value(Some(TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             #[allow(deprecated)]
-            cwd: turn_context.cwd.to_path_buf(),
+            cwd: turn_context.cwd.clone(),
             workspace_roots: None,
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
@@ -1085,6 +1219,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             personality: turn_context.personality,
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
             multi_agent_version: None,
+            multi_agent_mode: None,
             realtime_active: Some(turn_context.realtime_active),
             effort: turn_context.reasoning_effort.clone(),
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1101,7 +1236,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -1115,6 +1250,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1185,6 +1321,9 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -1192,7 +1331,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1223,7 +1362,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
     let current_context_item = TurnContextItem {
         turn_id: Some(current_turn_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -1237,6 +1376,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1314,7 +1454,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1343,7 +1483,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -1357,6 +1497,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1419,6 +1560,9 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
     ];
@@ -1426,7 +1570,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1477,7 +1621,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
@@ -1506,7 +1650,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: turn_context.cwd.clone(),
         workspace_roots: None,
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
@@ -1520,6 +1664,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
+        multi_agent_mode: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -1583,6 +1728,9 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(Vec::new()),
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
             window_id: None,
         }),
         // A newer TurnStarted replaces the incomplete compacted turn without a matching
@@ -1601,7 +1749,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::default(),
-            history: rollout_items,
+            history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;

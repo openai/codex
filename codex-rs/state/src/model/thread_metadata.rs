@@ -9,6 +9,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// The sort key to use when listing threads.
@@ -18,6 +19,8 @@ pub enum SortKey {
     CreatedAt,
     /// Sort by the thread's last update timestamp.
     UpdatedAt,
+    /// Sort by the thread's product recency timestamp.
+    RecencyAt,
 }
 
 /// Sort direction to use when listing threads.
@@ -27,11 +30,22 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Spawn-graph relationship used to filter thread listings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadRelationFilter {
+    /// Return only threads whose immediate parent is the given thread.
+    DirectChildrenOf(ThreadId),
+    /// Return every thread transitively descended from the given thread.
+    DescendantsOf(ThreadId),
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The timestamp component of the anchor.
     pub ts: DateTime<Utc>,
+    /// The thread ID component used to disambiguate equal recency timestamps.
+    pub id: Option<ThreadId>,
 }
 
 /// A single page of thread metadata results.
@@ -39,6 +53,8 @@ pub struct Anchor {
 pub struct ThreadsPage {
     /// The thread metadata items in this page.
     pub items: Vec<ThreadMetadata>,
+    /// Immediate parents for page items found through the persisted spawn graph.
+    pub parent_thread_ids: HashMap<ThreadId, ThreadId>,
     /// The next anchor to use for pagination, if any.
     pub next_anchor: Option<Anchor>,
     /// The number of rows scanned to produce this page.
@@ -67,6 +83,8 @@ pub struct ThreadMetadata {
     pub created_at: DateTime<Utc>,
     /// The last update timestamp.
     pub updated_at: DateTime<Utc>,
+    /// The product recency timestamp.
+    pub recency_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
     /// Optional analytics source classification for this thread.
@@ -120,6 +138,8 @@ pub struct ThreadMetadataBuilder {
     pub created_at: DateTime<Utc>,
     /// The last update timestamp, if known.
     pub updated_at: Option<DateTime<Utc>>,
+    /// The product recency timestamp, if known.
+    pub recency_at: Option<DateTime<Utc>>,
     /// The session source.
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -163,6 +183,7 @@ impl ThreadMetadataBuilder {
             rollout_path,
             created_at,
             updated_at: None,
+            recency_at: None,
             source,
             thread_source: None,
             agent_nickname: None,
@@ -190,11 +211,16 @@ impl ThreadMetadataBuilder {
             .updated_at
             .map(canonicalize_datetime)
             .unwrap_or(created_at);
+        let recency_at = self
+            .recency_at
+            .map(canonicalize_datetime)
+            .unwrap_or(updated_at);
         ThreadMetadata {
             id: self.id,
             rollout_path: self.rollout_path.clone(),
             created_at,
             updated_at,
+            recency_at,
             source,
             thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
@@ -340,6 +366,7 @@ pub(crate) struct ThreadRow {
     rollout_path: String,
     created_at: i64,
     updated_at: i64,
+    recency_at: i64,
     source: String,
     thread_source: Option<String>,
     agent_nickname: Option<String>,
@@ -369,6 +396,7 @@ impl ThreadRow {
             rollout_path: row.try_get("rollout_path")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
+            recency_at: row.try_get("recency_at")?,
             source: row.try_get("source")?,
             thread_source: row.try_get("thread_source")?,
             agent_nickname: row.try_get("agent_nickname")?,
@@ -402,6 +430,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             rollout_path,
             created_at,
             updated_at,
+            recency_at,
             source,
             thread_source,
             agent_nickname,
@@ -432,6 +461,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
+            recency_at: epoch_millis_to_datetime(recency_at)?,
             source,
             thread_source,
             agent_nickname,
@@ -457,12 +487,20 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
     }
 }
 
-pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
+pub(crate) fn anchor_from_item(
+    item: &ThreadMetadata,
+    sort_key: SortKey,
+    include_thread_id_tiebreaker: bool,
+) -> Option<Anchor> {
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
+        SortKey::RecencyAt => item.recency_at,
     };
-    Some(Anchor { ts })
+    Some(Anchor {
+        ts,
+        id: (include_thread_id_tiebreaker || sort_key == SortKey::RecencyAt).then_some(item.id),
+    })
 }
 
 pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
@@ -519,6 +557,7 @@ mod tests {
             rollout_path: "/tmp/rollout-123.jsonl".to_string(),
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
+            recency_at: 1_700_000_100,
             source: "cli".to_string(),
             thread_source: None,
             agent_nickname: None,
@@ -549,6 +588,7 @@ mod tests {
             rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
+            recency_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
             thread_source: None,
             agent_nickname: None,

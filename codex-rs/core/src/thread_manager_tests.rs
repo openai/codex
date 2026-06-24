@@ -4,6 +4,7 @@ use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
+use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -42,7 +43,7 @@ fn user_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 fn assistant_msg(text: &str) -> ResponseItem {
@@ -53,7 +54,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
-        metadata: None,
+        internal_chat_message_metadata_passthrough: None,
     }
 }
 
@@ -68,6 +69,41 @@ fn developer_interrupted_marker() -> ResponseItem {
 }
 
 #[test]
+fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
+    for (metrics_service_name, persisted_originator, inherited_originator, expected_originator) in [
+        (
+            Some("codex_work_desktop"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_desktop",
+        ),
+        (
+            None,
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "persisted_originator",
+        ),
+        (
+            None,
+            None,
+            Some("inherited_originator"),
+            "inherited_originator",
+        ),
+    ] {
+        assert_eq!(
+            effective_originator_value(
+                metrics_service_name,
+                Some("Codex Desktop".to_string()),
+                persisted_originator.map(str::to_string),
+                inherited_originator.map(str::to_string),
+                "codex_cli_rs".to_string(),
+            ),
+            expected_originator
+        );
+    }
+}
+
+#[test]
 fn truncates_before_requested_user_message() {
     let items = [
         user_msg("u1"),
@@ -76,13 +112,13 @@ fn truncates_before_requested_user_message() {
         user_msg("u2"),
         assistant_msg("a3"),
         ResponseItem::Reasoning {
-            id: "r1".to_string(),
+            id: Some("r1".to_string()),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "s".to_string(),
             }],
             content: None,
             encrypted_content: None,
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -90,7 +126,7 @@ fn truncates_before_requested_user_message() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
-            metadata: None,
+            internal_chat_message_metadata_passthrough: None,
         },
         assistant_msg("a4"),
     ];
@@ -116,7 +152,7 @@ fn truncates_before_requested_user_message() {
         RolloutItem::ResponseItem(items[2].clone()),
     ];
     assert_eq!(
-        serde_json::to_value(&got_items).unwrap(),
+        serde_json::to_value(got_items).unwrap(),
         serde_json::to_value(&expected_items).unwrap()
     );
 
@@ -225,7 +261,10 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
-    let mut items = session.build_initial_context(&turn_context).await;
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let mut items = session
+        .build_initial_context_with_world_state(&turn_context, &world_state)
+        .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));
@@ -256,7 +295,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
     ];
 
     assert_eq!(
-        serde_json::to_value(&got_items).unwrap(),
+        serde_json::to_value(got_items).unwrap(),
         serde_json::to_value(&expected).unwrap()
     );
 }
@@ -322,9 +361,11 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("internal thread should start");
@@ -439,6 +480,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let selected_root_init = |id: &str, environment_id: &str| {
         let mut init = codex_extension_api::ExtensionDataInit::new();
@@ -446,7 +488,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             id: id.to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: environment_id.to_string(),
-                path: format!("/plugins/{id}"),
+                path: PathUri::parse(&format!("file:///plugins/{id}")).expect("plugin root URI"),
             },
         }]);
         init
@@ -460,9 +502,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start first thread");
@@ -474,9 +518,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-b", "env-b"),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start second thread");
@@ -545,6 +591,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
     let selected_cwd =
         AbsolutePathBuf::try_from(config.cwd.as_path().join("selected")).expect("absolute path");
@@ -564,9 +611,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: environments.clone(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -593,6 +642,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -606,11 +656,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(resumed_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         resumed_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 
     let forked = manager
@@ -633,11 +683,11 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     assert_eq!(forked_turn.environments.turn_environments.len(), 1);
     assert_eq!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &default_cwd
+        &PathUri::from_abs_path(&default_cwd)
     );
     assert_ne!(
         forked_turn.environments.turn_environments[0].cwd(),
-        &selected_cwd
+        &PathUri::from_abs_path(&selected_cwd)
     );
 }
 
@@ -666,6 +716,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         state_db.clone(),
         installation_id.clone(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let thread = manager
@@ -706,6 +757,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -729,6 +781,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume active source thread");
@@ -764,6 +817,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -792,6 +846,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume stopped source thread");
@@ -829,6 +884,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -839,9 +895,11 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             thread_source: Some(ThreadSource::User),
             dynamic_tools: Vec::new(),
             metrics_service_name: None,
+            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
         })
         .await
         .expect("start source thread");
@@ -868,6 +926,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             rollout_path,
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume source thread");
@@ -920,6 +979,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         state_db,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -942,11 +1002,12 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: source.thread_id,
-                history: vec![RolloutItem::ResponseItem(user_msg("hello"))],
+                history: Arc::new(vec![RolloutItem::ResponseItem(user_msg("hello"))]),
                 rollout_path: Some(rollout_path.clone()),
             }),
             auth_manager.clone(),
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("seed rollout path in store");
@@ -963,6 +1024,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             rollout_path.clone(),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("resume from rollout path");
@@ -1022,6 +1084,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -1243,6 +1306,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1254,6 +1318,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from completed history");
@@ -1289,7 +1354,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     assert!(!snapshot_turn_state(&history).ends_mid_turn);
     let rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
     let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
@@ -1350,6 +1415,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1368,6 +1434,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from explicit partial history");
@@ -1407,7 +1474,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         .expect("read forked rollout history");
     let rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
 
@@ -1447,6 +1514,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
     );
 
     let source = manager
@@ -1458,6 +1526,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             ]),
             auth_manager,
             /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
         )
         .await
         .expect("create source thread from partial history");
@@ -1492,7 +1561,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
 
     let forked_rollout_items: Vec<_> = history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
     let interrupted_marker_json = serde_json::to_value(RolloutItem::ResponseItem(
@@ -1530,7 +1599,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         .expect("read re-forked rollout history");
     let reforked_rollout_items: Vec<_> = reforked_history
         .get_rollout_items()
-        .into_iter()
+        .iter()
         .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
         .collect();
 

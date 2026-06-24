@@ -44,6 +44,33 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
             );
             continue;
         }
+        if feature.id == codex_features::Feature::TokenBudget {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::TokenBudgetConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::RolloutBudget {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::RolloutBudgetConfigToml,
+                >>(),
+            );
+            continue;
+        }
+        if feature.id == codex_features::Feature::CurrentTimeReminder {
+            validation.properties.insert(
+                feature.key.to_string(),
+                schema_gen.subschema_for::<codex_features::FeatureToml<
+                    codex_features::CurrentTimeReminderConfigToml,
+                >>(),
+            );
+            continue;
+        }
         if feature.id == codex_features::Feature::AppsMcpPathOverride {
             validation.properties.insert(
                 feature.key.to_string(),

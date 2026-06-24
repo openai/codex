@@ -247,9 +247,21 @@ impl ChatWidget {
         self.add_to_history(cell);
     }
 
-    pub(crate) fn finish_status_rate_limit_refresh(&mut self, request_id: u64) {
-        if self.refreshing_status_outputs.is_empty() {
+    pub(crate) fn finish_status_rate_limit_refresh(
+        &mut self,
+        request_id: u64,
+        snapshots: Vec<RateLimitSnapshot>,
+    ) {
+        if !self
+            .refreshing_status_outputs
+            .iter()
+            .any(|(pending_request_id, _)| *pending_request_id == request_id)
+        {
             return;
+        }
+
+        for snapshot in snapshots {
+            self.on_rate_limit_snapshot(Some(snapshot));
         }
 
         let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self

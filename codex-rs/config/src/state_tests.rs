@@ -52,7 +52,7 @@ fn active_user_layer_is_highest_precedence_user_layer() {
         toml::from_str(
             r#"
 model = "base"
-approval_policy = "on-failure"
+approval_policy = "on-request"
 "#,
         )
         .expect("base config"),
@@ -86,7 +86,7 @@ approval_policy = "on-failure"
             .expect("merged user config")
             .get("approval_policy")
             .and_then(toml::Value::as_str),
-        Some("on-failure")
+        Some("on-request")
     );
 }
 
@@ -107,7 +107,7 @@ fn with_user_config_updates_matching_user_layer_without_replacing_active_profile
             file: profile_file.clone(),
             profile: Some("work".to_string()),
         },
-        toml::from_str(r#"approval_policy = "on-failure""#).expect("profile config"),
+        toml::from_str(r#"approval_policy = "on-request""#).expect("profile config"),
     );
     let stack = ConfigLayerStack::new(
         vec![base_layer, profile_layer],
@@ -136,6 +136,6 @@ fn with_user_config_updates_matching_user_layer_without_replacing_active_profile
             .expect("merged user config")
             .get("approval_policy")
             .and_then(toml::Value::as_str),
-        Some("on-failure")
+        Some("on-request")
     );
 }

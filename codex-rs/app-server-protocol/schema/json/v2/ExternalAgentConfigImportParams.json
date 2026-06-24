@@ -117,6 +117,13 @@
           },
           "type": "array"
         },
+        "skills": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SkillMigration"
+          },
+          "type": "array"
+        },
         "subagents": {
           "default": [],
           "items": {
@@ -166,6 +173,17 @@
       ],
       "type": "object"
     },
+    "SkillMigration": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "SubagentMigration": {
       "properties": {
         "name": {
@@ -184,6 +202,13 @@
         "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
       },
       "type": "array"
+    },
+    "source": {
+      "description": "Source product that produced the migration items. Missing means unspecified.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

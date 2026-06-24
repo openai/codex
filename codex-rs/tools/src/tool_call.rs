@@ -43,12 +43,12 @@ pub enum ExtensionTurnItem {
 /// Host-provided capability for extension tools to emit visible turn items.
 ///
 /// Implementations route lifecycle events through the host's normal item event
-/// pipeline, including any persistence and client delivery owned by the host.
+/// pipeline and client delivery.
 pub trait TurnItemEmitter: Send + Sync {
     /// Emits the beginning of one visible turn item.
     fn emit_started<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 
-    /// Emits one visible turn item after host-owned finalization.
+    /// Emits one completed visible turn item.
     fn emit_completed<'a>(&'a self, item: ExtensionTurnItem) -> TurnItemEmissionFuture<'a>;
 }
 

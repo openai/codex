@@ -5,7 +5,10 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Duration;
 use chrono::Utc;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::GetAccountParams;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -14,6 +17,7 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -162,7 +166,7 @@ async fn get_auth_status_with_api_key() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> {
+async fn personal_access_token_without_email_supports_auth_status_and_account_read() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
@@ -171,7 +175,7 @@ async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> 
         .and(path("/v1/user-auth-credential/whoami"))
         .and(header("Authorization", "Bearer at-test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "email": "user@example.com",
+            "email": null,
             "chatgpt_user_id": "user-123",
             "chatgpt_account_id": "account-123",
             "chatgpt_plan_type": "pro",
@@ -212,6 +216,34 @@ async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> 
             auth_method: Some(AuthMode::PersonalAccessToken),
             auth_token: None,
             requires_openai_auth: Some(true),
+        }
+    );
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        response
+            .result
+            .get("account")
+            .and_then(|account| account.get("email")),
+        Some(&serde_json::Value::Null),
+    );
+    assert_eq!(
+        to_response::<GetAccountResponse>(response)?,
+        GetAccountResponse {
+            account: Some(Account::Chatgpt {
+                email: None,
+                plan_type: AccountPlanType::Pro,
+            }),
+            requires_openai_auth: true,
         }
     );
 

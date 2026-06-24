@@ -4,6 +4,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::AttestationGenerateResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -36,36 +37,26 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
 {
     skip_if_no_network!(Ok(()));
 
-    let websocket_server = start_websocket_server_with_headers(vec![
-        // App-server refreshes `/models` over HTTP during thread startup. It points at the same
-        // local test base URL, so let that non-websocket probe consume one connection before the
-        // websocket handshake under test arrives.
-        WebSocketConnectionConfig {
-            requests: Vec::new(),
-            response_headers: Vec::new(),
-            accept_delay: None,
-            close_after_requests: true,
-        },
-        WebSocketConnectionConfig {
-            requests: vec![
-                vec![
-                    responses::ev_response_created("warm-1"),
-                    responses::ev_completed("warm-1"),
-                ],
-                vec![
-                    responses::ev_response_created("resp-1"),
-                    responses::ev_assistant_message("msg-1", "Done"),
-                    responses::ev_completed("resp-1"),
-                ],
+    let websocket_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![
+                responses::ev_response_created("warm-1"),
+                responses::ev_completed("warm-1"),
             ],
-            response_headers: Vec::new(),
-            accept_delay: None,
-            close_after_requests: true,
-        },
-    ])
+            vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-1"),
+            ],
+        ],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: true,
+    }])
     .await;
 
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     create_chatgpt_websocket_config(
         codex_home.path(),
         &websocket_server.uri().replacen("ws://", "http://", 1),
@@ -90,6 +81,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
                 experimental_api: true,
                 request_attestation: true,
                 opt_out_notification_methods: None,
+                mcp_server_openai_form_elicitation: false,
             }),
         ),
     )

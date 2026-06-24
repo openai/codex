@@ -277,6 +277,7 @@ fn sample_thread_archive_request() -> ClientRequest {
 fn sample_thread(thread_id: &str) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
         parent_thread_id: None,
@@ -285,6 +286,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
+        recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
         cwd: test_path_buf("/tmp").abs(),
@@ -308,11 +310,12 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         cwd: test_path_buf("/tmp").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AppServerAskForApproval::OnFailure,
+        approval_policy: AppServerAskForApproval::OnRequest,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 
@@ -325,11 +328,12 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         cwd: test_path_buf("/tmp").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AppServerAskForApproval::OnFailure,
+        approval_policy: AppServerAskForApproval::OnRequest,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
         initial_turns_page: None,
     })
 }
@@ -343,11 +347,12 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         cwd: test_path_buf("/tmp").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AppServerAskForApproval::OnFailure,
+        approval_policy: AppServerAskForApproval::OnRequest,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        multi_agent_mode: Default::default(),
     })
 }
 

@@ -35,6 +35,15 @@ impl fmt::Debug for WindowsSandboxCancellationToken {
     }
 }
 
+/// Controls whether a Windows sandbox launch reconciles persistent proxy
+/// firewall settings or preserves the settings established by another launch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowsSandboxProxySettingsMode {
+    #[default]
+    Reconcile,
+    Preserve,
+}
+
 #[cfg(target_os = "windows")]
 mod acl;
 #[cfg(target_os = "windows")]
@@ -174,6 +183,8 @@ pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
+pub use helper_materialization::resolve_exe_for_launch;
+#[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
@@ -183,6 +194,8 @@ pub use identity::require_logon_sandbox_creds;
 pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::ErrorStage;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ExitPayload;
 #[cfg(target_os = "windows")]

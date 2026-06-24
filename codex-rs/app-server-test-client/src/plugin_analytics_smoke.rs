@@ -27,7 +27,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-const ANALYTICS_CAPTURE_ENV_VAR: &str = "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE";
+pub(super) const ANALYTICS_CAPTURE_ENV_VAR: &str = "CODEX_ANALYTICS_EVENTS_CAPTURE_FILE";
 const TEST_USER_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_TEST_USER_CONFIG_FILE";
 const CAPTURE_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -159,6 +159,7 @@ fn wait_for_plugin_usage(
 #[derive(Debug)]
 struct ExpectedPlugin {
     plugin_id: String,
+    remote_plugin_id: String,
     plugin_name: String,
     marketplace_name: String,
 }
@@ -208,13 +209,15 @@ fn expected_plugin(response: &PluginInstalledResponse, plugin_id: &str) -> Resul
             plugin.availability
         );
     }
-    plugin
+    let remote_plugin_id = plugin
         .remote_plugin_id
         .as_ref()
-        .with_context(|| format!("plugin `{plugin_id}` does not have a remote plugin id"))?;
+        .with_context(|| format!("plugin `{plugin_id}` does not have a remote plugin id"))?
+        .clone();
 
     Ok(ExpectedPlugin {
         plugin_id: plugin.id.clone(),
+        remote_plugin_id,
         plugin_name: plugin.name.clone(),
         marketplace_name: marketplace.name.clone(),
     })
@@ -282,7 +285,7 @@ fn quoted(value: &str) -> Result<String> {
     serde_json::to_string(value).context("serialize config string")
 }
 
-fn prepare_capture_file(path: &Path) -> Result<()> {
+pub(super) fn prepare_capture_file(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .context("capture file must have a parent directory")?;
@@ -444,6 +447,7 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
 fn validate_identity(event: &Value, expected: &ExpectedPlugin) -> Result<()> {
     let params = &event["event_params"];
     require_string(params, "plugin_id", &expected.plugin_id)?;
+    require_string(params, "remote_plugin_id", &expected.remote_plugin_id)?;
     require_string(params, "plugin_name", &expected.plugin_name)?;
     require_string(params, "marketplace_name", &expected.marketplace_name)
 }

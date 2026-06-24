@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_exec_server_protocol::JSONRPCError;
+use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCRequest;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -24,6 +25,8 @@ use tokio::task::JoinHandle;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+
+pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 
 #[derive(Debug)]
 pub(crate) enum RpcCallError {
@@ -225,6 +228,7 @@ pub(crate) struct RpcClient {
     // immediately when the socket closes, even if no JSON-RPC error response
     // can be delivered for their request id.
     disconnected_rx: watch::Receiver<bool>,
+    closed: Arc<AtomicBool>,
     next_request_id: AtomicI64,
     transport_tasks: Vec<JoinHandle<()>>,
     transport: JsonRpcTransport,
@@ -241,9 +245,11 @@ impl RpcClient {
             transport,
         } = connection;
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
+        let closed = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::channel(128);
 
         let pending_for_reader = Arc::clone(&pending);
+        let closed_for_reader = Arc::clone(&closed);
         let transport_for_reader = transport.clone();
         let reader_task = tokio::spawn(async move {
             let disconnect_reason = loop {
@@ -269,12 +275,13 @@ impl RpcClient {
                 }
             };
 
+            closed_for_reader.store(true, Ordering::Release);
+            drain_pending(&pending_for_reader).await;
             let _ = event_tx
                 .send(RpcClientEvent::Disconnected {
                     reason: disconnect_reason,
                 })
                 .await;
-            drain_pending(&pending_for_reader).await;
             transport_for_reader.terminate();
         });
 
@@ -283,6 +290,7 @@ impl RpcClient {
                 write_tx,
                 pending,
                 disconnected_rx,
+                closed,
                 next_request_id: AtomicI64::new(1),
                 transport_tasks,
                 transport,
@@ -296,24 +304,31 @@ impl RpcClient {
         &self,
         method: &str,
         params: &P,
-    ) -> Result<(), serde_json::Error> {
-        let params = serde_json::to_value(params)?;
+    ) -> Result<(), RpcCallError> {
+        let params = serde_json::to_value(params).map_err(RpcCallError::Json)?;
+        if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+            return Err(RpcCallError::Closed);
+        }
         self.write_tx
             .send(JSONRPCMessage::Notification(JSONRPCNotification {
                 method: method.to_string(),
                 params: Some(params),
             }))
             .await
-            .map_err(|_| {
-                serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "JSON-RPC transport closed",
-                ))
-            })
+            .map_err(|_| RpcCallError::Closed)
     }
 
     pub(crate) fn is_disconnected(&self) -> bool {
-        *self.disconnected_rx.borrow()
+        self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow()
+    }
+
+    pub(crate) async fn close_transport(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.transport.terminate();
+        for task in &self.transport_tasks {
+            task.abort();
+        }
+        drain_pending(&self.pending).await;
     }
 
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
@@ -328,7 +343,7 @@ impl RpcClient {
             // Registering the pending request and checking disconnect must be
             // atomic with the reader's drain_pending path. Otherwise a call
             // can sneak in after the drain and wait forever.
-            if *self.disconnected_rx.borrow() {
+            if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
                 return Err(RpcCallError::Closed);
             }
             pending.insert(request_id.clone(), response_tx);
@@ -347,7 +362,7 @@ impl RpcClient {
                 id: request_id.clone(),
                 method: method.to_string(),
                 params: Some(params),
-                trace: None,
+                trace: codex_otel::current_span_w3c_trace_context(),
             }))
             .await
             .is_err()
@@ -412,6 +427,14 @@ pub(crate) fn encode_server_message(
 pub(crate) fn invalid_request(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
         code: -32600,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn session_already_attached(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: SESSION_ALREADY_ATTACHED_ERROR_CODE,
         data: None,
         message,
     }
@@ -529,13 +552,19 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
 mod tests {
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::io::BufReader;
     use tokio::time::timeout;
+    use tracing::Instrument;
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::prelude::*;
 
     use super::RpcClient;
     use crate::connection::JsonRpcConnection;
@@ -640,5 +669,56 @@ mod tests {
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rpc_client_propagates_current_trace_context() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter)
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+        let parent_span = tracing::info_span!("outbound-parent");
+        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
+            .expect("parent span should have trace context");
+
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+        let connection =
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
+        let (client, _events_rx) = RpcClient::new(connection);
+
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let request = match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Request(request) => request,
+                other => panic!("expected JSON-RPC request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id.clone(),
+                    result: serde_json::json!({}),
+                }),
+            )
+            .await;
+            request.trace
+        });
+
+        let response = client
+            .call::<_, serde_json::Value>("traced", &serde_json::json!({}))
+            .instrument(parent_span)
+            .await
+            .expect("RPC response");
+        assert_eq!(response, serde_json::json!({}));
+        let trace = server.await.expect("server task").expect("trace context");
+        assert_eq!(trace, expected_trace);
     }
 }

@@ -19,6 +19,7 @@ use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -32,7 +33,6 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnItemsView;
@@ -567,6 +567,7 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
                 use_state_db_only: false,
                 search_term: None,
                 parent_thread_id: None,
+                ancestor_thread_id: None,
             },
         })
         .await?
@@ -830,11 +831,11 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -962,6 +963,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
             use_state_db_only: false,
             search_term: None,
             parent_thread_id: None,
+            ancestor_thread_id: None,
         })
         .await?;
     let list_resp: JSONRPCResponse = timeout(
@@ -1037,11 +1039,11 @@ async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Res
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -1088,11 +1090,11 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -1137,7 +1139,7 @@ async fn thread_turns_list_rejects_unmaterialized_loaded_thread() -> Result<()> 
 }
 
 #[tokio::test]
-async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
+async fn thread_items_list_returns_unsupported() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -1146,9 +1148,9 @@ async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
-        .send_thread_turns_items_list_request(ThreadTurnsItemsListParams {
-            thread_id: "thr_123".to_string(),
-            turn_id: "turn_456".to_string(),
+        .send_thread_items_list_request(ThreadItemsListParams {
+            thread_id: "00000000-0000-4000-8000-000000000123".to_string(),
+            turn_id: None,
             cursor: None,
             limit: None,
             sort_direction: None,
@@ -1163,7 +1165,7 @@ async fn thread_turns_items_list_returns_unsupported() -> Result<()> {
     assert_eq!(read_err.error.code, -32601);
     assert_eq!(
         read_err.error.message,
-        "thread/turns/items/list is not supported yet"
+        "thread/items/list is not supported yet"
     );
 
     Ok(())
@@ -1180,11 +1182,11 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -1357,15 +1359,18 @@ async fn seed_pathless_store_thread(
 ) -> Result<()> {
     store
         .create_thread(CreateThreadParams {
+            session_id: thread_id.into(),
             thread_id,
             extra_config: None,
             forked_from_id: None,
             parent_thread_id: None,
             source: ProtocolSessionSource::Cli,
             thread_source: None,
+            originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
             multi_agent_version: None,
+            initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

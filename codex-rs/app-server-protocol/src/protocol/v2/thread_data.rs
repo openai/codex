@@ -2,6 +2,7 @@ use super::CodexErrorInfo;
 use super::ThreadItem;
 use super::ThreadStatus;
 use super::TurnStatus;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadSource as CoreThreadSource;
@@ -120,6 +121,12 @@ impl From<ThreadSource> for CoreThreadSource {
     }
 }
 
+/// Extra app-server data for a thread.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadExtra {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -129,11 +136,15 @@ pub struct GitInfo {
     pub origin_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
+    /// Identifier for this thread. Codex-generated thread IDs are UUIDv7.
     pub id: String,
+    /// Optional implementation-specific thread data.
+    #[experimental("thread.extra")]
+    pub extra: Option<ThreadExtra>,
     /// Session id shared by threads that belong to the same session tree.
     pub session_id: String,
     /// Source thread id when this thread was created by forking another thread.
@@ -152,6 +163,9 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was last updated.
     #[ts(type = "number")]
     pub updated_at: i64,
+    /// Unix timestamp (in seconds) used for thread recency ordering.
+    #[ts(type = "number | null")]
+    pub recency_at: Option<i64>,
     /// Current runtime status for the thread.
     pub status: ThreadStatus,
     /// [UNSTABLE] Path to the thread on disk.
@@ -183,6 +197,7 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Turn {
+    /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,

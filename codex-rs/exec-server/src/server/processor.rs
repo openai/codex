@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::warn;
 
@@ -89,7 +90,7 @@ async fn run_connection(
                 warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
-                        request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                        request_id: codex_exec_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
                     })
                     .await
@@ -99,35 +100,45 @@ async fn run_connection(
                 }
             }
             JsonRpcConnectionEvent::Message(message) => match message {
-                codex_app_server_protocol::JSONRPCMessage::Request(request) => {
+                codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     if let Some(route) = router.request_route(request.method.as_str()) {
+                        let request_span = request_span(request.method.as_str(), &request);
                         let message = tokio::select! {
-                            message = route(Arc::clone(&handler), request) => message,
+                            message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
+                                request_span.record("result", "disconnected");
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
                         };
+                        let result = request_result(&message);
                         if let Some(message) = message
                             && outgoing_tx.send(message).await.is_err()
                         {
+                            request_span.record("result", "disconnected");
                             break;
                         }
-                    } else if outgoing_tx
-                        .send(RpcServerOutboundMessage::Error {
-                            request_id: request.id,
-                            error: method_not_found(format!(
-                                "exec-server stub does not implement `{}` yet",
-                                request.method
-                            )),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
+                        request_span.record("result", result);
+                    } else {
+                        let request_span = request_span("unknown", &request);
+                        if outgoing_tx
+                            .send(RpcServerOutboundMessage::Error {
+                                request_id: request.id,
+                                error: method_not_found(format!(
+                                    "exec-server stub does not implement `{}` yet",
+                                    request.method
+                                )),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            request_span.record("result", "disconnected");
+                            break;
+                        }
+                        request_span.record("result", "error");
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
+                codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
                         warn!(
@@ -150,14 +161,14 @@ async fn run_connection(
                         break;
                     }
                 }
-                codex_app_server_protocol::JSONRPCMessage::Response(response) => {
+                codex_exec_server_protocol::JSONRPCMessage::Response(response) => {
                     warn!(
                         "closing exec-server connection after unexpected client response: {:?}",
                         response.id
                     );
                     break;
                 }
-                codex_app_server_protocol::JSONRPCMessage::Error(error) => {
+                codex_exec_server_protocol::JSONRPCMessage::Error(error) => {
                     warn!(
                         "closing exec-server connection after unexpected client error: {:?}",
                         error.id
@@ -184,18 +195,54 @@ async fn run_connection(
     let _ = outbound_task.await;
 }
 
+fn request_span(
+    span_name: &str,
+    request: &codex_exec_server_protocol::JSONRPCRequest,
+) -> tracing::Span {
+    let method = request.method.as_str();
+    let span = tracing::info_span!(
+        "codex.exec_server.request",
+        otel.kind = "server",
+        otel.name = span_name,
+        method,
+        result = tracing::field::Empty,
+    );
+    if let Some(trace) = &request.trace
+        && !codex_otel::set_parent_from_w3c_trace_context(&span, trace)
+    {
+        warn!(method, "ignoring invalid inbound exec-server trace carrier");
+    }
+    span
+}
+
+fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
+    match message {
+        Some(RpcServerOutboundMessage::Error { .. }) => "error",
+        Some(
+            RpcServerOutboundMessage::Response { .. } | RpcServerOutboundMessage::Notification(_),
+        )
+        | None => "success",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::JSONRPCResponse;
-    use codex_app_server_protocol::RequestId;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::RequestId;
     use codex_utils_path_uri::PathUri;
+    use opentelemetry::trace::SpanId;
+    use opentelemetry::trace::TraceId;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+    use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
     use tokio::io::AsyncBufReadExt;
@@ -206,14 +253,19 @@ mod tests {
     use tokio::io::duplex;
     use tokio::task::JoinHandle;
     use tokio::time::timeout;
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::prelude::*;
 
+    use super::request_span;
     use super::run_connection;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
+    use crate::protocol::ENVIRONMENT_INFO_METHOD;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
+    use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
@@ -224,6 +276,89 @@ mod tests {
     use crate::protocol::TerminateParams;
     use crate::protocol::TerminateResponse;
     use crate::server::session_registry::SessionRegistry;
+
+    #[test]
+    fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let trace_id = TraceId::from_hex("00000000000000000000000000000001").expect("trace id");
+        let parent_span_id = SpanId::from_hex("0000000000000002").expect("span id");
+        let trace = codex_protocol::protocol::W3cTraceContext {
+            traceparent: Some(format!("00-{trace_id}-{parent_span_id}-01")),
+            tracestate: None,
+        };
+
+        let method = "custom/method";
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            let request = JSONRPCRequest {
+                id: RequestId::Integer(1),
+                method: method.to_string(),
+                params: None,
+                trace: Some(trace),
+            };
+            let request_span = request_span("unknown", &request);
+            request_span.in_scope(|| {});
+            drop(request_span);
+        });
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let request_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == "unknown")
+            .expect("unknown method span");
+        assert_eq!(
+            request_span
+                .attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == "method")
+                .map(|attribute| attribute.value.clone()),
+            Some(opentelemetry::Value::String(method.into()))
+        );
+        assert_eq!(request_span.span_context.trace_id(), trace_id);
+        assert_eq!(request_span.parent_span_id, parent_span_id);
+    }
+
+    #[tokio::test]
+    async fn connection_accepts_pipelined_scalar_requests() {
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "pipelined-scalar");
+
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        send_request(&mut writer, /*id*/ 2, ENVIRONMENT_INFO_METHOD, &()).await;
+        send_request(&mut writer, /*id*/ 3, ENVIRONMENT_INFO_METHOD, &()).await;
+
+        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 2).await;
+        let _: EnvironmentInfo = read_response(&mut lines, /*expected_id*/ 3).await;
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
@@ -397,12 +532,16 @@ mod tests {
         ExecParams {
             process_id,
             argv: sleep_then_print_argv(),
-            cwd: PathUri::from_path(std::env::current_dir().expect("cwd")).expect("cwd URI"),
+            cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                .expect("cwd URI"),
             env_policy: None,
             env,
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
         }
     }
 

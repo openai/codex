@@ -296,6 +296,7 @@ impl ChatWidget {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             id: ev.effective_approval_id(),
+            environment_id: ev.environment_id,
             command: ev.command,
             reason: ev.reason,
             available_decisions,
@@ -375,7 +376,8 @@ impl ChatWidget {
                     self.bottom_pane
                         .push_approval_request(request, &self.config.features);
                 }
-                McpServerElicitationRequest::Url { .. } => {
+                McpServerElicitationRequest::OpenAiForm { .. }
+                | McpServerElicitationRequest::Url { .. } => {
                     self.app_event_tx.resolve_elicitation(
                         thread_id,
                         params.server_name,

@@ -47,6 +47,7 @@ impl RequestPermissionsHandler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             cancellation_token,
             call_id,
             payload,
@@ -63,15 +64,25 @@ impl RequestPermissionsHandler {
         };
 
         let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) =
-            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+        let Some(turn_environment) = resolve_tool_environment(
+            &step_context.environments,
+            environment_args.environment_id.as_deref(),
+        )?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "request_permissions requires a primary environment".to_string(),
             ));
         };
+        // TODO(anp): Migrate request_permissions parsing and permission profiles to PathUri so
+        // environment-native foreign paths do not require host conversion.
+        let native_cwd = turn_environment.cwd().to_abs_path().map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "request_permissions cwd `{}` is not native to the Codex host: {err}",
+                turn_environment.cwd()
+            ))
+        })?;
         let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, turn_environment.cwd())?;
+            parse_arguments_with_base_path(&arguments, &native_cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;

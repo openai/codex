@@ -409,6 +409,7 @@ mod tests {
         };
         let read_thread = Thread {
             id: read_thread_id.to_string(),
+            extra: None,
             session_id: read_thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
@@ -417,6 +418,7 @@ mod tests {
             model_provider: "read-provider".to_string(),
             created_at: 1,
             updated_at: 2,
+            recency_at: Some(2),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
             cwd: test_path_buf("/tmp/read").abs(),

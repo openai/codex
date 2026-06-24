@@ -131,6 +131,13 @@ impl ChatWidget {
             .send(AppEvent::RawOutputModeChanged { enabled });
     }
 
+    fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
+        (!cmd.available_during_task() && self.bottom_pane.is_task_running())
+            || (cmd == SlashCommand::Resume
+                && (self.input_queue.user_turn_pending_start
+                    || self.turn_lifecycle.agent_turn_running))
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
@@ -138,7 +145,7 @@ impl ChatWidget {
         if !self.ensure_side_command_allowed_outside_review(cmd) {
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if self.slash_command_blocked_by_active_task(cmd) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -263,9 +270,11 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+                self.defer_input_until_settings_applied();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
+                self.defer_input_until_settings_applied();
             }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
@@ -293,6 +302,7 @@ impl ChatWidget {
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+                self.defer_input_until_settings_applied();
             }
             SlashCommand::Vim => {
                 self.toggle_vim_mode_and_notify();
@@ -434,8 +444,8 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Usage => {
-                if self.ensure_token_activity_command_available() {
-                    self.add_token_activity_output(tokens::TokenActivityView::Daily);
+                if self.ensure_usage_command_available() {
+                    self.open_usage_menu();
                 }
             }
             SlashCommand::Ide => {
@@ -545,7 +555,7 @@ impl ChatWidget {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if self.slash_command_blocked_by_active_task(cmd) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -658,7 +668,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Usage => {
-                if self.ensure_token_activity_command_available() {
+                if self.ensure_usage_command_available() {
                     match tokens::TokenActivityView::parse(trimmed) {
                         Some(view) => self.add_token_activity_output(view),
                         None => self.add_error_message(
@@ -1017,7 +1027,7 @@ impl ChatWidget {
         }
     }
 
-    fn ensure_token_activity_command_available(&mut self) -> bool {
+    fn ensure_usage_command_available(&mut self) -> bool {
         if self.has_codex_backend_auth {
             return true;
         }

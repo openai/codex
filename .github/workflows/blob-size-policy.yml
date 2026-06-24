@@ -32,3 +32,7 @@ jobs:
             --head "$HEAD_SHA" \
             --max-bytes 512000 \
             --allowlist .github/blob-size-allowlist.txt
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

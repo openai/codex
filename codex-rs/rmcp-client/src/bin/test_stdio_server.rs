@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
@@ -11,10 +13,13 @@ use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::InitializeRequestParams;
+use rmcp::model::InitializeResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
+use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::RawResource;
 use rmcp::model::RawResourceTemplate;
@@ -38,6 +43,7 @@ struct TestToolServer {
     tools: Arc<Vec<Tool>>,
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
+    supports_openai_form_elicitation: Arc<AtomicBool>,
 }
 
 const MEMO_URI: &str = "memo://codex/example-note";
@@ -65,9 +71,28 @@ impl TestToolServer {
         );
         sandbox_meta_tool.annotations = Some(ToolAnnotations::new().read_only(true));
 
+        #[expect(clippy::expect_used)]
+        let thread_hint_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("thread_hint tool schema should deserialize");
+        let mut thread_hint_tool = Tool::new(
+            Cow::Borrowed("thread_hint"),
+            Cow::Borrowed("Return an unstructured history hint for a thread."),
+            Arc::new(thread_hint_schema),
+        );
+        thread_hint_tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        let mut thread_hint_meta = Meta::new();
+        thread_hint_meta.insert("ui".to_string(), json!({ "visibility": [] }));
+        thread_hint_tool.meta = Some(thread_hint_meta);
+
         let tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
+            thread_hint_tool,
+            Self::client_capabilities_tool(),
             Self::cwd_tool(),
             Self::sync_tool(),
             Self::sync_readonly_tool(),
@@ -81,6 +106,7 @@ impl TestToolServer {
             tools: Arc::new(tools),
             resources: Arc::new(resources),
             resource_templates: Arc::new(resource_templates),
+            supports_openai_form_elicitation: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -162,6 +188,24 @@ impl TestToolServer {
         }))
         .expect("cwd tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn client_capabilities_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("client capabilities tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("client_capabilities"),
+            Cow::Borrowed("Return capabilities advertised by the MCP client."),
+            Arc::new(schema),
+        );
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }
@@ -396,6 +440,23 @@ struct ImageScenarioArgs {
 }
 
 impl ServerHandler for TestToolServer {
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<InitializeResult, McpError> {
+        self.supports_openai_form_elicitation.store(
+            request
+                .capabilities
+                .extensions
+                .as_ref()
+                .is_some_and(|extensions| extensions.contains_key("openai/form")),
+            Ordering::Relaxed,
+        );
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -481,6 +542,11 @@ impl ServerHandler for TestToolServer {
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
+            "client_capabilities" => Ok(Self::structured_result(json!({
+                "supportsOpenaiFormElicitation": self
+                    .supports_openai_form_elicitation
+                    .load(Ordering::Relaxed),
+            }))),
             "sandbox_meta" => Ok(Self::structured_result(serde_json::Value::Object(
                 context.meta.0,
             ))),
@@ -489,6 +555,22 @@ impl ServerHandler for TestToolServer {
                     .map(|path| path.to_string_lossy().into_owned())
                     .map_err(|err| McpError::internal_error(err.to_string(), None))?;
                 Ok(Self::structured_result(json!({ "cwd": cwd })))
+            }
+            "thread_hint" => {
+                let thread_id = context
+                    .meta
+                    .0
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing threadId metadata".to_string(), None)
+                    })?;
+                Ok(CallToolResult::success(vec![
+                    rmcp::model::Content::text(format!(
+                        "manual history hint for thread {thread_id}"
+                    )),
+                    rmcp::model::Content::text("unstructured notes/thread_hint fixture result"),
+                ]))
             }
             "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {

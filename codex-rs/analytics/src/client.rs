@@ -11,8 +11,11 @@ use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexGoalEvent;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ExternalAgentConfigImportCompletedInput;
+use crate::facts::ExternalAgentConfigImportFailureInput;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
+use crate::facts::PluginInstallFailedInput;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::SkillInvocation;
@@ -35,6 +38,7 @@ use codex_app_server_protocol::ServerResponse;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
+use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use std::collections::HashSet;
@@ -170,7 +174,15 @@ impl AnalyticsEventsQueue {
         if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
-        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
+        let Some(plugin_id) = plugin
+            .plugin_id
+            .as_ref()
+            .map(PluginId::as_key)
+            .or_else(|| plugin.remote_plugin_id.clone())
+        else {
+            return true;
+        };
+        emitted.insert((tracking.turn_id.clone(), plugin_id))
     }
 }
 
@@ -340,6 +352,33 @@ impl AnalyticsEventsClient {
                 plugin,
                 state: PluginState::Installed,
             }),
+        ));
+    }
+
+    pub fn track_plugin_install_failed(&self, plugin: PluginTelemetryMetadata, error_type: String) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginInstallFailed(PluginInstallFailedInput {
+                plugin,
+                error_type,
+            }),
+        ));
+    }
+
+    pub fn track_external_agent_config_import_completed(
+        &self,
+        input: ExternalAgentConfigImportCompletedInput,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ExternalAgentConfigImportCompleted(input),
+        ));
+    }
+
+    pub fn track_external_agent_config_import_failure(
+        &self,
+        input: ExternalAgentConfigImportFailureInput,
+    ) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ExternalAgentConfigImportFailure(input),
         ));
     }
 

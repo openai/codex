@@ -6,6 +6,7 @@ mod seatbelt;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use anyhow::Context as _;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -16,6 +17,8 @@ use codex_core::exec_env::create_env;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
@@ -45,6 +48,7 @@ pub async fn run_command_under_seatbelt(
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
+        sandbox_state,
         permissions_profile,
         config_profile: _,
         cwd,
@@ -60,6 +64,7 @@ pub async fn run_command_under_seatbelt(
     );
     run_command_under_sandbox(
         DebugSandboxConfigOptions {
+            sandbox_state,
             permissions_profile,
             cwd,
             managed_requirements_mode,
@@ -90,6 +95,7 @@ pub async fn run_command_under_landlock(
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
     let LandlockCommand {
+        sandbox_state,
         permissions_profile,
         config_profile: _,
         cwd,
@@ -103,6 +109,7 @@ pub async fn run_command_under_landlock(
     );
     run_command_under_sandbox(
         DebugSandboxConfigOptions {
+            sandbox_state,
             permissions_profile,
             cwd,
             managed_requirements_mode,
@@ -124,6 +131,7 @@ pub async fn run_command_under_windows_sandbox(
     loader_overrides: LoaderOverrides,
 ) -> anyhow::Result<()> {
     let WindowsCommand {
+        sandbox_state,
         permissions_profile,
         config_profile: _,
         cwd,
@@ -137,6 +145,7 @@ pub async fn run_command_under_windows_sandbox(
     );
     run_command_under_sandbox(
         DebugSandboxConfigOptions {
+            sandbox_state,
             permissions_profile,
             cwd,
             managed_requirements_mode,
@@ -161,6 +170,7 @@ enum SandboxType {
 
 #[derive(Debug)]
 struct DebugSandboxConfigOptions {
+    sandbox_state: crate::SandboxStateArgs,
     permissions_profile: Option<String>,
     cwd: Option<PathBuf>,
     managed_requirements_mode: ManagedRequirementsMode,
@@ -187,7 +197,7 @@ impl ManagedRequirementsMode {
 }
 
 async fn run_command_under_sandbox(
-    config_options: DebugSandboxConfigOptions,
+    mut config_options: DebugSandboxConfigOptions,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -196,6 +206,34 @@ async fn run_command_under_sandbox(
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     allow_unix_sockets: &[AbsolutePathBuf],
 ) -> anyhow::Result<()> {
+    let sandbox_state = config_options
+        .sandbox_state
+        .sandbox_state_json
+        .as_deref()
+        .map(serde_json::from_str::<codex_mcp::SandboxState>)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("invalid --sandbox-state-json value: {err}"))?;
+    let sandbox_state_readable_root = config_options
+        .sandbox_state
+        .sandbox_state_readable_root
+        .clone();
+    let sandbox_state_disable_network = config_options.sandbox_state.sandbox_state_disable_network;
+    let codex_linux_sandbox_exe = match sandbox_state.as_ref() {
+        Some(state) => {
+            config_options.cwd = Some(
+                state
+                    .sandbox_cwd
+                    .to_abs_path()
+                    .context("sandbox state cwd is not native to this host")?
+                    .to_path_buf(),
+            );
+            state
+                .codex_linux_sandbox_exe
+                .clone()
+                .or(codex_linux_sandbox_exe)
+        }
+        None => codex_linux_sandbox_exe,
+    };
     let config = load_debug_sandbox_config(
         config_overrides
             .parse_overrides()
@@ -220,12 +258,75 @@ async fn run_command_under_sandbox(
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
     );
+    let mut permission_profile = match sandbox_state.as_ref() {
+        Some(state) => match &state.permission_profile {
+            PermissionProfile::External { .. } => {
+                // `External` only says that the producer relies on an outer sandbox; it does not
+                // include filesystem permissions we can recreate here. The consumer may not share
+                // that sandbox, so use a locally enforceable read-only profile instead of spawning
+                // without a sandbox.
+                PermissionProfile::read_only()
+            }
+            permission_profile => permission_profile.clone(),
+        },
+        None => config.permissions.effective_permission_profile(),
+    };
+    if matches!(permission_profile, PermissionProfile::Disabled) && sandbox_state_disable_network {
+        anyhow::bail!(
+            "--sandbox-state-disable-network cannot be applied to a disabled permission profile"
+        );
+    }
+    if !matches!(permission_profile, PermissionProfile::Disabled)
+        && (!sandbox_state_readable_root.is_empty() || sandbox_state_disable_network)
+    {
+        let file_system = permission_profile
+            .file_system_sandbox_policy()
+            .with_additional_readable_roots(&cwd, &sandbox_state_readable_root);
+        let network = if sandbox_state_disable_network {
+            NetworkSandboxPolicy::Restricted
+        } else {
+            permission_profile.network_sandbox_policy()
+        };
+        permission_profile = PermissionProfile::from_runtime_permissions(&file_system, network);
+    }
+    let use_legacy_landlock = sandbox_state.as_ref().map_or_else(
+        || config.features.use_legacy_landlock(),
+        |state| state.use_legacy_landlock,
+    );
+
+    match permission_profile.enforcement() {
+        SandboxEnforcement::Managed => {}
+        SandboxEnforcement::Disabled | SandboxEnforcement::External => {
+            let (program, args) = command
+                .split_first()
+                .context("sandbox command must not be empty")?;
+            let mut child = spawn_debug_sandbox_child(
+                PathBuf::from(program),
+                args.to_vec(),
+                /*arg0*/ None,
+                cwd.to_path_buf(),
+                permission_profile.network_sandbox_policy(),
+                env,
+                |_| {},
+            )
+            .await?;
+            handle_exit_status(child.wait().await?);
+        }
+    }
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            run_command_under_windows_session(&config, command, cwd, workspace_roots, env).await;
+            run_command_under_windows_session(
+                &config,
+                &permission_profile,
+                command,
+                cwd,
+                workspace_roots,
+                env,
+            )
+            .await;
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -244,7 +345,7 @@ async fn run_command_under_sandbox(
     let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
             spec.start_proxy(
-                config.permissions.permission_profile(),
+                &permission_profile,
                 /*policy_decider*/ None,
                 /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
@@ -266,7 +367,7 @@ async fn run_command_under_sandbox(
         None => None,
     };
     let runtime_permission_profile = with_managed_mitm_ca_readable_root(
-        config.permissions.effective_permission_profile(),
+        permission_profile,
         managed_mitm_ca_trust_bundle_path.as_ref(),
         sandbox_policy_cwd.as_path(),
     );
@@ -282,9 +383,12 @@ async fn run_command_under_sandbox(
                 network_sandbox_policy,
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network,
+                managed_network: None,
+                environment_id: None,
                 network: network.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
-            });
+            })
+            .map_err(|err| anyhow::anyhow!(err))?;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
@@ -306,7 +410,6 @@ async fn run_command_under_sandbox(
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
-            let use_legacy_landlock = config.features.use_legacy_landlock();
             let network_sandbox_policy = runtime_permission_profile.network_sandbox_policy();
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
@@ -362,6 +465,7 @@ async fn run_command_under_sandbox(
 #[cfg(target_os = "windows")]
 async fn run_command_under_windows_session(
     config: &Config,
+    permission_profile: &PermissionProfile,
     command: Vec<String>,
     cwd: AbsolutePathBuf,
     workspace_roots: Vec<AbsolutePathBuf>,
@@ -369,19 +473,20 @@ async fn run_command_under_windows_session(
 ) -> ! {
     use codex_core::windows_sandbox::WindowsSandboxLevelExt;
     use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
     use codex_windows_sandbox::WindowsSandboxSessionRequest;
     use codex_windows_sandbox::spawn_windows_sandbox_session_for_level;
 
-    let permission_profile = config.permissions.effective_permission_profile();
     let empty_paths: &[AbsolutePathBuf] = &[];
     let spawned = spawn_windows_sandbox_session_for_level(WindowsSandboxSessionRequest {
-        permission_profile: &permission_profile,
+        permission_profile,
         workspace_roots: workspace_roots.as_slice(),
         codex_home: config.codex_home.as_path(),
         command,
         cwd: cwd.as_path(),
         env_map: env,
         windows_sandbox_level: WindowsSandboxLevel::from_config(config),
+        proxy_settings_mode: WindowsSandboxProxySettingsMode::Reconcile,
         proxy_enforced: false,
         timeout_ms: None,
         read_roots_override: None,
@@ -462,6 +567,7 @@ async fn load_debug_sandbox_config_with_codex_home(
     strict_config: bool,
 ) -> anyhow::Result<Config> {
     let DebugSandboxConfigOptions {
+        sandbox_state: _,
         permissions_profile,
         cwd,
         managed_requirements_mode,
@@ -647,6 +753,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: None,
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Include,
@@ -715,6 +822,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: None,
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Include,
@@ -772,6 +880,7 @@ mod tests {
             cli_overrides,
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: None,
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Include,
@@ -830,6 +939,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: None,
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Include,
@@ -857,6 +967,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: Some(":workspace".to_string()),
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
@@ -896,6 +1007,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: Some("limited-read-test".to_string()),
                 cwd: None,
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,
@@ -935,6 +1047,7 @@ mod tests {
             Vec::new(),
             /*codex_linux_sandbox_exe*/ None,
             DebugSandboxConfigOptions {
+                sandbox_state: Default::default(),
                 permissions_profile: Some(":workspace".to_string()),
                 cwd: Some(cwd.path().to_path_buf()),
                 managed_requirements_mode: ManagedRequirementsMode::Ignore,

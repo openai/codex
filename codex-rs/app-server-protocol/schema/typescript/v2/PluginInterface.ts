@@ -22,9 +22,17 @@ composerIconUrl: string | null,
  */
 logo: AbsolutePathBuf | null,
 /**
+ * Local dark-mode logo path, resolved from the installed plugin package.
+ */
+logoDark: AbsolutePathBuf | null,
+/**
  * Remote logo URL from the plugin catalog.
  */
 logoUrl: string | null,
+/**
+ * Remote dark-mode logo URL from the plugin catalog.
+ */
+logoUrlDark: string | null,
 /**
  * Local screenshot paths, resolved from the installed plugin package.
  */

@@ -1,5 +1,5 @@
 use super::*;
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 

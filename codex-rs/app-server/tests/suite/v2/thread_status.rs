@@ -135,7 +135,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     let message = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_capabilities(
@@ -148,6 +148,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
                 experimental_api: true,
                 request_attestation: false,
                 opt_out_notification_methods: Some(vec!["thread/status/changed".to_string()]),
+                mcp_server_openai_form_elicitation: false,
             }),
         ),
     )
@@ -157,7 +158,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
     };
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

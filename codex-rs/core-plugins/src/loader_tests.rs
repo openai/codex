@@ -160,15 +160,16 @@ enabled = true
         &stack,
         HashMap::new(),
         &store,
+        /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
         &stack,
         HashMap::new(),
         &store,
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
         PluginLoadScope::HooksOnly,
     )
     .await;
