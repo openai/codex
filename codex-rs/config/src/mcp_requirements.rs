@@ -1,9 +1,15 @@
-use crate::McpServerIdentity;
-use crate::McpServerRequirement;
 use crate::mcp_types::McpServerConfig;
 use crate::mcp_types::McpServerTransportConfig;
 use regex_lite::Regex;
 use serde::Deserialize;
+use serde::de::Error as _;
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum McpServerIdentity {
+    Command { command: String },
+    Url { url: String },
+}
 
 /// String matching operations available to managed MCP server matchers.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -16,14 +22,17 @@ pub enum McpServerValueMatcher {
 
 impl McpServerValueMatcher {
     fn compile_full_regex(expression: &str) -> Result<Regex, String> {
-        Regex::new(&format!(r"\A(?:{expression})\z"))
-            .map_err(|err| format!("invalid regex `{expression}`: {err}"))
+        Regex::new(&format!(r"\A(?:{expression})\z")).map_err(|err| {
+            format!("regex `{expression}` cannot be used for full-value matching: {err}")
+        })
     }
 
     fn validate(&self) -> Result<(), String> {
         let Self::Regex { expression } = self else {
             return Ok(());
         };
+
+        Regex::new(expression).map_err(|err| format!("invalid regex `{expression}`: {err}"))?;
         Self::compile_full_regex(expression).map(|_| ())
     }
 
@@ -49,6 +58,56 @@ pub struct McpServerCommandMatcher {
 #[serde(deny_unknown_fields)]
 pub struct McpServerUrlMatcher {
     pub url: McpServerValueMatcher,
+}
+
+/// A requirement for one named MCP server.
+///
+/// The `Identity` variant preserves the released exact-match contract. The
+/// command and URL variants add matcher-based requirements under the same
+/// `mcp_servers` namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerRequirement {
+    Identity { identity: McpServerIdentity },
+    Command(McpServerCommandMatcher),
+    Url(McpServerUrlMatcher),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawMcpServerRequirement {
+    Identity {
+        identity: McpServerIdentity,
+        command: Option<serde::de::IgnoredAny>,
+        args: Option<serde::de::IgnoredAny>,
+        url: Option<serde::de::IgnoredAny>,
+    },
+    Command(McpServerCommandMatcher),
+    Url(McpServerUrlMatcher),
+}
+
+impl<'de> Deserialize<'de> for McpServerRequirement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match RawMcpServerRequirement::deserialize(deserializer)? {
+            RawMcpServerRequirement::Identity {
+                identity,
+                command,
+                args,
+                url,
+            } => {
+                if command.is_some() || args.is_some() || url.is_some() {
+                    return Err(D::Error::custom(
+                        "`identity` cannot be combined with matcher keys `command`, `args`, or `url`",
+                    ));
+                }
+                Ok(Self::Identity { identity })
+            }
+            RawMcpServerRequirement::Command(matcher) => Ok(Self::Command(matcher)),
+            RawMcpServerRequirement::Url(matcher) => Ok(Self::Url(matcher)),
+        }
+    }
 }
 
 impl McpServerRequirement {

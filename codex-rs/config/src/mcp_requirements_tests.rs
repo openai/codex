@@ -82,6 +82,21 @@ fn regex_matcher_allows_a_later_alternative_to_match_the_full_value() {
 }
 
 #[test]
+fn regex_matcher_validation_rejects_expression_that_cannot_be_wrapped() {
+    let matcher = McpServerValueMatcher::Regex {
+        expression: "(?x)mcp # trailing comment".to_string(),
+    };
+
+    let err = matcher
+        .validate()
+        .expect_err("expression should not be valid for full-value matching");
+    assert!(
+        err.contains("cannot be used for full-value matching"),
+        "{err}"
+    );
+}
+
+#[test]
 fn legacy_command_identity_keeps_ignoring_arguments() {
     let requirement: McpServerRequirement = toml::from_str(
         r#"
@@ -138,5 +153,56 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
                 value: "https://mcp.example.com/".to_string(),
             },
         })
+    );
+}
+
+#[test]
+fn requirement_rejects_identity_combined_with_matcher_keys() {
+    for contents in [
+        r#"
+command = "company-cli"
+[identity]
+command = "company-cli"
+"#,
+        r#"
+args = []
+[identity]
+command = "company-cli"
+"#,
+        r#"
+url = { match = "prefix", value = "https://mcp.example.com/" }
+[identity]
+url = "https://mcp.example.com"
+"#,
+    ] {
+        let err = toml::from_str::<McpServerRequirement>(contents)
+            .expect_err("identity and matcher keys should be mutually exclusive");
+        assert!(
+            err.to_string().contains(
+                "`identity` cannot be combined with matcher keys `command`, `args`, or `url`"
+            ),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn identity_requirement_keeps_ignoring_unrelated_sibling_fields() {
+    let requirement: McpServerRequirement = toml::from_str(
+        r#"
+unrelated = "ignored"
+[identity]
+command = "company-cli"
+"#,
+    )
+    .expect("legacy identity with unrelated sibling field");
+
+    assert_eq!(
+        requirement,
+        McpServerRequirement::Identity {
+            identity: McpServerIdentity::Command {
+                command: "company-cli".to_string(),
+            },
+        }
     );
 }

@@ -18,11 +18,14 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 /// requirement instead represents one complete requirement form, so combining
 /// its internal fields across layers could retain parts of both definitions.
 /// After the regular merge, reapply higher-priority values at the configured
-/// atomic paths so each same-name requirement is replaced as a whole. A `*`
-/// path segment matches every key at that level.
+/// atomic paths so each same-name requirement is replaced as a whole. An
+/// explicitly empty atomic map clears lower-priority entries. A `*` path
+/// segment matches every key at that level.
 pub(crate) fn merge_requirements_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     merge_toml_values(base, overlay);
-    apply_atomic_overrides(base, overlay, ATOMIC_REQUIREMENT_PATHS);
+    for path in ATOMIC_REQUIREMENT_PATHS {
+        apply_atomic_override_at_path(base, overlay, path);
+    }
 }
 
 fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
@@ -51,21 +54,19 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
     }
 }
 
-fn apply_atomic_overrides(base: &mut TomlValue, overlay: &TomlValue, atomic_paths: &[&[&str]]) {
-    for path in atomic_paths {
-        apply_atomic_override_at_path(base, overlay, path);
-    }
-}
-
 fn apply_atomic_override_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &[&str]) {
     let Some((segment, remaining)) = path.split_first() else {
         *base = overlay.clone();
         return;
     };
-    let Some(base_table) = base.as_table_mut() else {
+    let Some(overlay_table) = overlay.as_table() else {
         return;
     };
-    let Some(overlay_table) = overlay.as_table() else {
+    if *segment == "*" && remaining.is_empty() && overlay_table.is_empty() {
+        *base = overlay.clone();
+        return;
+    }
+    let Some(base_table) = base.as_table_mut() else {
         return;
     };
 

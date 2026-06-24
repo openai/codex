@@ -19,8 +19,7 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
-use crate::McpServerCommandMatcher;
-use crate::McpServerUrlMatcher;
+use crate::mcp_requirements::McpServerRequirement;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::WindowsSandboxModeToml;
@@ -219,26 +218,6 @@ impl ConfigRequirements {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum McpServerIdentity {
-    Command { command: String },
-    Url { url: String },
-}
-
-/// A requirement for one named MCP server.
-///
-/// The `Identity` variant preserves the released exact-match contract. The
-/// command and URL variants add matcher-based requirements under the same
-/// `mcp_servers` namespace.
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum McpServerRequirement {
-    Identity { identity: McpServerIdentity },
-    Command(McpServerCommandMatcher),
-    Url(McpServerUrlMatcher),
-}
-
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
@@ -281,7 +260,7 @@ pub enum MarketplaceAllowedSourceKind {
 
 impl PluginRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
+        self.mcp_servers.is_none()
     }
 }
 
@@ -1591,6 +1570,7 @@ mod tests {
     use super::*;
     use crate::HookEventsToml;
     use crate::McpServerCommandMatcher;
+    use crate::McpServerIdentity;
     use crate::McpServerValueMatcher;
     use anyhow::Result;
     use codex_execpolicy::Decision;

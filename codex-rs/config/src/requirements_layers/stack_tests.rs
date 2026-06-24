@@ -437,6 +437,25 @@ command = "approved-mcp"
 }
 
 #[test]
+fn higher_priority_empty_mcp_allowlist_clears_lower_rules() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[mcp_servers.server.identity]
+command = "low-mcp"
+"#,
+        ),
+        layer("req_high", "High", "mcp_servers = {}"),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(composed, expected_requirements("mcp_servers = {}"));
+}
+
+#[test]
 fn higher_priority_plugin_mcp_requirements_replace_named_rules() {
     let composed = compose(vec![
         layer(
@@ -465,6 +484,40 @@ url = { match = "regex", expression = '^https://high\.example\.com/mcp$' }
             r#"
 [plugins."sample@test".mcp_servers.shared]
 url = { match = "regex", expression = '^https://high\.example\.com/mcp$' }
+"#
+        )
+    );
+}
+
+#[test]
+fn higher_priority_empty_plugin_mcp_allowlist_clears_lower_rules() {
+    let composed = compose(vec![
+        layer(
+            "req_low",
+            "Low",
+            r#"
+[plugins."sample@test".mcp_servers.server.identity]
+command = "low-plugin-mcp"
+"#,
+        ),
+        layer(
+            "req_high",
+            "High",
+            r#"
+[plugins."sample@test"]
+mcp_servers = {}
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[plugins."sample@test"]
+mcp_servers = {}
 "#
         )
     );
