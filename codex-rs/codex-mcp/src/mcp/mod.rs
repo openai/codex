@@ -305,7 +305,8 @@ pub async fn read_mcp_resource(
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance(config),
-        auth,
+        auth.filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth),
         /*elicitation_reviewer*/ None,
     )
     .await;
@@ -378,7 +379,8 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
         tool_plugin_provenance,
-        auth,
+        auth.filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth),
         /*elicitation_reviewer*/ None,
     )
     .await;

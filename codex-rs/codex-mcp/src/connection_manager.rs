@@ -46,7 +46,6 @@ use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
@@ -135,7 +134,7 @@ impl McpConnectionManager {
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
         tool_plugin_provenance: ToolPluginProvenance,
-        auth: Option<&CodexAuth>,
+        codex_apps_auth_provider: Option<SharedAuthProvider>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Self {
         let mut required_servers = mcp_servers
@@ -154,9 +153,6 @@ impl McpConnectionManager {
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
-        let codex_apps_auth_provider = auth
-            .filter(|auth| auth.uses_codex_backend())
-            .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()

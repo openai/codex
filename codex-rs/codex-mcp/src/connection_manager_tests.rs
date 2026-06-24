@@ -1347,7 +1347,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
-        /*auth*/ None,
+        /*codex_apps_auth_provider*/ None,
         /*elicitation_reviewer*/ None,
     )
     .await;

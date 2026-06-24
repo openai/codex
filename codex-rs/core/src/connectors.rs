@@ -277,7 +277,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,
         ToolPluginProvenance::default(),
-        auth.as_ref(),
+        host_owned_codex_apps_enabled.then(|| {
+            codex_model_provider::auth_provider_from_auth_manager(Arc::clone(&auth_manager))
+        }),
         /*elicitation_reviewer*/ None,
     )
     .await;

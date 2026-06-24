@@ -1194,7 +1194,11 @@ impl Session {
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),
                 tool_plugin_provenance,
-                auth,
+                host_owned_codex_apps_enabled.then(|| {
+                    codex_model_provider::auth_provider_from_auth_manager(Arc::clone(
+                        &sess.services.auth_manager,
+                    ))
+                }),
                 Some(sess.mcp_elicitation_reviewer()),
             )
             .instrument(info_span!(
