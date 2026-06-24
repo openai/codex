@@ -45,6 +45,37 @@ impl AgentIdentitySessionFallback {
     }
 }
 
+/// Provider auth resolved for a request, plus metadata describing the effective auth.
+#[derive(Clone)]
+pub struct ResolvedProviderAuth {
+    pub auth: SharedAuthProvider,
+    pub agent_identity_telemetry: Option<AgentIdentityTelemetry>,
+}
+
+impl ResolvedProviderAuth {
+    pub(crate) fn new(auth: SharedAuthProvider) -> Self {
+        Self {
+            auth,
+            agent_identity_telemetry: None,
+        }
+    }
+
+    fn for_agent_identity(auth: AgentIdentityAuth) -> Self {
+        let agent_identity_telemetry = agent_identity_telemetry(&auth);
+        Self {
+            auth: Arc::new(AgentIdentityAuthProvider { auth }),
+            agent_identity_telemetry: Some(agent_identity_telemetry),
+        }
+    }
+}
+
+pub(crate) fn agent_identity_telemetry(auth: &AgentIdentityAuth) -> AgentIdentityTelemetry {
+    AgentIdentityTelemetry {
+        agent_id: auth.record().agent_runtime_id.clone(),
+        task_id: auth.run_task_id().to_string(),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AgentIdentityAuthProvider {
     auth: AgentIdentityAuth,
@@ -75,13 +106,6 @@ impl AuthProvider for AgentIdentityAuthProvider {
         if self.auth.is_fedramp_account() {
             let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
         }
-    }
-
-    fn agent_identity_telemetry(&self) -> Option<AgentIdentityTelemetry> {
-        Some(AgentIdentityTelemetry {
-            agent_id: self.auth.record().agent_runtime_id.clone(),
-            task_id: self.auth.run_task_id().to_string(),
-        })
     }
 }
 
@@ -136,36 +160,36 @@ pub(crate) async fn resolve_provider_auth_for_scope(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
     scope: ProviderAuthScope,
-) -> codex_protocol::error::Result<SharedAuthProvider> {
+) -> codex_protocol::error::Result<ResolvedProviderAuth> {
     let ProviderAuthScope {
         agent_identity_policy,
         session_source,
         agent_identity_session_fallback,
     } = scope;
     if let Some(CodexAuth::AgentIdentity(agent_identity_auth)) = auth {
-        return Ok(Arc::new(AgentIdentityAuthProvider {
-            auth: agent_identity_auth.clone(),
-        }));
+        return Ok(ResolvedProviderAuth::for_agent_identity(
+            agent_identity_auth.clone(),
+        ));
     }
 
     if !should_bootstrap_chatgpt_agent_identity(agent_identity_policy, auth)
         || agent_identity_session_fallback.is_engaged()
     {
-        return resolve_provider_auth(auth, provider);
+        return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
     }
 
     let Some(auth_manager) = auth_manager else {
-        return resolve_provider_auth(auth, provider);
+        return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
     };
 
     match auth_manager
         .agent_identity_auth(agent_identity_policy, session_source)
         .await
     {
-        Ok(Some(agent_identity_auth)) => Ok(Arc::new(AgentIdentityAuthProvider {
-            auth: agent_identity_auth,
-        })),
-        Ok(None) => resolve_provider_auth(auth, provider),
+        Ok(Some(agent_identity_auth)) => Ok(ResolvedProviderAuth::for_agent_identity(
+            agent_identity_auth,
+        )),
+        Ok(None) => resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new),
         Err(err) => {
             if let Some(AgentIdentityAuthError::BootstrapUnavailable {
                 operation,
@@ -183,7 +207,7 @@ pub(crate) async fn resolve_provider_auth_for_scope(
                     newly_engaged,
                     "agent identity bootstrap unavailable; using ChatGPT bearer auth for this session"
                 );
-                resolve_provider_auth(auth, provider)
+                resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new)
             } else {
                 Err(err.into())
             }
@@ -382,7 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_party_run_scope_uses_agent_assertion() {
+    async fn first_party_run_scope_uses_agent_assertion_and_exposes_telemetry() {
         let auth = CodexAuth::AgentIdentity(
             agent_identity_auth(/*chatgpt_account_is_fedramp*/ false).await,
         );
@@ -400,7 +424,14 @@ mod tests {
         .await
         .expect("auth should resolve");
 
-        let headers = auth.to_auth_headers();
+        assert_eq!(
+            auth.agent_identity_telemetry,
+            Some(AgentIdentityTelemetry {
+                agent_id: "agent-runtime-1".to_string(),
+                task_id: "task-run-1".to_string(),
+            })
+        );
+        let headers = auth.auth.to_auth_headers();
         assert!(
             headers
                 .get(http::header::AUTHORIZATION)
@@ -437,20 +468,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_identity_auth_provider_exposes_request_telemetry_ids() {
-        let auth = agent_identity_auth(/*chatgpt_account_is_fedramp*/ false).await;
-        let provider = auth_provider_from_auth(&CodexAuth::AgentIdentity(auth));
-
-        assert_eq!(
-            provider.agent_identity_telemetry(),
-            Some(AgentIdentityTelemetry {
-                agent_id: "agent-runtime-1".to_string(),
-                task_id: "task-run-1".to_string(),
-            })
-        );
-    }
-
-    #[tokio::test]
     async fn chatgpt_bootstrap_unavailable_uses_session_bearer_fallback() {
         let server = MockServer::start().await;
         let registration_count = Arc::new(AtomicUsize::new(0));
@@ -473,7 +490,7 @@ mod tests {
         .await
         .expect("fallback should resolve bearer auth");
 
-        let headers = provider_auth.to_auth_headers();
+        let headers = provider_auth.auth.to_auth_headers();
         assert_eq!(
             headers
                 .get(http::header::AUTHORIZATION)

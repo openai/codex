@@ -19,6 +19,7 @@ use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
+use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
@@ -181,10 +182,10 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_auth_for_scope(
         &self,
         scope: ProviderAuthScope,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
         Box::pin(async move {
             if !provider_uses_first_party_auth_path(self.info()) {
-                return self.api_auth().await;
+                return self.api_auth().await.map(ResolvedProviderAuth::new);
             }
             let auth = self.auth().await;
             resolve_provider_auth_for_scope(self.auth_manager(), auth.as_ref(), self.info(), scope)
@@ -451,7 +452,7 @@ mod tests {
             .await
             .expect("auth should resolve");
 
-        assert!(auth.to_auth_headers().is_empty());
+        assert!(auth.auth.to_auth_headers().is_empty());
     }
 
     #[test]

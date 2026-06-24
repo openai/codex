@@ -17,7 +17,6 @@ use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
-use codex_api::AuthProvider;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_login::AuthCredentialsStoreMode;
@@ -741,6 +740,7 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
         Some(AuthMode::Chatgpt),
         &BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        /*agent_identity_telemetry*/ None,
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
@@ -757,23 +757,13 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 
 #[test]
 fn auth_request_telemetry_context_tracks_agent_identity_ids() {
-    #[derive(Debug)]
-    struct AgentIdentityTelemetryAuthProvider;
-
-    impl AuthProvider for AgentIdentityTelemetryAuthProvider {
-        fn add_auth_headers(&self, _headers: &mut http::HeaderMap) {}
-
-        fn agent_identity_telemetry(&self) -> Option<AgentIdentityTelemetry> {
-            Some(AgentIdentityTelemetry {
-                agent_id: "agent-runtime-context".to_string(),
-                task_id: "task-run-context".to_string(),
-            })
-        }
-    }
-
     let auth_context = AuthRequestTelemetryContext::new(
         Some(AuthMode::Chatgpt),
-        &AgentIdentityTelemetryAuthProvider,
+        &BearerAuthProvider::for_test(/*token*/ None, /*account_id*/ None),
+        Some(AgentIdentityTelemetry {
+            agent_id: "agent-runtime-context".to_string(),
+            task_id: "task-run-context".to_string(),
+        }),
         PendingUnauthorizedRetry::default(),
     );
 

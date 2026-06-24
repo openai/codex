@@ -59,12 +59,6 @@ pub trait AuthProvider: Send + Sync {
             Ok(request)
         })
     }
-
-    /// Returns safe Agent Identity metadata for request telemetry, when this
-    /// provider authenticates with an AgentAssertion.
-    fn agent_identity_telemetry(&self) -> Option<AgentIdentityTelemetry> {
-        None
-    }
 }
 
 pub type AuthProviderFuture<'a> =

@@ -6,6 +6,7 @@ mod provider;
 
 pub use auth::AgentIdentitySessionFallback;
 pub use auth::ProviderAuthScope;
+pub use auth::ResolvedProviderAuth;
 pub use auth::auth_provider_from_auth;
 pub use auth::unauthenticated_auth_provider;
 pub use bearer_auth_provider::BearerAuthProvider;
