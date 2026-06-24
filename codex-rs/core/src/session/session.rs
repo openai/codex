@@ -1,6 +1,6 @@
 use super::input_queue::InputQueue;
 use super::*;
-use crate::agents_md::LoadedAgentsMd;
+use crate::agents_md::load_project_instructions;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -58,10 +58,6 @@ pub(crate) struct SessionConfiguration {
 
     /// Developer instructions that supplement the base instructions.
     pub(super) developer_instructions: Option<String>,
-
-    /// Model instructions assembled from provider instructions and discovered
-    /// AGENTS.md files.
-    pub(super) loaded_agents_md: Option<LoadedAgentsMd>,
 
     /// Personality preference for the model.
     pub(super) personality: Option<Personality>,
@@ -868,12 +864,13 @@ impl Session {
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
-            session_configuration.loaded_agents_md = load_project_instructions(
+            let loaded_agents_md = load_project_instructions(
                 config.as_ref(),
                 user_instructions,
                 &resolved_environments,
             )
-            .await;
+            .await
+            .unwrap_or_default();
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&plugins_manager),
@@ -1082,6 +1079,7 @@ impl Session {
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 tool_search_handler_cache: Default::default(),
+                loaded_agents_md,
                 turn_environments: Arc::clone(&turn_environments),
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =

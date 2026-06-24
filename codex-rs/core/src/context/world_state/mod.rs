@@ -1,4 +1,9 @@
+mod agents_md;
 mod environment;
+
+#[cfg(test)]
+#[path = "agents_md_tests.rs"]
+mod agents_md_tests;
 
 use crate::context::ContextualUserFragment;
 use indexmap::IndexMap;

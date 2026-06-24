@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::SkillsService;
 use crate::agent::AgentControl;
+use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::client::ModelClient;
 use crate::config::NetworkProxyAuditMetadata;
@@ -85,6 +86,8 @@ pub(crate) struct SessionServices {
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
+    /// Creation-time AGENTS.md snapshot reused across turns.
+    pub(crate) loaded_agents_md: LoadedAgentsMd,
     pub(crate) turn_environments: Arc<ThreadEnvironments>,
 }
 

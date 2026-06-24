@@ -14,7 +14,6 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
-use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -247,7 +246,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
-use self::world_state::build_world_state_from_environment_snapshot;
+use self::world_state::build_world_state_from_snapshot;
 use self::world_state::build_world_state_from_turn_context_item;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -308,7 +307,6 @@ pub(crate) struct PreviousTurnSettings {
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsService;
-use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
@@ -631,7 +629,6 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            loaded_agents_md: None,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -846,12 +843,7 @@ impl Codex {
     }
 
     pub(crate) async fn instruction_sources(&self) -> Vec<PathUri> {
-        let state = self.session.state.lock().await;
-        state
-            .session_configuration
-            .loaded_agents_md
-            .as_ref()
-            .map_or_else(Vec::new, |instructions| instructions.sources().collect())
+        self.session.services.loaded_agents_md.sources().collect()
     }
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
@@ -1400,9 +1392,13 @@ impl Session {
         // will be processed again if the rollout is reconstructed in a future session.
         // This meets image resizing requirements without modifying persisted rollouts.
         prepare_response_items(&mut history);
-        let world_state_baseline = reference_context_item
-            .as_ref()
-            .map(build_world_state_from_turn_context_item);
+        // Replayed history already contains the rendered AGENTS.md snapshot, but rollouts do not
+        // persist its structured state. Preserve the existing replay behavior by treating this
+        // session's creation-time snapshot as the reconstructed baseline.
+        let loaded_agents_md = self.services.loaded_agents_md.clone();
+        let world_state_baseline = reference_context_item.as_ref().map(|turn_context_item| {
+            build_world_state_from_turn_context_item(turn_context_item, loaded_agents_md)
+        });
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -1550,13 +1546,7 @@ impl Session {
     }
 
     pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
-        let state = self.state.lock().await;
-        state
-            .session_configuration
-            .loaded_agents_md
-            .as_ref()
-            .and_then(LoadedAgentsMd::user_instructions)
-            .cloned()
+        self.services.loaded_agents_md.user_instructions().cloned()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
@@ -2792,7 +2782,7 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         // Render model-visible state from the same step used to build and run tools.
         let world_state = Arc::new(
-            self.build_world_state_for_environments(turn_context, &step_context.environments)
+            self.build_world_state_for_snapshot(turn_context, &step_context.environments)
                 .await,
         );
         let items = crate::context_manager::updates::merge_contextual_fragments(
@@ -3076,7 +3066,7 @@ impl Session {
         items
     }
 
-    pub(crate) async fn build_world_state_for_environments(
+    pub(crate) async fn build_world_state_for_snapshot(
         &self,
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
@@ -3089,10 +3079,11 @@ impl Session {
         } else {
             String::new()
         };
-        build_world_state_from_environment_snapshot(
+        build_world_state_from_snapshot(
             turn_context,
             environments,
             &environment_subagents,
+            self.services.loaded_agents_md.clone(),
         )
     }
 
@@ -3298,9 +3289,6 @@ impl Session {
                     &mut separate_developer_sections,
                 );
             }
-        }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(user_instructions.to_string());
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
@@ -3511,7 +3499,7 @@ impl Session {
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
         let world_state = Arc::new(
-            self.build_world_state_for_environments(turn_context, &turn_context.environments)
+            self.build_world_state_for_snapshot(turn_context, &turn_context.environments)
                 .await,
         );
         let mut context_items = if should_inject_full_context {
