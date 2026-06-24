@@ -1144,6 +1144,13 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.cli_version = Some(session_meta_line.meta.cli_version);
                     summary.created_at = Some(session_meta_line.meta.timestamp.clone());
                     summary.saw_session_meta = true;
+
+                    if codex_state::is_guardian_review_source(&session_meta_line.meta.source) {
+                        // Guardian user messages are synthetic review prompts. SessionMeta plus
+                        // the compact preview form the full summary, so do not scan the prompt.
+                        summary.preview = Some(codex_state::GUARDIAN_THREAD_PREVIEW.to_string());
+                        break;
+                    }
                 }
             }
             RolloutItem::ResponseItem(_) | RolloutItem::InterAgentCommunication(_) => {

@@ -203,7 +203,7 @@ impl ThreadMetadataBuilder {
             .recency_at
             .map(canonicalize_datetime)
             .unwrap_or(updated_at);
-        ThreadMetadata {
+        let mut metadata = ThreadMetadata {
             id: self.id,
             rollout_path: self.rollout_path.clone(),
             created_at,
@@ -235,7 +235,11 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
+        };
+        if crate::extract::is_guardian_review_source(&self.source) {
+            crate::extract::apply_guardian_thread_metadata_defaults(&mut metadata);
         }
+        metadata
     }
 }
 
@@ -263,7 +267,13 @@ impl ThreadMetadata {
         }
 
         let title = self.title.trim();
-        if title.is_empty() || self.first_user_message.as_deref().map(str::trim) == Some(title) {
+        // Treat the compact default as derived only for Guardian threads; a
+        // non-Guardian thread may explicitly use the same title.
+        if title.is_empty()
+            || self.first_user_message.as_deref().map(str::trim) == Some(title)
+            || (title == crate::GUARDIAN_THREAD_TITLE
+                && crate::extract::metadata_is_guardian_review(self))
+        {
             self.title = existing.title.clone();
         }
     }
@@ -527,11 +537,14 @@ pub struct BackfillStats {
 #[cfg(test)]
 mod tests {
     use super::ThreadMetadata;
+    use super::ThreadMetadataBuilder;
     use super::ThreadRow;
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -616,5 +629,46 @@ mod tests {
             metadata,
             expected_thread_metadata(Some(ReasoningEffort::Custom("future".to_string())))
         );
+    }
+
+    #[test]
+    fn guardian_thread_builder_uses_contextual_defaults() {
+        let id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let created_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+        let metadata = ThreadMetadataBuilder::new(
+            id,
+            PathBuf::from("/tmp/rollout-123.jsonl"),
+            created_at,
+            SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+        )
+        .build("openai");
+
+        assert_eq!(metadata.title, crate::GUARDIAN_THREAD_TITLE);
+        assert_eq!(
+            metadata.preview.as_deref(),
+            Some(crate::GUARDIAN_THREAD_PREVIEW)
+        );
+        assert_eq!(metadata.first_user_message, None);
+    }
+
+    #[test]
+    fn guardian_default_title_does_not_replace_existing_explicit_title() {
+        let id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let created_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+        let mut metadata = ThreadMetadataBuilder::new(
+            id,
+            PathBuf::from("/tmp/rollout-123.jsonl"),
+            created_at,
+            SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+        )
+        .build("openai");
+        let mut existing = metadata.clone();
+        existing.title = "Named Guardian review".to_string();
+
+        metadata.prefer_existing_explicit_title(&existing);
+
+        assert_eq!(metadata.title, "Named Guardian review");
     }
 }

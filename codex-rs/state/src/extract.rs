@@ -3,6 +3,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::UserMessageEvent;
@@ -10,6 +12,26 @@ use serde::Serialize;
 use serde_json::Value;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
+pub const GUARDIAN_THREAD_TITLE: &str = "Guardian review";
+pub const GUARDIAN_THREAD_PREVIEW: &str = "Approval review";
+
+pub fn is_guardian_review_source(source: &SessionSource) -> bool {
+    matches!(
+        source,
+        SessionSource::SubAgent(SubAgentSource::Other(name)) if name == "guardian"
+    )
+}
+
+pub(crate) fn apply_guardian_thread_metadata_defaults(metadata: &mut ThreadMetadata) {
+    // Empty titles and titles copied from first_user_message are derived; preserve
+    // any other title as potentially explicit.
+    let title = metadata.title.trim();
+    if title.is_empty() || metadata.first_user_message.as_deref().map(str::trim) == Some(title) {
+        metadata.title = GUARDIAN_THREAD_TITLE.to_string();
+    }
+    metadata.preview = Some(GUARDIAN_THREAD_PREVIEW.to_string());
+    metadata.first_user_message = None;
+}
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -70,6 +92,9 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         metadata.git_branch = git.branch.clone();
         metadata.git_origin_url = git.repository_url.clone();
     }
+    if is_guardian_review_source(&meta_line.meta.source) {
+        apply_guardian_thread_metadata_defaults(metadata);
+    }
 }
 
 fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem) {
@@ -91,6 +116,9 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::UserMessage(user) => {
+            if metadata_is_guardian_review(metadata) {
+                return;
+            }
             let preview = user_message_preview(user);
             if metadata.first_user_message.is_none() {
                 metadata.first_user_message = preview.clone();
@@ -104,6 +132,9 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::ThreadGoalUpdated(event) => {
+            if metadata_is_guardian_review(metadata) {
+                return;
+            }
             let objective = event.goal.objective.trim();
             if !objective.is_empty() {
                 set_preview_if_empty(metadata, Some(objective.to_string()));
@@ -111,6 +142,12 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
         }
         _ => {}
     }
+}
+
+pub(crate) fn metadata_is_guardian_review(metadata: &ThreadMetadata) -> bool {
+    serde_json::from_str::<SessionSource>(metadata.source.as_str())
+        .as_ref()
+        .is_ok_and(is_guardian_review_source)
 }
 
 fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {}
@@ -170,6 +207,7 @@ mod tests {
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -221,6 +259,73 @@ mod tests {
         );
         assert_eq!(metadata.preview.as_deref(), Some("actual user request"));
         assert_eq!(metadata.title, "actual user request");
+    }
+
+    #[test]
+    fn guardian_user_messages_use_defaults_without_projection() {
+        let mut metadata = metadata_for_test();
+        let thread_id = metadata.id;
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    source: SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+            "test-provider",
+        );
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
+                message: "large synthetic guardian prompt".to_string(),
+                images: Some(vec![]),
+                local_images: vec![],
+                text_elements: vec![],
+                ..Default::default()
+            })),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.title, super::GUARDIAN_THREAD_TITLE);
+        assert_eq!(
+            metadata.preview.as_deref(),
+            Some(super::GUARDIAN_THREAD_PREVIEW)
+        );
+        assert_eq!(metadata.first_user_message, None);
+    }
+
+    #[test]
+    fn guardian_session_meta_preserves_existing_explicit_title() {
+        let mut metadata = metadata_for_test();
+        let thread_id = metadata.id;
+        metadata.title = "Named Guardian review".to_string();
+        metadata.first_user_message = Some("large synthetic guardian prompt".to_string());
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    source: SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.title, "Named Guardian review");
+        assert_eq!(
+            metadata.preview.as_deref(),
+            Some(super::GUARDIAN_THREAD_PREVIEW)
+        );
+        assert_eq!(metadata.first_user_message, None);
     }
 
     #[test]
