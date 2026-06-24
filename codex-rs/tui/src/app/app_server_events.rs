@@ -86,6 +86,7 @@ impl App {
                     Some(
                         AuthMode::Chatgpt
                             | AuthMode::ChatgptAuthTokens
+                            | AuthMode::HostProvided
                             | AuthMode::AgentIdentity
                             | AuthMode::PersonalAccessToken
                     )

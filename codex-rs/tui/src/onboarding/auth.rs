@@ -950,6 +950,7 @@ impl AuthModeWidget {
                     ApiAuthMode::ApiKey => AuthMode::ApiKey,
                     ApiAuthMode::Chatgpt => AuthMode::Chatgpt,
                     ApiAuthMode::ChatgptAuthTokens => AuthMode::ChatgptAuthTokens,
+                    ApiAuthMode::HostProvided => AuthMode::HostProvided,
                     ApiAuthMode::AgentIdentity => AuthMode::AgentIdentity,
                     ApiAuthMode::PersonalAccessToken => AuthMode::PersonalAccessToken,
                     ApiAuthMode::BedrockApiKey => AuthMode::BedrockApiKey,

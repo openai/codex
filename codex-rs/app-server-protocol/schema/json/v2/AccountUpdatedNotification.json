@@ -26,6 +26,13 @@
           "type": "string"
         },
         {
+          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nCodex backend request headers supplied by the process embedding Codex.",
+          "enum": [
+            "hostProvided"
+          ],
+          "type": "string"
+        },
+        {
           "description": "Programmatic Codex auth backed by a registered Agent Identity.",
           "enum": [
             "agentIdentity"

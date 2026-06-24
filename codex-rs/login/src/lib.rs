@@ -35,6 +35,7 @@ pub use auth::ExternalAuthFuture;
 pub use auth::ExternalAuthRefreshContext;
 pub use auth::ExternalAuthRefreshReason;
 pub use auth::ExternalAuthTokens;
+pub use auth::HostProvidedAuth;
 pub use auth::OPENAI_API_KEY_ENV_VAR;
 pub use auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 pub use auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;

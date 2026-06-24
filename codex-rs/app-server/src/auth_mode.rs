@@ -12,6 +12,7 @@ pub(crate) fn auth_mode_to_api(auth_mode: AuthMode) -> ApiAuthMode {
         AuthMode::ApiKey => ApiAuthMode::ApiKey,
         AuthMode::Chatgpt => ApiAuthMode::Chatgpt,
         AuthMode::ChatgptAuthTokens => ApiAuthMode::ChatgptAuthTokens,
+        AuthMode::HostProvided => ApiAuthMode::HostProvided,
         AuthMode::AgentIdentity => ApiAuthMode::AgentIdentity,
         AuthMode::PersonalAccessToken => ApiAuthMode::PersonalAccessToken,
         AuthMode::BedrockApiKey => ApiAuthMode::BedrockApiKey,

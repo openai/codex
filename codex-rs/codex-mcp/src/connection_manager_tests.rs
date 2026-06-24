@@ -26,6 +26,8 @@ use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::EnvironmentManager;
+use codex_login::CodexAuth;
+use codex_login::HostProvidedAuth;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
@@ -66,6 +68,34 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         connector_name: None,
         plugin_display_names: Vec::new(),
     }
+}
+
+#[test]
+fn host_provided_auth_scopes_codex_apps_cache() {
+    let auth = CodexAuth::HostProvided(
+        HostProvidedAuth::new([], "user-123").with_account_id("account-123"),
+    );
+
+    assert_eq!(
+        crate::codex_apps::codex_apps_tools_cache_key(Some(&auth)),
+        CodexAppsToolsCacheKey {
+            account_id: Some("account-123".to_string()),
+            chatgpt_user_id: Some("user-123".to_string()),
+            is_workspace_account: false,
+        }
+    );
+}
+
+fn create_test_tool_with_connector(
+    server_name: &str,
+    tool_name: &str,
+    connector_id: &str,
+    connector_name: Option<&str>,
+) -> ToolInfo {
+    let mut tool = create_test_tool(server_name, tool_name);
+    tool.connector_id = Some(connector_id.to_string());
+    tool.connector_name = connector_name.map(ToOwned::to_owned);
+    tool
 }
 
 fn create_codex_apps_tools_cache_context(

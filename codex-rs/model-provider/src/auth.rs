@@ -9,6 +9,7 @@ use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::HostProvidedAuth;
 use codex_login::auth::AgentIdentityAuth;
 use codex_login::auth::AgentIdentityAuthError;
 use codex_login::auth::AgentIdentityAuthPolicy;
@@ -16,6 +17,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 
 use crate::bearer_auth_provider::BearerAuthProvider;
@@ -105,6 +107,30 @@ impl AuthProvider for AgentIdentityAuthProvider {
 
         if self.auth.is_fedramp_account() {
             let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HostProvidedAuthProvider {
+    auth: HostProvidedAuth,
+}
+
+impl AuthProvider for HostProvidedAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        for (name, value) in self.auth.headers() {
+            let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
+                continue;
+            };
+            let Ok(value) = HeaderValue::from_str(value) else {
+                continue;
+            };
+            let _ = headers.insert(name, value);
+        }
+        if let Some(account_id) = self.auth.account_id()
+            && let Ok(account_id) = HeaderValue::from_str(account_id)
+        {
+            let _ = headers.insert("ChatGPT-Account-ID", account_id);
         }
     }
 }
@@ -240,6 +266,9 @@ fn bearer_auth_for_provider(
 /// Builds request-header auth for a first-party Codex auth snapshot.
 pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
     match auth {
+        CodexAuth::HostProvided(auth) => {
+            Arc::new(HostProvidedAuthProvider { auth: auth.clone() })
+        }
         CodexAuth::AgentIdentity(auth) => {
             Arc::new(AgentIdentityAuthProvider { auth: auth.clone() })
         }
@@ -403,6 +432,35 @@ mod tests {
             Err(err) => panic!("unexpected auth error: {err:?}"),
             Ok(_) => panic!("Bedrock API key auth should be rejected"),
         }
+    }
+
+    #[test]
+    fn host_provided_auth_provider_uses_host_headers() {
+        let auth = CodexAuth::HostProvided(
+            HostProvidedAuth::new(
+                [(
+                    "x-openai-actor-authorization".to_string(),
+                    "actor-token".to_string(),
+                )],
+                "user-123",
+            )
+            .with_account_id("account-123"),
+        );
+
+        let headers = auth_provider_from_auth(&auth).to_auth_headers();
+
+        assert_eq!(
+            headers
+                .get("x-openai-actor-authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("actor-token")
+        );
+        assert_eq!(
+            headers
+                .get("ChatGPT-Account-ID")
+                .and_then(|value| value.to_str().ok()),
+            Some("account-123")
+        );
     }
 
     #[tokio::test]
