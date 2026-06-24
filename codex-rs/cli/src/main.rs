@@ -647,6 +647,7 @@ struct AppServerProxyCommand {
     socket_path: Option<AbsolutePathBuf>,
 
     /// Start the CODEX_HOME app-server listener if it is not healthy before proxying.
+    #[cfg(unix)]
     #[arg(long = "ensure-listener")]
     ensure_listener: bool,
 }
@@ -1196,6 +1197,7 @@ async fn cli_main(
                             codex_app_server::app_server_control_socket_path(&codex_home)?
                         }
                     };
+                    #[cfg(unix)]
                     if proxy_cli.ensure_listener {
                         let codex_home = find_codex_home()?;
                         let default_socket_path =
@@ -1690,6 +1692,7 @@ fn profile_v2_for_subcommand<'a>(
     }
 }
 
+#[cfg(unix)]
 fn is_default_app_server_socket(
     socket_path: &std::path::Path,
     default_socket_path: &std::path::Path,
@@ -3787,11 +3790,13 @@ mod tests {
             app_server.subcommand,
             Some(AppServerSubcommand::Proxy(AppServerProxyCommand {
                 socket_path: None,
+                #[cfg(unix)]
                 ensure_listener: false,
             }))
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn app_server_proxy_ensure_listener_flag_parses() {
         let app_server =
@@ -3805,6 +3810,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn app_server_proxy_ensure_listener_accepts_sock() {
         let app_server = app_server_from_args(
@@ -3825,6 +3831,15 @@ mod tests {
                 ensure_listener: true,
             }))
         ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn app_server_proxy_ensure_listener_flag_is_unavailable() {
+        let err =
+            MultitoolCli::try_parse_from(["codex", "app-server", "proxy", "--ensure-listener"])
+                .expect_err("--ensure-listener should be Unix-only");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -3911,6 +3926,7 @@ mod tests {
     fn reject_remote_auth_token_env_for_app_server_proxy() {
         let subcommand = AppServerSubcommand::Proxy(AppServerProxyCommand {
             socket_path: None,
+            #[cfg(unix)]
             ensure_listener: false,
         });
         let err = reject_remote_mode_for_app_server_subcommand(
