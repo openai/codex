@@ -12,7 +12,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::RunnerTransport;
-use crate::runner_client::is_stale_sandbox_creds_error;
+use crate::runner_client::retry_runner_spawn_once;
 use crate::runner_client::spawn_runner_transport;
 use crate::spawn_prep::prepare_elevated_spawn_context_for_permissions;
 use anyhow::Result;
@@ -27,20 +27,79 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-async fn spawn_runner_transport_task(
+struct RunnerTransportRequest {
+    permissions: ResolvedWindowsSandboxPermissions,
     codex_home: PathBuf,
     cwd: PathBuf,
-    sandbox_creds: SandboxCreds,
+    env_map: HashMap<String, String>,
     logs_base_dir: Option<PathBuf>,
     spawn_request: SpawnRequest,
+    read_roots_override: Option<Vec<PathBuf>>,
+    read_roots_include_platform_defaults: bool,
+    write_roots_override: Option<Vec<PathBuf>>,
+    deny_read_paths_override: Vec<PathBuf>,
+    deny_write_paths_override: Vec<PathBuf>,
+    proxy_enforced: bool,
+    proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
+}
+
+fn spawn_runner_transport_with_retry<T>(
+    sandbox_creds: SandboxCreds,
+    request: &RunnerTransportRequest,
+    mut spawn: impl FnMut(&Path, &Path, &SandboxCreds, Option<&Path>, SpawnRequest) -> Result<T>,
+    refresh: impl FnOnce(
+        &ResolvedWindowsSandboxPermissions,
+        &Path,
+        &HashMap<String, String>,
+        &Path,
+        Option<&[PathBuf]>,
+        bool,
+        Option<&[PathBuf]>,
+        &[PathBuf],
+        &[PathBuf],
+        bool,
+        crate::WindowsSandboxProxySettingsMode,
+    ) -> Result<SandboxCreds>,
+) -> Result<T> {
+    retry_runner_spawn_once(
+        sandbox_creds,
+        |sandbox_creds| {
+            spawn(
+                &request.codex_home,
+                &request.cwd,
+                &sandbox_creds,
+                request.logs_base_dir.as_deref(),
+                request.spawn_request.clone(),
+            )
+        },
+        || {
+            refresh(
+                &request.permissions,
+                &request.cwd,
+                &request.env_map,
+                &request.codex_home,
+                request.read_roots_override.as_deref(),
+                request.read_roots_include_platform_defaults,
+                request.write_roots_override.as_deref(),
+                &request.deny_read_paths_override,
+                &request.deny_write_paths_override,
+                request.proxy_enforced,
+                request.proxy_settings_mode,
+            )
+        },
+    )
+}
+
+async fn spawn_runner_transport_task(
+    sandbox_creds: SandboxCreds,
+    request: RunnerTransportRequest,
 ) -> Result<RunnerTransport> {
     tokio::task::spawn_blocking(move || -> Result<_> {
-        spawn_runner_transport(
-            &codex_home,
-            &cwd,
-            &sandbox_creds,
-            logs_base_dir.as_deref(),
-            spawn_request,
+        spawn_runner_transport_with_retry(
+            sandbox_creds,
+            &request,
+            spawn_runner_transport,
+            refresh_logon_sandbox_creds,
         )
     })
     .await
@@ -95,59 +154,36 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         proxy_settings_mode,
     )?;
 
-    let spawn_request = SpawnRequest {
-        command: command.clone(),
-        cwd: cwd.to_path_buf(),
-        env: env_map.clone(),
-        permission_profile: permission_profile.clone(),
-        workspace_roots: workspace_roots.to_vec(),
-        codex_home: elevated.sandbox_base.clone(),
-        real_codex_home: codex_home.to_path_buf(),
-        cap_sids: elevated.cap_sids.clone(),
-        timeout_ms,
-        tty,
-        stdin_open,
-        use_private_desktop,
-    };
-    let codex_home = codex_home.to_path_buf();
-    let cwd = cwd.to_path_buf();
     let sandbox_creds = elevated.sandbox_creds;
-    let logs_base_dir = elevated.logs_base_dir.clone();
-    let transport = match spawn_runner_transport_task(
-        codex_home.clone(),
-        cwd.clone(),
-        sandbox_creds,
-        logs_base_dir.clone(),
-        spawn_request.clone(),
-    )
-    .await
-    {
-        Ok(transport) => transport,
-        Err(err) if is_stale_sandbox_creds_error(&err) => {
-            let sandbox_creds = refresh_logon_sandbox_creds(
-                &permissions,
-                &cwd,
-                &env_map,
-                &codex_home,
-                read_roots_override,
-                read_roots_include_platform_defaults,
-                write_roots_override,
-                &deny_read_paths_override,
-                &deny_write_paths_override,
-                /*proxy_enforced*/ false,
-                proxy_settings_mode,
-            )?;
-            spawn_runner_transport_task(
-                codex_home,
-                cwd,
-                sandbox_creds,
-                logs_base_dir,
-                spawn_request,
-            )
-            .await?
-        }
-        Err(err) => return Err(err),
+    let request = RunnerTransportRequest {
+        permissions,
+        codex_home: codex_home.to_path_buf(),
+        cwd: cwd.to_path_buf(),
+        env_map: env_map.clone(),
+        logs_base_dir: elevated.logs_base_dir,
+        spawn_request: SpawnRequest {
+            command,
+            cwd: cwd.to_path_buf(),
+            env: env_map,
+            permission_profile: permission_profile.clone(),
+            workspace_roots: workspace_roots.to_vec(),
+            codex_home: elevated.sandbox_base,
+            real_codex_home: codex_home.to_path_buf(),
+            cap_sids: elevated.cap_sids,
+            timeout_ms,
+            tty,
+            stdin_open,
+            use_private_desktop,
+        },
+        read_roots_override: read_roots_override.map(<[PathBuf]>::to_vec),
+        read_roots_include_platform_defaults,
+        write_roots_override: write_roots_override.map(<[PathBuf]>::to_vec),
+        deny_read_paths_override,
+        deny_write_paths_override,
+        proxy_enforced,
+        proxy_settings_mode,
     };
+    let transport = spawn_runner_transport_task(sandbox_creds, request).await?;
     let (pipe_write, pipe_read) = transport.into_files();
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -197,3 +233,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         stdin_open,
     ))
 }
+
+#[cfg(test)]
+#[path = "elevated_tests.rs"]
+mod tests;

@@ -1,4 +1,6 @@
 use crate::identity::SandboxCreds;
+use crate::ipc_framed::ErrorPayload;
+use crate::ipc_framed::ErrorStage;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
@@ -29,6 +31,7 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -63,14 +66,69 @@ impl std::fmt::Display for RunnerLogonError {
 
 impl std::error::Error for RunnerLogonError {}
 
+#[derive(Debug)]
+pub(crate) struct RunnerStartupError {
+    payload: ErrorPayload,
+}
+
+impl RunnerStartupError {
+    pub(crate) fn new(payload: ErrorPayload) -> Self {
+        Self { payload }
+    }
+}
+
+impl std::fmt::Display for RunnerStartupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "runner failed during {:?}: {}",
+            self.payload.stage, self.payload.message
+        )?;
+        if let Some(code) = self.payload.windows_error_code {
+            write!(f, " (Windows error {code})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RunnerStartupError {}
+
 pub(crate) struct RunnerTransport {
     pipe_write: File,
     pipe_read: File,
 }
 
-pub(crate) fn is_stale_sandbox_creds_error(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<RunnerLogonError>()
-        .is_some_and(|err| err.code == ERROR_LOGON_FAILURE)
+fn is_refreshable_windows_error(code: u32) -> bool {
+    matches!(code, ERROR_LOGON_FAILURE | ERROR_NO_SUCH_LOGON_SESSION)
+}
+
+pub(crate) fn is_refreshable_sandbox_creds_error(err: &anyhow::Error) -> bool {
+    if err
+        .downcast_ref::<RunnerLogonError>()
+        .is_some_and(|err| is_refreshable_windows_error(err.code))
+    {
+        return true;
+    }
+
+    err.downcast_ref::<RunnerStartupError>().is_some_and(|err| {
+        err.payload.stage == ErrorStage::SpawnChild
+            && err
+                .payload
+                .windows_error_code
+                .is_some_and(is_refreshable_windows_error)
+    })
+}
+
+pub(crate) fn retry_runner_spawn_once<T>(
+    sandbox_creds: SandboxCreds,
+    mut spawn: impl FnMut(SandboxCreds) -> Result<T>,
+    refresh: impl FnOnce() -> Result<SandboxCreds>,
+) -> Result<T> {
+    match spawn(sandbox_creds) {
+        Ok(result) => Ok(result),
+        Err(err) if is_refreshable_sandbox_creds_error(&err) => spawn(refresh()?),
+        Err(err) => Err(err),
+    }
 }
 
 impl RunnerTransport {
@@ -90,7 +148,7 @@ impl RunnerTransport {
             .ok_or_else(|| anyhow::anyhow!("runner pipe closed before spawn_ready"))?;
         match msg.message {
             Message::SpawnReady { .. } => Ok(()),
-            Message::Error { payload } => Err(anyhow::anyhow!("runner error: {}", payload.message)),
+            Message::Error { payload } => Err(RunnerStartupError::new(payload).into()),
             other => Err(anyhow::anyhow!(
                 "expected spawn_ready from runner, got {other:?}"
             )),
@@ -416,20 +474,46 @@ fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::RunnerLogonError;
-    use super::is_stale_sandbox_creds_error;
+    use super::RunnerStartupError;
+    use super::is_refreshable_sandbox_creds_error;
+    use crate::ipc_framed::ErrorPayload;
+    use crate::ipc_framed::ErrorStage;
     use pretty_assertions::assert_eq;
     use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+    use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
     use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 
     #[test]
-    fn stale_sandbox_creds_error_recognizes_logon_failures() {
+    fn refreshable_sandbox_creds_error_recognizes_credential_and_child_start_failures() {
         assert_eq!(
-            [ERROR_LOGON_FAILURE, ERROR_NOT_FOUND].map(|code| {
+            [
+                ERROR_LOGON_FAILURE,
+                ERROR_NO_SUCH_LOGON_SESSION,
+                ERROR_NOT_FOUND,
+            ]
+            .map(|code| {
                 let err =
                     anyhow::Error::new(RunnerLogonError { code }).context("runner launch failed");
-                is_stale_sandbox_creds_error(&err)
+                is_refreshable_sandbox_creds_error(&err)
             }),
-            [true, false]
+            [true, true, false]
+        );
+
+        assert_eq!(
+            [
+                (ErrorStage::SpawnChild, ERROR_NO_SUCH_LOGON_SESSION),
+                (ErrorStage::SpawnChild, ERROR_NOT_FOUND),
+                (ErrorStage::ReadSpawnRequest, ERROR_NO_SUCH_LOGON_SESSION),
+            ]
+            .map(|(stage, windows_error_code)| {
+                let err = anyhow::Error::new(RunnerStartupError::new(ErrorPayload {
+                    message: "runner startup failed".to_string(),
+                    stage,
+                    windows_error_code: Some(windows_error_code),
+                }));
+                is_refreshable_sandbox_creds_error(&err)
+            }),
+            [true, false, false]
         );
     }
 }

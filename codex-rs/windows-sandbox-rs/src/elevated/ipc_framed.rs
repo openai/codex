@@ -26,7 +26,7 @@ use std::path::PathBuf;
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 3;
+pub const IPC_PROTOCOL_VERSION: u8 = 4;
 
 /// Length-prefixed, JSON-encoded frame.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -118,7 +118,17 @@ pub struct ExitPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ErrorPayload {
     pub message: String,
-    pub code: String,
+    pub stage: ErrorStage,
+    pub windows_error_code: Option<u32>,
+}
+
+/// Runner startup stage that produced an error.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorStage {
+    ReadSpawnRequest,
+    SpawnChild,
+    WriteSpawnReady,
 }
 
 /// Empty payload for control messages.
@@ -235,5 +245,33 @@ mod tests {
         };
         assert_eq!(PermissionProfile::read_only(), payload.permission_profile);
         assert_eq!(workspace_roots, payload.workspace_roots);
+    }
+
+    #[test]
+    fn error_payload_serializes_stage_and_windows_error_code() {
+        let msg = FramedMessage {
+            version: IPC_PROTOCOL_VERSION,
+            message: Message::Error {
+                payload: ErrorPayload {
+                    message: "CreateProcessAsUserW failed".to_string(),
+                    stage: ErrorStage::SpawnChild,
+                    windows_error_code: Some(1312),
+                },
+            },
+        };
+
+        let encoded = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(
+            serde_json::json!({
+                "version": IPC_PROTOCOL_VERSION,
+                "type": "error",
+                "payload": {
+                    "message": "CreateProcessAsUserW failed",
+                    "stage": "spawn_child",
+                    "windows_error_code": 1312,
+                }
+            }),
+            encoded
+        );
     }
 }
