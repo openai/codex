@@ -116,6 +116,7 @@ pub async fn load_environment_skills_from_root(
                 max_depth: MAX_SCAN_DEPTH,
                 max_directories: MAX_SKILLS_DIRS_PER_ROOT,
                 max_entries: MAX_SKILLS_ENTRIES_PER_ROOT,
+                follow_directory_symlinks: true,
             },
             /*sandbox*/ None,
         )
