@@ -51,6 +51,28 @@ fn strips_nested_repeated_and_multiline_leading_control_wrappers() {
 }
 
 #[test]
+fn strips_observed_external_agent_control_wrapper_families() {
+    let cases = [
+        "<task-notification>\n\
+         <task-id>abc123</task-id>\n\
+         <status>completed</status>\n\
+         </task-notification>\n\
+         Fix auth flow",
+        "<command-message>review</command-message>\n\
+         <command-name>/review</command-name>\n\
+         <command-args>src/auth.rs</command-args>\n\
+         Fix auth flow",
+        "<local-command-caveat>Command output follows</local-command-caveat>\n\
+         <local-command-stdout>tests passed</local-command-stdout>\n\
+         Fix auth flow",
+    ];
+
+    for message in cases {
+        assert_eq!(fallback_title_from_user_message(message), "Fix auth flow");
+    }
+}
+
+#[test]
 fn uses_safe_fallback_for_empty_or_control_only_messages() {
     assert_eq!(
         fallback_title_from_user_message(""),
