@@ -736,14 +736,6 @@ pub fn ev_output_text_delta(delta: &str) -> Value {
     })
 }
 
-pub fn ev_output_text_delta_for_item(item_id: &str, delta: &str) -> Value {
-    serde_json::json!({
-        "type": "response.output_text.delta",
-        "item_id": item_id,
-        "delta": delta,
-    })
-}
-
 pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Value {
     let summary_entries: Vec<Value> = summary
         .iter()
@@ -797,19 +789,6 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
         "type": "response.reasoning_summary_text.delta",
         "delta": delta,
         "summary_index": 0,
-    })
-}
-
-pub fn ev_reasoning_summary_text_done_for_item(
-    item_id: &str,
-    summary_index: i64,
-    text: &str,
-) -> Value {
-    serde_json::json!({
-        "type": "response.reasoning_summary_text.done",
-        "item_id": item_id,
-        "text": text,
-        "summary_index": summary_index,
     })
 }
 
@@ -872,15 +851,6 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
             "arguments": arguments
         }
     })
-}
-
-pub fn ev_output_item_done_with_index(mut event: Value, output_index: usize) -> Value {
-    assert_eq!(
-        event.get("type").and_then(Value::as_str),
-        Some("response.output_item.done")
-    );
-    event["output_index"] = serde_json::json!(output_index);
-    event
 }
 
 pub fn ev_function_call_with_namespace(

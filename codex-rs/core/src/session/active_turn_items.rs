@@ -7,6 +7,7 @@ pub(super) struct ActiveTurnItem {
     pub(super) streams_to_client: bool,
 }
 
+/// Tracks interleaved items by response ID while retaining the legacy current-item fallback.
 #[derive(Default)]
 pub(super) struct ActiveTurnItems {
     by_response_item_id: HashMap<String, ActiveTurnItem>,

@@ -22,15 +22,13 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
-use core_test_support::responses::ev_output_item_done_with_index;
 use core_test_support::responses::ev_output_text_delta;
-use core_test_support::responses::ev_output_text_delta_for_item;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
-use core_test_support::responses::ev_reasoning_summary_text_done_for_item;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
@@ -1148,66 +1146,77 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
+async fn parallel_truncated_routes_items_and_preserves_history() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let TestCodex { codex, .. } = test_codex()
+        .with_model("test-gpt-5.1-codex")
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Auto);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
+
+    let partial_summary = "**Checking result**\n\npartial";
+    let call_id = "call-1";
+    let summary_done = |item_id: &str, summary_index: i64, text: &str| {
+        serde_json::json!({
+            "type": "response.reasoning_summary_text.done",
+            "item_id": item_id,
+            "text": text,
+            "summary_index": summary_index,
+        })
+    };
+    let with_output_index = |mut event: serde_json::Value, output_index: usize| {
+        event["output_index"] = serde_json::json!(output_index);
+        event
+    };
+    let mut preamble_added = ev_message_item_added("message-1", "");
+    preamble_added["item"]["phase"] = serde_json::json!("commentary");
+    let mut preamble_done = ev_assistant_message("message-1", "Checking files");
+    preamble_done["item"]["phase"] = serde_json::json!("commentary");
+    let user_input = |text: &str| Op::UserInput {
+        items: vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+        responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
+    };
 
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
         ev_reasoning_summary_text_delta("**Inspecting"),
-        ev_reasoning_summary_text_done_for_item(
-            "reasoning-1",
-            /*summary_index*/ 0,
-            "**Inspecting files**",
-        ),
-        ev_reasoning_summary_text_done_for_item(
-            "reasoning-1",
-            /*summary_index*/ 1,
-            "**Planning checks**",
-        ),
-        ev_message_item_added("message-1", ""),
-        ev_output_text_delta_for_item("message-1", "Final"),
+        summary_done("reasoning-1", 0, "**Inspecting files**"),
+        summary_done("reasoning-1", 1, "**Planning checks**"),
+        preamble_added,
         ev_reasoning_item_added("reasoning-2", &[""]),
-        ev_output_text_delta_for_item("message-1", " answer"),
-        ev_reasoning_summary_text_done_for_item(
-            "reasoning-1",
-            /*summary_index*/ 2,
-            "**Finishing checks**",
+        serde_json::json!({
+            "type": "response.output_text.delta",
+            "item_id": "message-1",
+            "delta": "Checking files",
+        }),
+        with_output_index(
+            ev_function_call(call_id, "test_sync_tool", "{}"),
+            /*output_index*/ 3,
         ),
-        ev_reasoning_summary_text_done_for_item(
-            "reasoning-2",
-            /*summary_index*/ 0,
-            "**Checking result**",
-        ),
-        ev_output_item_done_with_index(
-            ev_assistant_message("message-1", "Final answer"),
-            /*output_index*/ 1,
-        ),
-        ev_output_item_done_with_index(
+        summary_done("reasoning-2", 0, partial_summary),
+        with_output_index(preamble_done, /*output_index*/ 1),
+        with_output_index(
             ev_reasoning_item(
                 "reasoning-1",
-                &[
-                    "**Inspecting files**",
-                    "**Planning checks**",
-                    "**Finishing checks**",
-                ],
+                &["**Inspecting files**", "**Planning checks**"],
                 &[],
             ),
             /*output_index*/ 0,
         ),
-        ev_output_item_done_with_index(
-            ev_reasoning_item("reasoning-2", &["**Checking result**"], &[]),
+        with_output_index(
+            ev_reasoning_item("reasoning-2", &[partial_summary], &[]),
             /*output_index*/ 2,
         ),
         ev_completed("resp-1"),
@@ -1221,34 +1230,14 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
     )
     .await;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "reason through it".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
+    codex.submit(user_input("reason through it")).await?;
 
-    let mut completed_item_ids = Vec::new();
     let mut message_deltas = Vec::new();
     let mut summary_deltas = Vec::new();
     let mut summary_section_breaks = Vec::new();
     loop {
         let event = codex.next_event().await?;
         match event.msg {
-            EventMsg::ItemCompleted(ItemCompletedEvent { item, .. })
-                if matches!(
-                    item.id().as_str(),
-                    "reasoning-1" | "message-1" | "reasoning-2"
-                ) =>
-            {
-                completed_item_ids.push(item.id());
-            }
             EventMsg::AgentMessageContentDelta(event) => {
                 message_deltas.push((event.item_id, event.delta));
             }
@@ -1264,251 +1253,55 @@ async fn concurrent_reasoning_routes_events_by_item_id() -> anyhow::Result<()> {
     }
 
     assert_eq!(
-        completed_item_ids,
-        vec!["reasoning-1", "message-1", "reasoning-2"]
-    );
-    assert_eq!(
         message_deltas,
-        vec![
-            ("message-1".to_string(), "Final".to_string()),
-            ("message-1".to_string(), " answer".to_string()),
-        ]
+        [("message-1".to_string(), "Checking files".to_string())]
     );
     assert_eq!(
-        summary_deltas,
-        vec![
-            (
-                "reasoning-1".to_string(),
-                0,
-                "**Inspecting files**".to_string(),
-            ),
-            (
-                "reasoning-1".to_string(),
-                1,
-                "**Planning checks**".to_string(),
-            ),
-            (
-                "reasoning-1".to_string(),
-                2,
-                "**Finishing checks**".to_string(),
-            ),
-            (
-                "reasoning-2".to_string(),
-                0,
-                "**Checking result**".to_string(),
-            ),
+        summary_deltas
+            .iter()
+            .map(|(item_id, index, delta)| (item_id.as_str(), *index, delta.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("reasoning-1", 0, "**Inspecting files**"),
+            ("reasoning-1", 1, "**Planning checks**"),
+            ("reasoning-2", 0, partial_summary),
         ]
     );
-    assert_eq!(
-        summary_section_breaks,
-        vec![
-            ("reasoning-1".to_string(), 1),
-            ("reasoning-1".to_string(), 2),
-        ]
-    );
+    assert_eq!(summary_section_breaks, [("reasoning-1".to_string(), 1)]);
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "continue".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
+    codex.submit(user_input("continue")).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let requests = response_mock.requests();
     let second_request = requests.get(1).expect("second request");
-    let output_types = second_request
-        .input()
+    let second_input = second_request.input();
+    let output_types = second_input
         .iter()
-        .filter_map(
-            |item| match item.get("type").and_then(serde_json::Value::as_str) {
-                Some("reasoning") => Some("reasoning"),
-                Some("message")
-                    if item.get("role").and_then(serde_json::Value::as_str)
-                        == Some("assistant") =>
-                {
-                    Some("message")
-                }
+        .filter_map(|item| {
+            let item_type = item.get("type")?.as_str()?;
+            match item_type {
+                "reasoning" | "function_call" | "function_call_output" => Some(item_type),
+                "message" if item.get("role")?.as_str()? == "assistant" => Some(item_type),
                 _ => None,
-            },
-        )
+            }
+        })
         .collect::<Vec<_>>();
-    assert_eq!(output_types, ["reasoning", "message", "reasoning"]);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_cutoff_keeps_partial_summary_and_runs_tool() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let TestCodex { codex, .. } = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(|config| {
-            config.model_reasoning_summary = Some(ReasoningSummary::Auto);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
-        })
-        .build(&server)
-        .await?;
-
-    let partial_summary = "**Checking**\n\npartial";
-    let call_id = "call-1";
-    let stream = sse(vec![
-        ev_response_created("resp-1"),
-        ev_reasoning_item_added("reasoning-1", &[""]),
-        serde_json::json!({
-            "type": "response.reasoning_summary_part.added",
-            "item_id": "reasoning-1",
-            "output_index": 0,
-            "summary_index": 0,
-            "part": {"type": "summary_text", "text": ""},
-        }),
-        ev_reasoning_summary_text_delta("**Checking"),
-        serde_json::json!({
-            "type": "response.output_item.added",
-            "output_index": 1,
-            "item": {
-                "type": "function_call",
-                "id": "function-1",
-                "call_id": call_id,
-                "name": "test_sync_tool",
-                "arguments": "",
-            },
-        }),
-        serde_json::json!({
-            "type": "response.function_call_arguments.delta",
-            "item_id": "function-1",
-            "output_index": 1,
-            "delta": "{}",
-        }),
-        serde_json::json!({
-            "type": "response.function_call_arguments.done",
-            "item_id": "function-1",
-            "output_index": 1,
-            "arguments": "{}",
-        }),
-        serde_json::json!({
-            "type": "response.output_item.done",
-            "output_index": 1,
-            "item": {
-                "type": "function_call",
-                "id": "function-1",
-                "call_id": call_id,
-                "name": "test_sync_tool",
-                "arguments": "{}",
-            },
-        }),
-        ev_reasoning_summary_text_done_for_item(
-            "reasoning-1",
-            /*summary_index*/ 0,
-            partial_summary,
-        ),
-        serde_json::json!({
-            "type": "response.reasoning_summary_part.done",
-            "item_id": "reasoning-1",
-            "output_index": 0,
-            "summary_index": 0,
-            "status": "incomplete",
-            "part": {"type": "summary_text", "text": partial_summary},
-        }),
-        ev_output_item_done_with_index(
-            ev_reasoning_item("reasoning-1", &[partial_summary], &[]),
-            /*output_index*/ 0,
-        ),
-        ev_completed("resp-1"),
-    ]);
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            stream,
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("message-1", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "use the test tool".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-
-    let mut completed_reasoning = None;
-    let mut summary_deltas = Vec::new();
-    loop {
-        let event = codex.next_event().await?;
-        match event.msg {
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::Reasoning(item),
-                ..
-            }) => completed_reasoning = Some(item),
-            EventMsg::ReasoningContentDelta(event) => summary_deltas.push(event),
-            EventMsg::TurnComplete(_) => break,
-            _ => {}
-        }
-    }
-
     assert_eq!(
-        summary_deltas
-            .iter()
-            .map(|event| (
-                event.item_id.as_str(),
-                event.summary_index,
-                event.delta.as_str()
-            ))
-            .collect::<Vec<_>>(),
-        [("reasoning-1", 0, partial_summary)]
-    );
-    assert_eq!(
-        completed_reasoning
-            .expect("completed reasoning item")
-            .summary_text,
-        [partial_summary]
+        output_types,
+        [
+            "reasoning",
+            "message",
+            "reasoning",
+            "function_call",
+            "function_call_output",
+        ]
     );
     assert_eq!(
         response_mock.function_call_output_text(call_id).as_deref(),
         Some("ok")
     );
-
-    let requests = response_mock.requests();
-    let follow_up = requests.get(1).expect("follow-up request");
-    let output_types = follow_up
-        .input()
-        .iter()
-        .filter_map(
-            |item| match item.get("type").and_then(serde_json::Value::as_str) {
-                Some("reasoning") => Some("reasoning"),
-                Some("function_call") => Some("function_call"),
-                Some("function_call_output") => Some("function_call_output"),
-                _ => None,
-            },
-        )
-        .collect::<Vec<_>>();
     assert_eq!(
-        output_types,
-        ["reasoning", "function_call", "function_call_output"]
-    );
-    assert_eq!(
-        follow_up.inputs_of_type("reasoning")[0]["summary"][0]["text"],
+        second_request.inputs_of_type("reasoning")[1]["summary"][0]["text"],
         partial_summary
     );
 

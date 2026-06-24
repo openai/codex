@@ -38,9 +38,10 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
     );
     assert!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
-                delta: "hi".to_string(),
-                item_id: None,
+            .record_ttft_for_response_event(&ResponseEvent::ReasoningSummaryDone {
+                text: "summary".to_string(),
+                summary_index: 0,
+                item_id: "reasoning-1".to_string(),
             })
             .await
             .is_some()

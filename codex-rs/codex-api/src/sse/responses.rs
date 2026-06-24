@@ -357,11 +357,13 @@ pub fn process_responses_event(
             }
         }
         "response.reasoning_summary_text.done" => {
-            if let (Some(text), Some(summary_index)) = (event.text, event.summary_index) {
+            if let (Some(text), Some(summary_index), Some(item_id)) =
+                (event.text, event.summary_index, event.item_id)
+            {
                 return Ok(Some(ResponseEvent::ReasoningSummaryDone {
                     text,
                     summary_index,
-                    item_id: event.item_id,
+                    item_id,
                 }));
             }
         }
@@ -933,7 +935,7 @@ mod tests {
             ResponseEvent::ReasoningSummaryDone {
                 text,
                 summary_index: 2,
-                item_id: Some(item_id),
+                item_id,
             } if text == "**Checking result**" && item_id == "reasoning-1"
         );
     }

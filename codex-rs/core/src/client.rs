@@ -44,7 +44,6 @@ use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
-use codex_api::ReasoningSummaryDelivery;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -57,6 +56,7 @@ use codex_api::ResponsesWsRequest;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
 use codex_api::StreamOptions;
+use codex_api::SummaryDelivery;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::auth_header_telemetry;
@@ -385,12 +385,12 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
 }
 
 impl ModelClient {
-    pub(crate) fn should_use_concurrent_reasoning_summaries(
+    pub(crate) fn should_use_parallel_reasoning_summaries(
         provider_info: &ModelProviderInfo,
         model_info: &ModelInfo,
         effort: Option<&ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        requested_delivery: Option<ReasoningSummaryDelivery>,
+        requested_delivery: Option<SummaryDelivery>,
     ) -> bool {
         requested_delivery.is_some()
             && provider_info.is_openai()
@@ -556,7 +556,7 @@ impl ModelClient {
             model_info,
             settings.effort,
             settings.summary,
-            /*reasoning_summary_delivery*/ None,
+            /*summary_delivery*/ None,
             settings.service_tier,
             responses_metadata,
         )?;
@@ -818,7 +818,7 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
+        summary_delivery: Option<SummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
@@ -851,15 +851,15 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
-        let stream_options = Self::should_use_concurrent_reasoning_summaries(
+        let stream_options = Self::should_use_parallel_reasoning_summaries(
             self.state.provider.info(),
             model_info,
             effort.as_ref(),
             summary,
-            reasoning_summary_delivery,
+            summary_delivery,
         )
         .then_some(StreamOptions {
-            reasoning_summary_delivery: ReasoningSummaryDelivery::ConcurrentCutoff,
+            summary_delivery: SummaryDelivery::ParallelTruncated,
         });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
@@ -1354,7 +1354,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
+        summary_delivery: Option<SummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1393,7 +1393,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
-                reasoning_summary_delivery,
+                summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1405,6 +1405,7 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
+            let reorder_output_items = request.stream_options.is_some();
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1420,6 +1421,7 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        reorder_output_items,
                     );
                     return Ok(stream);
                 }
@@ -1481,7 +1483,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
+        summary_delivery: Option<SummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         warmup: bool,
@@ -1507,7 +1509,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
-                reasoning_summary_delivery,
+                summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1517,6 +1519,7 @@ impl ModelClientSession {
             } else {
                 session_telemetry_for_request(session_telemetry, &request)
             };
+            let reorder_output_items = request.stream_options.is_some();
             let mut client_metadata = self
                 .client
                 .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
@@ -1623,6 +1626,7 @@ impl ModelClientSession {
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                reorder_output_items,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1690,7 +1694,7 @@ impl ModelClientSession {
                 session_telemetry,
                 effort,
                 summary,
-                /*reasoning_summary_delivery*/ None,
+                /*summary_delivery*/ None,
                 service_tier,
                 responses_metadata,
                 /*warmup*/ true,
@@ -1734,7 +1738,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
+        summary_delivery: Option<SummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1751,7 +1755,7 @@ impl ModelClientSession {
                             session_telemetry,
                             effort.clone(),
                             summary,
-                            reasoning_summary_delivery,
+                            summary_delivery,
                             service_tier.clone(),
                             responses_metadata,
                             /*warmup*/ false,
@@ -1773,7 +1777,7 @@ impl ModelClientSession {
                     session_telemetry,
                     effort,
                     summary,
-                    reasoning_summary_delivery,
+                    summary_delivery,
                     service_tier,
                     responses_metadata,
                     inference_trace,
@@ -1876,6 +1880,7 @@ fn map_response_stream(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    reorder_output_items: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1891,6 +1896,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        reorder_output_items,
     )
 }
 
@@ -1900,6 +1906,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    reorder_output_items: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1918,7 +1925,7 @@ where
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut observed_items: Vec<ResponseItem> = Vec::new();
-        let mut output_item_done_buffer = OutputItemDoneBuffer::default();
+        let mut output_item_done_buffer = reorder_output_items.then(OutputItemDoneBuffer::default);
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1942,7 +1949,11 @@ where
             match event {
                 Ok(ResponseEvent::OutputItemDone { item, output_index }) => {
                     observed_items.push(item.clone());
-                    for (item, output_index) in output_item_done_buffer.push(item, output_index) {
+                    let ready = match output_item_done_buffer.as_mut() {
+                        Some(buffer) => buffer.push(item, output_index),
+                        None => vec![(item, output_index)],
+                    };
+                    for (item, output_index) in ready {
                         items_added.push(item.clone());
                         if tx_event
                             .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
@@ -1963,19 +1974,21 @@ where
                     token_usage,
                     end_turn,
                 }) => {
-                    for (item, output_index) in output_item_done_buffer.finish() {
-                        items_added.push(item.clone());
-                        if tx_event
-                            .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
-                            .await
-                            .is_err()
-                        {
-                            inference_trace_attempt.record_cancelled(
-                                STREAM_DROPPED_REASON,
-                                upstream_request_id,
-                                &observed_items,
-                            );
-                            return;
+                    if let Some(buffer) = output_item_done_buffer.as_mut() {
+                        for (item, output_index) in buffer.finish() {
+                            items_added.push(item.clone());
+                            if tx_event
+                                .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
+                                .await
+                                .is_err()
+                            {
+                                inference_trace_attempt.record_cancelled(
+                                    STREAM_DROPPED_REASON,
+                                    upstream_request_id,
+                                    &observed_items,
+                                );
+                                return;
+                            }
                         }
                     }
                     feedback_tags!(last_model_response_id = &response_id);

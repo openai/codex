@@ -113,7 +113,7 @@ pub enum ResponseEvent {
     ReasoningSummaryDone {
         text: String,
         summary_index: i64,
-        item_id: Option<String>,
+        item_id: String,
     },
     ReasoningContentDelta {
         delta: String,
@@ -170,13 +170,13 @@ pub struct Reasoning {
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ReasoningSummaryDelivery {
-    ConcurrentCutoff,
+pub enum SummaryDelivery {
+    ParallelTruncated,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct StreamOptions {
-    pub reasoning_summary_delivery: ReasoningSummaryDelivery,
+    pub summary_delivery: SummaryDelivery,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]

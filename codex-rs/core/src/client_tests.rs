@@ -15,6 +15,7 @@ use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
+use codex_api::SummaryDelivery;
 use codex_api::TransportError;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -28,9 +29,11 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -137,6 +140,70 @@ fn test_model_info() -> ModelInfo {
         "experimental_supported_tools": []
     }))
     .expect("deserialize test model info")
+}
+
+#[test]
+fn parallel_summary_delivery_requires_summary_generation() {
+    let openai_provider = ModelProviderInfo::create_openai_provider(None);
+    let other_provider =
+        create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    let mut model_info = test_model_info();
+    model_info.supports_reasoning_summaries = true;
+    let delivery = Some(SummaryDelivery::ParallelTruncated);
+    let should_use = |provider: &ModelProviderInfo,
+                      model: &ModelInfo,
+                      effort: Option<&ReasoningEffort>,
+                      summary: ReasoningSummary,
+                      delivery: Option<SummaryDelivery>| {
+        ModelClient::should_use_parallel_reasoning_summaries(
+            provider, model, effort, summary, delivery,
+        )
+    };
+
+    assert!(should_use(
+        &openai_provider,
+        &model_info,
+        Some(&ReasoningEffort::High),
+        ReasoningSummary::Auto,
+        delivery
+    ));
+    assert!(!should_use(
+        &other_provider,
+        &model_info,
+        Some(&ReasoningEffort::High),
+        ReasoningSummary::Auto,
+        delivery
+    ));
+    model_info.supports_reasoning_summaries = false;
+    assert!(!should_use(
+        &openai_provider,
+        &model_info,
+        Some(&ReasoningEffort::High),
+        ReasoningSummary::Auto,
+        delivery
+    ));
+    model_info.supports_reasoning_summaries = true;
+    assert!(!should_use(
+        &openai_provider,
+        &model_info,
+        Some(&ReasoningEffort::Minimal),
+        ReasoningSummary::Auto,
+        delivery
+    ));
+    assert!(!should_use(
+        &openai_provider,
+        &model_info,
+        Some(&ReasoningEffort::High),
+        ReasoningSummary::None,
+        delivery
+    ));
+    assert!(!should_use(
+        &openai_provider,
+        &model_info,
+        Some(&ReasoningEffort::High),
+        ReasoningSummary::Auto,
+        None
+    ));
 }
 
 fn test_session_telemetry() -> SessionTelemetry {
@@ -398,7 +465,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let item = output_message("msg-1", "partial answer");
     let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone {
         item,
-        output_index: None,
+        output_index: Some(1),
     })])
     .chain(futures::stream::pending());
     let (mut stream, _) = super::map_response_events(
@@ -407,6 +474,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     let observed = stream
@@ -437,65 +505,6 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn response_stream_orders_item_done_events() -> anyhow::Result<()> {
-    let item_zero = output_message("msg-0", "first");
-    let item_one = output_message("msg-1", "second");
-    let api_stream = futures::stream::iter([
-        Ok(ResponseEvent::OutputItemDone {
-            item: item_one,
-            output_index: Some(1),
-        }),
-        Ok(ResponseEvent::ReasoningSummaryDone {
-            text: "summary".to_string(),
-            summary_index: 0,
-            item_id: Some("reasoning-0".to_string()),
-        }),
-        Ok(ResponseEvent::OutputItemDone {
-            item: item_zero,
-            output_index: Some(0),
-        }),
-        Ok(ResponseEvent::Completed {
-            response_id: "resp-1".to_string(),
-            token_usage: None,
-            end_turn: Some(true),
-        }),
-    ]);
-    let (mut stream, last_response) = super::map_response_events(
-        /*upstream_request_id*/ None,
-        api_stream,
-        test_session_telemetry(),
-        InferenceTraceAttempt::disabled(),
-        test_model_provider(),
-    );
-
-    let mut observed = Vec::new();
-    while let Some(event) = stream.next().await {
-        match event? {
-            ResponseEvent::ReasoningSummaryDone { .. } => observed.push("summary".to_string()),
-            ResponseEvent::OutputItemDone { item, .. } => {
-                observed.push(item.id().expect("output item id").to_string());
-            }
-            ResponseEvent::Completed { .. } => observed.push("completed".to_string()),
-            _ => {}
-        }
-    }
-
-    assert_eq!(observed, ["summary", "msg-0", "msg-1", "completed"]);
-    assert_eq!(
-        last_response
-            .await
-            .expect("last response")
-            .items_added
-            .iter()
-            .map(|item| item.id().expect("output item id"))
-            .collect::<Vec<_>>(),
-        ["msg-0", "msg-1"]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn response_stream_records_last_model_feedback_ids() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let _guard = tracing_subscriber::registry()
@@ -516,6 +525,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     while stream.next().await.is_some() {}
@@ -591,6 +601,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*reorder_output_items*/ false,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output

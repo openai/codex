@@ -1,4 +1,4 @@
-use codex_api::ReasoningSummaryDelivery;
+use codex_api::SummaryDelivery;
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
@@ -1252,7 +1252,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
-            /*reasoning_summary_delivery*/ None,
+            /*summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2273,9 +2273,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2309,9 +2307,9 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     pretty_assertions::assert_eq!(
         request_body
             .get("stream_options")
-            .and_then(|options| options.get("reasoning_summary_delivery"))
+            .and_then(|options| options.get("summary_delivery"))
             .and_then(|value| value.as_str()),
-        Some("concurrent_cutoff")
+        Some("parallel_truncated")
     );
     pretty_assertions::assert_eq!(
         request_body
@@ -2461,9 +2459,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::None);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2493,95 +2489,6 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary")),
         None
     );
-    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_summary_delivery_is_omitted_for_minimal_effort() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = MockServer::start().await;
-
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config.model_reasoning_effort = Some(ReasoningEffort::Minimal);
-            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
-        })
-        .build(&server)
-        .await?;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request_body = resp_mock.single_request().body_json();
-    pretty_assertions::assert_eq!(request_body["reasoning"]["effort"], json!("minimal"));
-    pretty_assertions::assert_eq!(request_body["reasoning"]["summary"], json!("concise"));
-    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrent_summary_delivery_is_omitted_when_model_lacks_summary_support()
--> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = MockServer::start().await;
-
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
-    let TestCodex { codex, .. } = test_codex()
-        .with_model_info_override("gpt-5.4", |model_info| {
-            model_info.supports_reasoning_summaries = false;
-        })
-        .with_config(|config| {
-            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
-            let _ = config
-                .features
-                .enable(Feature::ConcurrentReasoningSummaries);
-        })
-        .build(&server)
-        .await?;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request_body = resp_mock.single_request().body_json();
     pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
@@ -3032,7 +2939,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
-            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
+            Some(SummaryDelivery::ParallelTruncated),
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
