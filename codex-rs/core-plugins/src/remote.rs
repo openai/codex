@@ -1941,12 +1941,16 @@ async fn send_and_decode_attempt<T: for<'de> Deserialize<'de>>(
     })?;
     let status = response.status();
     let retry_after = parse_retry_after_delay(response.headers());
-    let body = response.text().await.map_err(|source| {
-        RemotePluginCatalogAttemptError::new(RemotePluginCatalogError::Request {
-            url: url.to_string(),
-            source,
-        })
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|source| RemotePluginCatalogAttemptError {
+            error: RemotePluginCatalogError::Request {
+                url: url.to_string(),
+                source,
+            },
+            retry_after,
+        })?;
     if !status.is_success() {
         return Err(RemotePluginCatalogAttemptError {
             error: RemotePluginCatalogError::UnexpectedStatus {
@@ -2001,8 +2005,11 @@ fn retry_delay_for_remote_plugin_catalog_get_error(
 ) -> Option<Duration> {
     match err {
         RemotePluginCatalogError::Request { source, .. } => {
-            (source.is_timeout() || source.is_connect() || source.is_body())
-                .then_some(REMOTE_PLUGIN_CATALOG_GET_RETRY_DELAY)
+            if source.is_timeout() || source.is_connect() || source.is_body() {
+                bounded_retry_after_delay(retry_after)
+            } else {
+                None
+            }
         }
         RemotePluginCatalogError::UnexpectedStatus { status, .. }
             if *status == reqwest::StatusCode::TOO_MANY_REQUESTS =>

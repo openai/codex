@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -145,6 +146,45 @@ fn remote_plugin_catalog_get_retry_delay_skips_unparsable_retry_after() {
         retry_delay_for_remote_plugin_catalog_get_error(&err, RetryAfterDelay::Unparsable),
         None
     );
+}
+
+#[tokio::test]
+async fn remote_plugin_catalog_get_skips_retry_when_body_fails_after_long_retry_after() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let url = format!("http://{}/catalog", listener.local_addr().unwrap());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = Arc::clone(&attempts);
+    let server_task = tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            server_attempts.fetch_add(1, Ordering::SeqCst);
+            let response = concat!(
+                "HTTP/1.1 503 Service Unavailable\r\n",
+                "Retry-After: 60\r\n",
+                "Content-Length: 100\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+                "partial body",
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+
+    let request = reqwest::Client::new().get(&url);
+    let err = send_and_decode_idempotent_get_with_retry::<serde_json::Value>(request, &url)
+        .await
+        .expect_err("truncated response should fail without retrying");
+    server_task.abort();
+
+    assert!(
+        matches!(err, RemotePluginCatalogError::Request { .. }),
+        "expected body read failure, got {err:?}"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
