@@ -1784,7 +1784,7 @@ To disable a non-managed hook, upsert a state entry at `hooks.state` with `confi
 To re-enable it, upsert the same hook key with `"enabled": true`.
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, legacy logo URLs, structured light and dark icon assets, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -1801,6 +1801,10 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "description": "Example connector for documentation.",
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
+            "iconAssets": {
+                "256_square": "https://example.com/demo-app-square.png"
+            },
+            "iconDarkAssets": null,
             "distributionChannel": null,
             "branding": null,
             "appMetadata": null,
@@ -1831,6 +1835,10 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "description": "Example connector for documentation.",
         "logoUrl": "https://example.com/demo-app.png",
         "logoUrlDark": null,
+        "iconAssets": {
+          "256_square": "https://example.com/demo-app-square.png"
+        },
+        "iconDarkAssets": null,
         "distributionChannel": null,
         "branding": null,
         "appMetadata": null,

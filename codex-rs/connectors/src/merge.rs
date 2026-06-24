@@ -34,6 +34,12 @@ pub fn merge_connectors(
             if existing.logo_url_dark.is_none() && connector.logo_url_dark.is_some() {
                 existing.logo_url_dark = connector.logo_url_dark;
             }
+            if existing.icon_assets.is_none() && connector.icon_assets.is_some() {
+                existing.icon_assets = connector.icon_assets;
+            }
+            if existing.icon_dark_assets.is_none() && connector.icon_dark_assets.is_some() {
+                existing.icon_dark_assets = connector.icon_dark_assets;
+            }
             if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
                 existing.distribution_channel = connector.distribution_channel;
             }
@@ -107,6 +113,8 @@ pub fn plugin_connector_to_app_info(connector_id: String) -> AppInfo {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -136,6 +144,8 @@ mod tests {
             description: Some("Plan events".to_string()),
             logo_url: Some("https://example.com/logo.png".to_string()),
             logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: Some("workspace".to_string()),
             branding: None,
             app_metadata: None,
@@ -162,6 +172,8 @@ mod tests {
                 description: Some("Plan events".to_string()),
                 logo_url: Some("https://example.com/logo.png".to_string()),
                 logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: Some("workspace".to_string()),
                 branding: None,
                 app_metadata: None,
@@ -192,6 +204,8 @@ mod tests {
                 description: Some("Plan events".to_string()),
                 logo_url: Some("https://example.com/logo.png".to_string()),
                 logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: Some("workspace".to_string()),
                 branding: None,
                 app_metadata: None,
