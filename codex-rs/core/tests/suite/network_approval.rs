@@ -153,7 +153,7 @@ async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<
 
     let server = start_mock_server().await;
     let test = managed_network_unified_exec_test(&server).await?;
-    let command = network_python_fetch_command("1.1.1.1", /*timeout_secs*/ 10);
+    let command = "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://1.1.1.1', timeout=10).read().decode(errors='replace'))\"".to_string();
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -371,16 +371,12 @@ async fn mount_exec_network_turn(
 }
 
 fn network_fetch_args(environment_id: &str) -> Value {
-    let command = network_python_fetch_command(NETWORK_TEST_HOST, /*timeout_secs*/ 2);
+    let command = format!(
+        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{NETWORK_TEST_HOST}', timeout=2).read().decode(errors='replace'))\""
+    );
     let mut args = network_exec_args(&command);
     args["environment_id"] = json!(environment_id);
     args
-}
-
-fn network_python_fetch_command(host: &str, timeout_secs: u64) -> String {
-    format!(
-        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://{host}', timeout={timeout_secs}).read().decode(errors='replace'))\""
-    )
 }
 
 fn network_exec_args(command: &str) -> Value {
