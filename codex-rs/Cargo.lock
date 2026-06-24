@@ -2603,11 +2603,13 @@ version = "0.0.0"
 dependencies = [
  "codex-connectors",
  "codex-core-plugins",
+ "codex-exec-server",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-path-uri",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

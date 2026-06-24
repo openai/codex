@@ -99,6 +99,10 @@ impl McpManager {
         };
         let selected_connector_snapshot =
             thread_init.and_then(ExtensionDataInit::get::<ConnectorSnapshot>);
+        let hosted_apps_available = config.orchestrator_mcp_enabled
+            && config
+                .features
+                .apps_enabled_for_auth(apps_route_available(self.plugins_manager.auth_mode()));
         let mut selected_plugin_registrations = Vec::new();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
@@ -122,13 +126,12 @@ impl McpManager {
                         selection_order,
                         config,
                     } => {
-                        let routed_through_app =
-                            apps_route_available(self.plugins_manager.auth_mode())
-                                && selected_connector_snapshot
-                                    .as_ref()
-                                    .is_some_and(|snapshot| {
-                                        snapshot.plugin_declares_app(&plugin_id, &name)
-                                    });
+                        let routed_through_app = hosted_apps_available
+                            && selected_connector_snapshot
+                                .as_ref()
+                                .is_some_and(|snapshot| {
+                                    snapshot.plugin_declares_app(&plugin_id, &name)
+                                });
                         if !routed_through_app {
                             selected_plugin_registrations.push(
                                 McpServerRegistration::from_selected_plugin(

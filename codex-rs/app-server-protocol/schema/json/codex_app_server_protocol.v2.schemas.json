@@ -969,7 +969,7 @@
           ]
         },
         "threadId": {
-          "description": "Optional thread id used for feature gating and thread-selected plugin associations.",
+          "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
           "type": [
             "string",
             "null"

@@ -1545,26 +1545,6 @@ pub(super) async fn start_apps_server_with_delays(
     Ok((server_url, server_handle))
 }
 
-pub(super) async fn start_apps_server_with_delays_and_access_token(
-    connectors: Vec<AppInfo>,
-    tools: Vec<Tool>,
-    directory_delay: Duration,
-    tools_delay: Duration,
-    access_token: &str,
-) -> Result<(String, JoinHandle<()>)> {
-    let (server_url, server_handle, _server_control) =
-        start_apps_server_with_delays_and_control_inner(
-            connectors,
-            tools,
-            directory_delay,
-            tools_delay,
-            /*workspace_plugins_enabled*/ true,
-            format!("Bearer {access_token}"),
-        )
-        .await?;
-    Ok((server_url, server_handle))
-}
-
 async fn start_apps_server_with_workspace_plugins_enabled(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
@@ -1577,7 +1557,6 @@ async fn start_apps_server_with_workspace_plugins_enabled(
             Duration::ZERO,
             Duration::ZERO,
             workspace_plugins_enabled,
-            "Bearer chatgpt-token".to_string(),
         )
         .await?;
     Ok((server_url, server_handle))
@@ -1595,7 +1574,6 @@ async fn start_apps_server_with_delays_and_control(
         directory_delay,
         tools_delay,
         /*workspace_plugins_enabled*/ true,
-        "Bearer chatgpt-token".to_string(),
     )
     .await
 }
@@ -1606,14 +1584,13 @@ async fn start_apps_server_with_delays_and_control_inner(
     directory_delay: Duration,
     tools_delay: Duration,
     workspace_plugins_enabled: bool,
-    expected_bearer: String,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
     let response = Arc::new(StdMutex::new(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
     let state = AppsServerState {
-        expected_bearer,
+        expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
         directory_delay,
