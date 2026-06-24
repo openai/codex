@@ -758,7 +758,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store,
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         installation_id.clone(),
         /*attestation_provider*/ None,
@@ -929,7 +929,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store,
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
@@ -995,22 +995,6 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         .shutdown_and_wait()
         .await
         .expect("shutdown resumed thread");
-}
-
-#[tokio::test]
-async fn in_memory_thread_store_does_not_configure_an_agent_graph_store() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.experimental_thread_store = ThreadStoreConfig::InMemory {
-        id: format!("agent-graph-{}", uuid::Uuid::new_v4()),
-    };
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let state_db = init_state_db(&config)
-        .await
-        .expect("state db should initialize");
-    assert!(agent_graph_store_from_config(&config, Some(&state_db)).is_none());
 }
 
 #[tokio::test]
@@ -1083,7 +1067,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store.clone(),
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
@@ -1412,7 +1396,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
@@ -1522,7 +1506,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
@@ -1622,7 +1606,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
-        agent_graph_store_from_config(&config, state_db.as_ref()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
         state_db.clone(),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,

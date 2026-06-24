@@ -285,23 +285,13 @@ pub fn thread_store_from_config(
     }
 }
 
-fn local_agent_graph_store_from_state_db(
+/// Construct the default SQLite-backed agent graph store when local state is available.
+pub fn local_agent_graph_store_from_state_db(
     state_db: Option<&StateDbHandle>,
 ) -> Option<Arc<dyn AgentGraphStore>> {
     state_db.map(|state_db| {
         Arc::new(LocalAgentGraphStore::new(Arc::clone(state_db))) as Arc<dyn AgentGraphStore>
     })
-}
-
-/// Construct the agent graph store matching a config-selected local thread store.
-pub fn agent_graph_store_from_config(
-    config: &Config,
-    state_db: Option<&StateDbHandle>,
-) -> Option<Arc<dyn AgentGraphStore>> {
-    match &config.experimental_thread_store {
-        ThreadStoreConfig::Local => local_agent_graph_store_from_state_db(state_db),
-        ThreadStoreConfig::InMemory { .. } => None,
-    }
 }
 
 impl ThreadManager {

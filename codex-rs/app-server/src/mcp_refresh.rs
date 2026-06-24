@@ -247,7 +247,7 @@ mod tests {
                 )),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),
-                codex_core::agent_graph_store_from_config(&good_config, Some(&state_db)),
+                codex_core::local_agent_graph_store_from_state_db(Some(&state_db)),
                 Some(state_db.clone()),
                 "11111111-1111-4111-8111-111111111111".to_string(),
                 /*attestation_provider*/ None,
