@@ -22,6 +22,22 @@ rust_library(
 )
 
 rust_binary(
+    name = "bwrap-exec-test-runner",
+    testonly = True,
+    srcs = ["bwrap_remote_test_runner.rs"],
+    crate_name = "bwrap_exec_test_runner",
+    crate_root = "bwrap_remote_test_runner.rs",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bwrap-exec-server-test-support",
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
     name = "bwrap-exec-smoke",
     testonly = True,
     srcs = ["bwrap_exec_server_smoke.rs"],
