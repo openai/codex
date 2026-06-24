@@ -1504,7 +1504,9 @@ impl PluginsManager {
             Some(&config.config_layer_stack),
             /*enable_canonical*/ false,
         )
-        .await
+        .await?;
+        self.clear_cache();
+        Ok(())
     }
 
     async fn reconcile_plugin_install_locked(

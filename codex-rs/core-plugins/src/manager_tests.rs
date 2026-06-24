@@ -2370,6 +2370,49 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
 }
 
 #[tokio::test]
+async fn reconcile_remote_plugin_install_invalidates_loaded_plugin_cache() {
+    let codex_home = TempDir::new().unwrap();
+    write_cached_plugin(codex_home.path(), "debug", "linear");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+
+[plugins."linear@debug"]
+enabled = true
+"#,
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let before = manager.plugins_for_config(&config).await;
+    assert_eq!(before.plugins().len(), 1);
+    assert!(before.plugins()[0].is_active());
+
+    manager
+        .reconcile_remote_plugin_install(
+            &config,
+            &PluginId::new(
+                "linear".to_string(),
+                REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/cache/debug/linear")
+            .exists()
+    );
+    let after = manager.plugins_for_config(&config).await;
+    assert!(after.plugins().iter().all(|plugin| !plugin.is_active()));
+}
+
+#[tokio::test]
 async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home

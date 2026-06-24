@@ -1632,6 +1632,7 @@ impl PluginRequestProcessor {
             .reconcile_remote_plugin_install(&config.plugins_config_input(), &result.plugin_id)
             .await
             .map_err(Self::plugin_install_error)?;
+        self.clear_plugin_related_caches();
         plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
             &config.plugins_config_input(),
             auth.clone(),
