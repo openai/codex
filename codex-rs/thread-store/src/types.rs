@@ -385,6 +385,8 @@ pub struct ItemPage {
 pub struct StoredThread {
     /// Thread id.
     pub thread_id: ThreadId,
+    /// Session id shared by the root thread and all of its subagents.
+    pub session_id: SessionId,
     /// Optional extra configuration fields for the thread.
     pub extra_config: Option<ExtraConfig>,
     /// Local rollout path when the backing store is filesystem-based.

@@ -2268,6 +2268,7 @@ mod tests {
         ];
         let stored_thread = StoredThread {
             thread_id,
+            session_id: thread_id.into(),
             extra_config: None,
             rollout_path: None,
             forked_from_id: None,

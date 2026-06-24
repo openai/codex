@@ -46,10 +46,12 @@ use codex_rollout::StateDbHandle;
 use codex_state::ExternalAgentConfigImportFailureRecord;
 use codex_state::ExternalAgentConfigImportSuccessRecord;
 use codex_thread_store::ThreadStore;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::ConfigRequestProcessor;
+use super::ThreadCatalogSubscriptions;
 use super::external_agent_session_import::ExternalAgentSessionImporter;
 use uuid::Uuid;
 
@@ -74,6 +76,8 @@ pub(crate) struct ExternalAgentConfigRequestProcessorArgs {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) codex_home: PathBuf,
+    pub(crate) fallback_cwd: AbsolutePathBuf,
+    pub(crate) thread_catalog_subscriptions: ThreadCatalogSubscriptions,
 }
 
 impl ExternalAgentConfigRequestProcessor {
@@ -88,6 +92,8 @@ impl ExternalAgentConfigRequestProcessor {
             analytics_events_client,
             arg0_paths,
             codex_home,
+            fallback_cwd,
+            thread_catalog_subscriptions,
         } = args;
         let session_importer = ExternalAgentSessionImporter::new(
             codex_home.clone(),
@@ -95,6 +101,8 @@ impl ExternalAgentConfigRequestProcessor {
             thread_store,
             config_manager,
             arg0_paths,
+            fallback_cwd,
+            thread_catalog_subscriptions,
         );
         Self {
             outgoing,

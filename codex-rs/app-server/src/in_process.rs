@@ -886,18 +886,19 @@ mod tests {
     async fn in_process_catalog_notifications_survive_queue_pressure() {
         let mut client =
             start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 1).await;
-        let subscribed = request_when_ready(&client, || ClientRequest::ThreadCatalogSubscribe {
-            request_id: RequestId::Integer(10),
-            params: None,
-        })
-        .await
-        .expect("subscribe should succeed");
+        let subscribed =
+            request_when_ready(&client.client, || ClientRequest::ThreadCatalogSubscribe {
+                request_id: RequestId::Integer(10),
+                params: None,
+            })
+            .await
+            .expect("subscribe should succeed");
         let subscribed: ThreadCatalogSubscribeResponse =
             serde_json::from_value(subscribed).expect("subscribe response should parse");
 
         let mut started_ids = Vec::new();
         for request_id in [11, 12] {
-            let started = request_when_ready(&client, || ClientRequest::ThreadStart {
+            let started = request_when_ready(&client.client, || ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(request_id),
                 params: ThreadStartParams::default(),
             })
@@ -908,7 +909,25 @@ mod tests {
             started_ids.push(started.thread.id);
         }
 
+        let unsubscribe_client = client.client.clone();
+        let mut unsubscribe = Box::pin(request_when_ready(&unsubscribe_client, || {
+            ClientRequest::ThreadCatalogUnsubscribe {
+                request_id: RequestId::Integer(13),
+                params: None,
+            }
+        }));
+        assert!(
+            timeout(Duration::from_millis(100), &mut unsubscribe)
+                .await
+                .is_err(),
+            "unsubscribe must wait for an in-flight catalog notification"
+        );
+
         let first = next_catalog_change(&mut client).await;
+        timeout(SHUTDOWN_TIMEOUT, &mut unsubscribe)
+            .await
+            .expect("unsubscribe should complete after catalog delivery")
+            .expect("unsubscribe should succeed");
         let second = next_catalog_change(&mut client).await;
         assert_eq!(vec![first.thread.id, second.thread.id], started_ids,);
         assert!(first.revision > subscribed.revision);
@@ -938,7 +957,7 @@ mod tests {
     }
 
     async fn request_when_ready(
-        client: &InProcessClientHandle,
+        client: &InProcessClientSender,
         request: impl Fn() -> ClientRequest,
     ) -> PendingClientRequestResponse {
         loop {

@@ -29,6 +29,10 @@ use tokio::sync::Semaphore;
 use crate::config::external_agent_config::ExternalAgentConfigImportItemResult;
 use crate::config::external_agent_config::record_import_error;
 use crate::config_manager::ConfigManager;
+use codex_utils_absolute_path::AbsolutePathBuf;
+
+use super::ThreadCatalogSubscriptions;
+use super::thread_summary_from_stored_thread;
 
 const SESSION_IMPORT_CONCURRENCY: usize = 5;
 
@@ -40,6 +44,8 @@ pub(super) struct ExternalAgentSessionImporter {
     thread_store: Arc<dyn ThreadStore>,
     config_manager: ConfigManager,
     arg0_paths: Arg0DispatchPaths,
+    fallback_cwd: AbsolutePathBuf,
+    thread_catalog_subscriptions: ThreadCatalogSubscriptions,
 }
 
 impl ExternalAgentSessionImporter {
@@ -49,6 +55,8 @@ impl ExternalAgentSessionImporter {
         thread_store: Arc<dyn ThreadStore>,
         config_manager: ConfigManager,
         arg0_paths: Arg0DispatchPaths,
+        fallback_cwd: AbsolutePathBuf,
+        thread_catalog_subscriptions: ThreadCatalogSubscriptions,
     ) -> Self {
         Self {
             codex_home,
@@ -57,6 +65,8 @@ impl ExternalAgentSessionImporter {
             thread_store,
             config_manager,
             arg0_paths,
+            fallback_cwd,
+            thread_catalog_subscriptions,
         }
     }
 
@@ -262,7 +272,8 @@ impl ExternalAgentSessionImporter {
             return Err(format!("failed to import session: {err}"));
         }
 
-        self.thread_store
+        let stored_thread = self
+            .thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id,
                 patch: metadata,
@@ -278,6 +289,14 @@ impl ExternalAgentSessionImporter {
             .shutdown_thread(thread_id)
             .await
             .map_err(|err| format!("failed to shutdown imported session: {err}"))?;
+        let fallback_provider = stored_thread.model_provider.clone();
+        self.thread_catalog_subscriptions
+            .publish_thread_summary(thread_summary_from_stored_thread(
+                stored_thread,
+                &fallback_provider,
+                &self.fallback_cwd,
+            ))
+            .await;
         Ok(thread_id)
     }
 }

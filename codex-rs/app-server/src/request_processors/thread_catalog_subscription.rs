@@ -3,16 +3,22 @@ use super::*;
 #[derive(Clone)]
 pub(crate) struct ThreadCatalogSubscriptions {
     outgoing: Arc<OutgoingMessageSender>,
-    connection_ids: Arc<Mutex<HashSet<ConnectionId>>>,
-    revision: Arc<Mutex<u64>>,
+    state: Arc<Mutex<ThreadCatalogSubscriptionState>>,
+    delivery_barrier: Arc<Semaphore>,
+}
+
+#[derive(Default)]
+struct ThreadCatalogSubscriptionState {
+    connection_ids: HashSet<ConnectionId>,
+    revision: u64,
 }
 
 impl ThreadCatalogSubscriptions {
     pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
         Self {
             outgoing,
-            connection_ids: Arc::new(Mutex::new(HashSet::new())),
-            revision: Arc::new(Mutex::new(0)),
+            state: Arc::new(Mutex::new(ThreadCatalogSubscriptionState::default())),
+            delivery_barrier: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -20,39 +26,48 @@ impl ThreadCatalogSubscriptions {
         &self,
         connection_id: ConnectionId,
     ) -> ThreadCatalogSubscribeResponse {
-        let mut connection_ids = self.connection_ids.lock().await;
-        connection_ids.insert(connection_id);
-        let revision = *self.revision.lock().await;
-        ThreadCatalogSubscribeResponse { revision }
+        let _delivery_barrier = self.acquire_delivery_barrier().await;
+        let mut state = self.state.lock().await;
+        state.connection_ids.insert(connection_id);
+        ThreadCatalogSubscribeResponse {
+            revision: state.revision,
+        }
     }
 
     pub(super) async fn unsubscribe(
         &self,
         connection_id: ConnectionId,
     ) -> ThreadCatalogUnsubscribeResponse {
-        self.connection_ids.lock().await.remove(&connection_id);
+        let _delivery_barrier = self.acquire_delivery_barrier().await;
+        self.state
+            .lock()
+            .await
+            .connection_ids
+            .remove(&connection_id);
         ThreadCatalogUnsubscribeResponse {}
     }
 
     pub(super) async fn connection_closed(&self, connection_id: ConnectionId) {
-        self.connection_ids.lock().await.remove(&connection_id);
+        let _delivery_barrier = self.acquire_delivery_barrier().await;
+        self.state
+            .lock()
+            .await
+            .connection_ids
+            .remove(&connection_id);
     }
 
     pub(super) async fn publish_thread_summary(&self, thread: ThreadSummary) {
-        let connection_ids = self
-            .connection_ids
-            .lock()
-            .await
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        if connection_ids.is_empty() {
-            return;
-        }
-        let revision = {
-            let mut revision = self.revision.lock().await;
-            *revision = revision.saturating_add(1);
-            *revision
+        let _delivery_barrier = self.acquire_delivery_barrier().await;
+        let (connection_ids, revision) = {
+            let mut state = self.state.lock().await;
+            if state.connection_ids.is_empty() {
+                return;
+            }
+            state.revision = state.revision.saturating_add(1);
+            (
+                state.connection_ids.iter().copied().collect::<Vec<_>>(),
+                state.revision,
+            )
         };
         self.outgoing
             .send_server_notification_to_connections(
@@ -72,7 +87,7 @@ impl ThreadCatalogSubscriptions {
         fallback_provider: &str,
         fallback_cwd: &AbsolutePathBuf,
     ) {
-        if self.connection_ids.lock().await.is_empty() {
+        if self.state.lock().await.connection_ids.is_empty() {
             return;
         }
         let stored_thread = match thread_store
@@ -93,5 +108,12 @@ impl ThreadCatalogSubscriptions {
         let summary =
             thread_summary_from_stored_thread(stored_thread, fallback_provider, fallback_cwd);
         self.publish_thread_summary(summary).await;
+    }
+
+    async fn acquire_delivery_barrier(&self) -> SemaphorePermit<'_> {
+        match self.delivery_barrier.acquire().await {
+            Ok(permit) => permit,
+            Err(_) => unreachable!("catalog delivery semaphore is never closed"),
+        }
     }
 }

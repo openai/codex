@@ -3606,6 +3606,7 @@ async fn turn_start_emits_spawn_agent_item_and_catalog_metadata_v2() -> Result<(
         catalog_changed.thread.parent_thread_id.as_deref(),
         Some(thread.id.as_str())
     );
+    assert_eq!(catalog_changed.thread.session_id, thread.session_id);
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {

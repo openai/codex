@@ -18,6 +18,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCatalogChangedNotification;
+use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -637,6 +639,15 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         TestAppServer::new_with_env(codex_home.path(), &[("HOME", Some(home_dir.as_str()))])
             .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let request_id = mcp
+        .send_raw_request("threadCatalog/subscribe", /*params*/ None)
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadCatalogSubscribeResponse = to_response(response)?;
 
     let request_id = mcp
         .send_raw_request(
@@ -667,6 +678,16 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     let import_id = assert_import_response(response);
+    let catalog_notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("threadCatalog/changed"),
+    )
+    .await??;
+    let catalog_changed: ThreadCatalogChangedNotification = serde_json::from_value(
+        catalog_notification
+            .params
+            .expect("threadCatalog/changed params"),
+    )?;
     let notification = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
@@ -700,6 +721,12 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
         .as_deref()
         .expect("session success should include imported thread id")
         .to_string();
+    assert_eq!(catalog_changed.thread.id, imported_thread_id);
+    assert_eq!(catalog_changed.thread.preview, "first request");
+    assert_eq!(
+        catalog_changed.thread.name.as_deref(),
+        Some("source session title")
+    );
 
     let request_id = mcp
         .send_thread_list_request(ThreadListParams {

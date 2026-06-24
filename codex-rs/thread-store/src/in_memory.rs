@@ -523,6 +523,7 @@ fn stored_thread_from_state(
 
     Ok(StoredThread {
         thread_id,
+        session_id: created.session_id,
         extra_config: created.extra_config.clone(),
         rollout_path: metadata
             .and_then(|metadata| metadata.rollout_path.clone())

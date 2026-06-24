@@ -4304,9 +4304,9 @@ pub(crate) fn thread_from_stored_thread(
     let history = thread.history;
     let thread_id = thread.thread_id.to_string();
     let thread = Thread {
-        id: thread_id.clone(),
+        id: thread_id,
         extra: None,
-        session_id: thread_id,
+        session_id: thread.session_id.to_string(),
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
         parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
         preview: thread.preview,

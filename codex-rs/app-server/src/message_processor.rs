@@ -512,7 +512,7 @@ impl MessageProcessor {
             pending_thread_unloads,
             thread_state_manager,
             thread_watch_manager,
-            thread_catalog_subscriptions,
+            thread_catalog_subscriptions.clone(),
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
         );
@@ -545,6 +545,8 @@ impl MessageProcessor {
                 analytics_events_client,
                 arg0_paths,
                 codex_home: config.codex_home.to_path_buf(),
+                fallback_cwd: config.cwd.clone(),
+                thread_catalog_subscriptions,
             });
         let environment_processor =
             EnvironmentRequestProcessor::new(thread_manager.environment_manager());
