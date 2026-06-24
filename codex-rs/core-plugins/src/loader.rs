@@ -20,6 +20,8 @@ use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
 use codex_config::types::PluginMcpServerConfig;
+use codex_connectors::parse_plugin_app_config;
+use codex_connectors::parse_plugin_app_config_value;
 use codex_core_skills::PluginSkillSnapshots;
 use codex_core_skills::SkillMetadata;
 use codex_core_skills::config_rules::SkillConfigRules;
@@ -29,7 +31,6 @@ use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
 use codex_mcp::parse_plugin_mcp_config;
-use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
@@ -42,8 +43,6 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
-use indexmap::IndexMap;
-use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -94,19 +93,6 @@ pub(crate) fn log_plugin_load_errors(plugins: &[LoadedPlugin<McpServerConfig>]) 
             );
         }
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PluginAppFile {
-    #[serde(default)]
-    apps: IndexMap<String, PluginAppConfig>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PluginAppConfig {
-    id: String,
-    category: Option<String>,
 }
 
 /// Load configured plugins without applying auth-dependent runtime policies.
@@ -965,10 +951,10 @@ pub(crate) async fn load_plugin_apps_from_manifest(
 }
 
 pub fn plugin_app_declarations_from_value(value: &JsonValue) -> Vec<AppDeclaration> {
-    let Ok(parsed) = serde_json::from_value::<PluginAppFile>(value.clone()) else {
+    let Ok(mut apps) = parse_plugin_app_config_value(value.clone()) else {
         return Vec::new();
     };
-    let mut apps = app_declarations_from_file(parsed, /*plugin_root*/ None);
+    apps.retain(|app| !app.connector_id.0.trim().is_empty());
     let mut seen_connector_ids = HashSet::new();
     apps.retain(|app| seen_connector_ids.insert(app.connector_id.0.clone()));
     apps
@@ -1116,8 +1102,8 @@ async fn load_apps_from_paths(
         let Ok(contents) = tokio::fs::read_to_string(app_config_path.as_path()).await else {
             continue;
         };
-        let parsed = match serde_json::from_str::<PluginAppFile>(&contents) {
-            Ok(parsed) => parsed,
+        let declarations = match parse_plugin_app_config(&contents) {
+            Ok(declarations) => declarations,
             Err(err) => {
                 warn!(
                     path = %app_config_path.display(),
@@ -1127,42 +1113,19 @@ async fn load_apps_from_paths(
             }
         };
 
-        app_declarations.extend(app_declarations_from_file(parsed, Some(plugin_root)));
+        app_declarations.extend(declarations.into_iter().filter(|app| {
+            if app.connector_id.0.trim().is_empty() {
+                warn!(
+                    plugin = %plugin_root.display(),
+                    "plugin app config is missing an app id"
+                );
+                false
+            } else {
+                true
+            }
+        }));
     }
     app_declarations
-}
-
-fn app_declarations_from_file(
-    parsed: PluginAppFile,
-    plugin_root: Option<&Path>,
-) -> Vec<AppDeclaration> {
-    parsed
-        .apps
-        .into_iter()
-        .filter_map(|(name, app)| {
-            if app.id.trim().is_empty() {
-                if let Some(plugin_root) = plugin_root {
-                    warn!(
-                        plugin = %plugin_root.display(),
-                        "plugin app config is missing an app id"
-                    );
-                }
-                None
-            } else {
-                Some(AppDeclaration {
-                    name,
-                    connector_id: AppConnectorId(app.id),
-                    category: cleaned_app_category(app.category),
-                })
-            }
-        })
-        .collect()
-}
-
-fn cleaned_app_category(category: Option<String>) -> Option<String> {
-    category
-        .map(|category| category.trim().to_string())
-        .filter(|category| !category.is_empty())
 }
 
 pub async fn plugin_capability_summary_from_root(
