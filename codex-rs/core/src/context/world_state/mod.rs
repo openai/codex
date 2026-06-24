@@ -90,7 +90,12 @@ impl fmt::Debug for WorldState {
 
 impl WorldState {
     pub(crate) fn add_section<S: WorldStateSection>(&mut self, section: S) {
-        self.sections.insert(S::ID, Box::new(section));
+        let id = S::ID;
+        assert!(
+            !self.sections.contains_key(id),
+            "duplicate world-state section ID: {id}"
+        );
+        self.sections.insert(id, Box::new(section));
     }
 
     pub(crate) fn snapshot(&self) -> WorldStateSnapshot {
@@ -123,13 +128,13 @@ impl WorldState {
 }
 
 fn remove_null_object_fields(value: &mut Value) {
-    // RFC 7386 reserves object-valued nulls for deletion, so snapshots omit them.
+    // RFC 7386 reserves object-valued nulls for deletion, but arrays are replaced whole.
     match value {
         Value::Object(values) => {
             values.retain(|_, value| !value.is_null());
             values.values_mut().for_each(remove_null_object_fields);
         }
-        Value::Array(values) => values.iter_mut().for_each(remove_null_object_fields),
+        Value::Array(_) => {}
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
