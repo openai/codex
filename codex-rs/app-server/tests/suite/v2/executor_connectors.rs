@@ -15,6 +15,10 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -135,47 +139,7 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
     let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
     let thread_id = thread.id;
 
-    let apps_list_id = app_server
-        .send_apps_list_request(AppsListParams {
-            cursor: None,
-            limit: None,
-            thread_id: Some(thread_id.clone()),
-            force_refetch: true,
-        })
-        .await?;
-    let apps_list_response = timeout(
-        DEFAULT_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(apps_list_id)),
-    )
-    .await??;
-    assert_eq!(
-        to_response::<AppsListResponse>(apps_list_response)?,
-        AppsListResponse {
-            data: vec![expected_app(vec![PLUGIN_DISPLAY_NAME.to_string()])],
-            next_cursor: None,
-        }
-    );
-
-    let mcp_status_id = app_server
-        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
-            cursor: None,
-            limit: None,
-            detail: None,
-            thread_id: Some(thread_id.clone()),
-        })
-        .await?;
-    let mcp_status_response = timeout(
-        DEFAULT_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(mcp_status_id)),
-    )
-    .await??;
-    let mcp_status_response: ListMcpServerStatusResponse = to_response(mcp_status_response)?;
-    assert!(
-        mcp_status_response
-            .data
-            .iter()
-            .all(|server| server.name != "calendar_app")
-    );
+    assert_selected_connector_state(&mut app_server, &thread_id).await?;
 
     let response_mock = responses::mount_sse_once(
         &responses_server,
@@ -188,7 +152,7 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
     .await;
     let turn_start_id = app_server
         .send_turn_start_request(TurnStartParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "Use Calendar".to_string(),
                 text_elements: Vec::new(),
@@ -216,8 +180,97 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
         .context("Calendar connector tool should have a description")?;
     assert!(description.contains("This tool is part of plugin `Executor Calendar`."));
 
+    let request_id = app_server
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response(response)?;
+    let forked_thread_id = thread.id;
+    assert_selected_connector_state(&mut app_server, &forked_thread_id).await?;
+
+    drop(app_server);
+    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
+    resume_and_assert_selected_connector_state(&mut app_server, &thread_id).await?;
+    resume_and_assert_selected_connector_state(&mut app_server, &forked_thread_id).await?;
+
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
+    Ok(())
+}
+
+async fn resume_and_assert_selected_connector_state(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response(response)?;
+    assert_eq!(thread.id, thread_id);
+    assert_selected_connector_state(app_server, thread_id).await
+}
+
+async fn assert_selected_connector_state(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    let apps_list_id = app_server
+        .send_apps_list_request(AppsListParams {
+            cursor: None,
+            limit: None,
+            thread_id: Some(thread_id.to_string()),
+            force_refetch: true,
+        })
+        .await?;
+    let apps_list_response = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(apps_list_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<AppsListResponse>(apps_list_response)?,
+        AppsListResponse {
+            data: vec![expected_app(vec![PLUGIN_DISPLAY_NAME.to_string()])],
+            next_cursor: None,
+        }
+    );
+
+    let mcp_status_id = app_server
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: Some(thread_id.to_string()),
+        })
+        .await?;
+    let mcp_status_response = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(mcp_status_id)),
+    )
+    .await??;
+    let mcp_status_response: ListMcpServerStatusResponse = to_response(mcp_status_response)?;
+    assert!(
+        mcp_status_response
+            .data
+            .iter()
+            .all(|server| server.name != "calendar_app")
+    );
     Ok(())
 }
 
@@ -228,6 +281,8 @@ fn expected_app(plugin_display_names: Vec<String>) -> AppInfo {
         description: Some("Calendar connector".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,

@@ -2604,6 +2604,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-exec-server",
+ "codex-extension-api",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-path-uri",

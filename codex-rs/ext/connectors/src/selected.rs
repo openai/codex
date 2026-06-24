@@ -2,6 +2,9 @@ use codex_connectors::ConnectorSnapshot;
 use codex_connectors::PluginConnectorSource;
 use codex_core_plugins::ExecutorPluginProvider;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ThreadExtensionInitContributor;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::sync::Arc;
 
@@ -60,5 +63,20 @@ impl SelectedExecutorConnectorProvider {
         }
 
         ConnectorSnapshot::from_plugin_sources(sources)
+    }
+}
+
+impl ThreadExtensionInitContributor for SelectedExecutorConnectorProvider {
+    fn initialize<'a>(&'a self, thread_init: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if thread_init.get::<ConnectorSnapshot>().is_some() {
+                return;
+            }
+            let Some(selected_roots) = thread_init.get::<Vec<SelectedCapabilityRoot>>() else {
+                return;
+            };
+            let snapshot = self.snapshot_for_roots(selected_roots.as_ref()).await;
+            thread_init.insert(snapshot);
+        })
     }
 }
