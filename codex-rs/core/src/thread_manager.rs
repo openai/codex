@@ -43,7 +43,6 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
@@ -222,45 +221,6 @@ fn effective_originator_value(
         .or(inherited_originator)
         .or(env_originator)
         .unwrap_or(default_originator)
-}
-
-fn apply_managed_new_thread_defaults(
-    config: &mut Config,
-    initial_history: &InitialHistory,
-    session_source: &SessionSource,
-) {
-    if session_source.is_non_root_agent()
-        || !matches!(
-            initial_history,
-            InitialHistory::New | InitialHistory::Cleared
-        )
-    {
-        return;
-    }
-
-    let Some(defaults) = config
-        .config_layer_stack
-        .requirements_toml()
-        .models
-        .as_ref()
-        .and_then(|models| models.new_thread.as_ref())
-    else {
-        return;
-    };
-
-    if let Some(model) = defaults.model.as_ref() {
-        config.model = Some(model.clone());
-    }
-    if let Some(model_reasoning_effort) = defaults.model_reasoning_effort.as_ref() {
-        config.model_reasoning_effort = Some(model_reasoning_effort.clone());
-    }
-    if let Some(service_tier) = defaults.service_tier.as_ref() {
-        config.service_tier = Some(
-            ServiceTier::from_request_value(service_tier)
-                .map(|tier| tier.request_value().to_string())
-                .unwrap_or_else(|| service_tier.clone()),
-        );
-    }
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -1544,7 +1504,7 @@ impl ThreadManagerState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
-        mut config: Config,
+        config: Config,
         initial_history: InitialHistory,
         history_mode: Option<ThreadHistoryMode>,
         allow_provider_model_fallback: bool,
@@ -1586,7 +1546,6 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        apply_managed_new_thread_defaults(&mut config, &initial_history, &session_source);
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
