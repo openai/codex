@@ -52,8 +52,7 @@ use std::task::Context as TaskContext;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::time::Instant;
-use tokio::time::timeout_at;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
@@ -94,24 +93,35 @@ enum MitmPolicyDecision {
 const MITM_INSPECT_BODIES: bool = false;
 const MITM_MAX_BODY_BYTES: usize = 4096;
 const TLS_PREFIX_LEN: usize = 5;
-const TLS_PREFIX_PEEK_TIMEOUT: Duration = Duration::from_millis(250);
+const TLS_PREFIX_FIRST_BYTE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Peeks enough bytes to distinguish a TLS handshake from an opaque CONNECT stream.
 ///
-/// The timeout preserves server-first protocols: when the client does not speak promptly, the
-/// caller receives a non-TLS stream with every byte read so far replayed through `TlsPeekStream`.
+/// The first-byte timeout preserves server-first protocols. Once the client starts a possible TLS
+/// prefix, all five record-header bytes are accumulated so fragmented handshakes cannot bypass
+/// interception. Every byte read is replayed through `TlsPeekStream`.
 pub(crate) async fn peek_tls_prefix<S>(mut stream: S) -> Result<(bool, TlsPeekStream<S>)>
 where
     S: Stream + Unpin + ExtensionsMut,
 {
-    let deadline = Instant::now() + TLS_PREFIX_PEEK_TIMEOUT;
     let mut peek_buf = [0_u8; TLS_PREFIX_LEN];
-    let mut bytes_read = 0;
-    while bytes_read < TLS_PREFIX_LEN {
-        let read = match timeout_at(deadline, stream.read(&mut peek_buf[bytes_read..])).await {
+    let mut bytes_read =
+        match timeout(TLS_PREFIX_FIRST_BYTE_TIMEOUT, stream.read(&mut peek_buf)).await {
             Ok(result) => result.context("read TLS prefix")?,
-            Err(_) => break,
+            Err(_) => 0,
         };
+    while bytes_read > 0 && bytes_read < TLS_PREFIX_LEN {
+        let possible_tls_prefix = matches!(
+            &peek_buf[..bytes_read],
+            [0x16] | [0x16, 0x03] | [0x16, 0x03, 0x00..=0x04, ..]
+        );
+        if !possible_tls_prefix {
+            break;
+        }
+        let read = stream
+            .read(&mut peek_buf[bytes_read..])
+            .await
+            .context("read TLS prefix")?;
         if read == 0 {
             break;
         }

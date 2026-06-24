@@ -89,7 +89,7 @@ async fn tls_prefix_detection_accumulates_fragmented_reads() {
     let (mut writer, reader) = tokio::io::duplex(16);
     let writer_task = tokio::spawn(async move {
         writer.write_all(&tls_prefix[..1]).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(TLS_PREFIX_FIRST_BYTE_TIMEOUT + Duration::from_millis(50)).await;
         writer.write_all(&tls_prefix[1..]).await.unwrap();
     });
 
