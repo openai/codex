@@ -237,6 +237,7 @@ export type { McpServerMigration } from "./McpServerMigration";
 export type { McpServerOauthLoginCompletedNotification } from "./McpServerOauthLoginCompletedNotification";
 export type { McpServerOauthLoginParams } from "./McpServerOauthLoginParams";
 export type { McpServerOauthLoginResponse } from "./McpServerOauthLoginResponse";
+export type { McpServerReauthenticationRequiredNotification } from "./McpServerReauthenticationRequiredNotification";
 export type { McpServerRefreshResponse } from "./McpServerRefreshResponse";
 export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";

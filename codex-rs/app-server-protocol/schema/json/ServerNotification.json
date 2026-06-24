@@ -2384,6 +2384,17 @@
       ],
       "type": "object"
     },
+    "McpServerReauthenticationRequiredNotification": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerStartupState": {
       "enum": [
         "starting",
@@ -6379,6 +6390,26 @@
         "params"
       ],
       "title": "McpServer/oauthLogin/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "mcpServer/reauthenticationRequired"
+          ],
+          "title": "McpServer/reauthenticationRequiredNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerReauthenticationRequiredNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/reauthenticationRequiredNotification",
       "type": "object"
     },
     {

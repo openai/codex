@@ -4817,6 +4817,26 @@
           "properties": {
             "method": {
               "enum": [
+                "mcpServer/reauthenticationRequired"
+              ],
+              "title": "McpServer/reauthenticationRequiredNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpServerReauthenticationRequiredNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "McpServer/reauthenticationRequiredNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "mcpServer/startupStatus/updated"
               ],
               "title": "McpServer/startupStatus/updatedNotificationMethod",
@@ -12087,6 +12107,19 @@
           "authorizationUrl"
         ],
         "title": "McpServerOauthLoginResponse",
+        "type": "object"
+      },
+      "McpServerReauthenticationRequiredNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpServerReauthenticationRequiredNotification",
         "type": "object"
       },
       "McpServerRefreshResponse": {
