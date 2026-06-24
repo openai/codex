@@ -773,6 +773,7 @@ pub(crate) struct CodexAppUsedEventRequest {
 pub(crate) struct CodexHookRunMetadata {
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
+    pub(crate) product_client_id: Option<String>,
     pub(crate) model_slug: Option<String>,
     pub(crate) hook_name: Option<String>,
     pub(crate) hook_source: Option<&'static str>,
@@ -1030,13 +1031,20 @@ pub(crate) fn codex_app_metadata(
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         app_name: app.app_name,
-        product_client_id: Some(originator().value),
+        product_client_id: Some(tracking.product_client_id.clone()),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
     }
 }
 
 pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
+    codex_plugin_metadata_with_product_client_id(plugin, originator().value)
+}
+
+fn codex_plugin_metadata_with_product_client_id(
+    plugin: PluginTelemetryMetadata,
+    product_client_id: String,
+) -> CodexPluginMetadata {
     let PluginTelemetryMetadata {
         plugin_id,
         remote_plugin_id,
@@ -1062,7 +1070,7 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
                 .map(|connector_id| connector_id.0)
                 .collect()
         }),
-        product_client_id: Some(originator().value),
+        product_client_id: Some(product_client_id),
     }
 }
 
@@ -1139,7 +1147,10 @@ pub(crate) fn codex_plugin_used_metadata(
         .as_ref()
         .map(|summary| summary.mcp_server_names.clone());
     CodexPluginUsedMetadata {
-        plugin: codex_plugin_metadata(plugin),
+        plugin: codex_plugin_metadata_with_product_client_id(
+            plugin,
+            tracking.product_client_id.clone(),
+        ),
         mcp_server_names,
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
@@ -1154,6 +1165,7 @@ pub(crate) fn codex_hook_run_metadata(
     CodexHookRunMetadata {
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(tracking.product_client_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
         hook_source: Some(analytics_hook_source(hook.hook_source)),

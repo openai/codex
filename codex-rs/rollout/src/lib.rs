@@ -16,10 +16,6 @@ pub(crate) mod session_index;
 mod sqlite_metrics;
 pub mod state_db;
 
-pub(crate) mod default_client {
-    pub use codex_login::default_client::*;
-}
-
 pub(crate) use codex_protocol::protocol;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";

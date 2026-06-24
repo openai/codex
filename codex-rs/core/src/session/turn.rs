@@ -526,6 +526,7 @@ async fn build_skills_and_plugins(
         turn_context.model_info.slug.clone(),
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
+        turn_context.originator.clone(),
     );
     let loaded_plugins = sess
         .services
@@ -848,10 +849,15 @@ async fn maybe_run_previous_model_inline_compact(
             .with_model(previous_turn_settings.model, &sess.services.models_manager)
             .await,
     );
+    let compaction_turn_context = if turn_context.config.features.enabled(Feature::TokenBudget) {
+        Arc::clone(turn_context)
+    } else {
+        Arc::clone(&previous_model_turn_context)
+    };
 
     if should_compact_for_comp_hash_change {
         let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .capture_step_context(Arc::clone(&compaction_turn_context))
             .await;
         run_auto_compact(
             sess,
@@ -891,7 +897,7 @@ async fn maybe_run_previous_model_inline_compact(
         && old_context_window > new_context_window;
     if should_run {
         let step_context = sess
-            .capture_step_context(Arc::clone(&previous_model_turn_context))
+            .capture_step_context(Arc::clone(&compaction_turn_context))
             .await;
         run_auto_compact(
             sess,
