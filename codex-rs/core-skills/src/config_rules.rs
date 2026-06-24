@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::SkillConfig;

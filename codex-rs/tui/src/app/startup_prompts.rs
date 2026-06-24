@@ -4,6 +4,7 @@
 //! catalog state into one-time TUI prompts or warning cells without owning the main event loop.
 
 use super::*;
+use codex_config::ConfigLayerSource;
 use std::collections::HashSet;
 use std::path::PathBuf;
 

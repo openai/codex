@@ -15,7 +15,6 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-analytics = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
 codex-context-fragments = { workspace = true }
 codex-exec-server = { workspace = true }
