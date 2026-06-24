@@ -175,8 +175,7 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     let test_env = test_env().await?;
     let file_system = test_env.environment().get_filesystem();
 
-    let file_path_abs = test_env.cwd().join("remote-test-env-ok");
-    let file_path_uri = PathUri::from_host_native_path(&file_path_abs)?;
+    let file_path_uri = test_env.selection().cwd.join("remote-test-env-ok")?;
     let payload = b"remote-test-env-ok".to_vec();
 
     file_system
