@@ -1088,6 +1088,7 @@ strip_request_headers = ["authorization"]
                         unix_sockets: None,
                         allow_local_binding: None,
                         mitm: Some(NetworkMitmToml {
+                            dangerously_allow_plaintext_credential_injection: None,
                             hooks: Some(IndexMap::from([(
                                 "github_write".to_string(),
                                 NetworkMitmHookToml {
@@ -1169,6 +1170,7 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
     let network = NetworkToml {
         mode: Some(NetworkMode::Full),
         mitm: Some(NetworkMitmToml {
+            dangerously_allow_plaintext_credential_injection: None,
             hooks: Some(IndexMap::from([(
                 "github_write".to_string(),
                 NetworkMitmHookToml {

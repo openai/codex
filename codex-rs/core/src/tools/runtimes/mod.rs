@@ -87,7 +87,13 @@ pub(crate) fn is_managed_proxy_env_var(key: &str, value: &str) -> bool {
 }
 
 pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
-    env.retain(|key, value| !is_managed_proxy_env_var(key, value));
+    // Escalated commands bypass the credential broker. Remove only values that still match this
+    // child's broker-generated dummies, while preserving credentials replaced by the user.
+    let brokered_credential_dummy_env_keys =
+        codex_network_proxy::brokered_credential_dummy_env_keys(env);
+    env.retain(|key, value| {
+        !brokered_credential_dummy_env_keys.contains(key) && !is_managed_proxy_env_var(key, value)
+    });
 }
 
 /// Prepends `path_entry` to `PATH`, removing duplicate and empty existing
@@ -291,7 +297,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
-    let (proxy_captures, proxy_exports) = build_proxy_env_exports();
+    let (proxy_captures, proxy_exports) = build_proxy_env_exports(env);
     let runtime_path_prepend_exports =
         runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
@@ -324,10 +330,11 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
     build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
 }
 
-fn build_proxy_env_exports() -> (String, String) {
+fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
     let mut keys = PROXY_ENV_KEYS
         .iter()
         .copied()
+        .chain(codex_network_proxy::brokered_credential_env_keys(env))
         .chain(CUSTOM_CA_ENV_KEYS)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();

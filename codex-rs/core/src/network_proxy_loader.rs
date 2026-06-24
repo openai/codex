@@ -239,6 +239,14 @@ impl NetworkConfigAccumulator {
         network.apply_to_network_proxy_config(&mut self.config);
 
         if let Some(mitm) = mitm {
+            if let Some(dangerously_allow_plaintext_credential_injection) =
+                mitm.dangerously_allow_plaintext_credential_injection
+            {
+                self.config
+                    .network
+                    .dangerously_allow_plaintext_credential_injection =
+                    dangerously_allow_plaintext_credential_injection;
+            }
             if let Some(actions) = mitm.actions {
                 self.mitm_actions.extend(actions);
             }
@@ -252,6 +260,7 @@ impl NetworkConfigAccumulator {
         if !self.mitm_hooks.is_empty() {
             let actions = self.mitm_actions;
             let mitm = NetworkMitmToml {
+                dangerously_allow_plaintext_credential_injection: None,
                 hooks: Some(self.mitm_hooks),
                 actions: Some(actions.clone()),
             };
