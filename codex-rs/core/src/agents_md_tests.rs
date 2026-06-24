@@ -30,17 +30,29 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 
 #[derive(Clone, Copy)]
 enum InjectedFailure {
     Metadata(io::ErrorKind),
+    MetadataBlocked,
+    MetadataPending,
     Read(io::ErrorKind),
 }
 
 struct FailingFileSystem {
     path: AbsolutePathBuf,
     failure: InjectedFailure,
+    metadata_calls: Arc<MetadataCallCounts>,
+}
+
+#[derive(Default)]
+struct MetadataCallCounts {
+    paths: Mutex<Vec<PathUri>>,
+    started: Notify,
+    release: Notify,
 }
 
 impl FailingFileSystem {
@@ -88,12 +100,29 @@ impl FailingFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<FileMetadata> {
-        if path.to_abs_path()? == self.path
-            && let InjectedFailure::Metadata(kind) = self.failure
-        {
-            return Err(io::Error::new(kind, "injected metadata failure"));
+        let path_abs = path.to_abs_path()?;
+        self.metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .push(path.clone());
+        self.metadata_calls.started.notify_one();
+        match self.failure {
+            InjectedFailure::Metadata(kind) if path_abs == self.path => {
+                Err(io::Error::new(kind, "injected metadata failure"))
+            }
+            InjectedFailure::MetadataBlocked if path_abs == self.path => {
+                self.metadata_calls.release.notified().await;
+                LOCAL_FS.get_metadata(path, sandbox).await
+            }
+            InjectedFailure::MetadataPending if path_abs == self.path => {
+                std::future::pending().await
+            }
+            InjectedFailure::Metadata(_)
+            | InjectedFailure::MetadataBlocked
+            | InjectedFailure::MetadataPending
+            | InjectedFailure::Read(_) => LOCAL_FS.get_metadata(path, sandbox).await,
         }
-        LOCAL_FS.get_metadata(path, sandbox).await
     }
 
     async fn read_directory(
@@ -600,6 +629,7 @@ async fn read_agents_md_propagates_metadata_errors() {
     let fs = FailingFileSystem {
         path: marker_path,
         failure: InjectedFailure::Metadata(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -618,6 +648,7 @@ async fn read_agents_md_propagates_read_errors() {
     let fs = FailingFileSystem {
         path: config.cwd.join("AGENTS.md"),
         failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -636,6 +667,7 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     let fs = FailingFileSystem {
         path: config.cwd.join("AGENTS.md"),
         failure: InjectedFailure::Read(io::ErrorKind::NotFound),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -644,6 +676,153 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
+}
+
+#[tokio::test]
+async fn marker_search_does_not_wait_for_a_higher_ancestor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let nested = tmp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let pending_marker = tmp
+        .path()
+        .parent()
+        .expect("tempdir parent")
+        .join(".git")
+        .abs();
+    let fs = FailingFileSystem {
+        path: pending_marker,
+        failure: InjectedFailure::MetadataPending,
+        metadata_calls: Arc::default(),
+    };
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let paths = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        super::agents_md_paths(&config.config, &cwd, &fs),
+    )
+    .await
+    .expect("nearest marker should complete")
+    .expect("AGENTS.md discovery");
+
+    assert_eq!(
+        paths,
+        vec![PathUri::from_abs_path(
+            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn project_root_marker_search_pipelines_bounded_window_and_continues() {
+    const NESTING_DEPTH: usize = 9;
+    const CONCURRENCY_LIMIT: usize = 8;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let mut nested = tmp.path().to_path_buf();
+    for depth in 0..NESTING_DEPTH {
+        nested.push(format!("nested-{depth}"));
+    }
+    fs::create_dir_all(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: config.cwd.join(".git"),
+        failure: InjectedFailure::MetadataBlocked,
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+
+    let search =
+        tokio::spawn(async move { super::agents_md_paths(&config.config, &cwd, &fs).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let started = metadata_calls.started.notified();
+            if metadata_calls
+                .paths
+                .lock()
+                .expect("metadata paths lock")
+                .len()
+                >= CONCURRENCY_LIMIT
+            {
+                break;
+            }
+            started.await;
+        }
+    })
+    .await
+    .expect("initial marker window should start");
+    assert_eq!(
+        metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .len(),
+        CONCURRENCY_LIMIT
+    );
+
+    metadata_calls.release.notify_one();
+    let paths = tokio::time::timeout(std::time::Duration::from_secs(5), search)
+        .await
+        .expect("marker search should complete")
+        .expect("marker search task")
+        .expect("AGENTS.md discovery");
+
+    assert_eq!(
+        paths,
+        vec![PathUri::from_abs_path(
+            &tmp.path().join(DEFAULT_AGENTS_MD_FILENAME).abs()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn empty_project_root_markers_only_probe_cwd_candidates() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "parent doc").unwrap();
+    let nested = tmp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("AGENTS.md"), "cwd doc").unwrap();
+
+    let mut config = make_config_with_project_root_markers(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &[],
+    )
+    .await;
+    config.cwd = nested.abs();
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: config.cwd.join("unused"),
+        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let paths = super::agents_md_paths(&config.config, &cwd, &fs)
+        .await
+        .expect("AGENTS.md discovery");
+
+    let override_path = cwd.join(LOCAL_AGENTS_MD_FILENAME).expect("override path");
+    let agents_path = cwd.join(DEFAULT_AGENTS_MD_FILENAME).expect("agents path");
+    assert_eq!(paths, vec![agents_path.clone()]);
+    assert_eq!(
+        metadata_calls
+            .paths
+            .lock()
+            .expect("metadata paths lock")
+            .clone(),
+        vec![override_path, agents_path]
+    );
 }
 
 /// When `cwd` is nested inside a repo, the search should locate AGENTS.md
