@@ -14,7 +14,8 @@ from urllib.parse import quote
 
 
 DEFAULT_SOURCE_REPO = "openai/codex"
-WORKFLOW_PREFIX = ".github/workflows/"
+COPIED_PREFIXES = (".github/actions/", ".github/workflows/")
+COPIED_PATHS_DESCRIPTION = ".github/actions and .github/workflows"
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -29,7 +30,7 @@ class Repo:
 
 
 @dataclass(frozen=True)
-class WorkflowChange:
+class GitHubChange:
     path: Path
     status: str
     blob_sha: Optional[str]
@@ -41,10 +42,13 @@ def main() -> int:
     repo = parse_repo(args.repo)
     gh = find_gh()
     commit = load_commit(gh, repo, args.commit)
-    changes = workflow_changes(commit)
+    changes = github_changes(commit)
 
     if not changes:
-        print(f"No {WORKFLOW_PREFIX} changes found in {repo.slug}@{args.commit}.")
+        print(
+            f"No {COPIED_PATHS_DESCRIPTION} changes found in "
+            f"{repo.slug}@{args.commit}."
+        )
         return 0
 
     for change in changes:
@@ -52,7 +56,8 @@ def main() -> int:
 
     action = "Would copy" if args.dry_run else "Copied"
     print(
-        f"{action} {len(changes)} workflow change(s) from {repo.slug}@{commit['sha']}."
+        f"{action} {len(changes)} GitHub automation change(s) from "
+        f"{repo.slug}@{commit['sha']}."
     )
     return 0
 
@@ -60,8 +65,8 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Copy .github/workflows changes from one openai/codex commit into this "
-            "checkout as unstaged changes."
+            f"Copy {COPIED_PATHS_DESCRIPTION} changes from one openai/codex commit "
+            "into this checkout as unstaged changes."
         )
     )
     parser.add_argument("commit", help="Commit SHA or ref in the source repository.")
@@ -117,16 +122,16 @@ def load_commit(gh: str, repo: Repo, commit: str) -> dict:
     )
 
 
-def workflow_changes(commit: dict) -> list[WorkflowChange]:
+def github_changes(commit: dict) -> list[GitHubChange]:
     changes = []
     for file in commit.get("files", []):
         path = Path(file["filename"])
-        previous_path = previous_workflow_path(file)
-        if not is_workflow_path(path) and previous_path is None:
+        previous_path = previous_github_path(file)
+        if not is_copied_path(path) and previous_path is None:
             continue
 
         changes.append(
-            WorkflowChange(
+            GitHubChange(
                 path=path,
                 status=file["status"],
                 blob_sha=file.get("sha"),
@@ -137,30 +142,30 @@ def workflow_changes(commit: dict) -> list[WorkflowChange]:
     return changes
 
 
-def previous_workflow_path(file: dict) -> Optional[Path]:
+def previous_github_path(file: dict) -> Optional[Path]:
     previous_filename = file.get("previous_filename")
     if not previous_filename:
         return None
 
     path = Path(previous_filename)
-    return path if is_workflow_path(path) else None
+    return path if is_copied_path(path) else None
 
 
-def is_workflow_path(path: Path) -> bool:
-    return path.as_posix().startswith(WORKFLOW_PREFIX)
+def is_copied_path(path: Path) -> bool:
+    return path.as_posix().startswith(COPIED_PREFIXES)
 
 
 def apply_change(
     gh: str,
     repo: Repo,
-    change: WorkflowChange,
+    change: GitHubChange,
     destination_root: Path,
     dry_run: bool,
 ) -> None:
     if change.previous_path is not None and change.previous_path != change.path:
         remove_local_file(destination_root / change.previous_path, dry_run)
 
-    if not is_workflow_path(change.path):
+    if not is_copied_path(change.path):
         return
 
     if change.status == "removed":
