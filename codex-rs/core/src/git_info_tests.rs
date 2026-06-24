@@ -502,6 +502,22 @@ async fn get_git_repo_root_with_fs_detects_gitdir_pointer() {
 }
 
 #[tokio::test]
+async fn get_git_repo_root_with_fs_starts_at_parent_for_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proj = tmp.path().join("proj");
+    let nested = proj.join("nested");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let file = nested.join("file.txt");
+    std::fs::write(&file, "contents").unwrap();
+
+    assert_eq!(
+        get_git_repo_root_with_fs(LOCAL_FS.as_ref(), &file.abs()).await,
+        Some(proj.abs())
+    );
+}
+
+#[tokio::test]
 async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await.abs();

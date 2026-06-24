@@ -28,6 +28,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use futures::future::join_all;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -104,13 +105,6 @@ async fn read_agents_md(
             break;
         }
 
-        match fs.get_metadata(&p, /*sandbox*/ None).await {
-            Ok(metadata) if !metadata.is_file => continue,
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        }
-
         let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
@@ -177,68 +171,74 @@ async fn agents_md_paths(
             default_project_root_markers()
         }
     };
-    let mut project_root = None;
-    if !project_root_markers.is_empty() {
-        for current in dir.ancestors() {
-            for marker in &project_root_markers {
-                let marker_path = current
+    let ancestors = dir.ancestors().collect::<Vec<_>>();
+    let candidate_filenames = candidate_filenames(config);
+    let marker_probe_count = ancestors.len() * project_root_markers.len();
+    let mut probes =
+        Vec::with_capacity(marker_probe_count + ancestors.len() * candidate_filenames.len());
+    for ancestor in &ancestors {
+        for marker in &project_root_markers {
+            probes.push(
+                ancestor
                     .join(marker)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
-                    Ok(_) => true,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(err),
-                };
-                if marker_exists {
-                    project_root = Some(current.clone());
-                    break;
-                }
-            }
-            if project_root.is_some() {
-                break;
-            }
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+            );
         }
     }
-
-    let search_dirs: Vec<PathUri> = if let Some(root) = project_root {
-        let mut dirs = Vec::new();
-        let mut cursor = dir.clone();
-        loop {
-            dirs.push(cursor.clone());
-            if cursor == root {
-                break;
-            }
-            let Some(parent) = cursor.parent() else {
-                break;
-            };
-            cursor = parent;
-        }
-        dirs.reverse();
-        dirs
-    } else {
-        vec![dir]
-    };
-
-    let mut found: Vec<PathUri> = Vec::new();
-    let candidate_filenames = candidate_filenames(config);
-    for d in search_dirs {
+    let mut candidate_paths = Vec::with_capacity(ancestors.len() * candidate_filenames.len());
+    for ancestor in &ancestors {
         for name in &candidate_filenames {
-            let candidate = d
-                .join(name)
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
-                Ok(md) if md.is_file => {
-                    found.push(candidate);
+            candidate_paths.push(
+                ancestor
+                    .join(name)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+            );
+        }
+    }
+    probes.extend(candidate_paths.iter().cloned());
+
+    let mut metadata = join_all(
+        probes
+            .iter()
+            .map(|path| fs.get_metadata(path, /*sandbox*/ None)),
+    )
+    .await;
+    let candidate_metadata = metadata.split_off(marker_probe_count);
+
+    let mut project_root_index = None;
+    if !project_root_markers.is_empty() {
+        for (probe_index, metadata) in metadata.into_iter().enumerate() {
+            match metadata {
+                Ok(_) => {
+                    project_root_index = Some(probe_index / project_root_markers.len());
                     break;
                 }
-                Ok(_) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
             }
         }
     }
 
-    Ok(found)
+    let search_through_index = project_root_index.unwrap_or(0);
+    let mut selected = vec![None; search_through_index + 1];
+    for (probe_index, (candidate, metadata)) in candidate_paths
+        .into_iter()
+        .zip(candidate_metadata)
+        .enumerate()
+    {
+        let ancestor_index = probe_index / candidate_filenames.len();
+        if ancestor_index > search_through_index || selected[ancestor_index].is_some() {
+            continue;
+        }
+        match metadata {
+            Ok(metadata) if metadata.is_file => selected[ancestor_index] = Some(candidate),
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(selected.into_iter().rev().flatten().collect())
 }
 
 fn candidate_filenames(config: &Config) -> Vec<&str> {

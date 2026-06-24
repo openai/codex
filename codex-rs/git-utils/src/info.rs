@@ -47,14 +47,28 @@ pub async fn get_git_repo_root_with_fs(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let cwd_uri = PathUri::from_abs_path(cwd);
-    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_directory => cwd.clone(),
-        _ => cwd.parent()?,
-    };
-    find_ancestor_git_entry_with_fs(fs, &base)
-        .await
-        .map(|(repo_root, _)| repo_root)
+    let ancestors = cwd.ancestors().collect::<Vec<_>>();
+    let mut probes = Vec::with_capacity(ancestors.len() + 1);
+    probes.push(PathUri::from_abs_path(cwd));
+    probes.extend(
+        ancestors
+            .iter()
+            .map(|ancestor| PathUri::from_abs_path(&ancestor.join(".git"))),
+    );
+
+    let mut metadata = join_all(
+        probes
+            .iter()
+            .map(|path| fs.get_metadata(path, /*sandbox*/ None)),
+    )
+    .await
+    .into_iter();
+    let cwd_is_directory = matches!(metadata.next()?, Ok(metadata) if metadata.is_directory);
+    ancestors
+        .into_iter()
+        .zip(metadata)
+        .skip(usize::from(!cwd_is_directory))
+        .find_map(|(ancestor, metadata)| metadata.is_ok().then_some(ancestor))
 }
 
 /// Timeout for git commands to prevent freezing on large repositories
@@ -850,24 +864,6 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
         }
     }
 
-    None
-}
-
-async fn find_ancestor_git_entry_with_fs(
-    fs: &dyn ExecutorFileSystem,
-    base_dir: &AbsolutePathBuf,
-) -> Option<(AbsolutePathBuf, AbsolutePathBuf)> {
-    for dir in base_dir.ancestors() {
-        let dot_git = dir.join(".git");
-        let dot_git_uri = PathUri::from_abs_path(&dot_git);
-        if fs
-            .get_metadata(&dot_git_uri, /*sandbox*/ None)
-            .await
-            .is_ok()
-        {
-            return Some((dir, dot_git));
-        }
-    }
     None
 }
 

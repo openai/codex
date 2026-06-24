@@ -30,6 +30,8 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 
 #[derive(Clone, Copy)]
@@ -41,6 +43,14 @@ enum InjectedFailure {
 struct FailingFileSystem {
     path: AbsolutePathBuf,
     failure: InjectedFailure,
+    metadata_calls: Arc<MetadataCallCounts>,
+}
+
+#[derive(Default)]
+struct MetadataCallCounts {
+    active_calls: AtomicUsize,
+    max_active_calls: AtomicUsize,
+    scalar_calls: AtomicUsize,
 }
 
 impl FailingFileSystem {
@@ -88,12 +98,30 @@ impl FailingFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> io::Result<FileMetadata> {
-        if path.to_abs_path()? == self.path
+        let path_abs = path.to_abs_path()?;
+        self.metadata_calls
+            .scalar_calls
+            .fetch_add(1, Ordering::Relaxed);
+        let active_calls = self
+            .metadata_calls
+            .active_calls
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        self.metadata_calls
+            .max_active_calls
+            .fetch_max(active_calls, Ordering::Relaxed);
+        tokio::task::yield_now().await;
+        let result = if path_abs == self.path
             && let InjectedFailure::Metadata(kind) = self.failure
         {
-            return Err(io::Error::new(kind, "injected metadata failure"));
-        }
-        LOCAL_FS.get_metadata(path, sandbox).await
+            Err(io::Error::new(kind, "injected metadata failure"))
+        } else {
+            LOCAL_FS.get_metadata(path, sandbox).await
+        };
+        self.metadata_calls
+            .active_calls
+            .fetch_sub(1, Ordering::Relaxed);
+        result
     }
 
     async fn read_directory(
@@ -600,6 +628,7 @@ async fn read_agents_md_propagates_metadata_errors() {
     let fs = FailingFileSystem {
         path: marker_path,
         failure: InjectedFailure::Metadata(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -618,6 +647,7 @@ async fn read_agents_md_propagates_read_errors() {
     let fs = FailingFileSystem {
         path: config.cwd.join("AGENTS.md"),
         failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -636,6 +666,7 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
     let fs = FailingFileSystem {
         path: config.cwd.join("AGENTS.md"),
         failure: InjectedFailure::Read(io::ErrorKind::NotFound),
+        metadata_calls: Arc::default(),
     };
 
     let cwd = config.cwd.clone();
@@ -644,6 +675,38 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         .expect("removed file is recoverable");
 
     assert_eq!(loaded, None);
+}
+
+#[tokio::test]
+async fn read_agents_md_pipelines_all_lexical_metadata_probes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".git"), "").unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+    let nested = tmp.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    config.cwd = nested.abs();
+    let metadata_calls = Arc::new(MetadataCallCounts::default());
+    let fs = FailingFileSystem {
+        path: config.cwd.join("unused"),
+        failure: InjectedFailure::Read(io::ErrorKind::PermissionDenied),
+        metadata_calls: Arc::clone(&metadata_calls),
+    };
+    let cwd = PathUri::from_abs_path(&config.cwd);
+
+    let loaded = read_agents_md(&config.config, &fs, "local", &cwd)
+        .await
+        .expect("project instructions")
+        .expect("project instructions");
+
+    let expected_probe_count = cwd.ancestors().count() * 3;
+    assert_eq!(loaded.text(), "project doc");
+    assert_eq!(
+        metadata_calls.scalar_calls.load(Ordering::Relaxed),
+        expected_probe_count
+    );
+    assert!(metadata_calls.max_active_calls.load(Ordering::Relaxed) > 1);
 }
 
 /// When `cwd` is nested inside a repo, the search should locate AGENTS.md
