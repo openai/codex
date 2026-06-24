@@ -672,6 +672,7 @@ async fn drain_to_completed(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
+            /*reasoning_summary_delivery*/ None,
             turn_context.config.service_tier.clone(),
             responses_metadata,
             // Rollout tracing currently models remote compaction only; local compaction streams
@@ -688,7 +689,7 @@ async fn drain_to_completed(
             ));
         };
         match event {
-            Ok(ResponseEvent::OutputItemDone(item)) => {
+            Ok(ResponseEvent::OutputItemDone { item, .. }) => {
                 sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
                     .await;
             }

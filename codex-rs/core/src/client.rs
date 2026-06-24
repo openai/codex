@@ -44,6 +44,7 @@ use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
+use codex_api::ReasoningSummaryDelivery;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -55,6 +56,7 @@ use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
 use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
+use codex_api::StreamOptions;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::auth_header_telemetry;
@@ -110,6 +112,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::response_event_buffer::OutputItemDoneBuffer;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -297,6 +300,7 @@ fn responses_request_properties_match(
         reasoning: previous_reasoning,
         store: previous_store,
         stream: previous_stream,
+        stream_options: _,
         include: previous_include,
         service_tier: previous_service_tier,
         prompt_cache_key: previous_prompt_cache_key,
@@ -313,6 +317,7 @@ fn responses_request_properties_match(
         reasoning: current_reasoning,
         store: current_store,
         stream: current_stream,
+        stream_options: _,
         include: current_include,
         service_tier: current_service_tier,
         prompt_cache_key: current_prompt_cache_key,
@@ -328,6 +333,8 @@ fn responses_request_properties_match(
         && previous_reasoning == current_reasoning
         && previous_store == current_store
         && previous_stream == current_stream
+        // Stream options control delivery for the current response, not the context
+        // referenced by `previous_response_id`.
         && previous_include == current_include
         && previous_service_tier == current_service_tier
         && previous_prompt_cache_key == current_prompt_cache_key
@@ -378,6 +385,23 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
 }
 
 impl ModelClient {
+    pub(crate) fn should_use_parallel_reasoning_summaries(
+        provider_info: &ModelProviderInfo,
+        model_info: &ModelInfo,
+        effort: Option<&ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        requested_delivery: Option<ReasoningSummaryDelivery>,
+    ) -> bool {
+        requested_delivery.is_some()
+            && provider_info.is_openai()
+            && model_info.supports_reasoning_summaries
+            && summary != ReasoningSummaryConfig::None
+            && !matches!(
+                effort.or(model_info.default_reasoning_level.as_ref()),
+                Some(ReasoningEffortConfig::None | ReasoningEffortConfig::Minimal)
+            )
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Creates a new session-scoped `ModelClient`.
     ///
@@ -532,6 +556,7 @@ impl ModelClient {
             model_info,
             settings.effort,
             settings.summary,
+            /*reasoning_summary_delivery*/ None,
             settings.service_tier,
             responses_metadata,
         )?;
@@ -793,6 +818,7 @@ impl ModelClient {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
@@ -825,6 +851,16 @@ impl ModelClient {
         } else {
             (prompt.base_instructions.text.clone(), Some(tools))
         };
+        let stream_options = Self::should_use_parallel_reasoning_summaries(
+            self.state.provider.info(),
+            model_info,
+            effort.as_ref(),
+            summary,
+            reasoning_summary_delivery,
+        )
+        .then_some(StreamOptions {
+            reasoning_summary_delivery: ReasoningSummaryDelivery::ConcurrentCutoff,
+        });
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
@@ -859,6 +895,7 @@ impl ModelClient {
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
+            stream_options,
             include,
             service_tier,
             prompt_cache_key,
@@ -1317,6 +1354,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1355,6 +1393,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
+                reasoning_summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1366,6 +1405,7 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
+            let reorder_output_items = request.stream_options.is_some();
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1381,6 +1421,7 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        reorder_output_items,
                     );
                     return Ok(stream);
                 }
@@ -1442,6 +1483,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         warmup: bool,
@@ -1467,6 +1509,7 @@ impl ModelClientSession {
                 model_info,
                 effort.clone(),
                 summary,
+                reasoning_summary_delivery,
                 service_tier.clone(),
                 responses_metadata,
             )?;
@@ -1476,6 +1519,7 @@ impl ModelClientSession {
             } else {
                 session_telemetry_for_request(session_telemetry, &request)
             };
+            let reorder_output_items = request.stream_options.is_some();
             let mut client_metadata = self
                 .client
                 .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
@@ -1582,6 +1626,7 @@ impl ModelClientSession {
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                reorder_output_items,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -1649,6 +1694,7 @@ impl ModelClientSession {
                 session_telemetry,
                 effort,
                 summary,
+                /*reasoning_summary_delivery*/ None,
                 service_tier,
                 responses_metadata,
                 /*warmup*/ true,
@@ -1692,6 +1738,7 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
@@ -1708,6 +1755,7 @@ impl ModelClientSession {
                             session_telemetry,
                             effort.clone(),
                             summary,
+                            reasoning_summary_delivery,
                             service_tier.clone(),
                             responses_metadata,
                             /*warmup*/ false,
@@ -1729,6 +1777,7 @@ impl ModelClientSession {
                     session_telemetry,
                     effort,
                     summary,
+                    reasoning_summary_delivery,
                     service_tier,
                     responses_metadata,
                     inference_trace,
@@ -1831,6 +1880,7 @@ fn map_response_stream(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    reorder_output_items: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -1846,6 +1896,7 @@ fn map_response_stream(
         session_telemetry,
         inference_trace_attempt,
         provider,
+        reorder_output_items,
     )
 }
 
@@ -1855,6 +1906,7 @@ fn map_response_events<S>(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    reorder_output_items: bool,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1872,6 +1924,8 @@ where
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
+        let mut observed_items: Vec<ResponseItem> = Vec::new();
+        let mut output_item_done_buffer = reorder_output_items.then(OutputItemDoneBuffer::default);
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1883,7 +1937,7 @@ where
                     inference_trace_attempt.record_cancelled(
                         STREAM_DROPPED_REASON,
                         upstream_request_id,
-                        &items_added,
+                        &observed_items,
                     );
                     return;
                 }
@@ -1893,19 +1947,26 @@ where
                 break;
             };
             match event {
-                Ok(ResponseEvent::OutputItemDone(item)) => {
-                    items_added.push(item.clone());
-                    if tx_event
-                        .send(Ok(ResponseEvent::OutputItemDone(item)))
-                        .await
-                        .is_err()
-                    {
-                        inference_trace_attempt.record_cancelled(
-                            STREAM_DROPPED_REASON,
-                            upstream_request_id,
-                            &items_added,
-                        );
-                        return;
+                Ok(ResponseEvent::OutputItemDone { item, output_index }) => {
+                    observed_items.push(item.clone());
+                    let ready = match output_item_done_buffer.as_mut() {
+                        Some(buffer) => buffer.push(item, output_index),
+                        None => vec![(item, output_index)],
+                    };
+                    for (item, output_index) in ready {
+                        items_added.push(item.clone());
+                        if tx_event
+                            .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
+                            .await
+                            .is_err()
+                        {
+                            inference_trace_attempt.record_cancelled(
+                                STREAM_DROPPED_REASON,
+                                upstream_request_id,
+                                &observed_items,
+                            );
+                            return;
+                        }
                     }
                 }
                 Ok(ResponseEvent::Completed {
@@ -1913,6 +1974,23 @@ where
                     token_usage,
                     end_turn,
                 }) => {
+                    if let Some(buffer) = output_item_done_buffer.as_mut() {
+                        for (item, output_index) in buffer.finish() {
+                            items_added.push(item.clone());
+                            if tx_event
+                                .send(Ok(ResponseEvent::OutputItemDone { item, output_index }))
+                                .await
+                                .is_err()
+                            {
+                                inference_trace_attempt.record_cancelled(
+                                    STREAM_DROPPED_REASON,
+                                    upstream_request_id,
+                                    &observed_items,
+                                );
+                                return;
+                            }
+                        }
+                    }
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
@@ -1952,7 +2030,7 @@ where
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
                             upstream_request_id,
-                            &items_added,
+                            &observed_items,
                         );
                         return;
                     }
@@ -1969,7 +2047,7 @@ where
                     inference_trace_attempt.record_failed(
                         &mapped,
                         upstream_request_id,
-                        &items_added,
+                        &observed_items,
                     );
                     if !logged_error {
                         session_telemetry.see_event_completed_failed(&mapped);
@@ -1984,7 +2062,7 @@ where
         inference_trace_attempt.record_failed(
             "stream closed before response.completed",
             upstream_request_id,
-            &items_added,
+            &observed_items,
         );
     });
 

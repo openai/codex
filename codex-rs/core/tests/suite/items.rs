@@ -1,8 +1,10 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
@@ -20,6 +22,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
@@ -31,6 +34,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -1099,7 +1103,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
         ev_reasoning_item("reasoning-1", &["step one"], &[]),
         ev_completed("resp-1"),
     ]);
-    mount_sse_once(&server, stream).await;
+    let response_mock = mount_sse_once(&server, stream).await;
 
     codex
         .submit(Op::UserInput {
@@ -1130,6 +1134,176 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     .await;
     assert_eq!(delta_event.item_id, reasoning_item.id);
     assert_eq!(delta_event.delta, "step one");
+    assert_eq!(
+        response_mock
+            .single_request()
+            .body_json()
+            .get("stream_options"),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_cutoff_routes_items_and_preserves_history() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Auto);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
+        })
+        .build(&server)
+        .await?;
+
+    let partial_summary = "**Checking result**\n\npartial";
+    let call_id = "call-1";
+    let summary_done = |item_id: &str, summary_index: i64, text: &str| {
+        serde_json::json!({
+            "type": "response.reasoning_summary_text.done",
+            "item_id": item_id,
+            "text": text,
+            "summary_index": summary_index,
+        })
+    };
+    let with_output_index = |mut event: serde_json::Value, output_index: usize| {
+        event["output_index"] = serde_json::json!(output_index);
+        event
+    };
+    let mut preamble_added = ev_message_item_added("message-1", "");
+    preamble_added["item"]["phase"] = serde_json::json!("commentary");
+    let mut preamble_done = ev_assistant_message("message-1", "Checking files");
+    preamble_done["item"]["phase"] = serde_json::json!("commentary");
+    let user_input = |text: &str| Op::UserInput {
+        items: vec![UserInput::Text {
+            text: text.into(),
+            text_elements: Vec::new(),
+        }],
+        final_output_json_schema: None,
+        responsesapi_client_metadata: None,
+        additional_context: Default::default(),
+        thread_settings: Default::default(),
+    };
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-1", &[""]),
+        ev_reasoning_summary_text_delta("**Inspecting"),
+        summary_done("reasoning-1", 0, "**Inspecting files**"),
+        summary_done("reasoning-1", 1, "**Planning checks**"),
+        preamble_added,
+        ev_reasoning_item_added("reasoning-2", &[""]),
+        serde_json::json!({
+            "type": "response.output_text.delta",
+            "item_id": "message-1",
+            "delta": "Checking files",
+        }),
+        with_output_index(
+            ev_function_call(call_id, "test_sync_tool", "{}"),
+            /*output_index*/ 3,
+        ),
+        summary_done("reasoning-2", 0, partial_summary),
+        with_output_index(preamble_done, /*output_index*/ 1),
+        with_output_index(
+            ev_reasoning_item(
+                "reasoning-1",
+                &["**Inspecting files**", "**Planning checks**"],
+                &[],
+            ),
+            /*output_index*/ 0,
+        ),
+        with_output_index(
+            ev_reasoning_item("reasoning-2", &[partial_summary], &[]),
+            /*output_index*/ 2,
+        ),
+        ev_completed("resp-1"),
+    ]);
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            stream,
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+
+    codex.submit(user_input("reason through it")).await?;
+
+    let mut message_deltas = Vec::new();
+    let mut summary_deltas = Vec::new();
+    let mut summary_section_breaks = Vec::new();
+    loop {
+        let event = codex.next_event().await?;
+        match event.msg {
+            EventMsg::AgentMessageContentDelta(event) => {
+                message_deltas.push((event.item_id, event.delta));
+            }
+            EventMsg::ReasoningContentDelta(event) => {
+                summary_deltas.push((event.item_id, event.summary_index, event.delta));
+            }
+            EventMsg::AgentReasoningSectionBreak(event) => {
+                summary_section_breaks.push((event.item_id, event.summary_index));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        message_deltas,
+        [("message-1".to_string(), "Checking files".to_string())]
+    );
+    assert_eq!(
+        summary_deltas
+            .iter()
+            .map(|(item_id, index, delta)| (item_id.as_str(), *index, delta.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("reasoning-1", 0, "**Inspecting files**"),
+            ("reasoning-1", 1, "**Planning checks**"),
+            ("reasoning-2", 0, partial_summary),
+        ]
+    );
+    assert_eq!(summary_section_breaks, [("reasoning-1".to_string(), 1)]);
+
+    codex.submit(user_input("continue")).await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = response_mock.requests();
+    let second_request = requests.get(1).expect("second request");
+    let second_input = second_request.input();
+    let output_types = second_input
+        .iter()
+        .filter_map(|item| {
+            let item_type = item.get("type")?.as_str()?;
+            match item_type {
+                "reasoning" | "function_call" | "function_call_output" => Some(item_type),
+                "message" if item.get("role")?.as_str()? == "assistant" => Some(item_type),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        output_types,
+        [
+            "reasoning",
+            "message",
+            "reasoning",
+            "function_call",
+            "function_call_output",
+        ]
+    );
+    assert_eq!(
+        response_mock.function_call_output_text(call_id).as_deref(),
+        Some("ok")
+    );
+    assert_eq!(
+        second_request.inputs_of_type("reasoning")[1]["summary"][0]["text"],
+        partial_summary
+    );
 
     Ok(())
 }

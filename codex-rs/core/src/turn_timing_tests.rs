@@ -21,7 +21,10 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
     let state = TurnTimingState::default();
     assert_eq!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                delta: "hi".to_string(),
+                item_id: None,
+            })
             .await,
         None
     );
@@ -35,13 +38,20 @@ async fn turn_timing_state_records_ttft_only_once_per_turn() {
     );
     assert!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+            .record_ttft_for_response_event(&ResponseEvent::ReasoningSummaryDone {
+                text: "summary".to_string(),
+                summary_index: 0,
+                item_id: "reasoning-1".to_string(),
+            })
             .await
             .is_some()
     );
     assert_eq!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("again".to_string()))
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                delta: "again".to_string(),
+                item_id: None,
+            })
             .await,
         None
     );
@@ -54,7 +64,10 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
 
     assert!(
         state
-            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                delta: "hi".to_string(),
+                item_id: None,
+            })
             .await
             .is_some()
     );

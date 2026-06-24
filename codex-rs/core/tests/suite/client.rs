@@ -1,3 +1,4 @@
+use codex_api::ReasoningSummaryDelivery;
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::ModelClient;
@@ -1251,6 +1252,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            /*reasoning_summary_delivery*/ None,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2271,6 +2273,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2300,6 +2303,13 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary"))
             .and_then(|value| value.as_str()),
         Some("concise")
+    );
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("stream_options")
+            .and_then(|options| options.get("reasoning_summary_delivery"))
+            .and_then(|value| value.as_str()),
+        Some("concurrent_cutoff")
     );
     pretty_assertions::assert_eq!(
         request_body
@@ -2449,6 +2459,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model_reasoning_summary = Some(ReasoningSummary::None);
+            let _ = config.features.enable(Feature::ParallelReasoningSummaries);
         })
         .build(&server)
         .await?;
@@ -2478,6 +2489,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
             .and_then(|reasoning| reasoning.get("summary")),
         None
     );
+    pretty_assertions::assert_eq!(request_body.get("stream_options"), None);
 
     Ok(())
 }
@@ -2927,6 +2939,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2946,6 +2959,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body.get("stream_options"), None);
     assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
     assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
     assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));

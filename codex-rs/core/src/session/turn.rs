@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
+use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -41,6 +42,7 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::active_turn_items::ActiveTurnItems;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -73,6 +75,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
+use codex_api::ReasoningSummaryDelivery;
 use codex_async_utils::OrCancelExt;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
@@ -1892,6 +1895,11 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
+    let requested_reasoning_summary_delivery = turn_context
+        .config
+        .features
+        .enabled(Feature::ParallelReasoningSummaries)
+        .then_some(ReasoningSummaryDelivery::ConcurrentCutoff);
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
@@ -1900,6 +1908,7 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
+            requested_reasoning_summary_delivery,
             turn_context.config.service_tier.clone(),
             responses_metadata,
             &inference_trace,
@@ -1907,11 +1916,18 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
+    let uses_parallel_reasoning_summaries = ModelClient::should_use_parallel_reasoning_summaries(
+        turn_context.provider.info(),
+        &turn_context.model_info,
+        turn_context.reasoning_effort.as_ref(),
+        turn_context.reasoning_summary,
+        requested_reasoning_summary_delivery,
+    );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
+    let mut active_items = ActiveTurnItems::default();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1924,7 +1940,6 @@ async fn try_run_sampling_request(
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
-    let mut active_item_is_streaming_to_client = false;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -1965,23 +1980,25 @@ async fn try_run_sampling_request(
         sess.services
             .session_telemetry
             .record_responses(&handle_responses, &event);
-        record_turn_ttft_metric(&turn_context, &event).await;
+        if uses_parallel_reasoning_summaries
+            || !matches!(&event, ResponseEvent::ReasoningSummaryDone { .. })
+        {
+            record_turn_ttft_metric(&turn_context, &event).await;
+        }
 
         match event {
             ResponseEvent::Created => {}
-            ResponseEvent::OutputItemDone(item) => {
+            ResponseEvent::OutputItemDone { item, .. } => {
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
-                } else {
-                    None
-                };
-                active_item_is_streaming_to_client = false;
+                let response_item_id = item.id().map(str::to_owned);
+                let previously_streamed_item = active_items
+                    .take(response_item_id.as_deref())
+                    .filter(|active| active.streams_to_client)
+                    .map(|active| active.item);
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2064,6 +2081,8 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
+                let response_item_id = item.id().map(str::to_owned);
+                active_items.mark_started(response_item_id.as_deref());
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
                     let tool_name = ToolName::plain(name.as_str());
                     active_tool_argument_diff_consumer = tool_runtime
@@ -2131,8 +2150,11 @@ async fn try_run_sampling_request(
                             .await;
                         }
                     }
-                    active_item = Some(turn_item);
-                    active_item_is_streaming_to_client = stream_item_to_client;
+                    active_items.insert(
+                        response_item_id.as_deref(),
+                        turn_item,
+                        stream_item_to_client,
+                    );
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
@@ -2215,15 +2237,15 @@ async fn try_run_sampling_request(
                     last_agent_message,
                 });
             }
-            ResponseEvent::OutputTextDelta(delta) => {
+            ResponseEvent::OutputTextDelta { delta, item_id } => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = active_items.get(item_id.as_deref()) {
+                    if !active.streams_to_client {
                         continue;
                     }
-                    let item_id = active.id();
-                    if matches!(active, TurnItem::AgentMessage(_)) {
+                    let item_id = active.item.id();
+                    if matches!(&active.item, TurnItem::AgentMessage(_)) {
                         let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
                         emit_streamed_assistant_text_delta(
                             &sess,
@@ -2269,14 +2291,17 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                if let Some(active) = active_items.get(/*response_item_id*/ None) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.item.id(),
                         delta,
                         summary_index,
                     };
@@ -2286,14 +2311,55 @@ async fn try_run_sampling_request(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
+            ResponseEvent::ReasoningSummaryDone {
+                text,
+                summary_index,
+                item_id,
+            } => {
+                // Concurrent cutoff delivery can cancel an in-flight summary at the terminal
+                // boundary. Ignore partial deltas and present only atomic, item-scoped parts.
+                if !uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                let Some(active) = active_items.get(Some(&item_id)) else {
+                    error_or_panic("ReasoningSummaryDone without active item".to_string());
+                    continue;
+                };
+                if !active.streams_to_client {
+                    continue;
+                }
+                let item_id = active.item.id();
+                if summary_index > 0 {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
+                            item_id: item_id.clone(),
+                            summary_index,
+                        }),
+                    )
+                    .await;
+                }
+                let event = ReasoningContentDeltaEvent {
+                    thread_id: sess.thread_id.to_string(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item_id,
+                    delta: text,
+                    summary_index,
+                };
+                sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                    .await;
+            }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if uses_parallel_reasoning_summaries {
+                    continue;
+                }
+                if let Some(active) = active_items.get(/*response_item_id*/ None) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id: active.item.id(),
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
@@ -2305,14 +2371,14 @@ async fn try_run_sampling_request(
                 delta,
                 content_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = active_items.get(/*response_item_id*/ None) {
+                    if !active.streams_to_client {
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.item.id(),
                         delta,
                         content_index,
                     };

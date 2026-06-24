@@ -74,7 +74,10 @@ pub struct MemorySummarizeOutput {
 pub enum ResponseEvent {
     Created,
     SafetyBuffering(SafetyBuffering),
-    OutputItemDone(ResponseItem),
+    OutputItemDone {
+        item: ResponseItem,
+        output_index: Option<usize>,
+    },
     OutputItemAdded(ResponseItem),
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
     /// This can differ from the requested model when backend safety routing applies.
@@ -94,7 +97,10 @@ pub enum ResponseEvent {
         /// so we rely on fallback logic when this is `None`.
         end_turn: Option<bool>,
     },
-    OutputTextDelta(String),
+    OutputTextDelta {
+        delta: String,
+        item_id: Option<String>,
+    },
     ToolCallInputDelta {
         item_id: String,
         call_id: Option<String>,
@@ -103,6 +109,11 @@ pub enum ResponseEvent {
     ReasoningSummaryDelta {
         delta: String,
         summary_index: i64,
+    },
+    ReasoningSummaryDone {
+        text: String,
+        summary_index: i64,
+        item_id: String,
     },
     ReasoningContentDelta {
         delta: String,
@@ -155,6 +166,17 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ReasoningContext>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummaryDelivery {
+    ConcurrentCutoff,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct StreamOptions {
+    pub reasoning_summary_delivery: ReasoningSummaryDelivery,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
@@ -218,6 +240,8 @@ pub struct ResponsesApiRequest {
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
@@ -242,6 +266,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             reasoning: request.reasoning.clone(),
             store: request.store,
             stream: request.stream,
+            stream_options: request.stream_options.clone(),
             include: request.include.clone(),
             service_tier: request.service_tier.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
@@ -267,6 +292,8 @@ pub struct ResponseCreateWsRequest {
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,

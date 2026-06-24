@@ -365,6 +365,7 @@ async fn run_remote_compaction_request_v2(
                 &turn_context.session_telemetry,
                 turn_context.reasoning_effort.clone(),
                 turn_context.reasoning_summary,
+                /*reasoning_summary_delivery*/ None,
                 turn_context.config.service_tier.clone(),
                 responses_metadata,
                 &InferenceTraceContext::disabled(),
@@ -404,7 +405,7 @@ async fn collect_compaction_output(
     let mut completed_token_usage = None;
     while let Some(event) = stream.next().await {
         match event? {
-            ResponseEvent::OutputItemDone(item) => {
+            ResponseEvent::OutputItemDone { item, .. } => {
                 output_item_count += 1;
                 if let ResponseItem::Compaction { .. } = item {
                     compaction_count += 1;
@@ -829,12 +830,18 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         };
         let stream = response_stream(vec![
-            Ok(ResponseEvent::OutputItemDone(message(
-                "assistant",
-                "IGNORED_COMPACT_REPLY",
-                Some(MessagePhase::FinalAnswer),
-            ))),
-            Ok(ResponseEvent::OutputItemDone(compaction.clone())),
+            Ok(ResponseEvent::OutputItemDone {
+                item: message(
+                    "assistant",
+                    "IGNORED_COMPACT_REPLY",
+                    Some(MessagePhase::FinalAnswer),
+                ),
+                output_index: None,
+            }),
+            Ok(ResponseEvent::OutputItemDone {
+                item: compaction.clone(),
+                output_index: None,
+            }),
             Ok(ResponseEvent::Completed {
                 response_id: "resp-compact".to_string(),
                 token_usage: Some(TokenUsage {

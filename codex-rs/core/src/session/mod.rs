@@ -208,6 +208,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod active_turn_items;
 mod code_mode_warning;
 mod config_lock;
 pub(crate) mod context_window;
