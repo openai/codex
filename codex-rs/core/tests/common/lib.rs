@@ -38,6 +38,8 @@ pub mod zsh_fork;
 
 pub(crate) use test_environment::TestEnvironment;
 pub use test_environment::TestTargetOs;
+#[doc(hidden)]
+pub use test_environment::is_bwrap_exec_test_environment;
 pub use test_environment::is_remote_test_environment;
 #[doc(hidden)]
 pub use test_environment::is_wine_exec_test_environment;
@@ -611,6 +613,25 @@ macro_rules! skip_if_remote {
             $return_value,
             $crate::is_remote_test_environment(),
             "a remote test environment",
+            $reason,
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_bwrap_exec {
+    ($reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $crate::is_bwrap_exec_test_environment(),
+            "the bwrap-exec test environment",
+            $reason,
+        );
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        $crate::skip_if_test_condition!(
+            $return_value,
+            $crate::is_bwrap_exec_test_environment(),
+            "the bwrap-exec test environment",
             $reason,
         );
     }};

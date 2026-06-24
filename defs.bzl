@@ -3,6 +3,7 @@ load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("//bazel/rules/testing:foreign_platform_binary.bzl", "foreign_platform_binary")
+load("//bazel/rules/testing/bwrap:defs.bzl", "BWRAP_INTEGRATION_TEST_EXEC_PROPERTIES")
 load("//bazel/rules/testing/wine:wine_runtime.bzl", "WINE_TEST_TARGET_COMPATIBLE_WITH", "wine_test_runtime")
 
 # Match Cargo's Windows linker behavior so Bazel-built binaries and tests use
@@ -200,6 +201,7 @@ def codex_rust_crate(
         unit_test_timeout = None,
         extra_binaries = [],
         extra_binaries_non_windows = [],
+        run_tests_with_bwrap_exec = False,
         run_tests_with_wine_exec = False):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
@@ -248,6 +250,10 @@ def codex_rust_crate(
         extra_binaries_non_windows: Like `extra_binaries`, but omitted from
             Windows test data and environment variables. Tests using these
             binaries must be excluded when targeting Windows.
+        run_tests_with_bwrap_exec: Boolean, defaults to False. Whether to emit
+            a bwrap-exec variant for each integration test. Variants inherit
+            the native test's timeout and shard count, but intentionally do
+            not inherit its tags so they run under Bazel sandboxing.
         run_tests_with_wine_exec: Boolean, defaults to False. Whether to emit a
             Wine-exec variant for each integration test. Variants inherit the
             native test's timeout, tags, and shard count.
@@ -415,7 +421,7 @@ def codex_rust_crate(
             "//conditions:default": cargo_env_runfiles | non_windows_cargo_env_runfiles,
         })
 
-    wine_host_binaries = {
+    host_test_binaries = {
         env_var.removeprefix("CARGO_BIN_EXE_"): binary_label
         for binary_label, env_var in (cargo_env_runfiles | non_windows_cargo_env_runfiles).items()
     }
@@ -448,7 +454,7 @@ def codex_rust_crate(
 
         integration_test_binary = test_name + "-bin"
 
-        # There are four generated integration-test shapes:
+        # There are five generated integration-test shapes:
         #
         # 1. Unsharded native tests keep the plain rust_test label for minimal
         #    churn and the usual rules_rust Cargo-like environment.
@@ -465,6 +471,10 @@ def codex_rust_crate(
         #    owns cleanup. The outer workspace_root_test resolves the runner,
         #    test, and server from runfiles, sets a Cargo-like cwd, and applies
         #    the native test's shard count.
+        # 5. Bwrap-exec tests also reuse the native Rust test binary behind a
+        #    shared Linux runner. The runner starts a native exec server in an
+        #    outer bubblewrap namespace, while the public test action alone is
+        #    assigned to a fresh Firecracker VM under RBE.
         if test_shard_count:
             # This target is intentionally a binary-like helper, not the public
             # test target. The wrapper below owns cwd setup, runfile env
@@ -533,7 +543,7 @@ def codex_rust_crate(
         if run_tests_with_wine_exec:
             wine_test_name = test_name.removesuffix("-test") + "-wine-exec-test"
             native_test_binary = ":" + (integration_test_binary if test_shard_count else test_name)
-            wine_test_binaries = dict(wine_host_binaries)
+            wine_test_binaries = dict(host_test_binaries)
 
             wine_exec_server = wine_test_name + "-windows-exec-server"
             foreign_platform_binary(
@@ -575,6 +585,37 @@ def codex_rust_crate(
                 # dependency to a Windows toolchain the lint does not register.
                 tags = test_tags + ["no-argument-comment-lint"],
                 **wine_test_kwargs
+            )
+
+        if run_tests_with_bwrap_exec:
+            bwrap_test_name = test_name.removesuffix("-test") + "-bwrap-exec-test"
+            native_test_binary = ":" + (integration_test_binary if test_shard_count else test_name)
+            bwrap_runfile_env = {
+                binary_label: "CARGO_BIN_EXE_" + binary_name
+                for binary_name, binary_label in host_test_binaries.items()
+            }
+            bwrap_runfile_env["//codex-rs/bwrap:bwrap"] = "CARGO_BIN_EXE_bwrap"
+            bwrap_runfile_env["//codex-rs/cli:codex"] = "CARGO_BIN_EXE_codex"
+            bwrap_runfile_env[native_test_binary] = "CODEX_BWRAP_EXEC_TEST_BINARY"
+
+            bwrap_test_kwargs = {}
+            bwrap_test_kwargs.update(integration_test_kwargs)
+            if test_shard_count:
+                bwrap_test_kwargs["shard_count"] = test_shard_count
+                bwrap_test_kwargs["flaky"] = True
+
+            workspace_root_test(
+                name = bwrap_test_name,
+                env = test_env | {"RUST_TEST_THREADS": "1"},
+                runfile_env = bwrap_runfile_env,
+                test_bin = "//codex-rs/exec-server/testing:bwrap-exec-test-runner",
+                workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                # These apply only to the test action. Builds and every other
+                # test keep their normal execution environment.
+                exec_properties = BWRAP_INTEGRATION_TEST_EXEC_PROPERTIES,
+                tags = ["no-argument-comment-lint"],
+                target_compatible_with = ["@platforms//os:linux"],
+                **bwrap_test_kwargs
             )
 
         windows_cross_test_kwargs = {}
