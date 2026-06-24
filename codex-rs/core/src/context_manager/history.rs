@@ -20,6 +20,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::WorldStateItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -87,13 +88,26 @@ impl ContextManager {
     pub(crate) fn update_world_state(
         &mut self,
         world_state: &WorldState,
-    ) -> Vec<Box<dyn ContextualUserFragment>> {
-        let fragments = self.world_state_baseline.as_ref().map_or_else(
-            || world_state.render_full(),
-            |previous| world_state.render_diff(previous),
+    ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
+        let snapshot = world_state.snapshot();
+        let (fragments, rollout_item) = self.world_state_baseline.as_ref().map_or_else(
+            || {
+                (
+                    world_state.render_full(),
+                    Some(WorldStateItem::full(snapshot.clone().into_value())),
+                )
+            },
+            |previous| {
+                (
+                    world_state.render_diff(previous),
+                    snapshot
+                        .merge_patch_from(previous)
+                        .map(WorldStateItem::patch),
+                )
+            },
         );
-        self.world_state_baseline = Some(world_state.snapshot());
-        fragments
+        self.world_state_baseline = Some(snapshot);
+        (fragments, rollout_item)
     }
 
     pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {

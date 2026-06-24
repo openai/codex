@@ -63,7 +63,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
-        RolloutItem::TurnContext(_) => preserve_reference_context_item,
+        RolloutItem::TurnContext(_) | RolloutItem::WorldState(_) => preserve_reference_context_item,
         RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
 }

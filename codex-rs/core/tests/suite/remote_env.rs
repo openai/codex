@@ -22,6 +22,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -795,6 +797,46 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         .position(|text| text.contains("<shell>zsh</shell>"))
         .expect("the next sampling step should report that the environment is ready");
     assert!(starting_index < ready_index);
+
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    let rollout = fs::read_to_string(rollout_path)?;
+    let world_state_items = rollout
+        .lines()
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<serde_json::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|line| match line.item {
+            RolloutItem::WorldState(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        world_state_items
+            .iter()
+            .map(|item| item.full)
+            .collect::<Vec<_>>(),
+        vec![true, true, false]
+    );
+    assert_eq!(
+        world_state_items[0]
+            .state
+            .pointer("/environments/environments/remote/status"),
+        Some(&json!("starting"))
+    );
+    assert_eq!(
+        world_state_items[2]
+            .state
+            .pointer("/environments/environments/remote/status"),
+        Some(&json!("available"))
+    );
+    assert_eq!(
+        world_state_items[2]
+            .state
+            .pointer("/environments/environments/remote/shell"),
+        Some(&json!("zsh"))
+    );
 
     Ok(())
 }
