@@ -66,6 +66,17 @@ impl ChatWidget {
         self.last_rendered_user_message_display = None;
         self.finalize_turn();
         self.cancel_edit = cancel_edit;
+        self.input_queue.user_turn_pending_start = true;
+    }
+
+    pub(crate) fn fail_safety_buffering_retry(&mut self) {
+        self.input_queue.user_turn_pending_start = false;
+        self.clear_safety_buffering();
+        let prompt = self.cancel_edit.prompt.take();
+        self.clear_cancel_edit();
+        if let Some(prompt) = prompt {
+            self.restore_user_message_to_composer(prompt);
+        }
     }
 
     pub(super) fn on_model_safety_buffering_updated(

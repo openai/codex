@@ -405,7 +405,7 @@ impl App {
                 .await;
 
                 if let Err(err) = self.submit_thread_op(app_server, thread_id, turn).await {
-                    self.chat_widget.clear_safety_buffering();
+                    self.chat_widget.fail_safety_buffering_retry();
                     self.chat_widget
                         .add_error_message(format!("Failed to retry with a faster model: {err}"));
                 }
