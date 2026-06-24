@@ -375,6 +375,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            /*include_thread_id_tiebreaker*/ false,
         );
         builder.push(" AND threads.title = ");
         builder.push_bind(title);
@@ -387,6 +388,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
             crate::SortKey::UpdatedAt,
             SortDirection::Desc,
             OrderByIndex::Enabled,
+            /*include_thread_id_tiebreaker*/ false,
             /*limit*/ 1,
         );
 
@@ -460,9 +462,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
             if let Some(overflow_item) = items.pop() {
                 parent_thread_ids.remove(&overflow_item.id);
             }
-            items
-                .last()
-                .and_then(|item| anchor_from_item(item, filters.sort_key))
+            items.last().and_then(|item| {
+                anchor_from_item(item, filters.sort_key, relation_filter.is_some())
+            })
         } else {
             None
         };
@@ -497,12 +499,14 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            sort_key == crate::SortKey::RecencyAt,
         );
         push_thread_order_and_limit(
             &mut builder,
             sort_key,
             SortDirection::Desc,
             OrderByIndex::Enabled,
+            sort_key == crate::SortKey::RecencyAt,
             limit,
         );
 
@@ -1158,7 +1162,9 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         ),
         None => builder.push(" FROM threads"),
     };
-    push_thread_filters(builder, filters);
+    let include_thread_id_tiebreaker =
+        relation_filter.is_some() || filters.sort_key == SortKey::RecencyAt;
+    push_thread_filters(builder, filters, include_thread_id_tiebreaker);
     match relation_filter {
         Some(crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) => {
             builder.push(" AND listed_edge.parent_thread_id = ");
@@ -1185,6 +1191,7 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         filters.sort_key,
         filters.sort_direction,
         order_by_index,
+        include_thread_id_tiebreaker,
         limit,
     );
 }
@@ -1255,6 +1262,7 @@ pub struct ThreadFilterOptions<'a> {
 pub(super) fn push_thread_filters<'a>(
     builder: &mut QueryBuilder<Sqlite>,
     options: ThreadFilterOptions<'a>,
+    include_thread_id_tiebreaker: bool,
 ) {
     let ThreadFilterOptions {
         archived_only,
@@ -1329,9 +1337,7 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(operator);
         builder.push(" ");
         builder.push_bind(anchor_ts);
-        if sort_key == SortKey::RecencyAt
-            && let Some(anchor_id) = anchor.id
-        {
+        if include_thread_id_tiebreaker && let Some(anchor_id) = anchor.id {
             builder.push(" OR (");
             builder.push(column);
             builder.push(" = ");
@@ -1361,6 +1367,7 @@ pub(super) fn push_thread_order_and_limit(
     sort_key: SortKey,
     sort_direction: SortDirection,
     order_by_index: OrderByIndex,
+    include_thread_id_tiebreaker: bool,
     limit: usize,
 ) {
     let order_column = match sort_key {
@@ -1382,7 +1389,7 @@ pub(super) fn push_thread_order_and_limit(
     builder.push(order_column);
     builder.push(" ");
     builder.push(order_direction);
-    if sort_key == SortKey::RecencyAt {
+    if include_thread_id_tiebreaker {
         builder.push(", threads.id ");
         builder.push(order_direction);
     }
@@ -1922,7 +1929,7 @@ mod tests {
 
         for (thread_id, created_at) in [
             (parent_id, 1_700_000_000),
-            (first_child_id, 1_700_000_100),
+            (first_child_id, 1_700_000_200),
             (second_child_id, 1_700_000_200),
             (grandchild_id, 1_700_000_300),
         ] {
