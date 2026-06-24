@@ -381,7 +381,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo").join("foo.txt").into(),
+                path: PathBuf::from("foo/foo.txt").into(),
             }],
         );
     }
@@ -393,7 +393,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("-weird").join("foo.txt").into(),
+                path: PathBuf::from("-weird/foo.txt").into(),
             }],
         );
     }
@@ -405,7 +405,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("dir2").join("foo.txt").into(),
+                path: PathBuf::from("dir2/foo.txt").into(),
             }],
         );
     }
@@ -428,7 +428,7 @@ mod tests {
             vec![ParsedCommand::Read {
                 cmd: "cat foo.txt".to_string(),
                 name: "foo.txt".to_string(),
-                path: PathBuf::from("foo").join("foo.txt").into(),
+                path: PathBuf::from("foo/foo.txt").into(),
             }],
         );
     }
@@ -2524,7 +2524,12 @@ fn join_paths(base: &str, rel: &str) -> String {
     if base.is_empty() {
         return rel.to_string();
     }
-    let mut buf = PathBuf::from(base);
-    buf.push(rel);
-    buf.to_string_lossy().to_string()
+    // Forward slash is a separator under both supported path conventions. Keep
+    // the combined path host-independent so its eventual cwd resolution can
+    // render the target environment's native spelling.
+    if base.ends_with('/') {
+        format!("{base}{rel}")
+    } else {
+        format!("{base}/{rel}")
+    }
 }
