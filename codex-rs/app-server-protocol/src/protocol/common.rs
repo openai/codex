@@ -618,6 +618,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadListResponse,
     },
+    ThreadCatalogSubscribe => "threadCatalog/subscribe" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::ThreadCatalogSubscribeResponse,
+    },
     #[experimental("thread/search")]
     ThreadSearch => "thread/search" {
         params: v2::ThreadSearchParams,
@@ -1605,6 +1610,7 @@ server_notification_definitions! {
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadDeleted => "thread/deleted" (v2::ThreadDeletedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
+    ThreadCatalogChanged => "threadCatalog/changed" (v2::ThreadCatalogChangedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),

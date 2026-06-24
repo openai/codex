@@ -44,6 +44,7 @@ use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
 use crate::skills_watcher::SkillsWatcher;
+use crate::thread_catalog::ThreadCatalogSubscriptions;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
@@ -64,6 +65,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::ThreadCatalogSubscribeResponse;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
@@ -205,6 +207,7 @@ pub(crate) struct MessageProcessor {
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
+    thread_catalog_subscriptions: ThreadCatalogSubscriptions,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
@@ -335,6 +338,12 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        let thread_catalog_subscriptions = ThreadCatalogSubscriptions::new(
+            outgoing.clone(),
+            Arc::clone(&thread_store),
+            config.model_provider_id.clone(),
+            config.cwd.clone(),
+        );
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();
@@ -574,6 +583,7 @@ impl MessageProcessor {
             remote_control_processor,
             search_processor,
             thread_goal_processor,
+            thread_catalog_subscriptions,
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
@@ -804,6 +814,9 @@ impl MessageProcessor {
             .connection_closed(connection_id)
             .await;
         self.thread_processor.connection_closed(connection_id).await;
+        self.thread_catalog_subscriptions
+            .connection_closed(connection_id)
+            .await;
     }
 
     pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
@@ -1210,6 +1223,12 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
+            }
+            ClientRequest::ThreadCatalogSubscribe { .. } => {
+                self.thread_catalog_subscriptions
+                    .subscribe(connection_id)
+                    .await;
+                Ok(Some(ThreadCatalogSubscribeResponse {}.into()))
             }
             ClientRequest::ThreadSearch { params, .. } => {
                 self.thread_processor.thread_search(params).await
