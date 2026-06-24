@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use codex_app_server_protocol::AppInfo;
+use crate::connectors::AppInfo;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;

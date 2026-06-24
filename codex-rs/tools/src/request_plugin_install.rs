@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_connectors::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;

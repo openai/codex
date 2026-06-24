@@ -2,8 +2,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_core_plugins::ResolvedExecutorPlugin;
 use codex_exec_server::ExecutorFileSystem;
-use codex_mcp::PluginMcpServerPlacement;
-use codex_mcp::parse_plugin_mcp_config;
+use codex_mcp::parse_executor_plugin_mcp_config;
 use codex_plugin::PluginResourceLocator;
 use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginLocation;
@@ -11,7 +10,6 @@ use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
 use std::io;
-use std::path::PathBuf;
 use thiserror::Error;
 
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
@@ -116,17 +114,13 @@ async fn load_from_file_system(
             (contents, config_path)
         }
     };
-    let plugin_root_path = PathBuf::from(plugin_root.inferred_native_path_string());
-    let parsed = parse_plugin_mcp_config(
-        plugin_root_path.as_path(),
-        &contents,
-        PluginMcpServerPlacement::Environment { environment_id },
-    )
-    .map_err(|source| ExecutorPluginMcpProviderError::ParseConfig {
-        plugin_id: plugin_id.to_string(),
-        path: config_path,
-        source,
-    })?;
+    let parsed = parse_executor_plugin_mcp_config(plugin_root, &contents, environment_id).map_err(
+        |source| ExecutorPluginMcpProviderError::ParseConfig {
+            plugin_id: plugin_id.to_string(),
+            path: config_path,
+            source,
+        },
+    )?;
 
     for error in parsed.errors {
         tracing::warn!(

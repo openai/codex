@@ -2,9 +2,9 @@ use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Permissions;
 use crate::session_state::SessionNetworkProxyRuntime;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ManagedHooksRequirementsToml;
@@ -557,8 +557,8 @@ mod tests {
     use super::session_all_proxy_url;
     use crate::legacy_core::config::Permissions;
     use codex_app_server_protocol::AskForApproval;
-    use codex_app_server_protocol::ConfigLayerSource;
     use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
     use codex_config::ConfigLayerStack;
     use codex_config::ConfigRequirements;
     use codex_config::ConfigRequirementsToml;
@@ -785,6 +785,7 @@ mod tests {
                 },
             )])),
             plugins: None,
+            marketplaces: None,
             apps: None,
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
@@ -1142,6 +1143,7 @@ approval_policy = "never"
             hooks: None,
             mcp_servers: None,
             plugins: None,
+            marketplaces: None,
             apps: None,
             rules: None,
             enforce_residency: None,

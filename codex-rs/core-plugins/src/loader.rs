@@ -15,7 +15,6 @@ use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
 use crate::store::plugin_version_for_source_with_fallback_manifest;
-use codex_app_server_protocol::AuthMode;
 use codex_config::ConfigLayerStack;
 use codex_config::HooksFile;
 use codex_config::types::McpServerConfig;
@@ -29,7 +28,6 @@ use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
 use codex_exec_server::LOCAL_FS;
-use codex_mcp::PluginMcpServerPlacement;
 use codex_mcp::parse_plugin_mcp_config;
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
@@ -39,6 +37,7 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::app_connector_ids_from_declarations;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -118,14 +117,14 @@ pub(crate) async fn load_plugins_from_layer_stack(
     store: &PluginStore,
     plugin_skill_snapshots: Option<&PluginSkillSnapshots>,
     restriction_product: Option<Product>,
-    prefer_remote_curated_conflicts: bool,
+    remote_global_catalog_active: bool,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
-        prefer_remote_curated_conflicts,
+        remote_global_catalog_active,
         PluginLoadScope::AllCapabilities {
             restriction_product,
             skill_config_rules: &skill_config_rules,
@@ -139,14 +138,14 @@ async fn load_plugins_from_layer_stack_with_scope(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
-    prefer_remote_curated_conflicts: bool,
+    remote_global_catalog_active: bool,
     scope: PluginLoadScope<'_>,
 ) -> Vec<LoadedPlugin<McpServerConfig>> {
     let configured_plugins = merge_configured_plugins_with_remote_installed(
         configured_plugins_from_stack(config_layer_stack),
         extra_plugins,
         store,
-        prefer_remote_curated_conflicts,
+        remote_global_catalog_active,
     );
     let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
@@ -178,13 +177,13 @@ pub async fn load_plugin_hooks_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
-    prefer_remote_curated_conflicts: bool,
+    remote_global_catalog_active: bool,
 ) -> PluginHookLoadOutcome {
     let plugins = load_plugins_from_layer_stack_with_scope(
         config_layer_stack,
         extra_plugins,
         store,
-        prefer_remote_curated_conflicts,
+        remote_global_catalog_active,
         PluginLoadScope::HooksOnly,
     )
     .await;
@@ -206,8 +205,17 @@ fn merge_configured_plugins_with_remote_installed(
     mut configured_plugins: HashMap<String, PluginConfig>,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
-    prefer_remote_curated_conflicts: bool,
+    remote_global_catalog_active: bool,
 ) -> HashMap<String, PluginConfig> {
+    if remote_global_catalog_active {
+        configured_plugins.retain(|plugin_key, _| match PluginId::parse(plugin_key) {
+            Ok(plugin_id) => plugin_id.marketplace_name != crate::OPENAI_CURATED_MARKETPLACE_NAME,
+            Err(_) => true,
+        });
+        configured_plugins.extend(extra_plugins);
+        return configured_plugins;
+    }
+
     let mut local_curated_installed_plugin_keys = HashMap::<String, Vec<String>>::new();
     for plugin_key in configured_plugins.keys() {
         let Ok(plugin_id) = PluginId::parse(plugin_key) else {
@@ -234,14 +242,8 @@ fn merge_configured_plugins_with_remote_installed(
             .as_ref()
             .and_then(|plugin_name| local_curated_installed_plugin_keys.get(plugin_name));
 
-        if let Some(local_curated_plugin_keys) = local_curated_plugin_keys {
-            if prefer_remote_curated_conflicts {
-                for local_curated_plugin_key in local_curated_plugin_keys {
-                    configured_plugins.remove(local_curated_plugin_key);
-                }
-            } else {
-                continue;
-            }
+        if local_curated_plugin_keys.is_some() {
+            continue;
         }
 
         configured_plugins.insert(plugin_key, plugin_config);
@@ -1279,17 +1281,16 @@ async fn load_mcp_servers_from_file(
     let Ok(contents) = tokio::fs::read_to_string(mcp_config_path.as_path()).await else {
         return PluginMcpDiscovery::default();
     };
-    let parsed =
-        match parse_plugin_mcp_config(plugin_root, &contents, PluginMcpServerPlacement::Declared) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                warn!(
-                    path = %mcp_config_path.display(),
-                    "failed to parse plugin MCP config: {err}"
-                );
-                return PluginMcpDiscovery::default();
-            }
-        };
+    let parsed = match parse_plugin_mcp_config(plugin_root, &contents) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                path = %mcp_config_path.display(),
+                "failed to parse plugin MCP config: {err}"
+            );
+            return PluginMcpDiscovery::default();
+        }
+    };
     for error in parsed.errors {
         warn!(
             plugin = %plugin_root.display(),
@@ -1308,11 +1309,7 @@ fn load_mcp_servers_from_manifest_object(
     plugin_root: &Path,
     object_config: &str,
 ) -> PluginMcpDiscovery {
-    let parsed = match parse_plugin_mcp_config(
-        plugin_root,
-        object_config,
-        PluginMcpServerPlacement::Declared,
-    ) {
+    let parsed = match parse_plugin_mcp_config(plugin_root, object_config) {
         Ok(parsed) => parsed,
         Err(err) => {
             warn!(

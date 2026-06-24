@@ -521,6 +521,8 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_respects_workdir_override() -> Result<()> {
+    // TODO(anp): Remove after workdir helpers use target-native paths and commands.
+    skip_if_target_windows!(Ok(()), "uses a POSIX pwd command and workdir path");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_host_windows!(Ok(()));
@@ -1277,6 +1279,8 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
+    // TODO(anp): Remove after unified-exec fixtures use target-native commands.
+    skip_if_target_windows!(Ok(()), "uses bash and a POSIX sleep command");
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_host_windows!(Ok(()));

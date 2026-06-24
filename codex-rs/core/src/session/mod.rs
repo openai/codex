@@ -1337,8 +1337,15 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(rollout_items) => {
+            InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
+                if turn_context.config.features.enabled(Feature::ItemIds) {
+                    for rollout_item in &mut rollout_items {
+                        if let RolloutItem::ResponseItem(response_item) = rollout_item {
+                            Self::assign_missing_response_item_id(response_item);
+                        }
+                    }
+                }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -2723,29 +2730,33 @@ impl Session {
         }
         let mut items = items;
         for item in items.to_mut() {
-            if item.id().is_some() {
-                continue;
-            }
-            let prefix = match item {
-                ResponseItem::AdditionalTools { .. } => "at",
-                ResponseItem::Message { .. } => "msg",
-                ResponseItem::Reasoning { .. } => "rs",
-                ResponseItem::LocalShellCall { .. } => "lsh",
-                ResponseItem::FunctionCall { .. } => "fc",
-                ResponseItem::ToolSearchCall { .. } => "tsc",
-                ResponseItem::FunctionCallOutput { .. } => "fco",
-                ResponseItem::CustomToolCall { .. } => "ctc",
-                ResponseItem::CustomToolCallOutput { .. } => "ctco",
-                ResponseItem::ToolSearchOutput { .. } => "tso",
-                ResponseItem::WebSearchCall { .. } => "ws",
-                ResponseItem::ImageGenerationCall { .. } => "ig",
-                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
-                ResponseItem::AgentMessage { .. } => "amsg",
-                ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => continue,
-            };
-            item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
+            Self::assign_missing_response_item_id(item);
         }
         items
+    }
+
+    fn assign_missing_response_item_id(item: &mut ResponseItem) {
+        if item.id().is_some() {
+            return;
+        }
+        let prefix = match item {
+            ResponseItem::AdditionalTools { .. } => "at",
+            ResponseItem::Message { .. } => "msg",
+            ResponseItem::Reasoning { .. } => "rs",
+            ResponseItem::LocalShellCall { .. } => "lsh",
+            ResponseItem::FunctionCall { .. } => "fc",
+            ResponseItem::ToolSearchCall { .. } => "tsc",
+            ResponseItem::FunctionCallOutput { .. } => "fco",
+            ResponseItem::CustomToolCall { .. } => "ctc",
+            ResponseItem::CustomToolCallOutput { .. } => "ctco",
+            ResponseItem::ToolSearchOutput { .. } => "tso",
+            ResponseItem::WebSearchCall { .. } => "ws",
+            ResponseItem::ImageGenerationCall { .. } => "ig",
+            ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => "cmp",
+            ResponseItem::AgentMessage { .. } => "amsg",
+            ResponseItem::CompactionTrigger { .. } | ResponseItem::Other => return,
+        };
+        item.set_id(Some(format!("{prefix}_{}", Uuid::now_v7())));
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
@@ -2830,7 +2841,7 @@ impl Session {
             std::slice::from_ref(&response_item),
         );
         let items = items.as_ref();
-        communication.id = items.first().and_then(ResponseItem::id).map(str::to_string);
+        let response_item = items[0].clone();
         {
             let mut state = self.state.lock().await;
             state.record_items(
@@ -2838,8 +2849,13 @@ impl Session {
                 turn_context.model_info.truncation_policy.into(),
             );
         }
-        self.persist_rollout_items(&[RolloutItem::InterAgentCommunication(communication)])
-            .await;
+        self.persist_rollout_items(&[
+            RolloutItem::InterAgentCommunicationMetadata {
+                trigger_turn: communication.trigger_turn,
+            },
+            RolloutItem::ResponseItem(response_item),
+        ])
+        .await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -3446,28 +3462,21 @@ impl Session {
             .build_initial_context_with_world_state(turn_context, world_state.as_ref())
             .await;
         let turn_context_item = turn_context.to_turn_context_item();
-        let replacement_history = context_items;
-        {
-            let mut state = self.state.lock().await;
-            state.replace_history(replacement_history.clone(), Some(turn_context_item.clone()));
-            state.history.set_world_state_baseline(world_state);
-        };
-        self.persist_rollout_items(&[
-            RolloutItem::Compacted(CompactedItem {
+        self.replace_compacted_history(
+            turn_context,
+            context_items,
+            Some(turn_context_item),
+            Some(world_state),
+            CompactedItem {
                 message: String::new(),
-                replacement_history: Some(replacement_history),
+                replacement_history: None,
                 window_number: Some(window_number),
                 first_window_id: Some(window_ids.first_window_id.to_string()),
                 previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
                 window_id: Some(window_ids.window_id.to_string()),
-            }),
-            RolloutItem::TurnContext(turn_context_item),
-        ])
+            },
+        )
         .await;
-        {
-            let mut state = self.state.lock().await;
-            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
-        }
         self.recompute_token_usage(turn_context).await;
         window_number
     }

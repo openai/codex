@@ -24,7 +24,8 @@ struct RawPluginManifestName {
     name: String,
 }
 
-async fn plugin_manifest_name(
+/// Returns the plugin manifest `name` defined directly below `plugin_root`.
+pub async fn plugin_namespace_for_root_uri(
     fs: &dyn ExecutorFileSystem,
     plugin_root: &PathUri,
 ) -> Option<String> {
@@ -68,7 +69,7 @@ pub async fn plugin_namespace_for_skill_uri(
 ) -> Option<String> {
     let mut ancestor = Some(path.clone());
     while let Some(path) = ancestor {
-        if let Some(name) = plugin_manifest_name(fs, &path).await {
+        if let Some(name) = plugin_namespace_for_root_uri(fs, &path).await {
             return Some(name);
         }
         ancestor = path.parent();

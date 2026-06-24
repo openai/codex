@@ -34,9 +34,9 @@ use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::plugin_interface_with_marketplace_category;
+use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
-use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
@@ -54,7 +54,6 @@ use crate::store::PluginStore;
 use crate::store::PluginStoreError;
 use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::AuthMode;
 use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
@@ -75,6 +74,7 @@ use codex_plugin::PluginIdError;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_tools::DiscoverablePluginInfo;
@@ -384,15 +384,15 @@ struct LoadedPluginsCache {
 struct PluginLoadCacheKey {
     configured_plugins: HashMap<String, PluginConfig>,
     skill_config_rules: SkillConfigRules,
-    remote_plugin_enabled: bool,
+    remote_global_catalog_active: bool,
 }
 
 impl PluginLoadCacheKey {
-    fn from_config(config: &PluginsConfigInput) -> Self {
+    fn from_config(config: &PluginsConfigInput, remote_global_catalog_active: bool) -> Self {
         Self {
             configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
             skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
-            remote_plugin_enabled: config.remote_plugin_enabled,
+            remote_global_catalog_active,
         }
     }
 }
@@ -459,6 +459,10 @@ impl PluginsManager {
         }
     }
 
+    fn remote_global_catalog_active(&self, config: &PluginsConfigInput) -> bool {
+        config.remote_plugin_enabled && self.auth_mode().is_some_and(AuthMode::uses_codex_backend)
+    }
+
     pub fn set_analytics_events_client(&self, analytics_events_client: AnalyticsEventsClient) {
         let mut stored_client = match self.analytics_events_client.write() {
             Ok(client_guard) => client_guard,
@@ -490,7 +494,8 @@ impl PluginsManager {
         if !config.plugins_enabled {
             return None;
         }
-        let key = PluginLoadCacheKey::from_config(config);
+        let key =
+            PluginLoadCacheKey::from_config(config, self.remote_global_catalog_active(config));
         self.loaded_plugins_cache
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -519,7 +524,8 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let cache_key = PluginLoadCacheKey::from_config(config);
+        let remote_global_catalog_active = self.remote_global_catalog_active(config);
+        let cache_key = PluginLoadCacheKey::from_config(config, remote_global_catalog_active);
         if !force_reload && let Some(plugins) = self.cached_loaded_plugins(&cache_key) {
             return self.resolve_loaded_plugins_for_auth(plugins);
         }
@@ -539,7 +545,7 @@ impl PluginsManager {
             &self.store,
             Some(&plugin_skill_snapshots),
             self.restriction_product,
-            config.remote_plugin_enabled,
+            remote_global_catalog_active,
         )
         .await;
         log_plugin_load_errors(&plugins);
@@ -624,7 +630,7 @@ impl PluginsManager {
             &self.store,
             /*plugin_skill_snapshots*/ None,
             self.restriction_product,
-            config.remote_plugin_enabled,
+            self.remote_global_catalog_active(config),
         )
         .await;
         self.resolve_loaded_plugins_for_auth(plugins)
@@ -643,7 +649,7 @@ impl PluginsManager {
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
-            config.remote_plugin_enabled,
+            self.remote_global_catalog_active(config),
         )
         .await
     }
@@ -1247,19 +1253,10 @@ impl PluginsManager {
 
     pub async fn install_plugin(
         &self,
+        config_layer_stack: &ConfigLayerStack,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = match find_installable_marketplace_plugin(
-            &request.marketplace_path,
-            &request.plugin_name,
-            self.restriction_product,
-        ) {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                self.track_plugin_install_resolution_failed(&err);
-                return Err(err.into());
-            }
-        };
+        let resolved = self.resolve_installable_plugin(config_layer_stack, &request)?;
         let plugin_id = resolved.plugin_id.clone();
         match self.install_resolved_plugin(resolved).await {
             Ok(outcome) => Ok(outcome),
@@ -1274,12 +1271,11 @@ impl PluginsManager {
         }
     }
 
-    pub async fn install_plugin_with_remote_sync(
+    fn resolve_installable_plugin(
         &self,
-        config: &PluginsConfigInput,
-        auth: Option<&CodexAuth>,
-        request: PluginInstallRequest,
-    ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        config_layer_stack: &ConfigLayerStack,
+        request: &PluginInstallRequest,
+    ) -> Result<ResolvedMarketplacePlugin, PluginInstallError> {
         let resolved = match find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
@@ -1291,6 +1287,32 @@ impl PluginsManager {
                 return Err(err.into());
             }
         };
+        if let Err(message) =
+            MarketplacePolicy::from_requirements(config_layer_stack.requirements())
+                .validate_install(
+                    config_layer_stack,
+                    self.codex_home.as_path(),
+                    &request.marketplace_path,
+                    &resolved.plugin_id.marketplace_name,
+                )
+        {
+            let err = MarketplaceError::InvalidMarketplaceFile {
+                path: request.marketplace_path.to_path_buf(),
+                message,
+            };
+            self.track_plugin_install_resolution_failed(&err);
+            return Err(err.into());
+        }
+        Ok(resolved)
+    }
+
+    pub async fn install_plugin_with_remote_sync(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        request: PluginInstallRequest,
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        let resolved = self.resolve_installable_plugin(&config.config_layer_stack, &request)?;
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
         if let Err(err) = crate::remote_legacy::enable_remote_plugin(
@@ -1989,21 +2011,18 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         marketplace_name: Option<&str>,
     ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
-        if let Some(marketplace_name) = marketplace_name
-            && !configured_git_marketplace_names(&config.config_layer_stack)
-                .iter()
-                .any(|name| name == marketplace_name)
-        {
-            return Err(format!(
-                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
-            ));
-        }
-
         let mut outcome = upgrade_configured_git_marketplaces(
             self.codex_home.as_path(),
             &config.config_layer_stack,
             marketplace_name,
         );
+        if let Some(marketplace_name) = marketplace_name
+            && outcome.selected_marketplaces.is_empty()
+        {
+            return Err(format!(
+                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
+            ));
+        }
         if !outcome.upgraded_roots.is_empty() {
             match refresh_non_curated_plugin_cache_force_reinstall(
                 self.codex_home.as_path(),

@@ -6,6 +6,7 @@ mod manager;
 pub mod manifest;
 pub mod marketplace;
 pub mod marketplace_add;
+mod marketplace_policy;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
 mod plugin_bundle_archive;
@@ -23,6 +24,8 @@ mod tool_suggest_metadata;
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
+pub(crate) const OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME: &str = "openai-bundled-alpha";
+pub(crate) const OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME: &str = "openai-primary-runtime";
 
 pub fn is_openai_curated_marketplace_name(marketplace_name: &str) -> bool {
     marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME

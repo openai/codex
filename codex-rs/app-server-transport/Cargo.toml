@@ -55,6 +55,7 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 [dev-dependencies]
 chrono = { workspace = true }
 codex-config = { workspace = true }
+codex-protocol = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
