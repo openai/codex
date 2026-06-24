@@ -50,6 +50,12 @@ struct SkillsExtension<C> {
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
 }
 
+#[derive(Clone, Copy)]
+enum ExecutorCatalogCacheAction {
+    PopulateForFirstTurn,
+    ConsumeForTurn,
+}
+
 impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
 where
     C: Send + Sync + 'static,
@@ -128,6 +134,7 @@ where
                         mcp_resources: session_store.get::<McpResourceClient>(),
                     },
                     &thread_state,
+                    ExecutorCatalogCacheAction::PopulateForFirstTurn,
                 )
                 .await;
             for warning in &catalog.warnings {
@@ -194,7 +201,13 @@ where
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.list_skills(query, &thread_state).await;
+            let catalog = self
+                .list_skills(
+                    query,
+                    &thread_state,
+                    ExecutorCatalogCacheAction::ConsumeForTurn,
+                )
+                .await;
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
@@ -292,6 +305,7 @@ impl<C> SkillsExtension<C> {
         &self,
         mut query: SkillListQuery,
         thread_state: &SkillsThreadState,
+        executor_catalog_cache_action: ExecutorCatalogCacheAction,
     ) -> SkillCatalog {
         let executor_query = query.clone();
         let include_orchestrator_skills = query.include_orchestrator_skills;
@@ -299,9 +313,22 @@ impl<C> SkillsExtension<C> {
         let mcp_resources = orchestrator_query.mcp_resources.clone();
         query.include_orchestrator_skills = false;
 
-        let executor_catalog = thread_state
-            .executor_catalog_snapshot(self.providers.list_executor_for_turn(executor_query))
-            .await;
+        let executor_catalog = match executor_catalog_cache_action {
+            ExecutorCatalogCacheAction::PopulateForFirstTurn => {
+                thread_state
+                    .executor_catalog_for_thread_context(
+                        self.providers.list_executor_for_turn(executor_query),
+                    )
+                    .await
+            }
+            ExecutorCatalogCacheAction::ConsumeForTurn => {
+                thread_state
+                    .executor_catalog_for_turn(
+                        self.providers.list_executor_for_turn(executor_query),
+                    )
+                    .await
+            }
+        };
         let mut catalog = self.providers.list_for_turn(query, executor_catalog).await;
         if include_orchestrator_skills {
             let orchestrator_catalog = thread_state

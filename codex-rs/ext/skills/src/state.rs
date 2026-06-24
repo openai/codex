@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::OnceCell;
 
 use crate::SkillsExtensionConfig;
@@ -27,7 +28,7 @@ const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     selected_roots: Vec<SelectedCapabilityRoot>,
-    executor_catalog: OnceCell<SkillCatalog>,
+    first_turn_executor_catalog: AsyncMutex<Option<SkillCatalog>>,
     orchestrator_skills_available: bool,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
@@ -41,7 +42,7 @@ impl SkillsThreadState {
         Self {
             config: Mutex::new(config),
             selected_roots,
-            executor_catalog: OnceCell::new(),
+            first_turn_executor_catalog: AsyncMutex::new(None),
             orchestrator_skills_available,
             orchestrator_cache: Mutex::new(None),
         }
@@ -69,14 +70,29 @@ impl SkillsThreadState {
         self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
     }
 
-    pub(crate) async fn executor_catalog_snapshot(
+    pub(crate) async fn executor_catalog_for_thread_context(
         &self,
         initialize: impl Future<Output = SkillCatalog> + Send,
     ) -> SkillCatalog {
-        self.executor_catalog
-            .get_or_init(|| initialize)
-            .await
-            .clone()
+        let mut cached_catalog = self.first_turn_executor_catalog.lock().await;
+        if let Some(catalog) = cached_catalog.as_ref() {
+            return catalog.clone();
+        }
+
+        let catalog = initialize.await;
+        *cached_catalog = Some(catalog.clone());
+        catalog
+    }
+
+    pub(crate) async fn executor_catalog_for_turn(
+        &self,
+        initialize: impl Future<Output = SkillCatalog> + Send,
+    ) -> SkillCatalog {
+        if let Some(catalog) = self.first_turn_executor_catalog.lock().await.take() {
+            return catalog;
+        }
+
+        initialize.await
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(

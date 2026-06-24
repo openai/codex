@@ -234,11 +234,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         )],
         read_request_keys(&read_requests)
     );
-    let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
-        .await;
-    assert_eq!(1, rebuilt_prompt_fragments.len());
-    assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
+    assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
     let next_turn_store = ExtensionData::new("turn-2");
     let next_fragments = registry.turn_input_contributors()[0]
@@ -258,7 +254,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         .await;
 
     assert!(next_fragments.is_empty());
-    assert_eq!(1, list_calls.load(Ordering::Relaxed));
+    assert_eq!(2, list_calls.load(Ordering::Relaxed));
 
     Ok(())
 }
