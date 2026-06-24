@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_info::app_info_to_api;
 
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -396,7 +397,11 @@ fn paginate_apps(
 
     let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
     let end = start.saturating_add(effective_limit).min(total);
-    let data = connectors[start..end].to_vec();
+    let data = connectors[start..end]
+        .iter()
+        .cloned()
+        .map(app_info_to_api)
+        .collect();
     let next_cursor = if end < total {
         Some(end.to_string())
     } else {
@@ -410,6 +415,7 @@ async fn send_app_list_updated_notification(
     outgoing: &Arc<OutgoingMessageSender>,
     data: Vec<AppInfo>,
 ) {
+    let data = data.into_iter().map(app_info_to_api).collect();
     outgoing
         .send_server_notification(ServerNotification::AppListUpdated(
             AppListUpdatedNotification { data },

@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
+use crate::AppInfo;
 use crate::metadata::connector_install_url;
 use crate::normalize_connector_value;
-use codex_app_server_protocol::AppInfo;
 
 pub struct AccessibleConnectorTool {
     pub connector_id: String,

@@ -1,4 +1,4 @@
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 

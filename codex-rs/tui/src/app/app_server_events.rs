@@ -7,6 +7,7 @@ use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
@@ -127,7 +128,12 @@ impl App {
             ServerNotification::AppListUpdated(notification) => {
                 self.chat_widget.on_connectors_loaded(
                     Ok(ConnectorsSnapshot {
-                        connectors: notification.data.clone(),
+                        connectors: notification
+                            .data
+                            .iter()
+                            .cloned()
+                            .map(app_info_from_api)
+                            .collect(),
                     }),
                     /*is_final*/ false,
                 );

@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
 use tracing::warn;
 
+use crate::AppInfo;
 use crate::ConnectorDirectoryCacheKey;
 
 pub(crate) const CONNECTOR_DIRECTORY_DISK_CACHE_SCHEMA_VERSION: u8 = 1;

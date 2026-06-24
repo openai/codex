@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::AppInfo;
 use crate::metadata::connector_install_url;
 use crate::metadata::sort_connectors_by_accessibility_and_name;
-use codex_app_server_protocol::AppInfo;
 
 pub fn merge_connectors(
     connectors: Vec<AppInfo>,
