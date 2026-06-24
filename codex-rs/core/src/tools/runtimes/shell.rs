@@ -40,6 +40,7 @@ use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::error::CodexErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
@@ -48,6 +49,7 @@ use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::io;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
@@ -258,7 +260,20 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         );
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions);
-        let env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
+        let mut env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
+        if let Some(network) = managed_network {
+            network
+                .apply_to_env_for_optional_environment(
+                    &mut env,
+                    Some(&req.turn_environment.environment_id),
+                )
+                .map_err(|err| {
+                    ToolError::Codex(CodexErr::Io(io::Error::other(format!(
+                        "failed to prepare network proxy for environment `{}`: {err}",
+                        req.turn_environment.environment_id
+                    ))))
+                })?;
+        }
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
         let (env, runtime_path_prepends) = {
