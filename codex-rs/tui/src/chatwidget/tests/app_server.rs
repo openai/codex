@@ -176,7 +176,10 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
         /*replay_kind*/ None,
     );
 
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    let render_popup = |chat: &ChatWidget| {
+        normalize_snapshot_paths(render_bottom_popup(chat, /*width*/ 80))
+    };
+    let popup = render_popup(&chat);
     assert_chatwidget_snapshot!("safety_buffering_status_without_retry", popup,);
 
     let notification = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
@@ -185,14 +188,14 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
         ServerNotification::ModelSafetyBufferingUpdated(notification.clone()),
         /*replay_kind*/ None,
     );
-    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
+    assert_eq!(render_popup(&chat), popup);
 
     chat.record_safety_buffering_turn(turn_id.to_string(), &turn);
     chat.handle_server_notification(
         ServerNotification::ModelSafetyBufferingUpdated(notification),
         Some(ReplayKind::ThreadSnapshot),
     );
-    assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
+    assert_eq!(render_popup(&chat), popup);
 }
 
 #[tokio::test]
