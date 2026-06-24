@@ -2,14 +2,14 @@ use crate::policy::normalize_host;
 use rama_http::HeaderMap;
 use rama_http::HeaderValue;
 use rama_http::header::AUTHORIZATION;
-use sha2::Digest;
-use sha2::Sha256;
+use rand::Rng as _;
 use std::collections::HashMap;
 
 const GH_HOST_ENV_VAR: &str = "GH_HOST";
 const GITHUB_TOKEN_PREFIXES: &[&str] = &["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"];
 const GITHUB_TOKEN_MIN_LEN: usize = 40;
 const OPENAI_API_KEY_MIN_LEN: usize = 51;
+const DUMMY_ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const GITHUB_CLOUD_TOKEN_ENV_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
 const GITHUB_ENTERPRISE_TOKEN_ENV_VARS: &[&str] =
     &["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
@@ -53,21 +53,17 @@ pub(super) const CREDENTIAL_SOURCES: &[CredentialSource] = &[
 ];
 
 impl CredentialKind {
-    pub(super) fn dummy_value(self, credential_id: usize, real_value: &str) -> String {
+    pub(super) fn dummy_value(self, real_value: &str) -> String {
         match self {
             Self::GitHub => shaped_dummy_value(
                 real_value,
                 github_token_prefix(real_value),
                 GITHUB_TOKEN_MIN_LEN,
-                "github",
-                credential_id,
             ),
             Self::OpenAiApiKey => shaped_dummy_value(
                 real_value,
                 openai_api_key_prefix(real_value),
                 OPENAI_API_KEY_MIN_LEN,
-                "openai",
-                credential_id,
             ),
         }
     }
@@ -134,25 +130,15 @@ fn openai_api_key_prefix(value: &str) -> &str {
         .map_or("sk-", |separator| &value[..separator + 4])
 }
 
-fn shaped_dummy_value(
-    real_value: &str,
-    prefix: &str,
-    minimum_len: usize,
-    seed: &str,
-    credential_id: usize,
-) -> String {
+fn shaped_dummy_value(real_value: &str, prefix: &str, minimum_len: usize) -> String {
     let target_len = real_value.len().max(minimum_len).max(prefix.len() + 16);
-    let digest = Sha256::digest(format!("{seed}:{credential_id}").as_bytes());
+    let mut rng = rand::rng();
     let mut dummy = String::with_capacity(target_len);
     dummy.push_str(prefix);
     for index in prefix.len()..target_len {
-        let offset = index - prefix.len();
-        let entropy = digest[offset % digest.len()].wrapping_add(offset as u8);
         let character = match real_value.as_bytes().get(index).copied() {
             Some(template) if !template.is_ascii_alphanumeric() => template,
-            Some(template) if template.is_ascii_digit() => b'0' + entropy % 10,
-            Some(template) if template.is_ascii_uppercase() => b'A' + entropy % 26,
-            _ => b'a' + entropy % 26,
+            _ => DUMMY_ALPHANUMERIC[rng.random_range(0..DUMMY_ALPHANUMERIC.len())],
         };
         dummy.push(char::from(character));
     }

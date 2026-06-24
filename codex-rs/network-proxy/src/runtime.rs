@@ -350,17 +350,15 @@ impl NetworkProxyState {
 
         match self.reloader.reload_now().await {
             Ok(mut new_state) => {
+                self.ensure_credential_broker_enablement_unchanged(&new_state)?;
                 // Policy changes are operationally sensitive; logging diffs makes changes traceable
                 // without needing to dump full config blobs (which can include unrelated settings).
                 log_policy_changes(&previous_cfg, &new_state.config);
-                let credential_broker_enabled = new_state.config.network.credential_broker;
                 {
                     let mut guard = self.state.write().await;
                     new_state.blocked = guard.blocked.clone();
                     *guard = new_state;
                 }
-                self.credential_broker
-                    .set_enabled(credential_broker_enabled);
                 let source = self.reloader.source_label();
                 info!("reloaded config from {source}");
                 Ok(())
@@ -375,14 +373,12 @@ impl NetworkProxyState {
 
     pub async fn replace_config_state(&self, mut new_state: ConfigState) -> Result<()> {
         self.reload_if_needed().await?;
+        self.ensure_credential_broker_enablement_unchanged(&new_state)?;
         let mut guard = self.state.write().await;
         log_policy_changes(&guard.config, &new_state.config);
         new_state.blocked = guard.blocked.clone();
         new_state.blocked_total = guard.blocked_total;
-        let credential_broker_enabled = new_state.config.network.credential_broker;
         *guard = new_state;
-        self.credential_broker
-            .set_enabled(credential_broker_enabled);
         info!("updated network proxy config state");
         Ok(())
     }
@@ -650,16 +646,6 @@ impl NetworkProxyState {
         })
     }
 
-    pub async fn host_requires_mitm(&self, host: &str, port: u16) -> Result<bool> {
-        // The SOCKS path decides before it owns the client stream, so TLS-only requirements retain
-        // the default HTTPS-port heuristic there. HTTP CONNECT inspects the upgraded stream instead.
-        Ok(match self.host_mitm_requirement(host).await? {
-            HostMitmRequirement::None => false,
-            HostMitmRequirement::Tls => port == 443,
-            HostMitmRequirement::Always => true,
-        })
-    }
-
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.update_domain_list(host, DomainListKind::Allow).await
     }
@@ -731,6 +717,7 @@ impl NetworkProxyState {
         match self.reloader.maybe_reload().await? {
             None => Ok(()),
             Some(mut new_state) => {
+                self.ensure_credential_broker_enablement_unchanged(&new_state)?;
                 let (previous_cfg, blocked, blocked_total) = {
                     let guard = self.state.read().await;
                     (
@@ -740,20 +727,25 @@ impl NetworkProxyState {
                     )
                 };
                 log_policy_changes(&previous_cfg, &new_state.config);
-                let credential_broker_enabled = new_state.config.network.credential_broker;
                 new_state.blocked = blocked;
                 new_state.blocked_total = blocked_total;
                 {
                     let mut guard = self.state.write().await;
                     *guard = new_state;
                 }
-                self.credential_broker
-                    .set_enabled(credential_broker_enabled);
                 let source = self.reloader.source_label();
                 info!("reloaded config from {source}");
                 Ok(())
             }
         }
+    }
+
+    fn ensure_credential_broker_enablement_unchanged(&self, new_state: &ConfigState) -> Result<()> {
+        anyhow::ensure!(
+            self.credential_broker.enabled() == new_state.config.network.credential_broker,
+            "network.credential_broker cannot change while the proxy is running"
+        );
+        Ok(())
     }
 }
 
@@ -976,6 +968,27 @@ mod tests {
     use crate::state::validate_policy_against_constraints;
     use pretty_assertions::assert_eq;
 
+    #[derive(Clone)]
+    struct StaticReloader {
+        state: ConfigState,
+    }
+
+    impl ConfigReloader for StaticReloader {
+        fn source_label(&self) -> String {
+            "static test reloader".to_string()
+        }
+
+        fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+            let state = self.state.clone();
+            Box::pin(async move { Ok(Some(state)) })
+        }
+
+        fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+            let state = self.state.clone();
+            Box::pin(async move { Ok(state) })
+        }
+    }
+
     fn strings(entries: &[&str]) -> Vec<String> {
         entries.iter().map(|entry| (*entry).to_string()).collect()
     }
@@ -1001,6 +1014,38 @@ mod tests {
             network.set_allow_unix_sockets(unix_sockets.to_vec());
         }
         network
+    }
+
+    #[tokio::test]
+    async fn reload_rejects_credential_broker_enablement_changes() {
+        let initial_state = build_config_state(
+            NetworkProxyConfig::default(),
+            NetworkProxyConstraints::default(),
+        )
+        .unwrap();
+        let mut reloaded_state = initial_state.clone();
+        reloaded_state.config.set_credential_broker_enabled(true);
+        let state = NetworkProxyState::with_reloader(
+            initial_state,
+            Arc::new(StaticReloader {
+                state: reloaded_state,
+            }),
+        );
+
+        let err = state
+            .force_reload()
+            .await
+            .expect_err("credential broker enablement should require a proxy restart");
+        let mut env = HashMap::from([("OPENAI_API_KEY".to_string(), "sk-real".to_string())]);
+        state.virtualize_child_credentials(&mut env);
+
+        assert!(
+            format!("{err:#}")
+                .contains("network.credential_broker cannot change while the proxy is running"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(env["OPENAI_API_KEY"], "sk-real");
+        assert!(!state.credential_broker.enabled());
     }
 
     #[tokio::test]

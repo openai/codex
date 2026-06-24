@@ -26,6 +26,8 @@ use rama_core::extensions::ExtensionsRef;
 use rama_core::futures::stream::Stream as FuturesStream;
 use rama_core::rt::Executor;
 use rama_core::service::service_fn;
+use rama_core::stream::PeekStream;
+use rama_core::stream::StackReader;
 use rama_core::stream::Stream;
 use rama_http::Body;
 use rama_http::BodyDataStream;
@@ -41,12 +43,17 @@ use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http_backend::server::HttpServer;
 use rama_net::proxy::ProxyTarget;
 use rama_net::stream::SocketInfo;
+use rama_net::tls::server::TlsPeekStream;
 use rama_tls_rustls::server::TlsAcceptorData;
 use rama_tls_rustls::server::TlsAcceptorLayer;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
 use std::task::Poll;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::time::Instant;
+use tokio::time::timeout_at;
 use tracing::info;
 use tracing::warn;
 
@@ -86,6 +93,40 @@ enum MitmPolicyDecision {
 
 const MITM_INSPECT_BODIES: bool = false;
 const MITM_MAX_BODY_BYTES: usize = 4096;
+const TLS_PREFIX_LEN: usize = 5;
+const TLS_PREFIX_PEEK_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Peeks enough bytes to distinguish a TLS handshake from an opaque CONNECT stream.
+///
+/// The timeout preserves server-first protocols: when the client does not speak promptly, the
+/// caller receives a non-TLS stream with every byte read so far replayed through `TlsPeekStream`.
+pub(crate) async fn peek_tls_prefix<S>(mut stream: S) -> Result<(bool, TlsPeekStream<S>)>
+where
+    S: Stream + Unpin + ExtensionsMut,
+{
+    let deadline = Instant::now() + TLS_PREFIX_PEEK_TIMEOUT;
+    let mut peek_buf = [0_u8; TLS_PREFIX_LEN];
+    let mut bytes_read = 0;
+    while bytes_read < TLS_PREFIX_LEN {
+        let read = match timeout_at(deadline, stream.read(&mut peek_buf[bytes_read..])).await {
+            Ok(result) => result.context("read TLS prefix")?,
+            Err(_) => break,
+        };
+        if read == 0 {
+            break;
+        }
+        bytes_read += read;
+    }
+
+    let is_tls = bytes_read == TLS_PREFIX_LEN && matches!(peek_buf, [0x16, 0x03, 0x00..=0x04, ..]);
+    let offset = TLS_PREFIX_LEN - bytes_read;
+    if offset > 0 {
+        peek_buf.copy_within(0..bytes_read, offset);
+    }
+    let mut peek = StackReader::new(peek_buf);
+    peek.skip(offset);
+    Ok((is_tls, PeekStream::new(peek, stream)))
+}
 
 impl std::fmt::Debug for MitmState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

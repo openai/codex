@@ -17,7 +17,6 @@ pub(crate) struct CredentialBroker {
 #[derive(Default)]
 struct CredentialBrokerState {
     enabled: bool,
-    next_credential_id: usize,
     credentials: Vec<CredentialRecord>,
 }
 
@@ -39,13 +38,8 @@ impl CredentialBroker {
         }
     }
 
-    pub(crate) fn set_enabled(&self, enabled: bool) {
-        let mut state = self.write_state();
-        state.enabled = enabled;
-        if !enabled {
-            state.credentials.clear();
-            state.next_credential_id = 0;
-        }
+    pub(crate) fn enabled(&self) -> bool {
+        self.read_state().enabled
     }
 
     pub(crate) fn virtualize_child_env(&self, env: &mut HashMap<String, String>) {
@@ -160,8 +154,12 @@ impl CredentialBrokerState {
             return existing.dummy_value.clone();
         }
 
-        let dummy_value = kind.dummy_value(self.next_credential_id, real_value);
-        self.next_credential_id += 1;
+        let dummy_value = loop {
+            let candidate = kind.dummy_value(real_value);
+            if candidate != real_value && !self.is_dummy_value(&candidate) {
+                break candidate;
+            }
+        };
         self.credentials.push(CredentialRecord {
             env_var: env_var.to_string(),
             kind,

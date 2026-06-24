@@ -85,6 +85,17 @@ fn virtualize_child_env_preserves_live_dummy_mappings() {
 }
 
 #[test]
+fn virtualize_child_env_uses_fresh_dummy_capabilities() {
+    let mut first_env = env_map([("OPENAI_API_KEY", "sk-proj-abcdefghijklmnopqrstuvwxyz")]);
+    let mut second_env = first_env.clone();
+
+    CredentialBroker::new(/*enabled*/ true).virtualize_child_env(&mut first_env);
+    CredentialBroker::new(/*enabled*/ true).virtualize_child_env(&mut second_env);
+
+    assert_ne!(first_env["OPENAI_API_KEY"], second_env["OPENAI_API_KEY"]);
+}
+
+#[test]
 fn child_without_dummy_cannot_use_previous_child_credential() {
     let broker = CredentialBroker::new(/*enabled*/ true);
     let mut first_env = env_map([("OPENAI_API_KEY", "sk-real")]);

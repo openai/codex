@@ -66,8 +66,6 @@ use rama_net::proxy::ProxyRequest;
 use rama_net::proxy::ProxyTarget;
 use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
-use rama_net::tls::server::TlsPeekRouter;
-use rama_net::tls::server::TlsPeekStream;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::server::TcpListener;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
@@ -361,15 +359,11 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     let result: Result<(), OpaqueError> = match connect_mitm_mode {
         ConnectMitmMode::Disabled => forward_connect_tunnel(upgraded).await,
         ConnectMitmMode::Enabled => mitm_connect_tunnel(upgraded).await,
-        ConnectMitmMode::DetectTls => {
-            let tls_service = service_fn(mitm_connect_tunnel::<TlsPeekStream<Upgraded>>);
-            let fallback_service = service_fn(forward_connect_tunnel::<TlsPeekStream<Upgraded>>);
-            TlsPeekRouter::new(tls_service)
-                .with_fallback(fallback_service)
-                .serve(upgraded)
-                .await
-                .map_err(OpaqueError::from_boxed)
-        }
+        ConnectMitmMode::DetectTls => match mitm::peek_tls_prefix(upgraded).await {
+            Ok((true, stream)) => mitm_connect_tunnel(stream).await,
+            Ok((false, stream)) => forward_connect_tunnel(stream).await,
+            Err(err) => Err(OpaqueError::from_display(format!("detect TLS: {err:#}"))),
+        },
     };
     if let Err(err) = result {
         warn!("CONNECT tunnel error: {err}");
@@ -1334,8 +1328,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn brokered_connect_forwards_opaque_protocol_without_mitm() {
-        let client_banner = b"SSH-2.0-client\r\n";
+    async fn brokered_connect_forwards_server_first_opaque_protocol_without_mitm() {
         let server_banner = b"SSH-2.0-server\r\n";
         let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
@@ -1348,12 +1341,6 @@ mod tests {
                 .accept()
                 .await
                 .expect("target listener should accept");
-            let mut buf = vec![0_u8; client_banner.len()];
-            timeout(Duration::from_secs(2), stream.read_exact(&mut buf))
-                .await
-                .expect("opaque client bytes should arrive before timeout")
-                .expect("target should read opaque client bytes");
-            assert_eq!(buf, client_banner);
             stream
                 .write_all(server_banner)
                 .await
@@ -1410,10 +1397,6 @@ mod tests {
             "unexpected proxy response: {response:?}"
         );
 
-        stream
-            .write_all(client_banner)
-            .await
-            .expect("client should write opaque protocol bytes");
         let mut buf = vec![0_u8; server_banner.len()];
         timeout(Duration::from_secs(2), stream.read_exact(&mut buf))
             .await
