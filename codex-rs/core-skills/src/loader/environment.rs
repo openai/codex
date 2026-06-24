@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 
 use codex_exec_server::ExecutorFileSystem;
@@ -108,6 +109,15 @@ pub async fn load_environment_skills_from_root(
         return outcome;
     }
 
+    let mut skill_ancestors = HashSet::new();
+    for skill_path in &discovery.skill_files {
+        let mut ancestor = skill_path.parent();
+        while let Some(path) = ancestor {
+            skill_ancestors.insert(path.clone());
+            ancestor = path.parent();
+        }
+    }
+
     let namespace_roots = discovery.namespace_roots;
     let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
         (
@@ -120,6 +130,7 @@ pub async fn load_environment_skills_from_root(
         discovery
             .plugin_roots
             .iter()
+            .filter(|plugin_root| skill_ancestors.contains(*plugin_root))
             .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
             .map(|plugin_root| async {
                 (
