@@ -439,6 +439,11 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             thread_init: &'a mut codex_extension_api::ExtensionDataInit,
         ) -> codex_extension_api::ExtensionFuture<'a, ()> {
             Box::pin(async move {
+                assert!(
+                    thread_init
+                        .get::<codex_core_plugins::SelectedCapabilityBindings>()
+                        .is_some()
+                );
                 let selected_root = thread_init
                     .get::<Vec<SelectedCapabilityRoot>>()
                     .and_then(|roots| roots.first().cloned())

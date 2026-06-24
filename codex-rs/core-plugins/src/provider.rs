@@ -1,5 +1,7 @@
 use crate::manifest::parse_plugin_manifest_uri;
+use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
 use codex_plugin::PluginProvider;
 use codex_plugin::ResolvedPlugin;
@@ -12,6 +14,9 @@ use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use std::io;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::Semaphore;
+
+const MAX_CONCURRENT_PLUGIN_INSPECTIONS: usize = 4;
 
 /// Failure to resolve an environment-owned capability root as a plugin package.
 #[derive(Debug, Error)]
@@ -22,6 +27,15 @@ pub enum ExecutorPluginProviderError {
     UnavailableEnvironment {
         root_id: String,
         environment_id: String,
+    },
+    #[error(
+        "selected capability root `{root_id}` environment `{environment_id}` failed to start: {source}"
+    )]
+    EnvironmentStartup {
+        root_id: String,
+        environment_id: String,
+        #[source]
+        source: ExecServerError,
     },
     #[error("failed to inspect selected capability root `{root_id}` at {path}: {source}")]
     InspectRoot {
@@ -75,6 +89,7 @@ pub enum ExecutorPluginProviderError {
 #[derive(Clone, Debug)]
 pub struct ExecutorPluginProvider {
     environment_manager: Arc<EnvironmentManager>,
+    inspection_permits: Arc<Semaphore>,
 }
 
 /// A resolved plugin paired with the concrete filesystem used to read it.
@@ -82,6 +97,62 @@ pub struct ExecutorPluginProvider {
 pub struct ResolvedExecutorPlugin {
     plugin: ResolvedPlugin,
     file_system: Arc<dyn ExecutorFileSystem>,
+}
+
+/// One selected capability root bound to its owning execution environment.
+///
+/// The optional plugin descriptor is absent when the root is valid but does
+/// not contain a plugin manifest. Consumers such as skills may still use the
+/// exact executor filesystem in that case.
+#[derive(Clone)]
+pub struct ResolvedSelectedCapabilityRoot {
+    selection_order: usize,
+    selected_root: SelectedCapabilityRoot,
+    environment: Arc<Environment>,
+    plugin: Option<ResolvedPlugin>,
+}
+
+impl ResolvedSelectedCapabilityRoot {
+    pub(crate) fn new(
+        selection_order: usize,
+        selected_root: SelectedCapabilityRoot,
+        environment: Arc<Environment>,
+        plugin: Option<ResolvedPlugin>,
+    ) -> Self {
+        Self {
+            selection_order,
+            selected_root,
+            environment,
+            plugin,
+        }
+    }
+
+    /// Returns this root's position in the caller-provided selection.
+    pub fn selection_order(&self) -> usize {
+        self.selection_order
+    }
+
+    /// Returns the original environment-qualified selection.
+    pub fn selected_root(&self) -> &SelectedCapabilityRoot {
+        &self.selected_root
+    }
+
+    /// Returns the plugin descriptor when the selected root declares one.
+    pub fn plugin(&self) -> Option<&ResolvedPlugin> {
+        self.plugin.as_ref()
+    }
+
+    /// Returns the filesystem owned by the selected root's exact executor.
+    pub fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {
+        self.environment.get_filesystem()
+    }
+
+    fn into_plugin(self) -> Option<ResolvedExecutorPlugin> {
+        self.plugin.map(|plugin| ResolvedExecutorPlugin {
+            plugin,
+            file_system: self.environment.get_filesystem(),
+        })
+    }
 }
 
 impl ResolvedExecutorPlugin {
@@ -101,6 +172,7 @@ impl ExecutorPluginProvider {
     pub fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
         Self {
             environment_manager,
+            inspection_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_PLUGIN_INSPECTIONS)),
         }
     }
 
@@ -109,8 +181,18 @@ impl ExecutorPluginProvider {
         &self,
         selected_root: &SelectedCapabilityRoot,
     ) -> Result<Option<ResolvedExecutorPlugin>, ExecutorPluginProviderError> {
+        self.resolve_selected_root(/*selection_order*/ 0, selected_root.clone())
+            .await
+            .map(ResolvedSelectedCapabilityRoot::into_plugin)
+    }
+
+    /// Resolves one selected root after its owning environment becomes ready.
+    pub async fn resolve_selected_root(
+        &self,
+        selection_order: usize,
+        selected_root: SelectedCapabilityRoot,
+    ) -> Result<ResolvedSelectedCapabilityRoot, ExecutorPluginProviderError> {
         let root_id = &selected_root.id;
-        let plugin_root = selected_plugin_root(selected_root);
         let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
         let environment = self
             .environment_manager
@@ -119,13 +201,40 @@ impl ExecutorPluginProvider {
                 root_id: root_id.clone(),
                 environment_id: environment_id.clone(),
             })?;
-        let file_system = environment.get_filesystem();
-        let plugin = resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await?;
+        self.resolve_selected_root_with_environment(selection_order, selected_root, environment)
+            .await
+    }
 
-        Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
+    pub(crate) async fn resolve_selected_root_with_environment(
+        &self,
+        selection_order: usize,
+        selected_root: SelectedCapabilityRoot,
+        environment: Arc<Environment>,
+    ) -> Result<ResolvedSelectedCapabilityRoot, ExecutorPluginProviderError> {
+        let root_id = &selected_root.id;
+        let plugin_root = selected_plugin_root(&selected_root);
+        let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
+        environment.wait_until_ready().await.map_err(|source| {
+            ExecutorPluginProviderError::EnvironmentStartup {
+                root_id: root_id.clone(),
+                environment_id: environment_id.clone(),
+                source,
+            }
+        })?;
+        let _inspection_permit = self
+            .inspection_permits
+            .acquire()
+            .await
+            .expect("plugin inspection semaphore should remain open");
+        let file_system = environment.get_filesystem();
+        let plugin = resolve_plugin_root(&selected_root, plugin_root, file_system.as_ref()).await?;
+
+        Ok(ResolvedSelectedCapabilityRoot::new(
+            selection_order,
+            selected_root,
+            environment,
             plugin,
-            file_system,
-        }))
+        ))
     }
 }
 

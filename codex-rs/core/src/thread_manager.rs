@@ -22,6 +22,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::SelectedCapabilityBindings;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
@@ -1548,6 +1549,18 @@ impl ThreadManagerState {
             if !selected_capability_roots.is_empty() {
                 thread_extension_init.insert(selected_capability_roots);
             }
+        }
+        if thread_extension_init
+            .get::<SelectedCapabilityBindings>()
+            .is_none()
+            && let Some(selected_capability_roots) =
+                thread_extension_init.get::<Vec<SelectedCapabilityRoot>>()
+            && !selected_capability_roots.is_empty()
+        {
+            thread_extension_init.insert(SelectedCapabilityBindings::new(
+                selected_capability_roots.as_ref().clone(),
+                Arc::clone(&self.environment_manager),
+            ));
         }
         self.extensions
             .initialize_thread_data(&mut thread_extension_init)

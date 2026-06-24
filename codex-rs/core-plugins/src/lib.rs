@@ -14,6 +14,7 @@ mod provider;
 pub mod remote;
 pub mod remote_bundle;
 pub mod remote_legacy;
+mod selected_capabilities;
 pub mod startup_sync;
 pub mod store;
 #[cfg(test)]
@@ -59,5 +60,11 @@ pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarket
 pub use provider::ExecutorPluginProvider;
 pub use provider::ExecutorPluginProviderError;
 pub use provider::ResolvedExecutorPlugin;
+pub use provider::ResolvedSelectedCapabilityRoot;
 pub use remote::RecommendedPlugin;
 pub use remote::RecommendedPluginsMode;
+pub use selected_capabilities::SelectedCapabilityBindingSnapshot;
+pub use selected_capabilities::SelectedCapabilityBindingStatus;
+pub use selected_capabilities::SelectedCapabilityBindings;
+pub use selected_capabilities::SelectedCapabilityFailure;
+pub use selected_capabilities::SelectedCapabilitySnapshot;
