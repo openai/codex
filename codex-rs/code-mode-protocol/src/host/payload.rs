@@ -1,3 +1,5 @@
+use std::num::TryFromIntError;
+
 use codex_protocol::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
@@ -142,30 +144,34 @@ pub struct WireExecuteRequest {
     pub enabled_tools: Vec<WireToolDefinition>,
     pub source: String,
     pub yield_time_ms: Option<u64>,
-    pub max_output_tokens: Option<usize>,
+    pub max_output_tokens: Option<i32>,
 }
 
-impl From<ExecuteRequest> for WireExecuteRequest {
-    fn from(value: ExecuteRequest) -> Self {
-        Self {
+impl TryFrom<ExecuteRequest> for WireExecuteRequest {
+    type Error = TryFromIntError;
+
+    fn try_from(value: ExecuteRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
             tool_call_id: value.tool_call_id,
             enabled_tools: value.enabled_tools.into_iter().map(Into::into).collect(),
             source: value.source,
             yield_time_ms: value.yield_time_ms,
-            max_output_tokens: value.max_output_tokens,
-        }
+            max_output_tokens: value.max_output_tokens.map(i32::try_from).transpose()?,
+        })
     }
 }
 
-impl From<WireExecuteRequest> for ExecuteRequest {
-    fn from(value: WireExecuteRequest) -> Self {
-        Self {
+impl TryFrom<WireExecuteRequest> for ExecuteRequest {
+    type Error = TryFromIntError;
+
+    fn try_from(value: WireExecuteRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
             tool_call_id: value.tool_call_id,
             enabled_tools: value.enabled_tools.into_iter().map(Into::into).collect(),
             source: value.source,
             yield_time_ms: value.yield_time_ms,
-            max_output_tokens: value.max_output_tokens,
-        }
+            max_output_tokens: value.max_output_tokens.map(usize::try_from).transpose()?,
+        })
     }
 }
 
