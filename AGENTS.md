@@ -220,10 +220,13 @@ Use `just bench-smoke` to dry-run the benchmark for a single iteration to ensure
   - Under Bazel, binaries and resources may live under runfiles; use `codex_utils_cargo_bin::cargo_bin` to resolve absolute paths that remain stable after `chdir`.
 - When locating fixture files or test resources under Bazel, avoid `env!("CARGO_MANIFEST_DIR")`. Prefer `codex_utils_cargo_bin::find_resource!` so paths resolve correctly under both Cargo and Bazel runfiles.
 
-### Integration tests (core)
+### Integration tests
+
+#### codex_core integration testing
 
 - Prefer the utilities in `core_test_support::responses` when writing end-to-end Codex tests.
-
+- Use `TestCodexBuilder::build_with_auto_env()` by default to ensure that new tests work with
+  foreign app/exec OSes. See $remote-tests for details.
 - All `mount_sse*` helpers return a `ResponseMock`; hold onto it so you can assert against outbound `/responses` POST bodies.
 - Use `ResponseMock::single_request()` when a test should only issue one POST, or `ResponseMock::requests()` to inspect every captured `ResponsesRequest`.
 - `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
@@ -246,6 +249,14 @@ Use `just bench-smoke` to dry-run the benchmark for a single iteration to ensure
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+#### app-server integration testing
+
+- Tests should exercise app-server's public JSON-RPC API.
+- Use similar server mocking as for core integration tests.
+- Use `TestAppServer::new_with_auto_env()` and `TestAppServer::send_thread_start_request_with_auto_env()`
+  by default to ensure that new tests work with foreign app/exec OSes. See `$remote-tests` for
+  details.
 
 ## App-server API Development Best Practices
 
@@ -307,3 +318,6 @@ closest `pyproject.toml`'s `requires-python` field to see what minimum runtime v
 ## Platform Support
 
 Tests and features must support Linux, macOS and Windows unless feature is explicitly OS-specific.
+
+Codex supports running connected app-server and exec-server on different operating systems. See the
+`$remote-tests` skill for details about integration testing these configurations.
