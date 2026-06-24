@@ -6,11 +6,13 @@ use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::read_cached_codex_apps_tools;
 use crate::codex_apps::write_cached_codex_apps_tools;
 use crate::codex_apps::write_codex_apps_tools_cache;
+use crate::codex_apps_startup_retry::CodexAppsStartupRetry;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
+use crate::rmcp_client::ManagedClientFuture;
 use crate::rmcp_client::StartupOutcomeError;
 use crate::server::EffectiveMcpServer;
 use crate::server::McpServerMetadata;
@@ -25,12 +27,15 @@ use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_rmcp_client::RmcpClient;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use rmcp::model::CreateElicitationRequestParams;
@@ -42,6 +47,7 @@ use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -99,6 +105,64 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
         icons: None,
         website_url: None,
     }
+}
+
+async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
+    let client = RmcpClient::new_streamable_http_client(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "http://127.0.0.1:1",
+        /*bearer_token*/ Some("test-token".to_string()),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::Auto,
+        AuthKeyringBackendKind::default(),
+        Arc::new(ReqwestHttpClient),
+        /*auth_provider*/ None,
+    )
+    .await
+    .expect("create test MCP client");
+    ManagedClient {
+        client: Arc::new(client),
+        server_info: create_test_server_info("Codex Apps"),
+        tools,
+        tool_filter: ToolFilter::default(),
+        tool_timeout: Some(Duration::from_secs(1)),
+        server_instructions: None,
+        server_supports_sandbox_state_meta_capability: false,
+        codex_apps_tools_cache_context: None,
+    }
+}
+
+fn create_test_manager_with_failed_apps_startup(
+    cached_tools: Vec<ToolInfo>,
+    startup_retry: CodexAppsStartupRetry,
+) -> McpConnectionManager {
+    let client: ManagedClientFuture = futures::future::ready(Err(StartupOutcomeError::Failed {
+        error: "startup failed".to_string(),
+    }))
+    .boxed()
+    .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client,
+            is_codex_apps_mcp_server: true,
+            cached_tool_info_snapshot: Some(cached_tools),
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            startup_retry: Some(Arc::new(startup_retry)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+    manager
 }
 
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
@@ -801,6 +865,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_while_client_is_pending()
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -839,6 +904,7 @@ async fn list_available_server_infos_uses_cache_while_client_is_pending() {
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: Some(server_info.clone()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -877,6 +943,7 @@ async fn list_all_tools_accepts_canonical_namespaced_tool_names() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -921,6 +988,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -964,6 +1032,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1001,6 +1070,7 @@ async fn shutdown_cancels_pending_tool_listing() {
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token,
         },
@@ -1046,6 +1116,7 @@ async fn shutdown_continues_after_caller_is_aborted() {
             cached_tool_info_snapshot: None,
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1090,6 +1161,7 @@ async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty()
             cached_tool_info_snapshot: Some(Vec::new()),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1131,6 +1203,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: Some(server_info.clone()),
             startup_complete,
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },
@@ -1153,6 +1226,146 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
             .get(CODEX_APPS_MCP_SERVER_NAME),
         Some(&server_info)
     );
+}
+
+#[tokio::test]
+async fn list_all_tools_retries_failed_codex_apps_startup_with_cache_refresh_fallback() {
+    let recovered_client = create_test_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "drive_search",
+    )])
+    .await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_retry = Arc::clone(&attempts);
+    let startup_retry = CodexAppsStartupRetry::new(Arc::new(move || {
+        let attempt = attempts_for_retry.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let outcome = if attempt == 0 {
+            Err(StartupOutcomeError::Failed {
+                error: "recreated startup failed".to_string(),
+            })
+        } else {
+            Ok(recovered_client.clone())
+        };
+        futures::future::ready(outcome).boxed().shared()
+    }));
+    let manager = create_test_manager_with_failed_apps_startup(Vec::new(), startup_retry);
+
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn list_all_tools_stops_retrying_after_codex_apps_recovery_is_exhausted() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_retry = Arc::clone(&attempts);
+    let startup_retry = CodexAppsStartupRetry::new(Arc::new(move || {
+        attempts_for_retry.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        futures::future::ready(Err(StartupOutcomeError::Failed {
+            error: "recreated startup failed".to_string(),
+        }))
+        .boxed()
+        .shared()
+    }));
+    let manager = create_test_manager_with_failed_apps_startup(
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_drive_search",
+        )],
+        startup_retry,
+    );
+
+    for _ in 0..2 {
+        let tools = manager.list_all_tools().await;
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.callable_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cached_drive_search"]
+        );
+    }
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn concurrent_tool_lists_share_codex_apps_startup_retry() {
+    let recovered_client = create_test_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "drive_search",
+    )])
+    .await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_retry = Arc::clone(&attempts);
+    let retry_started = Arc::new(tokio::sync::Notify::new());
+    let retry_started_for_retry = Arc::clone(&retry_started);
+    let release_retry = Arc::new(tokio::sync::Notify::new());
+    let release_retry_for_factory = Arc::clone(&release_retry);
+    let startup_retry = CodexAppsStartupRetry::new(Arc::new(move || {
+        let recovered_client = recovered_client.clone();
+        let attempts = Arc::clone(&attempts_for_retry);
+        let retry_started = Arc::clone(&retry_started_for_retry);
+        let release_retry = Arc::clone(&release_retry_for_factory);
+        async move {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            retry_started.notify_one();
+            release_retry.notified().await;
+            Ok(recovered_client)
+        }
+        .boxed()
+        .shared()
+    }));
+    let manager = Arc::new(create_test_manager_with_failed_apps_startup(
+        Vec::new(),
+        startup_retry,
+    ));
+    let retry_started_wait = retry_started.notified();
+    let first_list = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move { manager.list_all_tools().await }
+    });
+    let second_list = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move { manager.list_all_tools().await }
+    });
+
+    retry_started_wait.await;
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    release_retry.notify_one();
+
+    let first_tools = first_list.await.expect("first tool list");
+    let second_tools = second_list.await.expect("second tool list");
+    assert_eq!(
+        first_tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["drive_search"]
+    );
+    assert_eq!(
+        second_tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1190,6 +1403,7 @@ async fn list_all_tools_adds_server_metadata_to_cached_tools() {
             cached_tool_info_snapshot: Some(startup_tools),
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_retry: None,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
             cancel_token: CancellationToken::new(),
         },

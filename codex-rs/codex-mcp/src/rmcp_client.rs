@@ -26,6 +26,7 @@ use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_codex_apps_tools_cache;
+use crate::codex_apps_startup_retry::CodexAppsStartupRetry;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -129,13 +130,113 @@ impl ManagedClient {
     }
 }
 
+pub(crate) type ManagedClientFuture =
+    Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+
+#[derive(Clone)]
+struct ManagedClientStartup {
+    server_name: String,
+    server: EffectiveMcpServer,
+    store_mode: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
+    codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    runtime_context: McpRuntimeContext,
+    runtime_auth_provider: Option<SharedAuthProvider>,
+    client_elicitation_capability: ElicitationCapability,
+    supports_openai_form_elicitation: bool,
+    cancel_token: CancellationToken,
+    startup_complete: Arc<AtomicBool>,
+}
+
+impl ManagedClientStartup {
+    fn start(&self) -> ManagedClientFuture {
+        let Self {
+            server_name,
+            server,
+            store_mode,
+            keyring_backend_kind,
+            tx_event,
+            elicitation_requests,
+            codex_apps_tools_cache_context,
+            runtime_context,
+            runtime_auth_provider,
+            client_elicitation_capability,
+            supports_openai_form_elicitation,
+            cancel_token,
+            startup_complete,
+        } = self.clone();
+        let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
+        let tool_filter = server
+            .configured_config()
+            .map(ToolFilter::from_config)
+            .unwrap_or_default();
+        let cancel_token_for_fut = cancel_token;
+        async move {
+            let outcome = match async {
+                if let Err(error) = validate_mcp_server_name(&server_name) {
+                    return Err(error.into());
+                }
+
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        server.clone(),
+                        store_mode,
+                        keyring_backend_kind,
+                        runtime_context,
+                        runtime_auth_provider,
+                    )
+                    .await?,
+                );
+                start_server_task(
+                    server_name,
+                    client,
+                    StartServerTaskParams {
+                        is_codex_apps_mcp_server,
+                        startup_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.startup_timeout_sec)
+                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                        tool_timeout: server
+                            .configured_config()
+                            .and_then(|config| config.tool_timeout_sec)
+                            .unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                        tool_filter,
+                        tx_event,
+                        elicitation_requests,
+                        codex_apps_tools_cache_context,
+                        client_elicitation_capability,
+                        supports_openai_form_elicitation,
+                    },
+                )
+                .await
+            }
+            .or_cancel(&cancel_token_for_fut)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            };
+
+            startup_complete.store(true, Ordering::Release);
+            outcome
+        }
+        .in_current_span()
+        .boxed()
+        .shared()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct AsyncManagedClient {
-    pub(crate) client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    pub(crate) client: ManagedClientFuture,
     pub(crate) is_codex_apps_mcp_server: bool,
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
+    pub(crate) startup_retry: Option<Arc<CodexAppsStartupRetry>>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
 }
@@ -177,61 +278,29 @@ impl AsyncManagedClient {
         };
         let cached_tool_info_snapshot =
             cached_tool_info_snapshot.map(|tools| filter_tools(tools, &tool_filter));
-        let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
-        let startup_complete_for_fut = Arc::clone(&startup_complete);
-        let cancel_token_for_fut = cancel_token.clone();
-        let fut = async move {
-            let outcome = match async {
-                if let Err(error) = validate_mcp_server_name(&server_name) {
-                    return Err(error.into());
-                }
-
-                let client = Arc::new(
-                    make_rmcp_client(
-                        &server_name,
-                        server.clone(),
-                        store_mode,
-                        keyring_backend_kind,
-                        runtime_context,
-                        runtime_auth_provider,
-                    )
-                    .await?,
-                );
-                start_server_task(
-                    server_name,
-                    client,
-                    StartServerTaskParams {
-                        is_codex_apps_mcp_server,
-                        startup_timeout: server
-                            .configured_config()
-                            .and_then(|config| config.startup_timeout_sec)
-                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                        tool_timeout: server
-                            .configured_config()
-                            .and_then(|config| config.tool_timeout_sec)
-                            .unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                        tool_filter: startup_tool_filter,
-                        tx_event,
-                        elicitation_requests,
-                        codex_apps_tools_cache_context,
-                        client_elicitation_capability,
-                        supports_openai_form_elicitation,
-                    },
-                )
-                .await
-            }
-            .or_cancel(&cancel_token_for_fut)
-            .await
-            {
-                Ok(result) => result,
-                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
-            };
-
-            startup_complete_for_fut.store(true, Ordering::Release);
-            outcome
-        };
-        let client = fut.in_current_span().boxed().shared();
+        let startup = Arc::new(ManagedClientStartup {
+            server_name,
+            server,
+            store_mode,
+            keyring_backend_kind,
+            tx_event,
+            elicitation_requests,
+            codex_apps_tools_cache_context,
+            runtime_context,
+            runtime_auth_provider,
+            client_elicitation_capability,
+            supports_openai_form_elicitation,
+            cancel_token: cancel_token.clone(),
+            startup_complete: Arc::clone(&startup_complete),
+        });
+        let client = startup.start();
+        let startup_retry = is_codex_apps_mcp_server.then(|| {
+            let startup = Arc::clone(&startup);
+            Arc::new(CodexAppsStartupRetry::new(Arc::new(move || {
+                startup.start()
+            })))
+        });
         if cached_tool_info_snapshot.is_some() {
             let startup_task = client.clone();
             tokio::spawn(async move {
@@ -245,13 +314,31 @@ impl AsyncManagedClient {
             cached_tool_info_snapshot,
             cached_server_info,
             startup_complete,
+            startup_retry,
             tool_plugin_provenance,
             cancel_token,
         }
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        self.client.clone().await
+        let client = self
+            .startup_retry
+            .as_ref()
+            .and_then(|startup_retry| startup_retry.replacement())
+            .unwrap_or_else(|| self.client.clone());
+        client.await
+    }
+
+    pub(crate) async fn retry_failed_startup(&self) {
+        let Some(startup_retry) = self.startup_retry.as_ref() else {
+            return;
+        };
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return;
+        }
+        if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. })) {
+            startup_retry.retry().await;
+        }
     }
 
     pub(crate) async fn shutdown(&self) {
