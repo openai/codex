@@ -1895,6 +1895,9 @@
           },
           "type": "object"
         },
+        "dangerously_allow_plaintext_credential_injection": {
+          "type": "boolean"
+        },
         "hooks": {
           "additionalProperties": {
             "$ref": "#/definitions/NetworkMitmHookToml"
@@ -1918,6 +1921,9 @@
           "type": "boolean"
         },
         "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "credential_broker": {
           "type": "boolean"
         },
         "dangerously_allow_all_unix_sockets": {

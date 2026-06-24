@@ -355,6 +355,7 @@ pub struct NetworkToml {
 #[derive(Serialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NetworkMitmToml {
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     #[schemars(with = "Option<BTreeMap<String, NetworkMitmHookToml>>")]
     pub hooks: Option<IndexMap<String, NetworkMitmHookToml>>,
     #[schemars(with = "Option<BTreeMap<String, NetworkMitmActionToml>>")]
@@ -364,6 +365,7 @@ pub struct NetworkMitmToml {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NetworkMitmTomlUnchecked {
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     pub hooks: Option<IndexMap<String, NetworkMitmHookToml>>,
     pub actions: Option<IndexMap<String, NetworkMitmActionToml>>,
 }
@@ -417,6 +419,8 @@ impl<'de> Deserialize<'de> for NetworkMitmToml {
     {
         let unchecked = NetworkMitmTomlUnchecked::deserialize(deserializer)?;
         let mitm = Self {
+            dangerously_allow_plaintext_credential_injection: unchecked
+                .dangerously_allow_plaintext_credential_injection,
             hooks: unchecked.hooks,
             actions: unchecked.actions,
         };
@@ -551,6 +555,14 @@ impl NetworkToml {
             config.network.allow_local_binding = allow_local_binding;
         }
         if let Some(mitm) = self.mitm.as_ref() {
+            if let Some(dangerously_allow_plaintext_credential_injection) =
+                mitm.dangerously_allow_plaintext_credential_injection
+            {
+                config
+                    .network
+                    .dangerously_allow_plaintext_credential_injection =
+                    dangerously_allow_plaintext_credential_injection;
+            }
             config.network.mitm_hooks = mitm.to_runtime_hooks(mitm.actions.as_ref());
         }
         config.network.mitm =

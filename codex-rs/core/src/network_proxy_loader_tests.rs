@@ -188,6 +188,33 @@ strip_request_headers = ["x-api-key"]
 }
 
 #[test]
+fn profile_network_mitm_applies_plaintext_credential_injection_flag() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network.mitm]
+dangerously_allow_plaintext_credential_injection = true
+"#,
+    )
+    .expect("permissions profile should parse");
+    let mut accumulator = NetworkConfigAccumulator::default();
+    accumulator
+        .apply_network_tables(
+            network_tables_from_toml(&config).expect("permissions profile should deserialize"),
+        )
+        .expect("permissions profile should apply");
+
+    let config = accumulator.finish().expect("merged config should build");
+
+    assert!(
+        config
+            .network
+            .dangerously_allow_plaintext_credential_injection
+    );
+}
+
+#[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
     config
