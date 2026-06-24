@@ -193,6 +193,39 @@ pub struct Thread {
     pub turns: Vec<Turn>,
 }
 
+/// Persisted metadata needed to render and order a thread catalog row.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSummary {
+    pub id: String,
+    pub forked_from_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub preview: String,
+    pub model_provider: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub created_at_ms: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+    #[ts(type = "number")]
+    pub updated_at_ms: i64,
+    #[ts(type = "number | null")]
+    pub recency_at: Option<i64>,
+    #[ts(type = "number | null")]
+    pub recency_at_ms: Option<i64>,
+    #[ts(type = "number | null")]
+    pub archived_at: Option<i64>,
+    pub cwd: AbsolutePathBuf,
+    pub source: SessionSource,
+    pub thread_source: Option<ThreadSource>,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub git_info: Option<GitInfo>,
+    pub name: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

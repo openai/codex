@@ -6,6 +6,7 @@ use super::SandboxPolicy;
 use super::Thread;
 use super::ThreadItem;
 use super::ThreadSource;
+use super::ThreadSummary;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::TurnItemsView;
@@ -1182,6 +1183,11 @@ pub struct ThreadListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadCatalogSubscribeResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadSearchResult {
     pub thread: Thread,
     pub snippet: String,
@@ -1438,6 +1444,22 @@ pub struct ThreadDeletedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadUnarchivedNotification {
     pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadCatalogChangedNotification {
+    Upsert {
+        thread: Box<ThreadSummary>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Delete {
+        thread_id: String,
+    },
+    Invalidate,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
