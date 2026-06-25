@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use super::*;
 
-fn registry_error() -> ExecServerError {
+fn registry_error(status: reqwest::StatusCode, code: Option<&str>) -> ExecServerError {
     ExecServerError::EnvironmentRegistryHttp {
-        status: reqwest::StatusCode::TOO_MANY_REQUESTS,
-        code: None,
+        status,
+        code: code.map(str::to_string),
         message: "registry unavailable".to_string(),
     }
 }
@@ -33,8 +33,24 @@ fn registry_recovery_retry_delay_exponentially_backs_off_and_caps() {
 
 #[test]
 fn recovery_retries_transient_registry_errors() {
-    let error = registry_error();
+    let error = registry_error(reqwest::StatusCode::TOO_MANY_REQUESTS, /*code*/ None);
 
     assert!(is_retryable_registry_error(&error));
     assert!(is_retryable_recovery_error(&error));
+}
+
+#[test]
+fn recovery_retries_environment_offline_conflicts() {
+    let error = registry_error(reqwest::StatusCode::CONFLICT, Some("environment_offline"));
+
+    assert!(is_retryable_registry_error(&error));
+    assert!(is_retryable_recovery_error(&error));
+}
+
+#[test]
+fn recovery_does_not_retry_other_registry_conflicts() {
+    let error = registry_error(reqwest::StatusCode::CONFLICT, Some("registration_conflict"));
+
+    assert!(!is_retryable_registry_error(&error));
+    assert!(!is_retryable_recovery_error(&error));
 }
