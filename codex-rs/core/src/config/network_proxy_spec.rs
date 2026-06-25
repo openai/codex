@@ -249,6 +249,16 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
+        if let Some(dangerously_allow_plaintext_credential_injection) =
+            requirements.dangerously_allow_plaintext_credential_injection
+        {
+            config
+                .network
+                .dangerously_allow_plaintext_credential_injection =
+                dangerously_allow_plaintext_credential_injection;
+            constraints.dangerously_allow_plaintext_credential_injection =
+                Some(dangerously_allow_plaintext_credential_injection);
+        }
         let managed_allowed_domains = if hard_deny_allowlist_misses {
             Some(
                 requirements

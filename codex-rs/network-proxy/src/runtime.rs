@@ -1884,6 +1884,44 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_disallows_plaintext_credential_injection_without_managed_opt_in()
+     {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_plaintext_credential_injection: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_plaintext_credential_injection: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_plaintext_credential_injection_with_managed_opt_in()
+     {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_plaintext_credential_injection: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_plaintext_credential_injection: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_when_allowlist_is_managed()
      {
         let constraints = NetworkProxyConstraints {
