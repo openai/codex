@@ -20,6 +20,7 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -33,6 +34,7 @@ use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadCatalogChange;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStore;
@@ -59,6 +61,7 @@ pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
     state_db: Option<StateDbHandle>,
+    catalog_changes_tx: broadcast::Sender<ThreadCatalogChange>,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -94,11 +97,17 @@ impl std::fmt::Debug for LocalThreadStore {
 impl LocalThreadStore {
     /// Create a local store using an already initialized state DB handle.
     pub fn new(config: LocalThreadStoreConfig, state_db: Option<StateDbHandle>) -> Self {
+        let (catalog_changes_tx, _) = broadcast::channel(256);
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
             state_db,
+            catalog_changes_tx,
         }
+    }
+
+    fn publish_catalog_change(&self, change: ThreadCatalogChange) {
+        let _ = self.catalog_changes_tx.send(change);
     }
 
     /// Return the state DB handle used by local rollout writers.
@@ -229,6 +238,10 @@ impl ThreadStore for LocalThreadStore {
         self
     }
 
+    fn subscribe_catalog_changes(&self) -> broadcast::Receiver<ThreadCatalogChange> {
+        self.catalog_changes_tx.subscribe()
+    }
+
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::create_thread(self, params).await })
     }
@@ -242,7 +255,11 @@ impl ThreadStore for LocalThreadStore {
     }
 
     fn persist_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::persist_thread(self, thread_id).await })
+        Box::pin(async move {
+            live_writer::persist_thread(self, thread_id).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            Ok(())
+        })
     }
 
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
@@ -292,19 +309,42 @@ impl ThreadStore for LocalThreadStore {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(async move { update_thread_metadata::update_thread_metadata(self, params).await })
+        let thread_id = params.thread_id;
+        let changed = !params.patch.is_empty();
+        Box::pin(async move {
+            let thread = update_thread_metadata::update_thread_metadata(self, params).await?;
+            if changed {
+                self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            }
+            Ok(thread)
+        })
     }
 
     fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { archive_thread::archive_thread(self, params).await })
+        let thread_id = params.thread_id;
+        Box::pin(async move {
+            archive_thread::archive_thread(self, params).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            Ok(())
+        })
     }
 
     fn unarchive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
-        Box::pin(async move { unarchive_thread::unarchive_thread(self, params).await })
+        let thread_id = params.thread_id;
+        Box::pin(async move {
+            let thread = unarchive_thread::unarchive_thread(self, params).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Upsert { thread_id });
+            Ok(thread)
+        })
     }
 
     fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { delete_thread::delete_thread(self, params).await })
+        let thread_id = params.thread_id;
+        Box::pin(async move {
+            delete_thread::delete_thread(self, params).await?;
+            self.publish_catalog_change(ThreadCatalogChange::Delete { thread_id });
+            Ok(())
+        })
     }
 }
 
@@ -325,6 +365,7 @@ mod tests {
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     use super::*;
@@ -338,6 +379,7 @@ mod tests {
     async fn live_writer_lifecycle_writes_and_closes() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let mut catalog_changes = store.subscribe_catalog_changes();
         let thread_id = ThreadId::default();
 
         store
@@ -360,6 +402,10 @@ mod tests {
             .persist_thread(thread_id)
             .await
             .expect("persist live thread");
+        assert_eq!(
+            catalog_changes.recv().await.expect("persist change"),
+            ThreadCatalogChange::Upsert { thread_id }
+        );
         store
             .flush_thread(thread_id)
             .await
