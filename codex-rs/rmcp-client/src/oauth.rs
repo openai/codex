@@ -1290,6 +1290,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unpersisted_refresh_does_not_reinstall_unchanged_durable_credentials() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let server = MockServer::start().await;
+        mount_oauth_metadata(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let failing_store = MockKeyringStore::default();
+        let mut initial_tokens = sample_tokens();
+        initial_tokens.url = format!("{}/mcp", server.uri());
+        super::save_oauth_tokens_with_keyring_store(
+            &failing_store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+
+        let mut unpersisted_tokens = initial_tokens.clone();
+        unpersisted_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new("unpersisted-access-token".to_string()));
+        let manager = authorization_manager_for(&unpersisted_tokens).await?;
+        let persistor = OAuthPersistor::new(
+            initial_tokens.server_name.clone(),
+            initial_tokens.url.clone(),
+            manager.clone(),
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+            Some(initial_tokens.clone()),
+        );
+        let key = super::compute_store_key(&initial_tokens.server_name, &initial_tokens.url)?;
+        failing_store.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
+        persistor
+            .persist_if_needed_with_keyring_store(&failing_store)
+            .await
+            .expect_err("the refreshed credential should remain unpersisted");
+
+        let unchanged_store = MockKeyringStore::default();
+        super::save_oauth_tokens_with_keyring_store(
+            &unchanged_store,
+            &initial_tokens.server_name,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        )?;
+        let mut subsequent_tokens = unpersisted_tokens.clone();
+        subsequent_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new("subsequent-access-token".to_string()));
+        install_tokens_in_manager(&manager, &subsequent_tokens).await?;
+
+        persistor
+            .persist_if_needed_locked_with_keyring_store(&unchanged_store)
+            .await?;
+
+        let manager_tokens = tokens_from_manager(&manager).await?;
+        assert_eq!(
+            manager_tokens.token_response,
+            subsequent_tokens.token_response
+        );
+        let stored = super::load_oauth_tokens_from_keyring(
+            &unchanged_store,
+            AuthKeyringBackendKind::Direct,
+            &subsequent_tokens.server_name,
+            &subsequent_tokens.url,
+        )?
+        .expect("the subsequent credentials should replace the unchanged stale snapshot");
+        assert_eq!(stored.token_response, subsequent_tokens.token_response);
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn resolved_secrets_write_does_not_cleanup_fallback_file() -> Result<()> {
         let _env = TempCodexHome::new();
         let server = MockServer::start().await;
