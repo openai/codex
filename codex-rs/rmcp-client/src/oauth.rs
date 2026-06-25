@@ -698,6 +698,7 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::refresh_lock::RefreshCredentialLock;
     use super::*;
     use anyhow::Result;
     use codex_secrets::compute_keyring_account;
@@ -1204,7 +1205,16 @@ mod tests {
             .expect_err("the caller task should observe cancellation");
         assert!(caller_error.is_cancelled());
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // The provider handler fires only after the owned transaction has acquired this lock.
+        // Reacquiring it therefore waits deterministically for refresh and persistence to finish,
+        // without relying on a scheduler-sensitive sleep after aborting the caller.
+        let store_key = super::compute_store_key(&initial_tokens.server_name, &initial_tokens.url)?;
+        let _lock = tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 2),
+            RefreshCredentialLock::acquire(&store_key),
+        )
+        .await
+        .expect("the independently owned refresh should release its credential lock")?;
         let stored = super::load_oauth_tokens_with_source_and_keyring_store(
             &store,
             &initial_tokens.server_name,
