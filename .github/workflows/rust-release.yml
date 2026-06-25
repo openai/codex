@@ -14,6 +14,9 @@ on:
     tags:
       - "rust-v*.*.*"
 
+env:
+  CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
+
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
@@ -354,6 +357,15 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
+      - name: Download packaged zsh manifest
+        if: ${{ runner.os != 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+
       - name: Build Codex package archive
         if: ${{ runner.os != 'macOS' }}
         shell: bash
@@ -366,7 +378,8 @@ jobs:
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
-            --archive-dir "dist/${TARGET}"
+            --archive-dir "dist/${TARGET}" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
@@ -697,6 +710,14 @@ jobs:
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
 
+      - name: Download packaged zsh manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+
       - name: Build Codex package archive
         shell: bash
         env:
@@ -708,7 +729,8 @@ jobs:
             --target "$TARGET" \
             --bundle "$BUNDLE" \
             --entrypoint-dir "target/${TARGET}/release" \
-            --archive-dir "dist/${TARGET}"
+            --archive-dir "dist/${TARGET}" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
@@ -1043,11 +1065,6 @@ jobs:
     with:
       publish: true
 
-  zsh-release-assets:
-    name: zsh release assets
-    needs: tag-check
-    uses: ./.github/workflows/rust-release-zsh.yml
-
   release:
     needs:
       - tag-check
@@ -1055,7 +1072,6 @@ jobs:
       - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
-      - zsh-release-assets
     if: >-
       ${{
         always() &&
@@ -1063,8 +1079,7 @@ jobs:
         needs.build.result == 'success' &&
         needs.finalize-macos.result == 'success' &&
         needs.build-windows.result == 'success' &&
-        needs.argument-comment-lint-release-assets.result == 'success' &&
-        needs.zsh-release-assets.result == 'success'
+        needs.argument-comment-lint-release-assets.result == 'success'
       }}
     name: release
     runs-on: ubuntu-latest
@@ -1113,7 +1128,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: "{*-symbols,argument-comment-lint-*,codex-zsh-*,python-runtime-wheel-*}"
+          pattern: "{*-symbols,argument-comment-lint-*,python-runtime-wheel-*}"
 
       - name: List
         run: ls -R dist/
@@ -1235,13 +1250,6 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
-
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag: ${{ github.ref_name }}
-          config: .github/dotslash-zsh-config.json
 
       - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
