@@ -233,8 +233,11 @@ struct RegistryHarnessKeyValidator {
     executor_registration_id: String,
 }
 
-impl RegistryHarnessKeyValidator {
-    async fn validate_harness_key_inner(
+impl HarnessKeyValidator for RegistryHarnessKeyValidator {
+    /// Authorize the harness key recovered from the first IK message.
+    /// Noise proves key possession; the registry decides whether that key may use
+    /// this executor. The authorization token and public key are checked together.
+    async fn validate_harness_key(
         &self,
         harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
@@ -248,7 +251,6 @@ impl RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
-            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: self.executor_registration_id.clone(),
                 harness_public_key: harness_public_key.clone(),
@@ -409,37 +411,6 @@ fn static_bearer_auth_provider(
         authorization,
         chatgpt_account_id,
     }))
-}
-
-impl HarnessKeyValidator for RegistryHarnessKeyValidator {
-    /// Authorize the harness key recovered from the first IK message.
-    /// Noise proves key possession; the registry decides whether that key may use
-    /// this executor. The authorization token and public key are checked together.
-    #[tracing::instrument(
-        name = "codex.exec_server.remote.authorize",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = "codex.exec_server.remote.authorize",
-            result = tracing::field::Empty,
-        )
-    )]
-    async fn validate_harness_key(
-        &self,
-        harness_public_key: &NoiseChannelPublicKey,
-        authorization: &str,
-    ) -> Result<(), ExecServerError> {
-        let started_at = Instant::now();
-        let result = self
-            .validate_harness_key_inner(harness_public_key, authorization)
-            .await;
-        let result_name = if result.is_ok() { "success" } else { "error" };
-        tracing::Span::current().record("result", result_name);
-        self.client
-            .telemetry
-            .remote_authorization_completed(result_name, started_at.elapsed());
-        result
-    }
 }
 
 /// Configuration for registering an exec-server for remote use.

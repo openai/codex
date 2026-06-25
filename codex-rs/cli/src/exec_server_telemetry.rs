@@ -47,8 +47,7 @@ pub(crate) fn init(
 
 pub(crate) async fn run_until_shutdown<F, E>(run: F) -> Result<(), E>
 where
-    F: Future<Output = Result<(), E>> + Send + 'static,
-    E: Send + 'static,
+    F: Future<Output = Result<(), E>>,
 {
     let shutdown_signal = match shutdown_signal() {
         Ok(signal) => Some(signal),
@@ -57,35 +56,23 @@ where
             None
         }
     };
-    let mut task = tokio::spawn(run);
+    tokio::pin!(run);
 
     if let Some(shutdown_signal) = shutdown_signal {
         tokio::select! {
-            result = &mut task => task_result(result),
+            result = &mut run => result,
             signal = wait_for_shutdown_signal(shutdown_signal) => {
                 match signal {
-                    Ok(()) => {
-                        task.abort();
-                        let _ = task.await;
-                        Ok(())
-                    }
+                    Ok(()) => Ok(()),
                     Err(error) => {
                         eprintln!("Could not listen for exec-server shutdown signal: {error}");
-                        task_result(task.await)
+                        run.await
                     }
                 }
             }
         }
     } else {
-        task_result(task.await)
-    }
-}
-
-fn task_result<E>(result: Result<Result<(), E>, tokio::task::JoinError>) -> Result<(), E> {
-    match result {
-        Ok(result) => result,
-        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(error) => panic!("exec-server task was cancelled unexpectedly: {error}"),
+        run.await
     }
 }
 
