@@ -28,6 +28,21 @@ pub struct ToolSearchHandler {
     search_engine: SearchEngine<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ToolSearchIdentityTier {
+    None,
+    SourceAlias,
+    ToolAlias,
+    CanonicalAlias,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ToolSearchScore {
+    pub(crate) index: usize,
+    pub(crate) identity_tier: ToolSearchIdentityTier,
+    pub(crate) bm25_score: f32,
+}
+
 #[derive(Default)]
 pub(crate) struct ToolSearchHandlerCache {
     cached: Mutex<Option<Arc<ToolSearchHandler>>>,
@@ -160,14 +175,52 @@ impl ToolSearchHandler {
         query: &str,
         limit: usize,
     ) -> Result<Vec<LoadableToolSpec>, FunctionCallError> {
-        let results = self
-            .search_engine
-            .search(query, limit)
-            .into_iter()
-            .map(|result| result.document.id)
-            .filter_map(|id| self.search_infos.get(id))
-            .map(|search_info| &search_info.entry);
-        self.search_output_tools(results)
+        let results = self.search_ranked(query).into_iter().take(limit);
+        self.search_output_tools(
+            results
+                .map(|result| result.index)
+                .filter_map(|id| self.search_infos.get(id))
+                .map(|search_info| &search_info.entry),
+        )
+    }
+
+    pub(crate) fn search_ranked(&self, query: &str) -> Vec<ToolSearchScore> {
+        let mut bm25_scores = vec![None; self.search_infos.len()];
+        for result in self.search_engine.search(query, None) {
+            if let Some(score) = bm25_scores.get_mut(result.document.id) {
+                *score = Some(result.score);
+            }
+        }
+
+        let mut results = self
+            .search_infos
+            .iter()
+            .enumerate()
+            .filter_map(|(index, search_info)| {
+                let identity_tier = identity_tier(query, &search_info.entry);
+                let bm25_score = bm25_scores[index].unwrap_or(0.0);
+                (identity_tier != ToolSearchIdentityTier::None || bm25_scores[index].is_some())
+                    .then_some(ToolSearchScore {
+                        index,
+                        identity_tier,
+                        bm25_score,
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        results.sort_by(|left, right| {
+            right
+                .identity_tier
+                .cmp(&left.identity_tier)
+                .then_with(|| {
+                    right
+                        .bm25_score
+                        .partial_cmp(&left.bm25_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.index.cmp(&right.index))
+        });
+        results
     }
 
     fn search_output_tools<'a>(
@@ -178,6 +231,38 @@ impl ToolSearchHandler {
             results.into_iter().map(|entry| entry.output.clone()),
         ))
     }
+}
+
+fn identity_tier(query: &str, entry: &ToolSearchEntry) -> ToolSearchIdentityTier {
+    let query = normalized_identifier(query);
+    if query.is_empty() {
+        return ToolSearchIdentityTier::None;
+    }
+
+    if has_alias_match(&entry.identity.canonical_aliases, &query) {
+        return ToolSearchIdentityTier::CanonicalAlias;
+    }
+    if has_alias_match(&entry.identity.tool_aliases, &query) {
+        return ToolSearchIdentityTier::ToolAlias;
+    }
+    if has_alias_match(&entry.identity.source_aliases, &query) {
+        return ToolSearchIdentityTier::SourceAlias;
+    }
+    ToolSearchIdentityTier::None
+}
+
+fn has_alias_match(aliases: &[String], normalized_query: &str) -> bool {
+    aliases
+        .iter()
+        .any(|alias| normalized_identifier(alias) == normalized_query)
+}
+
+fn normalized_identifier(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -191,6 +276,7 @@ mod tests {
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
+    use codex_tools::ToolSearchSourceInfo;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
@@ -323,6 +409,286 @@ mod tests {
                 }),
             ],
         );
+    }
+
+    #[test]
+    fn identity_match_enters_limited_results_ahead_of_description_distractors() {
+        let mut search_infos = (0..10)
+            .map(|index| {
+                namespace_search_info(
+                    &format!("distractor_{index}"),
+                    "semantic_match",
+                    "OpenAI Topics list topics semantic overlap",
+                    "OpenAI Topics list topics semantic overlap",
+                    /*source_info*/ None,
+                )
+            })
+            .collect::<Vec<_>>();
+        search_infos.push(namespace_search_info(
+            "openai_topics",
+            "list_topics",
+            "List OpenAI topic metadata.",
+            "metadata",
+            Some(ToolSearchSourceInfo {
+                name: "OpenAI Topics".to_string(),
+                description: None,
+            }),
+        ));
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let tools = handler
+            .search("OpenAI Topics list topics", TOOL_SEARCH_DEFAULT_LIMIT)
+            .expect("tool search should serialize");
+
+        assert!(
+            namespace_tool_names(&tools, "openai_topics").contains(&"list_topics".to_string()),
+            "identity target should enter the default top 8 before description distractors: {tools:?}"
+        );
+    }
+
+    #[test]
+    fn separator_variants_rank_canonical_tool_first() {
+        let handler = ToolSearchHandler::new(vec![
+            namespace_search_info(
+                "openai_topics",
+                "list_topics",
+                "List OpenAI topic metadata.",
+                "metadata",
+                /*source_info*/ None,
+            ),
+            namespace_search_info(
+                "openai_topics",
+                "create_topic",
+                "Create OpenAI topic metadata.",
+                "metadata",
+                /*source_info*/ None,
+            ),
+        ]);
+
+        for query in [
+            "openai_topics.list_topics",
+            "openai_topics__list_topics",
+            "OpenAI Topics list topics",
+        ] {
+            let first = handler
+                .search_ranked(query)
+                .into_iter()
+                .next()
+                .expect("identity query should match");
+            assert_eq!(
+                first,
+                ToolSearchScore {
+                    index: 0,
+                    identity_tier: ToolSearchIdentityTier::CanonicalAlias,
+                    bm25_score: 0.0,
+                },
+                "query {query:?} should rank list_topics first",
+            );
+        }
+    }
+
+    #[test]
+    fn tool_and_source_identity_outrank_description_only_matches() {
+        let target = namespace_search_info(
+            "openai_topics",
+            "list_topics",
+            "List OpenAI topic metadata.",
+            "metadata",
+            Some(ToolSearchSourceInfo {
+                name: "OpenAI Topics".to_string(),
+                description: None,
+            }),
+        );
+        let description_match = namespace_search_info(
+            "notes",
+            "read_note",
+            "Description repeats list_topics and OpenAI Topics.",
+            "list_topics OpenAI Topics OpenAI Topics",
+            /*source_info*/ None,
+        );
+        let handler = ToolSearchHandler::new(vec![description_match, target]);
+
+        assert_eq!(handler.search_ranked("list_topics")[0].index, 1);
+        assert_eq!(
+            handler.search_ranked("list_topics")[0].identity_tier,
+            ToolSearchIdentityTier::ToolAlias
+        );
+        assert_eq!(handler.search_ranked("OpenAI Topics")[0].index, 1);
+        assert_eq!(
+            handler.search_ranked("OpenAI Topics")[0].identity_tier,
+            ToolSearchIdentityTier::SourceAlias
+        );
+    }
+
+    #[test]
+    fn plugin_display_name_is_source_identity() {
+        let mut cortex_tool = tool_info("openai_topics", "list_topics", "List topics");
+        cortex_tool.connector_name = Some("OpenAI Topics".to_string());
+        cortex_tool.plugin_display_names = vec!["Cortex".to_string()];
+        let handler = ToolSearchHandler::new(vec![
+            namespace_search_info(
+                "notes",
+                "read_note",
+                "Description repeats Cortex.",
+                "Cortex Cortex",
+                /*source_info*/ None,
+            ),
+            McpHandler::new(cortex_tool)
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info"),
+        ]);
+
+        let first = handler.search_ranked("Cortex")[0];
+
+        assert_eq!(first.index, 1);
+        assert_eq!(first.identity_tier, ToolSearchIdentityTier::SourceAlias);
+    }
+
+    #[test]
+    fn description_only_queries_retain_bm25_ordering() {
+        let handler = ToolSearchHandler::new(vec![
+            namespace_search_info(
+                "calendar",
+                "create_event",
+                "Create calendar events.",
+                "calendar event",
+                /*source_info*/ None,
+            ),
+            namespace_search_info(
+                "docs",
+                "extract_text",
+                "Extract text from uploaded documents.",
+                "uploaded document uploaded document",
+                /*source_info*/ None,
+            ),
+        ]);
+
+        let results = handler.search_ranked("uploaded document");
+
+        assert_eq!(results[0].index, 1);
+        assert_eq!(results[0].identity_tier, ToolSearchIdentityTier::None);
+        assert!(results[0].bm25_score > 0.0);
+    }
+
+    #[test]
+    fn limit_applies_before_namespace_coalescing() {
+        let handler = ToolSearchHandler::new(vec![
+            namespace_search_info(
+                "calendar",
+                "create_event",
+                "Calendar semantic match.",
+                "calendar",
+                /*source_info*/ None,
+            ),
+            namespace_search_info(
+                "calendar",
+                "list_events",
+                "Calendar semantic match.",
+                "calendar",
+                /*source_info*/ None,
+            ),
+            namespace_search_info(
+                "docs",
+                "extract_text",
+                "Calendar semantic match.",
+                "calendar",
+                /*source_info*/ None,
+            ),
+        ]);
+
+        let tools = handler
+            .search("calendar", /*limit*/ 2)
+            .expect("tool search should serialize");
+
+        assert_eq!(
+            namespace_tool_names(&tools, "calendar"),
+            vec!["create_event".to_string(), "list_events".to_string()]
+        );
+        assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn identity_ties_preserve_original_search_info_order() {
+        let source = Some(ToolSearchSourceInfo {
+            name: "OpenAI Topics".to_string(),
+            description: None,
+        });
+        let handler = ToolSearchHandler::new(vec![
+            namespace_search_info(
+                "openai_topics",
+                "list_topics",
+                "List topics.",
+                "metadata",
+                source.clone(),
+            ),
+            namespace_search_info(
+                "openai_topics",
+                "create_topic",
+                "Create topic.",
+                "metadata",
+                source,
+            ),
+        ]);
+
+        let indexes = handler
+            .search_ranked("OpenAI Topics")
+            .into_iter()
+            .map(|result| result.index)
+            .collect::<Vec<_>>();
+
+        assert_eq!(indexes, vec![0, 1]);
+    }
+
+    fn namespace_search_info(
+        namespace: &str,
+        tool_name: &str,
+        description: &str,
+        search_text: &str,
+        source_info: Option<ToolSearchSourceInfo>,
+    ) -> ToolSearchInfo {
+        ToolSearchInfo::from_spec(
+            search_text.to_string(),
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: namespace.to_string(),
+                description: format!("Tools in {namespace}."),
+                tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                    name: tool_name.to_string(),
+                    description: description.to_string(),
+                    strict: false,
+                    defer_loading: None,
+                    parameters: codex_tools::JsonSchema::object(
+                        Default::default(),
+                        /*required*/ None,
+                        Some(false.into()),
+                    ),
+                    output_schema: None,
+                })],
+            }),
+            source_info,
+        )
+        .expect("namespace tool should be searchable")
+    }
+
+    fn namespace_tool_names(tools: &[LoadableToolSpec], namespace: &str) -> Vec<String> {
+        tools
+            .iter()
+            .filter_map(|tool| match tool {
+                LoadableToolSpec::Namespace(namespace_tool) if namespace_tool.name == namespace => {
+                    Some(
+                        namespace_tool
+                            .tools
+                            .iter()
+                            .map(|tool| match tool {
+                                ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                LoadableToolSpec::Function(_) | LoadableToolSpec::Namespace(_) => None,
+            })
+            .flatten()
+            .collect()
     }
 
     fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
