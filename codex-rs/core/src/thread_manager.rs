@@ -22,6 +22,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::SelectedCapabilityActivation;
 use codex_core_plugins::SelectedCapabilityBindings;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
@@ -1561,6 +1562,22 @@ impl ThreadManagerState {
                 selected_capability_roots.as_ref().clone(),
                 Arc::clone(&self.environment_manager),
             ));
+        }
+        if let Some(bindings) = thread_extension_init.get::<SelectedCapabilityBindings>() {
+            if thread_extension_init
+                .get::<SelectedCapabilityActivation>()
+                .is_none()
+            {
+                thread_extension_init.insert(SelectedCapabilityActivation::new(
+                    bindings.initial_snapshot(),
+                ));
+            }
+            if thread_extension_init
+                .get::<codex_connectors::ConnectorSnapshotState>()
+                .is_none()
+            {
+                thread_extension_init.insert(codex_connectors::ConnectorSnapshotState::default());
+            }
         }
         self.extensions
             .initialize_thread_data(&mut thread_extension_init)

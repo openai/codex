@@ -1,3 +1,4 @@
+use super::session::PendingMcpServerRefresh;
 use super::*;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
@@ -74,7 +75,16 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "runtime MCP materialization must observe one published snapshot"
+    )]
     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        let _runtime_snapshot_guard = self.runtime_snapshot_view_lock.read().await;
+        self.runtime_mcp_config_unlocked(config).await
+    }
+
+    async fn runtime_mcp_config_unlocked(&self, config: &Config) -> McpConfig {
         self.services
             .mcp_manager
             .runtime_config_for_thread(config, &self.services.mcp_thread_init)
@@ -200,6 +210,15 @@ impl Session {
             return Ok(());
         }
 
+        if let Some(candidate_manager) = self.services.pending_mcp_connection_manager.load_full()
+            && candidate_manager
+                .resolve_elicitation(server_name.clone(), id.clone(), response.clone())
+                .await
+                .is_ok()
+        {
+            return Ok(());
+        }
+
         self.services
             .mcp_connection_manager
             .load_full()
@@ -257,17 +276,54 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "refresh construction keeps its runtime snapshot inputs explicit"
+    )]
     async fn refresh_mcp_servers_inner(
+        &self,
+        turn_context: &TurnContext,
+        config: Arc<Config>,
+        mcp_config: McpConfig,
+        mcp_servers: HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+    ) {
+        let mcp_startup_cancellation_token = CancellationToken::new();
+        self.replace_mcp_startup_cancellation_token(mcp_startup_cancellation_token.clone())
+            .await;
+        let refreshed_manager = self
+            .build_mcp_connection_manager(
+                turn_context,
+                mcp_servers,
+                store_mode,
+                keyring_backend_kind,
+                elicitation_reviewer,
+                config.as_ref(),
+                mcp_config,
+                mcp_startup_cancellation_token,
+            )
+            .await;
+        self.replace_mcp_connection_manager(refreshed_manager).await;
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "candidate construction keeps its config and cancellation inputs explicit"
+    )]
+    pub(super) async fn build_mcp_connection_manager(
         &self,
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) {
+        config: &Config,
+        mcp_config: McpConfig,
+        mcp_startup_cancellation_token: CancellationToken,
+    ) -> McpConnectionManager {
         let auth = self.services.auth_manager.auth().await;
-        let config = self.get_config().await;
-        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
@@ -291,14 +347,7 @@ impl Session {
                 turn_context.cwd.to_path_buf()
             });
         let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
-        let mcp_startup_cancellation_token = {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            guard.cancel();
-            let cancellation_token = CancellationToken::new();
-            *guard = cancellation_token.clone();
-            cancellation_token
-        };
-        let refreshed_manager = McpConnectionManager::new(
+        McpConnectionManager::new(
             &mcp_servers,
             store_mode,
             keyring_backend_kind,
@@ -320,7 +369,19 @@ impl Session {
             auth.as_ref(),
             elicitation_reviewer,
         )
-        .await;
+        .await
+    }
+
+    async fn replace_mcp_startup_cancellation_token(&self, cancellation_token: CancellationToken) {
+        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+        guard.cancel();
+        *guard = cancellation_token;
+    }
+
+    pub(super) async fn replace_mcp_connection_manager(
+        &self,
+        refreshed_manager: McpConnectionManager,
+    ) {
         {
             let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
@@ -341,41 +402,81 @@ impl Session {
         let Some(refresh_config) = refresh_config else {
             return;
         };
-
-        let McpServerRefreshConfig {
-            mcp_servers,
-            mcp_oauth_credentials_store_mode,
-            auth_keyring_backend_kind,
-        } = refresh_config;
-
-        let mcp_servers =
-            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
-                Ok(servers) => servers,
-                Err(err) => {
-                    warn!("failed to parse MCP server refresh config: {err}");
-                    return;
+        let (config, mcp_config, mcp_servers, store_mode, keyring_backend_kind) =
+            match refresh_config {
+                PendingMcpServerRefresh::Serialized(refresh_config) => {
+                    if self
+                        .services
+                        .mcp_thread_init
+                        .get::<codex_core_plugins::SelectedCapabilityActivation>()
+                        .is_some()
+                    {
+                        warn!(
+                            "ignoring serialized MCP refresh for a thread with dynamic selected capabilities"
+                        );
+                        return;
+                    }
+                    let McpServerRefreshConfig {
+                        mcp_servers,
+                        mcp_oauth_credentials_store_mode,
+                        auth_keyring_backend_kind,
+                    } = refresh_config;
+                    let mcp_servers = match serde_json::from_value::<HashMap<String, McpServerConfig>>(
+                        mcp_servers,
+                    ) {
+                        Ok(servers) => servers,
+                        Err(err) => {
+                            warn!("failed to parse MCP server refresh config: {err}");
+                            return;
+                        }
+                    };
+                    let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+                        mcp_oauth_credentials_store_mode,
+                    ) {
+                        Ok(mode) => mode,
+                        Err(err) => {
+                            warn!("failed to parse MCP OAuth refresh config: {err}");
+                            return;
+                        }
+                    };
+                    let keyring_backend_kind = match serde_json::from_value::<AuthKeyringBackendKind>(
+                        auth_keyring_backend_kind,
+                    ) {
+                        Ok(kind) => kind,
+                        Err(err) => {
+                            warn!("failed to parse MCP auth keyring backend refresh config: {err}");
+                            return;
+                        }
+                    };
+                    let config = self.get_config().await;
+                    let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
+                    (
+                        config,
+                        mcp_config,
+                        mcp_servers,
+                        store_mode,
+                        keyring_backend_kind,
+                    )
                 }
-            };
-        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
-            mcp_oauth_credentials_store_mode,
-        ) {
-            Ok(mode) => mode,
-            Err(err) => {
-                warn!("failed to parse MCP OAuth refresh config: {err}");
-                return;
-            }
-        };
-        let keyring_backend_kind =
-            match serde_json::from_value::<AuthKeyringBackendKind>(auth_keyring_backend_kind) {
-                Ok(kind) => kind,
-                Err(err) => {
-                    warn!("failed to parse MCP auth keyring backend refresh config: {err}");
-                    return;
+                PendingMcpServerRefresh::RuntimeConfig(config) => {
+                    let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
+                    let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
+                    let store_mode = config.mcp_oauth_credentials_store_mode;
+                    let keyring_backend_kind = config.auth_keyring_backend_kind();
+                    (
+                        config,
+                        mcp_config,
+                        mcp_servers,
+                        store_mode,
+                        keyring_backend_kind,
+                    )
                 }
             };
 
         self.refresh_mcp_servers_inner(
             turn_context,
+            config,
+            mcp_config,
             mcp_servers,
             store_mode,
             keyring_backend_kind,
@@ -397,19 +498,18 @@ impl Session {
             return Ok(());
         }
 
-        let config = self.get_config().await;
-        let refresh_config = McpServerRefreshConfig {
-            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
-            mcp_oauth_credentials_store_mode: serde_json::to_value(
-                config.mcp_oauth_credentials_store_mode,
-            )?,
-            auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())?,
-        };
         self.services
             .supports_openai_form_elicitation
             .store(supported, std::sync::atomic::Ordering::Relaxed);
-        *self.pending_mcp_server_refresh_config.lock().await = Some(refresh_config);
+        let config = self.get_config().await;
+        self.queue_mcp_server_refresh_from_config(config.as_ref().clone())
+            .await;
         Ok(())
+    }
+
+    pub(crate) async fn queue_mcp_server_refresh_from_config(&self, config: Config) {
+        *self.pending_mcp_server_refresh_config.lock().await =
+            Some(PendingMcpServerRefresh::RuntimeConfig(Arc::new(config)));
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -420,8 +520,12 @@ impl Session {
         keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        let config = self.get_config().await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
         self.refresh_mcp_servers_inner(
             turn_context,
+            config,
+            mcp_config,
             mcp_servers,
             store_mode,
             keyring_backend_kind,

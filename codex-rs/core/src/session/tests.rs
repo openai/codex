@@ -8,6 +8,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::environment_selection::ThreadEnvironments;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::PendingMcpServerRefresh;
 use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
 use crate::shell_snapshot::ShellSnapshot;
@@ -5368,6 +5369,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
                 config.prefix_mcp_tool_names(),
             ),
         )),
+        pending_mcp_connection_manager: arc_swap::ArcSwapOption::empty(),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -5484,6 +5486,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
+        runtime_snapshot_lock: Mutex::new(()),
+        runtime_snapshot_view_lock: tokio::sync::RwLock::new(()),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7449,6 +7453,7 @@ where
                 config.prefix_mcp_tool_names(),
             ),
         )),
+        pending_mcp_connection_manager: arc_swap::ArcSwapOption::empty(),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7565,6 +7570,8 @@ where
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
+        runtime_snapshot_lock: Mutex::new(()),
+        runtime_snapshot_view_lock: tokio::sync::RwLock::new(()),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7618,7 +7625,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     };
     {
         let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
+        *guard = Some(PendingMcpServerRefresh::Serialized(refresh_config));
     }
 
     assert!(!old_token.is_cancelled());

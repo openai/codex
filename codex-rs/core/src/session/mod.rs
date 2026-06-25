@@ -47,6 +47,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
+use arc_swap::ArcSwapOption;
 use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
@@ -169,7 +170,6 @@ use rmcp::model::RequestId;
 use rmcp::model::UrlElicitationCapability;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -218,6 +218,7 @@ pub(crate) mod multi_agents;
 mod review;
 mod rollout_budget;
 mod rollout_reconstruction;
+mod selected_capabilities;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod step_context;
@@ -831,8 +832,17 @@ impl Codex {
                 ..Default::default()
             })
             .await?;
+        let _runtime_snapshot_guard = self.session.runtime_snapshot_view_lock.read().await;
         let mcp_connection_manager = self.session.services.mcp_connection_manager.load_full();
         mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        if let Some(pending_manager) = self
+            .session
+            .services
+            .pending_mcp_connection_manager
+            .load_full()
+        {
+            pending_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        }
         Ok(())
     }
 

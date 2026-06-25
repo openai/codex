@@ -19,6 +19,7 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
+use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -38,13 +39,20 @@ pub(crate) struct Session {
     /// session.
     pub(super) features: ManagedFeatures,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
-    pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pub(super) pending_mcp_server_refresh_config: Mutex<Option<PendingMcpServerRefresh>>,
+    pub(super) runtime_snapshot_lock: Mutex<()>,
+    pub(super) runtime_snapshot_view_lock: RwLock<()>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
+}
+
+pub(super) enum PendingMcpServerRefresh {
+    Serialized(McpServerRefreshConfig),
+    RuntimeConfig(Arc<Config>),
 }
 
 #[derive(Clone)]
@@ -1026,6 +1034,7 @@ impl Session {
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager,
+                pending_mcp_connection_manager: ArcSwapOption::empty(),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1103,6 +1112,8 @@ impl Session {
                 features: config.features.clone(),
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
+                runtime_snapshot_lock: Mutex::new(()),
+                runtime_snapshot_view_lock: RwLock::new(()),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),

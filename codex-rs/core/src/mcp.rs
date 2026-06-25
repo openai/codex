@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use codex_config::McpServerConfig;
 use codex_connectors::ConnectorSnapshot;
+use codex_connectors::ConnectorSnapshotState;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::apps_route_available;
 use codex_extension_api::ExtensionDataInit;
@@ -40,11 +41,17 @@ pub(crate) fn connector_snapshot_for_thread(
     local_snapshot: ConnectorSnapshot,
     thread_init: Option<&ExtensionDataInit>,
 ) -> ConnectorSnapshot {
-    let Some(selected_snapshot) = thread_init.and_then(ExtensionDataInit::get::<ConnectorSnapshot>)
-    else {
-        return local_snapshot;
-    };
-    local_snapshot.merged_with(selected_snapshot.as_ref())
+    let selected_snapshot = thread_init
+        .and_then(ExtensionDataInit::get::<ConnectorSnapshotState>)
+        .map(|state| state.snapshot())
+        .or_else(|| {
+            thread_init
+                .and_then(ExtensionDataInit::get::<ConnectorSnapshot>)
+                .map(|snapshot| snapshot.as_ref().clone())
+        });
+    selected_snapshot.map_or(local_snapshot.clone(), |selected_snapshot| {
+        local_snapshot.merged_with(&selected_snapshot)
+    })
 }
 
 #[derive(Clone)]
@@ -97,8 +104,14 @@ impl McpManager {
             Some(thread_init) => McpServerContributionContext::for_thread(config, thread_init),
             None => McpServerContributionContext::global(config),
         };
-        let selected_connector_snapshot =
-            thread_init.and_then(ExtensionDataInit::get::<ConnectorSnapshot>);
+        let selected_connector_snapshot = thread_init
+            .and_then(ExtensionDataInit::get::<ConnectorSnapshotState>)
+            .map(|state| state.snapshot())
+            .or_else(|| {
+                thread_init
+                    .and_then(ExtensionDataInit::get::<ConnectorSnapshot>)
+                    .map(|snapshot| snapshot.as_ref().clone())
+            });
         let hosted_apps_available = config.orchestrator_mcp_enabled
             && config
                 .features

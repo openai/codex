@@ -15,10 +15,6 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
-use codex_app_server_protocol::ThreadForkParams;
-use codex_app_server_protocol::ThreadForkResponse;
-use codex_app_server_protocol::ThreadResumeParams;
-use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -139,7 +135,7 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
     let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
     let thread_id = thread.id;
 
-    assert_selected_connector_state(&mut app_server, &thread_id).await?;
+    assert_selected_connector_not_active(&mut app_server, &thread_id).await?;
 
     let response_mock = responses::mount_sse_once(
         &responses_server,
@@ -170,6 +166,7 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
         app_server.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    assert_selected_connector_state(&mut app_server, &thread_id).await?;
     let description = response_mock
         .single_request()
         .tool_by_name("mcp__codex_apps__calendar", "connector_calendar")
@@ -180,50 +177,36 @@ async fn selected_executor_connector_is_listed_hosted_and_suppresses_mcp_fallbac
         .context("Calendar connector tool should have a description")?;
     assert!(description.contains("This tool is part of plugin `Executor Calendar`."));
 
-    let request_id = app_server
-        .send_thread_fork_request(ThreadForkParams {
-            thread_id: thread_id.clone(),
-            ..Default::default()
-        })
-        .await?;
-    let response = timeout(
-        DEFAULT_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let ThreadForkResponse { thread, .. } = to_response(response)?;
-    let forked_thread_id = thread.id;
-    assert_selected_connector_state(&mut app_server, &forked_thread_id).await?;
-
-    drop(app_server);
-    let mut app_server = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
-    resume_and_assert_selected_connector_state(&mut app_server, &thread_id).await?;
-    resume_and_assert_selected_connector_state(&mut app_server, &forked_thread_id).await?;
-
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
     Ok(())
 }
 
-async fn resume_and_assert_selected_connector_state(
+async fn assert_selected_connector_not_active(
     app_server: &mut TestAppServer,
     thread_id: &str,
 ) -> Result<()> {
-    let request_id = app_server
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread_id.to_string(),
-            ..Default::default()
+    let apps_list_id = app_server
+        .send_apps_list_request(AppsListParams {
+            cursor: None,
+            limit: None,
+            thread_id: Some(thread_id.to_string()),
+            force_refetch: true,
         })
         .await?;
-    let response = timeout(
+    let apps_list_response = timeout(
         DEFAULT_TIMEOUT,
-        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+        app_server.read_stream_until_response_message(RequestId::Integer(apps_list_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, .. } = to_response(response)?;
-    assert_eq!(thread.id, thread_id);
-    assert_selected_connector_state(app_server, thread_id).await
+    assert_eq!(
+        to_response::<AppsListResponse>(apps_list_response)?,
+        AppsListResponse {
+            data: vec![expected_app(Vec::new())],
+            next_cursor: None,
+        }
+    );
+    Ok(())
 }
 
 async fn assert_selected_connector_state(

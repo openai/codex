@@ -347,6 +347,15 @@ impl CodexThread {
             .await
     }
 
+    /// Queues an MCP refresh that will be materialized from `config` and the
+    /// latest selected-capability generation at the next turn boundary.
+    pub async fn queue_mcp_server_refresh_from_config(&self, config: crate::config::Config) {
+        self.codex
+            .session
+            .queue_mcp_server_refresh_from_config(config)
+            .await;
+    }
+
     /// Preview persistent thread settings overrides without committing them.
     pub async fn preview_thread_settings_overrides(
         &self,

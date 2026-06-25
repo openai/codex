@@ -1,9 +1,7 @@
 use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::Op;
+use codex_core::config::Config;
 use std::io;
 use std::sync::Arc;
 use tracing::warn;
@@ -21,11 +19,11 @@ pub(crate) async fn queue_strict_refresh(
             .get_thread(thread_id)
             .await
             .map_err(|err| io::Error::other(format!("failed to load thread {thread_id}: {err}")))?;
-        let config = build_refresh_config(thread.as_ref(), config_manager).await?;
-        refreshes.push((thread_id, thread, config));
+        let config = load_refresh_config(thread.as_ref(), config_manager).await?;
+        refreshes.push((thread, config));
     }
-    for (thread_id, thread, config) in refreshes {
-        queue_refresh(thread_id, thread, config).await?;
+    for (thread, config) in refreshes {
+        thread.queue_mcp_server_refresh_from_config(config).await;
     }
     Ok(())
 }
@@ -42,54 +40,25 @@ pub(crate) async fn queue_best_effort_refresh(
                 continue;
             }
         };
-        let config = match build_refresh_config(thread.as_ref(), config_manager).await {
+        let config = match load_refresh_config(thread.as_ref(), config_manager).await {
             Ok(config) => config,
             Err(err) => {
                 warn!("failed to build MCP refresh config for thread {thread_id}: {err}");
                 continue;
             }
         };
-        if let Err(err) = queue_refresh(thread_id, thread, config).await {
-            warn!("{err}");
-        }
+        thread.queue_mcp_server_refresh_from_config(config).await;
     }
 }
 
-async fn build_refresh_config(
+async fn load_refresh_config(
     thread: &CodexThread,
     config_manager: &ConfigManager,
-) -> io::Result<McpServerRefreshConfig> {
+) -> io::Result<Config> {
     let thread_config = thread.config().await;
-    let config = config_manager
+    config_manager
         .load_latest_config_for_thread(thread_config.as_ref())
-        .await?;
-    let mcp_config = thread.runtime_mcp_config(&config).await;
-    let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
-    Ok(McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            config.mcp_oauth_credentials_store_mode,
-        )
-        .map_err(io::Error::other)?,
-        auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())
-            .map_err(io::Error::other)?,
-    })
-}
-
-async fn queue_refresh(
-    thread_id: ThreadId,
-    thread: Arc<CodexThread>,
-    config: McpServerRefreshConfig,
-) -> io::Result<()> {
-    thread
-        .submit(Op::RefreshMcpServers { config })
         .await
-        .map(|_| ())
-        .map_err(|err| {
-            io::Error::other(format!(
-                "failed to queue MCP refresh for thread {thread_id}: {err}"
-            ))
-        })
 }
 
 #[cfg(test)]
@@ -164,10 +133,8 @@ mod tests {
         }
         let thread = good_thread.expect("good test thread should exist");
 
-        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
-        let backend = serde_json::from_value::<AuthKeyringBackendKind>(
-            refresh_config.auth_keyring_backend_kind,
-        )?;
+        let refresh_config = load_refresh_config(thread.as_ref(), &config_manager).await?;
+        let backend = refresh_config.auth_keyring_backend_kind();
 
         assert_eq!(
             thread.config().await.auth_keyring_backend_kind(),

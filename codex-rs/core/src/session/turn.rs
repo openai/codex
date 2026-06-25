@@ -191,6 +191,22 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
+    if let Err(err) = sess
+        .prepare_runtime_snapshot(turn_context.as_ref(), Some(sess.mcp_elicitation_reviewer()))
+        .await
+    {
+        sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+            .await;
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
+        record_inspected_inputs(&sess, &turn_context, inspected_input).await;
+        return Err(err);
+    }
+    let mut first_step_context = Some(sess.capture_step_context(Arc::clone(&turn_context)).await);
     // Keep the exact model-visible state used by this turn and its inline compactions.
     let mut world_state = sess
         .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
@@ -266,7 +282,17 @@ pub(crate) async fn run_turn(
         .await;
 
         // Capture once so context, advertised tools, and tool calls share one request view.
-        let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+        let step_context = match first_step_context.take() {
+            Some(step_context) => step_context,
+            None => {
+                sess.prepare_runtime_snapshot(
+                    turn_context.as_ref(),
+                    Some(sess.mcp_elicitation_reviewer()),
+                )
+                .await?;
+                sess.capture_step_context(Arc::clone(&turn_context)).await
+            }
+        };
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
