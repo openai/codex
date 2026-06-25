@@ -534,6 +534,7 @@ impl TurnRequestProcessor {
                 turn_op,
                 self.request_trace_context(&request_id).await,
                 client_user_message_id,
+                params.account_routing_override,
             )
             .await
             .map_err(|err| {

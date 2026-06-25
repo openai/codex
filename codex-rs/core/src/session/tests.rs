@@ -6437,6 +6437,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
                 id: "sub-1".into(),
                 op: Op::Interrupt,
                 client_user_message_id: None,
+                account_routing_override: None,
                 trace: None,
             })
             .await
@@ -6509,6 +6510,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             id: "sub-1".into(),
             op: Op::Interrupt,
             client_user_message_id: None,
+            account_routing_override: None,
             trace: Some(submission_trace),
         })
     });
@@ -6536,6 +6538,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
             },
         }),
         client_user_message_id: None,
+        account_routing_override: None,
         trace: None,
     });
 
@@ -6602,6 +6605,7 @@ async fn user_turn_updates_approvals_reviewer() {
             },
         },
         /*client_user_message_id*/ None,
+        /*account_routing_override*/ None,
     )
     .await;
 
@@ -6849,6 +6853,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         id: "sub-1".into(),
         op: Op::Interrupt,
         client_user_message_id: None,
+        account_routing_override: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();

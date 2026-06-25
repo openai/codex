@@ -162,6 +162,9 @@ pub struct Submission {
     pub op: Op,
     /// Client-provided id for the user message represented by `Op::UserInput`.
     pub client_user_message_id: Option<String>,
+    /// Optional account routing override for ChatGPT-authenticated Responses requests in this
+    /// turn.
+    pub account_routing_override: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
 }

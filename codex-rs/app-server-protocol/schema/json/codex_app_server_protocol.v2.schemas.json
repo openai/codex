@@ -17762,6 +17762,13 @@
     "TurnStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "accountRoutingOverride": {
+          "description": "Optional account routing override for ChatGPT-authenticated Responses requests in this turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "approvalPolicy": {
           "anyOf": [
             {

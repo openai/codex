@@ -267,6 +267,8 @@ async fn run_remote_compact_task_inner_impl(
         Some(client_session) => client_session,
         None => {
             owned_client_session = sess.services.model_client.new_session();
+            owned_client_session
+                .set_account_routing_override(turn_context.account_routing_override.clone());
             &mut owned_client_session
         }
     };

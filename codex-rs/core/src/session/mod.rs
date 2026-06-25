@@ -731,6 +731,7 @@ impl Codex {
             id: id.clone(),
             op,
             client_user_message_id: None,
+            account_routing_override: None,
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -742,6 +743,7 @@ impl Codex {
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
+        account_routing_override: Option<String>,
     ) -> CodexResult<String> {
         debug_assert!(matches!(op, Op::UserInput { .. }));
         let id = new_submission_id();
@@ -749,6 +751,7 @@ impl Codex {
             id: id.clone(),
             op,
             client_user_message_id,
+            account_routing_override,
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -1198,6 +1201,7 @@ impl Session {
                 thread_settings: Default::default(),
             },
             /*client_user_message_id*/ None,
+            /*account_routing_override*/ None,
         )
         .await;
     }

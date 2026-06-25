@@ -136,6 +136,7 @@ pub struct TurnContext {
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) account_routing_override: Option<String>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
@@ -286,6 +287,7 @@ impl TurnContext {
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
+            account_routing_override: self.account_routing_override.clone(),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             extension_data: Arc::clone(&self.extension_data),
@@ -573,6 +575,7 @@ impl Session {
             available_models,
             unified_exec_shell_mode,
             final_output_json_schema: None,
+            account_routing_override: None,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             extension_data,
@@ -649,6 +652,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.account_routing_override,
             )
             .await)
     }
@@ -658,11 +662,13 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        account_routing_override: Option<String>,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             final_output_json_schema,
+            account_routing_override,
             TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
@@ -677,6 +683,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*account_routing_override*/ None,
             TurnMultiAgentRuntime::Preview,
         )
         .await
@@ -688,6 +695,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        account_routing_override: Option<String>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
         let turn_environments = self.services.turn_environments.snapshot().await;
@@ -778,6 +786,7 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        turn_context.account_routing_override = account_routing_override;
         let turn_context = Arc::new(turn_context);
         if turn_context
             .environments
@@ -822,6 +831,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*account_routing_override*/ None,
         )
         .await
     }

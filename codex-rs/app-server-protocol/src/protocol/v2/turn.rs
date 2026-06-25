@@ -70,6 +70,10 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Optional account routing override for ChatGPT-authenticated Responses requests in this
+    /// turn.
+    #[ts(optional = nullable)]
+    pub account_routing_override: Option<String>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
     ///
     /// Entries are flattened into the JSON string sent as
