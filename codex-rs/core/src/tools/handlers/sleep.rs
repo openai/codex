@@ -111,20 +111,21 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                     .sleep(session.thread_id, Duration::from_millis(args.duration_ms));
                 tokio::pin!(sleep);
                 tokio::select! {
-                    result = &mut sleep => {
-                        result.map_err(|err| {
+                    result = &mut sleep => result
+                        .map(|()| false)
+                        .map_err(|err| {
                             FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
-                        })?;
-                        Ok(false)
-                    },
+                        }),
                     result = activity_rx.changed() => {
                         if result.is_ok() {
                             Ok(true)
                         } else {
-                            sleep.await.map_err(|err| {
-                                FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
-                            })?;
-                            Ok(false)
+                            sleep
+                                .await
+                                .map(|()| false)
+                                .map_err(|err| {
+                                    FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
+                                })
                         }
                     }
                 }
