@@ -28,6 +28,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -81,39 +82,61 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
     };
     let first_command = network_command(&first_marker, &second_marker, "1.1.1.1");
     let second_command = network_command(&second_marker, &first_marker, "8.8.8.8");
-    let responses = mount_sse_sequence(
+    mount_sse_once_match(
         &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-network-concurrent"),
-                ev_function_call(
-                    "exec-network-first",
-                    "exec_command",
-                    &serde_json::to_string(&network_exec_args(&first_command))?,
-                ),
-                ev_function_call(
-                    "exec-network-second",
-                    "exec_command",
-                    &serde_json::to_string(&network_exec_args(&second_command))?,
-                ),
-                ev_completed("resp-network-concurrent"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-network-guardian-1"),
-                ev_assistant_message("msg-network-guardian-1", r#"{"outcome":"deny"}"#),
-                ev_completed("resp-network-guardian-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-network-guardian-2"),
-                ev_assistant_message("msg-network-guardian-2", r#"{"outcome":"deny"}"#),
-                ev_completed("resp-network-guardian-2"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-network-done"),
-                ev_assistant_message("msg-network-done", "done"),
-                ev_completed("resp-network-done"),
-            ]),
-        ],
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "run both network requests")
+                && !request_body_contains(request, "exec-network-first")
+        },
+        sse(vec![
+            ev_response_created("resp-network-concurrent"),
+            ev_function_call(
+                "exec-network-first",
+                "exec_command",
+                &serde_json::to_string(&network_exec_args(&first_command))?,
+            ),
+            ev_function_call(
+                "exec-network-second",
+                "exec_command",
+                &serde_json::to_string(&network_exec_args(&second_command))?,
+            ),
+            ev_completed("resp-network-concurrent"),
+        ]),
+    )
+    .await;
+    let first_guardian = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| guardian_request_is_for(request, "exec-network-first"),
+        sse(vec![
+            ev_response_created("resp-network-guardian-1"),
+            ev_assistant_message("msg-network-guardian-1", r#"{"outcome":"deny"}"#),
+            ev_completed("resp-network-guardian-1"),
+        ]),
+    )
+    .await;
+    let second_guardian = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| guardian_request_is_for(request, "exec-network-second"),
+        sse(vec![
+            ev_response_created("resp-network-guardian-2"),
+            ev_assistant_message("msg-network-guardian-2", r#"{"outcome":"deny"}"#),
+            ev_completed("resp-network-guardian-2"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !is_guardian_request(request)
+                && request_body_contains(request, "exec-network-first")
+                && request_body_contains(request, "exec-network-second")
+        },
+        sse(vec![
+            ev_response_created("resp-network-done"),
+            ev_assistant_message("msg-network-done", "done"),
+            ev_completed("resp-network-done"),
+        ]),
     )
     .await;
 
@@ -125,10 +148,21 @@ async fn guardian_receives_exact_triggers_for_concurrent_network_requests() -> R
         AskForApproval::OnRequest,
     )
     .await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let actual_triggers = loop {
+        let mut actual_triggers = guardian_network_triggers(&[&first_guardian, &second_guardian])?;
+        actual_triggers.sort_unstable();
+        actual_triggers.dedup();
+        if actual_triggers.len() == 2 {
+            break actual_triggers;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for both Guardian network reviews");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
     wait_for_turn_complete(&test).await;
 
-    let mut actual_triggers = guardian_network_triggers(&responses)?;
-    actual_triggers.sort_unstable();
     assert_eq!(
         actual_triggers,
         vec![
@@ -191,7 +225,7 @@ async fn guardian_receives_exact_trigger_for_single_network_request() -> Result<
     wait_for_turn_complete(&test).await;
 
     assert_eq!(
-        guardian_network_triggers(&responses)?,
+        guardian_network_triggers(&[&responses])?,
         vec![("exec-network-single".to_string(), command)]
     );
 
@@ -437,10 +471,65 @@ async fn submit_managed_network_turn(
     Ok(())
 }
 
-fn guardian_network_triggers(responses: &ResponseMock) -> Result<Vec<(String, String)>> {
+fn decoded_request_body(request: &wiremock::Request) -> Option<Vec<u8>> {
+    let is_zstd = request
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&request.body)).ok()
+    } else {
+        Some(request.body.clone())
+    }
+}
+
+fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
+    decoded_request_body(request)
+        .and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
+}
+
+fn is_guardian_request(request: &wiremock::Request) -> bool {
+    decoded_request_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| {
+            body.pointer("/client_metadata/x-openai-subagent")
+                .and_then(Value::as_str)
+                == Some("guardian")
+        })
+}
+
+fn guardian_request_is_for(request: &wiremock::Request, call_id: &str) -> bool {
+    decoded_request_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .filter(|body| {
+            body.pointer("/client_metadata/x-openai-subagent")
+                .and_then(Value::as_str)
+                == Some("guardian")
+        })
+        .and_then(|body| {
+            body.get("input")
+                .and_then(Value::as_array)
+                .and_then(|input| {
+                    input
+                        .iter()
+                        .rev()
+                        .find(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+                })
+                .cloned()
+        })
+        .is_some_and(|latest_user_message| latest_user_message.to_string().contains(call_id))
+}
+
+fn guardian_network_triggers(responses: &[&ResponseMock]) -> Result<Vec<(String, String)>> {
     responses
-        .requests()
-        .into_iter()
+        .iter()
+        .flat_map(|responses| responses.requests())
         .filter(|request| {
             request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
         })
