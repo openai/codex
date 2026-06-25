@@ -49,11 +49,6 @@ async fn handle_spawn_agent(
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
-    let multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
-        turn.multi_agent_version,
-        &turn.session_source,
-        turn.multi_agent_mode,
-    );
     let role_name = args
         .agent_type
         .as_deref()
@@ -134,7 +129,6 @@ async fn handle_spawn_agent(
                 fork_mode,
                 parent_thread_id: Some(session.thread_id),
                 environments: Some(turn.environments.to_selections()),
-                initial_multi_agent_mode: multi_agent_mode,
             },
         ),
     )

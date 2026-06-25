@@ -903,7 +903,7 @@ impl ThreadRequestProcessor {
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
-            multi_agent_mode,
+            multi_agent_mode: _multi_agent_mode,
             ephemeral,
             session_start_source,
             thread_source,
@@ -957,7 +957,6 @@ impl ThreadRequestProcessor {
                 supports_openai_form_elicitation,
                 config,
                 typesafe_overrides,
-                multi_agent_mode,
                 dynamic_tools,
                 selected_capability_roots.unwrap_or_default(),
                 session_start_source,
@@ -1032,7 +1031,6 @@ impl ThreadRequestProcessor {
         supports_openai_form_elicitation: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
-        multi_agent_mode: Option<MultiAgentMode>,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
@@ -1156,7 +1154,6 @@ impl ThreadRequestProcessor {
                 thread_source,
                 dynamic_tools,
                 metrics_service_name: service_name,
-                multi_agent_mode,
                 parent_trace: request_trace,
                 environments,
                 thread_extension_init,
@@ -1262,7 +1259,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: config_snapshot.reasoning_effort,
-            multi_agent_mode: config_snapshot.multi_agent_mode,
+            multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
         let notif = thread_started_notification(thread);
         listener_task_context
@@ -2793,7 +2790,7 @@ impl ThreadRequestProcessor {
                     sandbox,
                     active_permission_profile,
                     reasoning_effort: session_configured.reasoning_effort,
-                    multi_agent_mode: config_snapshot.multi_agent_mode,
+                    multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
                     initial_turns_page,
                 };
 
@@ -3515,7 +3512,7 @@ impl ThreadRequestProcessor {
             sandbox,
             active_permission_profile,
             reasoning_effort: session_configured.reasoning_effort,
-            multi_agent_mode: config_snapshot.multi_agent_mode,
+            multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
         };
 
         let notif = thread_started_notification(thread);

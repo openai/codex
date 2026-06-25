@@ -454,7 +454,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
-    pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -539,7 +538,6 @@ impl Codex {
             attestation_provider,
             external_time_provider,
             inherited_multi_agent_version,
-            initial_multi_agent_mode,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -594,7 +592,6 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
-        let multi_agent_mode = initial_multi_agent_mode.unwrap_or_default();
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
@@ -628,7 +625,6 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
-            multi_agent_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -3330,11 +3326,7 @@ impl Session {
         {
             items.push(usage_hint_message);
         }
-        match multi_agents::effective_multi_agent_mode(
-            turn_context.multi_agent_version,
-            &session_source,
-            turn_context.multi_agent_mode,
-        ) {
+        match multi_agents::effective_multi_agent_mode(turn_context) {
             Some(
                 multi_agent_mode
                 @ (MultiAgentMode::ExplicitRequestOnly | MultiAgentMode::Proactive),
