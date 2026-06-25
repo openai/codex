@@ -535,6 +535,78 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
 }
 
 #[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_permission_profile_from_env() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport CODEX_PERMISSION_PROFILE='parent-profile'\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printenv CODEX_PERMISSION_PROFILE".to_string(),
+    ];
+    let env = HashMap::from([(
+        CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+        "current-profile".to_string(),
+    )]);
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        Some(&shell_snapshot),
+        &HashMap::new(),
+        &env,
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(CODEX_PERMISSION_PROFILE_ENV_VAR, "current-profile")
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "current-profile\n");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_unsets_absent_permission_profile() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport CODEX_PERMISSION_PROFILE='stale-profile'\n",
+    )
+    .expect("write snapshot");
+    let (session_shell, shell_snapshot) =
+        shell_with_snapshot(ShellType::Bash, "/bin/bash", snapshot_path.abs());
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printenv CODEX_PERMISSION_PROFILE".to_string(),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        Some(&shell_snapshot),
+        &HashMap::new(),
+        &HashMap::new(),
+        &RuntimePathPrepends::default(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env_remove(CODEX_PERMISSION_PROFILE_ENV_VAR)
+        .output()
+        .expect("run rewritten command");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
 fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
