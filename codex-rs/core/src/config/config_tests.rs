@@ -627,11 +627,13 @@ current_time_reminder = true
 enabled = true
 reminder_interval_seconds = 0
 clock_source = "external"
+delivery_mode = "after_user_or_tool_output"
 sleep_tool = true
 "#,
             CurrentTimeReminderConfig {
                 reminder_interval_seconds: 0,
                 clock_source: CurrentTimeSource::External,
+                delivery_mode: CurrentTimeReminderDeliveryMode::AfterUserOrToolOutput,
                 sleep_tool: true,
             },
         ),
