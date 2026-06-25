@@ -475,10 +475,12 @@ async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
 enabled = true
 reminder_threshold_tokens = 16000
 reminder_message_template = "Custom reminder: {n_remaining} tokens."
+guidance_message = "Preserve important state before compaction."
 "#,
             TokenBudgetConfig {
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
+                guidance_message: Some("Preserve important state before compaction.".to_string()),
             },
         ),
     ] {

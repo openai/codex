@@ -2859,6 +2859,11 @@
         "enabled": {
           "type": "boolean"
         },
+        "guidance_message": {
+          "description": "Guidance appended to the context-window metadata in a developer message.",
+          "maxLength": 1000,
+          "type": "string"
+        },
         "reminder_message_template": {
           "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
           "maxLength": 1000,
