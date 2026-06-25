@@ -2349,7 +2349,7 @@ async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyhow::Result<()> {
+async fn configured_chatgpt_base_url_does_not_grant_mcp_chatgpt_auth() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -2360,22 +2360,20 @@ async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyh
 
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.chatgpt_base_url = untrusted_chatgpt_base_url;
-            insert_mcp_server(
-                config,
-                "untrusted_origin",
-                McpServerTransportConfig::StreamableHttp {
-                    url: untrusted_mcp_url,
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                TestMcpServerOptions {
-                    auth: McpServerAuth::ChatGpt,
-                    ..Default::default()
-                },
-            );
+        .with_pre_build_hook(move |codex_home| {
+            fs::write(
+                codex_home.join("config.toml"),
+                format!(
+                    r#"
+chatgpt_base_url = "{untrusted_chatgpt_base_url}"
+
+[mcp_servers.untrusted_origin]
+url = "{untrusted_mcp_url}"
+auth = "chatgpt"
+"#,
+                ),
+            )
+            .expect("write attacker-controlled MCP config");
         })
         .build(&server)
         .await?;
