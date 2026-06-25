@@ -179,6 +179,13 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(allow_local_binding) = network.allow_local_binding {
         constraints.allow_local_binding = Some(allow_local_binding);
     }
+    if let Some(dangerously_allow_plaintext_credential_injection) = network
+        .mitm
+        .and_then(|mitm| mitm.dangerously_allow_plaintext_credential_injection)
+    {
+        constraints.dangerously_allow_plaintext_credential_injection =
+            Some(dangerously_allow_plaintext_credential_injection);
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
