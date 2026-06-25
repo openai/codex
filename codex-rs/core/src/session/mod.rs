@@ -100,7 +100,6 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
-use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
@@ -158,8 +157,6 @@ use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
-use rmcp::model::ReadResourceRequestParams;
-use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -2825,7 +2822,7 @@ impl Session {
     /// `run_turn` and pass the result down; standalone request or history boundaries may capture
     /// their own step.
     pub(crate) async fn capture_step_context(
-        &self,
+        self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
     ) -> Arc<StepContext> {
         let deferred_executor_enabled = turn_context
@@ -2846,15 +2843,15 @@ impl Session {
         }
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
         let selected_capability_roots = self
-            .services
-            .turn_environments
-            .environment_manager()
-            .resolve_selected_capability_roots(
-                &self.services.selected_capability_roots,
-                &environments.captured_environments(),
+            .resolve_selected_capability_roots_for_step(&environments)
+            .await;
+        let mcp = self
+            .mcp_runtime_for_step(
+                turn_context.as_ref(),
+                &environments,
+                &selected_capability_roots,
             )
             .await;
-        let mcp = self.services.latest_mcp_runtime();
         Arc::new(StepContext::new(
             turn_context,
             environments,

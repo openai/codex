@@ -661,6 +661,7 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
+        let thread_extension_data_for_mcp = &thread_extension_data;
         let mcp_runtime_cwd = session_configuration
             .environment_selections()
             .first()
@@ -673,7 +674,12 @@ impl Session {
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_config = mcp_manager_for_mcp
-                .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
+                .runtime_config_for_step(
+                    &config_for_mcp,
+                    mcp_thread_init_for_startup,
+                    thread_extension_data_for_mcp,
+                    /*available_environment_ids*/ &[],
+                )
                 .await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
@@ -1039,6 +1045,7 @@ impl Session {
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager,
                 mcp_runtime: arc_swap::ArcSwapOption::empty(),
+                mcp_projection_lock: Mutex::new(()),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1210,6 +1217,7 @@ impl Session {
                 .install_mcp_connection_manager(
                     Arc::new(mcp_config),
                     mcp_runtime_context,
+                    /*available_environment_ids*/ Vec::new(),
                     mcp_connection_manager,
                 )
                 .await?;
