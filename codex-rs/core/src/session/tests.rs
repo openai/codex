@@ -5372,6 +5372,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7446,6 +7447,7 @@ where
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7603,6 +7605,7 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 #[tokio::test]
 async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let old_runtime = session.services.latest_mcp_runtime();
     let step_context = session
