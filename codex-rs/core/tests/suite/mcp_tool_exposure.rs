@@ -17,6 +17,7 @@ use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_mcp_server;
 use serde_json::Value;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()> {
@@ -86,7 +87,8 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn follow_up_recovers_apps_after_mid_thread_startup_failures() -> Result<()> {
+async fn later_follow_up_uses_background_recovered_apps_after_mid_thread_startup_failures()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -102,8 +104,13 @@ async fn follow_up_recovers_apps_after_mid_thread_startup_failures() -> Result<(
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "follow-up turn"),
+                ev_assistant_message("msg-2", "recovery-trigger turn"),
                 ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "recovered follow-up turn"),
+                ev_completed("resp-3"),
             ]),
         ],
     )
@@ -153,10 +160,19 @@ async fn follow_up_recovers_apps_after_mid_thread_startup_failures() -> Result<(
         .await?;
     test.submit_turn("use Calendar after transient Apps startup failures")
         .await?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while startup_control.initialize_attempts() < 3 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("background Apps reconnect should complete");
+    test.submit_turn("use Calendar after background Apps recovery")
+        .await?;
 
     let requests = response.requests();
-    assert_eq!(requests.len(), 2);
-    let recovered_request = requests[1].body_json();
+    assert_eq!(requests.len(), 3);
+    let recovered_request = requests[2].body_json();
     assert!(
         namespace_child_tool(
             &recovered_request,

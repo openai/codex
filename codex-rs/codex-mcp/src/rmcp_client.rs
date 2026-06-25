@@ -67,7 +67,7 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
-use tokio::sync::OnceCell;
+use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::instrument;
@@ -83,6 +83,9 @@ pub(crate) const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str =
     "codex.mcp.tools.fetch_uncached.duration_ms";
 pub(crate) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
+
+pub(crate) const CODEX_APPS_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const CODEX_APPS_RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 const UNTRUSTED_CONNECTOR_META_KEYS: &[&str] = &[
     "connector_id",
@@ -134,69 +137,87 @@ impl ManagedClient {
 pub(crate) type ManagedClientFuture =
     Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
 
-type ManagedClientAttempt = OnceCell<Result<ManagedClient, StartupOutcomeError>>;
+#[derive(Default)]
+struct CodexAppsStartupReconnectState {
+    current_client: Option<ManagedClient>,
+    reconnect_in_flight: bool,
+    consecutive_failures: u32,
+    retry_not_before: Option<TokioInstant>,
+}
 
 pub(crate) struct CodexAppsStartupReconnect {
     factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
-    current_client: StdMutex<Option<ManagedClient>>,
-    reconnect: StdMutex<Option<Arc<ManagedClientAttempt>>>,
+    state: StdMutex<CodexAppsStartupReconnectState>,
 }
 
 impl CodexAppsStartupReconnect {
     pub(crate) fn new(factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>) -> Self {
         Self {
             factory,
-            current_client: StdMutex::new(None),
-            reconnect: StdMutex::new(None),
+            state: StdMutex::new(CodexAppsStartupReconnectState::default()),
         }
     }
 
     fn current_client(&self) -> Option<ManagedClient> {
-        self.current_client
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .current_client
             .clone()
     }
 
-    async fn reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        // Callers handling the same startup failure share one reconnect attempt.
-        let attempt = {
-            let mut reconnect = self
-                .reconnect
+    fn reconnect_in_background(self: &Arc<Self>) {
+        {
+            let mut state = self
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(client) = self.current_client() {
-                return Ok(client);
+            if state.current_client.is_some() || state.reconnect_in_flight {
+                return;
             }
-            reconnect
-                .get_or_insert_with(|| Arc::new(ManagedClientAttempt::new()))
-                .clone()
-        };
-        let result = attempt
-            .get_or_init(|| async {
-                let result = (self.factory)().await;
-                if let Ok(client) = &result {
-                    *self
-                        .current_client
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(client.clone());
-                }
-                result
-            })
-            .await;
-        let mut reconnect = self
-            .reconnect
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Forget only this completed attempt so a later operation can retry after failure.
-        if reconnect
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &attempt))
-        {
-            *reconnect = None;
+            if state
+                .retry_not_before
+                .is_some_and(|retry_not_before| TokioInstant::now() < retry_not_before)
+            {
+                return;
+            }
+            state.reconnect_in_flight = true;
         }
-        result.clone()
+
+        let reconnect = Arc::clone(self);
+        tokio::spawn(async move {
+            let result = (reconnect.factory)().await;
+            let mut state = reconnect
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.reconnect_in_flight = false;
+            match result {
+                Ok(client) => {
+                    state.current_client = Some(client);
+                    state.consecutive_failures = 0;
+                    state.retry_not_before = None;
+                }
+                Err(error) => {
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                    let retry_after = codex_apps_reconnect_backoff(state.consecutive_failures);
+                    state.retry_not_before = Some(TokioInstant::now() + retry_after);
+                    warn!(
+                        error = %error,
+                        retry_after_ms = retry_after.as_millis(),
+                        "Apps MCP startup reconnect failed; continuing with cached tools"
+                    );
+                }
+            }
+        });
     }
+}
+
+fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
+    let exponent = consecutive_failures.saturating_sub(1).min(5);
+    CODEX_APPS_RECONNECT_INITIAL_BACKOFF
+        .saturating_mul(1 << exponent)
+        .min(CODEX_APPS_RECONNECT_MAX_BACKOFF)
 }
 
 #[derive(Clone)]
@@ -405,7 +426,7 @@ impl AsyncManagedClient {
             return;
         }
         if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. })) {
-            let _ = startup_reconnect.reconnect().await;
+            startup_reconnect.reconnect_in_background();
         }
     }
 

@@ -10,6 +10,7 @@ use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
+use crate::rmcp_client::CODEX_APPS_RECONNECT_INITIAL_BACKOFF;
 use crate::rmcp_client::CodexAppsStartupReconnect;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::ManagedClientFuture;
@@ -1237,13 +1238,25 @@ async fn list_all_tools_reconnects_failed_codex_apps_startup_and_reuses_client()
     .await;
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_reconnect = Arc::clone(&attempts);
+    let reconnect_finished = Arc::new(tokio::sync::Notify::new());
+    let reconnect_finished_for_factory = Arc::clone(&reconnect_finished);
     let reconnect_factory = Arc::new(move || {
         attempts_for_reconnect.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        futures::future::ready(Ok(recovered_client.clone()))
-            .boxed()
-            .shared()
+        let reconnect_finished = Arc::clone(&reconnect_finished_for_factory);
+        let recovered_client = recovered_client.clone();
+        async move {
+            reconnect_finished.notify_one();
+            Ok(recovered_client)
+        }
+        .boxed()
+        .shared()
     });
     let manager = create_test_manager_with_failed_apps_startup(Vec::new(), reconnect_factory);
+
+    let reconnect_finished_wait = reconnect_finished.notified();
+    let tools = manager.list_all_tools().await;
+    assert!(tools.is_empty());
+    reconnect_finished_wait.await;
 
     let tools = manager.list_all_tools().await;
     assert_eq!(
@@ -1266,7 +1279,7 @@ async fn list_all_tools_reconnects_failed_codex_apps_startup_and_reuses_client()
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools() {
     let recovered_client = create_test_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
@@ -1275,16 +1288,25 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
     .await;
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_reconnect = Arc::clone(&attempts);
+    let reconnect_finished = Arc::new(tokio::sync::Notify::new());
+    let reconnect_finished_for_factory = Arc::clone(&reconnect_finished);
     let reconnect_factory = Arc::new(move || {
         let attempt = attempts_for_reconnect.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let result = if attempt == 0 {
-            Err(StartupOutcomeError::Failed {
-                error: "recreated startup failed".to_string(),
-            })
-        } else {
-            Ok(recovered_client.clone())
-        };
-        futures::future::ready(result).boxed().shared()
+        let reconnect_finished = Arc::clone(&reconnect_finished_for_factory);
+        let recovered_client = recovered_client.clone();
+        async move {
+            let result = if attempt < 2 {
+                Err(StartupOutcomeError::Failed {
+                    error: "recreated startup failed".to_string(),
+                })
+            } else {
+                Ok(recovered_client)
+            };
+            reconnect_finished.notify_one();
+            result
+        }
+        .boxed()
+        .shared()
     });
     let manager = create_test_manager_with_failed_apps_startup(
         vec![create_test_tool(
@@ -1293,6 +1315,18 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
         )],
         reconnect_factory,
     );
+
+    let first_reconnect_finished = reconnect_finished.notified();
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+    first_reconnect_finished.await;
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     let tools = manager.list_all_tools().await;
     assert_eq!(
@@ -1304,6 +1338,43 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
     );
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 
+    tokio::time::advance(CODEX_APPS_RECONNECT_INITIAL_BACKOFF).await;
+    let second_reconnect_finished = reconnect_finished.notified();
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+    second_reconnect_finished.await;
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    tokio::time::advance(CODEX_APPS_RECONNECT_INITIAL_BACKOFF).await;
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    tokio::time::advance(CODEX_APPS_RECONNECT_INITIAL_BACKOFF).await;
+    let third_reconnect_finished = reconnect_finished.notified();
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+    third_reconnect_finished.await;
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
+
     let tools = manager.list_all_tools().await;
     assert_eq!(
         tools
@@ -1312,11 +1383,10 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
             .collect::<Vec<_>>(),
         vec!["drive_search"]
     );
-    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
-async fn concurrent_tool_lists_share_codex_apps_startup_reconnect() {
+async fn tool_lists_do_not_block_and_share_codex_apps_startup_reconnect() {
     let recovered_client = create_test_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "drive_search",
@@ -1343,34 +1413,42 @@ async fn concurrent_tool_lists_share_codex_apps_startup_reconnect() {
         .shared()
     });
     let manager = Arc::new(create_test_manager_with_failed_apps_startup(
-        Vec::new(),
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_drive_search",
+        )],
         reconnect_factory,
     ));
     let reconnect_started_wait = reconnect_started.notified();
-    let first_list = tokio::spawn({
-        let manager = Arc::clone(&manager);
-        async move { manager.list_all_tools().await }
-    });
-    let second_list = tokio::spawn({
-        let manager = Arc::clone(&manager);
-        async move { manager.list_all_tools().await }
-    });
+    let first_tools = tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools())
+        .await
+        .expect("cached tools should not wait for reconnect");
 
     reconnect_started_wait.await;
+    let second_tools = tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools())
+        .await
+        .expect("concurrent cached tools should not wait for reconnect");
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
-    release_reconnect.notify_one();
-
-    let first_tools = first_list.await.expect("first tool list");
-    let second_tools = second_list.await.expect("second tool list");
     assert_eq!(
         first_tools
             .iter()
             .map(|tool| tool.callable_name.as_str())
             .collect::<Vec<_>>(),
-        vec!["drive_search"]
+        vec!["cached_drive_search"]
     );
     assert_eq!(
         second_tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+
+    release_reconnect.notify_one();
+    tokio::task::yield_now().await;
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
             .iter()
             .map(|tool| tool.callable_name.as_str())
             .collect::<Vec<_>>(),
