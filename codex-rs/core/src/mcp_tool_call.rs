@@ -1471,9 +1471,15 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         {
             Some(connectors) => Some(connectors),
             None => {
-                connectors::list_accessible_connectors_from_mcp_tools(turn_context.config.as_ref())
-                    .await
-                    .ok()
+                connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                    turn_context.config.as_ref(),
+                    /*force_refetch*/ false,
+                    sess.services.turn_environments.environment_manager(),
+                    Arc::clone(&sess.services.mcp_manager),
+                )
+                .await
+                .ok()
+                .map(|status| status.connectors)
             }
         };
         connectors.and_then(|connectors| {
