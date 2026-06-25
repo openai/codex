@@ -7,7 +7,7 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use semver::VersionReq;
+use node_semver::Range;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -139,6 +139,12 @@ pub enum MarketplacePluginSource {
         version: Option<String>,
         registry: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NpmPackageScope {
+    Scoped,
+    Unscoped,
 }
 
 impl MarketplacePluginSource {
@@ -778,17 +784,25 @@ fn normalize_npm_package(
     package: &str,
 ) -> Result<String, MarketplaceError> {
     let package = package.trim();
+    let package_scope = if package.starts_with('@') {
+        NpmPackageScope::Scoped
+    } else {
+        NpmPackageScope::Unscoped
+    };
     let segments = if let Some(scoped_package) = package.strip_prefix('@') {
         scoped_package.split('/').collect::<Vec<_>>()
     } else {
         package.split('/').collect::<Vec<_>>()
     };
-    let expected_segments = if package.starts_with('@') { 2 } else { 1 };
+    let expected_segments = match package_scope {
+        NpmPackageScope::Scoped => 2,
+        NpmPackageScope::Unscoped => 1,
+    };
     if package.is_empty()
         || segments.len() != expected_segments
         || segments
             .iter()
-            .any(|segment| !is_valid_npm_package_segment(segment))
+            .any(|segment| !is_valid_npm_package_segment(segment, package_scope))
     {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
@@ -798,10 +812,12 @@ fn normalize_npm_package(
     Ok(package.to_string())
 }
 
-fn is_valid_npm_package_segment(segment: &str) -> bool {
+fn is_valid_npm_package_segment(segment: &str, package_scope: NpmPackageScope) -> bool {
     !segment.is_empty()
         && segment != "."
         && segment != ".."
+        && (package_scope == NpmPackageScope::Scoped
+            || !matches!(segment.chars().next(), Some('.' | '_')))
         && segment
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
@@ -815,7 +831,7 @@ fn normalize_optional_npm_version(
     else {
         return Ok(None);
     };
-    if VersionReq::parse(&version).is_err() {
+    if Range::parse(&version).is_err() {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
             message: format!(

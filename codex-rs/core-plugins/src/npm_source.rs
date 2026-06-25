@@ -89,6 +89,7 @@ fn pack_npm_package(
     );
     let mut command = Command::new(npm_command);
     command
+        .current_dir(destination)
         .arg("pack")
         .arg("--ignore-scripts")
         .arg("--pack-destination")

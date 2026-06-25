@@ -313,6 +313,22 @@ fn find_marketplace_plugin_skips_unsafe_npm_sources() {
         "version": "1.2.0",
         "registry": "https://user:password@npm.example.com"
       }
+    },
+    {
+      "name": "dot-package",
+      "source": {
+        "source": "npm",
+        "package": ".codex-plugin",
+        "registry": "https://npm.example.com"
+      }
+    },
+    {
+      "name": "underscore-package",
+      "source": {
+        "source": "npm",
+        "package": "_codex-plugin",
+        "registry": "https://npm.example.com"
+      }
     }
   ]
 }"#,
@@ -321,6 +337,71 @@ fn find_marketplace_plugin_skips_unsafe_npm_sources() {
     assert_eq!(
         load_marketplace(&marketplace_path).unwrap().plugins,
         Vec::new()
+    );
+}
+
+#[test]
+fn find_marketplace_plugin_supports_npm_semver_ranges() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "comparator-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": ">=1.2.7 <1.3.0"
+      }
+    },
+    {
+      "name": "x-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.x"
+      }
+    },
+    {
+      "name": "or-range",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "1.2.7 || >=1.2.9 <2.0.0"
+      }
+    }
+  ]
+}"#,
+    );
+
+    assert_eq!(
+        load_marketplace(&marketplace_path)
+            .unwrap()
+            .plugins
+            .into_iter()
+            .map(|plugin| plugin.source)
+            .collect::<Vec<_>>(),
+        vec![
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some(">=1.2.7 <1.3.0".to_string()),
+                registry: None,
+            },
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("1.2.x".to_string()),
+                registry: None,
+            },
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("1.2.7 || >=1.2.9 <2.0.0".to_string()),
+                registry: None,
+            },
+        ]
     );
 }
 

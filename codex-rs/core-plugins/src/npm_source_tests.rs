@@ -31,6 +31,7 @@ for argument in "$@"; do
 done
 cp "{}" "$destination/acme-plugin-1.2.0.tgz"
 printf '%s\n' "$@" > "$destination/args.txt"
+pwd > "$destination/pwd.txt"
 "#,
             archive_path.display()
         ),
@@ -68,6 +69,16 @@ printf '%s\n' "$@" > "$destination/args.txt"
     assert!(args.contains("https://npm.example.com"));
     assert!(args.contains("@acme/plugin@^1.2.0"));
     assert!(!args.contains("install"));
+    let npm_working_directory = fs::canonicalize(
+        fs::read_to_string(tempdir.path().join("pwd.txt"))
+            .expect("read npm working directory")
+            .trim(),
+    )
+    .expect("canonicalize npm working directory");
+    assert_eq!(
+        npm_working_directory,
+        fs::canonicalize(tempdir.path()).expect("canonicalize tempdir")
+    );
 }
 
 fn npm_package_archive_bytes(package: &str, version: &str) -> std::io::Result<Vec<u8>> {
