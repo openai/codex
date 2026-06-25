@@ -120,6 +120,25 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
     }
 }
 
+pub fn materialize_runtime_binaries_for_setup(codex_home: &Path) -> Result<()> {
+    let source = std::env::current_exe().context("resolve current executable for setup")?;
+    let destination = helper_bin_dir(codex_home).join(
+        source
+            .file_name()
+            .ok_or_else(|| anyhow!("current executable has no file name: {}", source.display()))?,
+    );
+    copy_from_source_if_needed(&source, &destination)
+        .with_context(|| format!("copy sandbox runtime executable to {}", destination.display()))?;
+
+    let sandbox_log_dir = crate::sandbox_dir(codex_home);
+    copy_helper_if_needed(
+        HelperExecutable::CommandRunner,
+        codex_home,
+        Some(&sandbox_log_dir),
+    )
+    .map(|_| ())
+}
+
 pub(crate) fn copy_helper_if_needed(
     kind: HelperExecutable,
     codex_home: &Path,

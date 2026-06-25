@@ -334,6 +334,11 @@ async fn run_windows_sandbox_setup_and_persist(
 
     setup_result?;
 
+    if mode == WindowsSandboxSetupMode::Elevated {
+        codex_windows_sandbox::materialize_runtime_binaries_for_setup(codex_home.as_path())
+            .map_err(|err| anyhow::anyhow!("failed to materialize sandbox runtime binaries: {err:#}"))?;
+    }
+
     ConfigEditsBuilder::new(codex_home.as_path())
         .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
         .clear_legacy_windows_sandbox_keys()
