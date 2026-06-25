@@ -171,8 +171,13 @@ pub(crate) async fn run_turn(
         .record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
         .await;
 
-    let Some((injection_items, explicitly_enabled_connectors)) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+        &sess,
+        first_step_context.as_ref(),
+        &input,
+        &cancellation_token,
+    )
+    .await
     else {
         return Ok(None);
     };
@@ -504,10 +509,11 @@ async fn run_hooks_and_record_inputs(
 #[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    let turn_context = step_context.turn.as_ref();
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
@@ -575,7 +581,7 @@ async fn build_skills_and_plugins(
     let skills_outcome = turn_context.turn_skills.snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =
-        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
+        build_extension_turn_input_items(sess, step_context, &user_input, cancellation_token)
             .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
@@ -678,7 +684,7 @@ async fn build_skills_and_plugins(
 )]
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     user_input: &[UserInput],
     cancellation_token: &CancellationToken,
 ) -> Option<Vec<ResponseItem>> {
@@ -687,7 +693,7 @@ async fn build_extension_turn_input_items(
         return Some(Vec::new());
     }
 
-    let environments = turn_context
+    let environments = step_context
         .environments
         .turn_environments
         .iter()
@@ -703,6 +709,7 @@ async fn build_extension_turn_input_items(
         })
         .collect::<Vec<_>>();
 
+    let turn_context = step_context.turn.as_ref();
     let input = TurnInputContext {
         turn_id: turn_context.sub_id.to_string(),
         user_input: user_input.to_vec(),
