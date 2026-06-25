@@ -116,14 +116,15 @@ fn text_turn_params(thread_id: String, prompt: &str) -> TurnStartParams {
 #[tokio::test]
 async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
     let mut fixture = SelectedEnvironmentFixture::new().await?;
-    let response = fixture.start_thread().await?;
+    let ThreadStartResponse {
+        cwd,
+        runtime_workspace_roots,
+        active_permission_profile,
+        ..
+    } = fixture.start_thread().await?;
     let host_cwd = fixture.codex_home.path().to_path_buf().abs();
     assert_eq!(
-        (
-            response.cwd.clone(),
-            response.runtime_workspace_roots.clone(),
-            response.active_permission_profile.clone(),
-        ),
+        (cwd, runtime_workspace_roots, active_permission_profile),
         (
             // TODO(anp): Return the selected environment's native cwd from thread/start.
             host_cwd.clone(),
