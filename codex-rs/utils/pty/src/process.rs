@@ -2,6 +2,7 @@ use core::fmt;
 use std::io;
 #[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(not(windows))]
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -32,6 +33,7 @@ pub(crate) fn unsupported_signal(signal: ProcessSignal) -> io::Error {
     }
 }
 
+#[cfg(not(windows))]
 pub(crate) fn exit_code_from_status(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
