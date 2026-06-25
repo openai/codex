@@ -9,10 +9,11 @@ use crate::Environment;
 use crate::EnvironmentManager;
 use crate::ExecutorFileSystem;
 
-/// A selected capability root pinned to the exact environment instance that owns it.
+/// A selected capability root paired with its currently ready environment handle.
 ///
-/// This value is process-local and must not be persisted. Cloning it keeps the same
-/// [`Environment`] alive so every consumer of one model step uses the same executor.
+/// Environment IDs have stable identity and contents. This process-local value must not be
+/// persisted: it only keeps the current connection handle alive while one model step uses the
+/// stable environment.
 #[derive(Clone)]
 pub struct ResolvedSelectedCapabilityRoot {
     selected_root: SelectedCapabilityRoot,
@@ -41,15 +42,16 @@ impl ResolvedSelectedCapabilityRoot {
 }
 
 impl EnvironmentManager {
-    /// Binds selected roots to the ready environment instances currently registered for them.
+    /// Resolves selected roots whose stable environments are ready for the current model step.
     ///
-    /// The registry and readiness are each captured once per environment ID, so every root owned
-    /// by one environment uses the same executor instance and readiness result. Missing, starting,
-    /// or failed environments are omitted. A lazy environment is started for a later step.
+    /// Environment identity comes from the selected root's stable environment ID. Captured
+    /// availability keeps this projection consistent with the step's environment World State;
+    /// it is not an executor-identity or content cache key. Missing, starting, or failed
+    /// environments are omitted. A lazy environment is started for a later step.
     pub async fn resolve_selected_capability_roots(
         &self,
         selected_roots: &[SelectedCapabilityRoot],
-        captured_environments: &HashMap<String, Option<Arc<Environment>>>,
+        captured_availability: &HashMap<String, bool>,
     ) -> Vec<ResolvedSelectedCapabilityRoot> {
         let candidates = {
             let environments = self
@@ -61,12 +63,12 @@ impl EnvironmentManager {
                 .filter_map(|selected_root| {
                     let CapabilityRootLocation::Environment { environment_id, .. } =
                         &selected_root.location;
-                    let (environment, already_ready) =
-                        match captured_environments.get(environment_id) {
-                            Some(Some(environment)) => (Arc::clone(environment), true),
-                            Some(None) => return None,
-                            None => (Arc::clone(environments.get(environment_id)?), false),
-                        };
+                    let already_ready = match captured_availability.get(environment_id) {
+                        Some(true) => true,
+                        Some(false) => return None,
+                        None => false,
+                    };
+                    let environment = Arc::clone(environments.get(environment_id)?);
                     Some((
                         ResolvedSelectedCapabilityRoot::new(selected_root.clone(), environment),
                         already_ready,

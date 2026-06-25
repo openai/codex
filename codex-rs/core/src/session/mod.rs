@@ -2834,7 +2834,7 @@ impl Session {
             .environment_manager()
             .resolve_selected_capability_roots(
                 &self.services.selected_capability_roots,
-                &environments.captured_environments(),
+                &environments.captured_environment_availability(),
             )
             .await;
         Arc::new(StepContext::new(
