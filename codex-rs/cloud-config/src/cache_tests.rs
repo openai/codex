@@ -13,20 +13,24 @@ use tempfile::tempdir;
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: vec![CloudConfigFragment {
-                id: "cfg_1".to_string(),
-                name: "Base config".to_string(),
-                contents: "model = \"gpt-5\"".to_string(),
-            }],
-            managed_layers: Default::default(),
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudConfigFragment {
+                    id: "cfg_1".to_string(),
+                    name: "Base config".to_string(),
+                    contents: "model = \"gpt-5\"".to_string(),
+                }],
+            },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_1".to_string(),
-                name: "Base requirements".to_string(),
-                contents: "allowed_approval_policies = [\"never\"]".to_string(),
-            }],
-            managed_layers: Default::default(),
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                }],
+            },
         },
     }
 }
@@ -53,27 +57,6 @@ fn valid_signed_payload() -> CloudConfigBundleCacheSignedPayload {
     }
 }
 
-fn valid_managed_signed_payload() -> CloudConfigBundleCacheSignedPayload {
-    let mut payload = valid_signed_payload();
-    payload.bundle.config_toml.managed_layers = CloudConfigTomlManagedLayers {
-        baseline: Some(vec![CloudConfigFragment {
-            id: "cfg_baseline".to_string(),
-            name: "Config baseline".to_string(),
-            contents: "model = \"baseline\"".to_string(),
-        }]),
-        system_overlay: Some(Vec::new()),
-    };
-    payload.bundle.requirements_toml.managed_layers = CloudRequirementsTomlManagedLayers {
-        baseline: None,
-        system_overlay: Some(vec![CloudRequirementsFragment {
-            id: "req_overlay".to_string(),
-            name: "Requirements overlay".to_string(),
-            contents: "allowed_approval_policies = [\"on-request\"]".to_string(),
-        }]),
-    };
-    payload
-}
-
 fn write_cache_file(cache: &CloudConfigBundleCache, cache_file: &CloudConfigBundleCacheFile) {
     std::fs::write(
         cache.path(),
@@ -90,7 +73,7 @@ fn create_test_cache(codex_home: &Path) -> CloudConfigBundleCache {
 async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
-    let bundle = valid_managed_signed_payload().bundle;
+    let bundle = test_bundle();
 
     cache
         .save(
@@ -104,6 +87,8 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let cache_file: CloudConfigBundleCacheFile =
         serde_json::from_slice(&std::fs::read(cache.path()).expect("read cache"))
             .expect("parse cache");
+    let cache_json = serde_json::to_string(&cache_file).expect("serialize cache as JSON");
+    assert!(!cache_json.contains("enterprise_managed"));
     assert!(
         cache_file.signed_payload.expires_at
             <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)
@@ -139,19 +124,6 @@ async fn load_rejects_v1_cache() {
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
         Err(CacheLoadStatus::CacheVersionUnsupported(1))
-    );
-}
-
-#[tokio::test]
-async fn load_accepts_managed_data_with_full_payload_signature() {
-    let codex_home = tempdir().expect("tempdir");
-    let cache = create_test_cache(codex_home.path());
-    let cache_file = signed_cache_file(valid_managed_signed_payload());
-    write_cache_file(&cache, &cache_file);
-
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Ok(cache_file.signed_payload)
     );
 }
 
@@ -198,46 +170,9 @@ async fn load_rejects_tampered_payload() {
         .signed_payload
         .bundle
         .requirements_toml
-        .enterprise_managed[0]
-        .contents = "allowed_approval_policies = [\"on-request\"]".to_string();
-    write_cache_file(&cache, &cache_file);
-
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheSignatureInvalid)
-    );
-}
-
-#[tokio::test]
-async fn load_rejects_tampered_managed_data() {
-    let codex_home = tempdir().expect("tempdir");
-    let cache = create_test_cache(codex_home.path());
-    let mut cache_file = signed_cache_file(valid_managed_signed_payload());
-    cache_file
-        .signed_payload
-        .bundle
-        .requirements_toml
         .managed_layers
-        .system_overlay
-        .as_mut()
-        .expect("system overlay")
-        .first_mut()
-        .expect("requirements fragment")
-        .contents = "allowed_approval_policies = [\"never\"]".to_string();
-    write_cache_file(&cache, &cache_file);
-
-    assert_eq!(
-        cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheSignatureInvalid)
-    );
-}
-
-#[tokio::test]
-async fn load_rejects_tampered_signature() {
-    let codex_home = tempdir().expect("tempdir");
-    let cache = create_test_cache(codex_home.path());
-    let mut cache_file = signed_cache_file(valid_managed_signed_payload());
-    cache_file.signature = "tampered".to_string();
+        .system_overlay[0]
+        .contents = "allowed_approval_policies = [\"on-request\"]".to_string();
     write_cache_file(&cache, &cache_file);
 
     assert_eq!(

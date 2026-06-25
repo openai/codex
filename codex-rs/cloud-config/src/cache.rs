@@ -20,7 +20,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::fs;
 
-// Cache v2 signs the complete payload, including managed layers. V1 entries are cache misses.
+// Cache v2 signs the complete managed-only payload. V1 entries are cache misses.
 const CLOUD_CONFIG_BUNDLE_CACHE_VERSION: u32 = 2;
 pub(super) const CLOUD_CONFIG_BUNDLE_CACHE_FILENAME: &str = "cloud-config-bundle-cache.json";
 const CLOUD_CONFIG_BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);

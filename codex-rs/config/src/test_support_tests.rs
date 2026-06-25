@@ -8,7 +8,7 @@ fn adds_enterprise_requirements_in_order() {
         .into_bundle();
 
     assert_eq!(
-        bundle.requirements_toml.enterprise_managed,
+        bundle.requirements_toml.managed_layers.system_overlay,
         vec![
             CloudRequirementsFragment {
                 id: "req_1".to_string(),

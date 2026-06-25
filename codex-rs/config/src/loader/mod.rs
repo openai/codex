@@ -84,7 +84,7 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 ///
 /// - system    `/etc/codex/requirements.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows)
-/// - cloud:    enterprise-managed cloud config bundle requirements
+/// - cloud:    cloud-managed system-overlay bundle requirements
 /// - legacy:   managed_config.toml reinterpreted as requirements.toml
 /// - admin:    managed preferences (*)
 ///
@@ -96,7 +96,7 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
-/// - cloud     enterprise-managed cloud config bundle fragments
+/// - cloud     cloud-managed system-overlay bundle fragments
 /// - user      `${CODEX_HOME}/config.toml`
 /// - profile   `${CODEX_HOME}/<name>.config.toml`, when selected
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
@@ -147,14 +147,12 @@ pub async fn load_config_layers_state(
             };
             let CloudConfigBundleLayers {
                 baseline_config: _,
-                system_overlay_config: _,
-                enterprise_managed_config,
+                system_overlay_config,
                 baseline_requirements: _,
-                system_overlay_requirements: _,
-                enterprise_managed_requirements,
+                system_overlay_requirements,
             } = bundle_layers;
-            bundle_requirements_layers = enterprise_managed_requirements;
-            cloud_config_layers = enterprise_managed_config;
+            bundle_requirements_layers = system_overlay_requirements;
+            cloud_config_layers = system_overlay_config;
         }
 
         #[cfg(target_os = "macos")]
