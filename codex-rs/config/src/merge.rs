@@ -18,9 +18,8 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 /// requirement instead represents one complete requirement, so combining its
 /// internal fields across layers could retain parts of both definitions.
 /// After the regular merge, reapply higher-priority values at the configured
-/// atomic paths so each same-name requirement is replaced as a whole. An
-/// explicitly empty atomic map clears lower-priority entries. A `*` path
-/// segment matches every key at that level.
+/// atomic paths so each same-name requirement is replaced as a whole. A `*`
+/// path segment matches every key at that level.
 pub(crate) fn merge_requirements_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     merge_toml_values(base, overlay);
     for path in ATOMIC_REQUIREMENT_PATHS {
@@ -62,10 +61,6 @@ fn apply_atomic_override_at_path(base: &mut TomlValue, overlay: &TomlValue, path
     let Some(overlay_table) = overlay.as_table() else {
         return;
     };
-    if *segment == "*" && remaining.is_empty() && overlay_table.is_empty() {
-        *base = overlay.clone();
-        return;
-    }
     let Some(base_table) = base.as_table_mut() else {
         return;
     };

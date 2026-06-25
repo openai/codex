@@ -391,7 +391,7 @@ url = "https://high.example.com/mcp"
 }
 
 #[test]
-fn higher_priority_empty_mcp_allowlist_clears_lower_rules() {
+fn higher_priority_empty_mcp_allowlist_preserves_lower_rules() {
     let composed = compose(vec![
         layer(
             "req_low",
@@ -406,7 +406,15 @@ command = "low-mcp"
     .expect("compose requirements")
     .expect("requirements present");
 
-    assert_eq!(composed, expected_requirements("mcp_servers = {}"));
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[mcp_servers.server.identity]
+command = "low-mcp"
+"#
+        )
+    );
 }
 
 #[test]
@@ -444,7 +452,7 @@ url = "https://high.example.com/mcp"
 }
 
 #[test]
-fn higher_priority_empty_plugin_mcp_allowlist_clears_lower_rules() {
+fn higher_priority_empty_plugin_mcp_allowlist_preserves_lower_rules() {
     let composed = compose(vec![
         layer(
             "req_low",
@@ -470,8 +478,8 @@ mcp_servers = {}
         composed,
         expected_requirements(
             r#"
-[plugins."sample@test"]
-mcp_servers = {}
+[plugins."sample@test".mcp_servers.server.identity]
+command = "low-plugin-mcp"
 "#
         )
     );
