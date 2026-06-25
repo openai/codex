@@ -37,7 +37,6 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::McpServerReauthenticationRequiredNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
@@ -98,7 +97,6 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::McpStartupFailureReason as CoreMcpStartupFailureReason;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -202,45 +200,32 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::McpStartupUpdate(update) => {
-            let (status, error, reauthentication_required) = match update.status {
+            let (status, error, failure_reason) = match update.status {
                 codex_protocol::protocol::McpStartupStatus::Starting => {
-                    (McpServerStartupState::Starting, None, false)
+                    (McpServerStartupState::Starting, None, None)
                 }
                 codex_protocol::protocol::McpStartupStatus::Ready => {
-                    (McpServerStartupState::Ready, None, false)
+                    (McpServerStartupState::Ready, None, None)
                 }
-                codex_protocol::protocol::McpStartupStatus::Failed { error, reason } => {
-                    let reauthentication_required =
-                        reason == Some(CoreMcpStartupFailureReason::ReauthenticationRequired);
-                    (
-                        McpServerStartupState::Failed,
-                        Some(error),
-                        reauthentication_required,
-                    )
-                }
+                codex_protocol::protocol::McpStartupStatus::Failed { error, reason } => (
+                    McpServerStartupState::Failed,
+                    Some(error),
+                    reason.map(Into::into),
+                ),
                 codex_protocol::protocol::McpStartupStatus::Cancelled => {
-                    (McpServerStartupState::Cancelled, None, false)
+                    (McpServerStartupState::Cancelled, None, None)
                 }
             };
-            let server_name = update.server;
             let notification = McpServerStatusUpdatedNotification {
                 thread_id: Some(conversation_id.to_string()),
-                name: server_name.clone(),
+                name: update.server,
                 status,
                 error,
+                failure_reason,
             };
             outgoing
                 .send_server_notification(ServerNotification::McpServerStatusUpdated(notification))
                 .await;
-            if reauthentication_required {
-                outgoing
-                    .send_global_server_notification(
-                        ServerNotification::McpServerReauthenticationRequired(
-                            McpServerReauthenticationRequiredNotification { name: server_name },
-                        ),
-                    )
-                    .await;
-            }
         }
         EventMsg::Warning(warning_event) => {
             let notification = WarningNotification {
