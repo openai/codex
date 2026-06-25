@@ -8,6 +8,7 @@ mod selection;
 mod sources;
 mod state;
 mod tools;
+mod world_state;
 
 pub use config::SkillsExtensionConfig;
 pub use extension::install;
