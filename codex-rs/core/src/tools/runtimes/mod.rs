@@ -293,7 +293,9 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
             override_env.insert(key.to_string(), value.clone());
         }
     }
-    let (override_captures, override_exports) = build_override_exports(&override_env);
+    // Do not let a snapshot resurrect a stale profile when no named profile is active.
+    let (override_captures, override_exports) =
+        build_override_exports(&override_env, &[CODEX_PERMISSION_PROFILE_ENV_VAR]);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
     let runtime_path_prepend_exports =
         runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
@@ -316,10 +318,14 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
 }
 
-fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
+fn build_override_exports(
+    explicit_env_overrides: &HashMap<String, String>,
+    restore_even_when_absent: &[&str],
+) -> (String, String) {
     let mut keys = explicit_env_overrides
         .keys()
         .map(String::as_str)
+        .chain(restore_even_when_absent.iter().copied())
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.push(CODEX_PERMISSION_PROFILE_ENV_VAR);
