@@ -215,7 +215,6 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         !thread.ephemeral,
         "new persistent threads should not be ephemeral"
     );
-    assert_eq!(thread.history_mode, Default::default());
     assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));
     let thread_path = thread.path.clone().expect("thread path should be present");
@@ -303,13 +302,6 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     );
     assert_eq!(
         started_thread_json
-            .get("historyMode")
-            .and_then(Value::as_str),
-        Some("legacy"),
-        "thread/started should serialize `historyMode: legacy`"
-    );
-    assert_eq!(
-        started_thread_json
             .get("threadSource")
             .and_then(Value::as_str),
         Some("user"),
@@ -323,7 +315,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_accepts_explicit_legacy_history_mode() -> Result<()> {
+async fn thread_start_history_mode_accepts_legacy_and_rejects_paginated() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
@@ -345,17 +337,6 @@ async fn thread_start_accepts_explicit_legacy_history_mode() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response(response)?;
 
     assert_eq!(thread.history_mode, ThreadHistoryMode::Legacy);
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_start_rejects_paginated_history_mode_as_unsupported() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {

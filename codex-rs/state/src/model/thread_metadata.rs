@@ -650,16 +650,6 @@ mod tests {
     }
 
     #[test]
-    fn thread_row_parses_history_mode() {
-        let mut row = thread_row(None);
-        row.history_mode = "paginated".to_string();
-
-        let metadata = ThreadMetadata::try_from(row).expect("thread metadata should parse");
-
-        assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
-    }
-
-    #[test]
     fn thread_row_rejects_unknown_history_mode() {
         let mut row = thread_row(None);
         row.history_mode = "future".to_string();

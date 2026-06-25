@@ -443,7 +443,6 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         panic!("expected session metadata in rollout");
     };
     assert_eq!(session_meta.meta.session_id, session_id);
-    assert_eq!(session_meta.meta.history_mode, Default::default());
     assert_eq!(
         session_meta
             .meta

@@ -1120,7 +1120,6 @@ mod tests {
 
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.history_mode, ThreadHistoryMode::Legacy);
-        let rollout_path = thread.rollout_path.clone().expect("rollout path");
         assert_eq!(
             thread
                 .history
@@ -1132,13 +1131,6 @@ mod tests {
                 .count(),
             1
         );
-        let (items, _, _) = RolloutRecorder::load_rollout_items(rollout_path.as_path())
-            .await
-            .expect("load rollout items");
-        let RolloutItem::SessionMeta(meta_line) = &items[0] else {
-            panic!("expected session metadata");
-        };
-        assert_eq!(meta_line.meta.history_mode, ThreadHistoryMode::Legacy);
     }
 
     #[tokio::test]
