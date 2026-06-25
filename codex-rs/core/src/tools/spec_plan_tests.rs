@@ -689,6 +689,7 @@ async fn environment_tools_follow_the_step_context() {
     let step_context = Arc::new(StepContext::new(
         Arc::new(turn),
         environments,
+        Vec::new(),
         /*loaded_agents_md*/ None,
     ));
 

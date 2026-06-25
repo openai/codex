@@ -10,6 +10,10 @@ impl Session {
         step_context: &StepContext,
     ) -> WorldState {
         let turn_context = step_context.turn.as_ref();
+        tracing::trace!(
+            selected_capability_root_count = step_context.selected_capability_roots.len(),
+            "building step world state"
+        );
         let environment_subagents = if turn_context.config.include_environment_context {
             self.services
                 .agent_control

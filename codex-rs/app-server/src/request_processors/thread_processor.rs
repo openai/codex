@@ -8,6 +8,8 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
+    "thread/rollback is deprecated and will be removed soon";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -633,9 +635,23 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.send_thread_rollback_deprecation_notice(request_id.connection_id)
+            .await;
         self.thread_rollback_inner(request_id, params)
             .await
             .map(|()| None)
+    }
+
+    async fn send_thread_rollback_deprecation_notice(&self, connection_id: ConnectionId) {
+        self.outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
+                    summary: THREAD_ROLLBACK_DEPRECATION_SUMMARY.to_string(),
+                    details: None,
+                }),
+            )
+            .await;
     }
 
     pub(crate) async fn thread_list(
@@ -887,6 +903,7 @@ impl ThreadRequestProcessor {
         let ThreadStartParams {
             model,
             model_provider,
+            allow_provider_model_fallback,
             service_tier,
             cwd,
             runtime_workspace_roots,
@@ -963,6 +980,7 @@ impl ThreadRequestProcessor {
                 thread_source.map(Into::into),
                 environment_selections,
                 service_name,
+                allow_provider_model_fallback,
                 experimental_raw_events,
                 request_trace,
             )
@@ -1037,6 +1055,7 @@ impl ThreadRequestProcessor {
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
+        allow_provider_model_fallback: bool,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<(), JSONRPCErrorError> {
@@ -1144,6 +1163,7 @@ impl ThreadRequestProcessor {
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
                 config,
+                allow_provider_model_fallback,
                 initial_history: match session_start_source
                     .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
                 {

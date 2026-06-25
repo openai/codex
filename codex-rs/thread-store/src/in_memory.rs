@@ -126,6 +126,7 @@ mod tests {
                     originator: "test_originator".to_string(),
                     base_instructions: BaseInstructions::default(),
                     dynamic_tools: Vec::new(),
+                    selected_capability_roots: Vec::new(),
                     multi_agent_version: None,
                     initial_window_id: uuid::Uuid::now_v7().to_string(),
                     metadata: ThreadPersistenceMetadata {
@@ -281,6 +282,7 @@ impl InMemoryThreadStore {
             model_provider: Some(params.metadata.model_provider.clone()),
             base_instructions: Some(params.base_instructions.clone()),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
+            selected_capability_roots: params.selected_capability_roots.clone(),
             memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
                 .then_some("disabled".to_string()),
             multi_agent_version: params.multi_agent_version,

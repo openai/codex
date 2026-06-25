@@ -22,10 +22,12 @@ mod relay_proto;
 mod remote;
 mod remote_file_system;
 mod remote_process;
+mod resolved_capability;
 mod rpc;
 mod runtime_paths;
 mod sandboxed_file_system;
 mod server;
+mod telemetry;
 
 use codex_exec_server_protocol as protocol;
 
@@ -143,7 +145,10 @@ pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
 pub use remote::RemoteEnvironmentConfig;
 pub use remote::run_remote_environment;
+pub use resolved_capability::ResolvedSelectedCapabilityRoot;
 pub use runtime_paths::ExecServerRuntimePaths;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;
+pub use server::run_main_with_telemetry;
+pub use telemetry::ExecServerTelemetry;
