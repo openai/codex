@@ -616,7 +616,6 @@ impl Session {
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
                             history: Some(resumed_history.history.clone()),
-                            history_mode: session_configuration.history_mode,
                             include_archived: true,
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),

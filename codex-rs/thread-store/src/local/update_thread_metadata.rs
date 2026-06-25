@@ -808,7 +808,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
-                history_mode: Default::default(),
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })
@@ -1612,7 +1611,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,
-                history_mode: Default::default(),
                 include_archived: true,
                 metadata: test_thread_metadata(),
             })

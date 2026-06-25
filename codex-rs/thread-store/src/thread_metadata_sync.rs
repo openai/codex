@@ -567,7 +567,6 @@ mod tests {
             thread_id,
             rollout_path: None,
             history: Some(Arc::new(history)),
-            history_mode: Default::default(),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,

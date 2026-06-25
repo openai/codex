@@ -645,7 +645,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
                     cwd: Some(home.path().to_path_buf()),
@@ -700,7 +699,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: false,
                 metadata: ThreadPersistenceMetadata {
                     cwd: Some(home.path().to_path_buf()),
@@ -830,7 +828,6 @@ mod tests {
                 thread_id,
                 rollout_path: None,
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
@@ -891,7 +888,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
@@ -914,7 +910,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: ThreadPersistenceMetadata {
                     cwd: None,
@@ -944,7 +939,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
@@ -993,7 +987,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
@@ -1032,7 +1025,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: true,
                 metadata: thread_metadata(),
             })
@@ -1204,7 +1196,6 @@ mod tests {
                     thread_id,
                     rollout_path: Some(rollout_path),
                     history: None,
-                    history_mode: ThreadHistoryMode::Paginated,
                     include_archived: false,
                     metadata: thread_metadata(),
                 })

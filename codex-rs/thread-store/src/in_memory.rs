@@ -38,6 +38,7 @@ use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::error::reject_paginated_history_mode;
+use crate::types::history_mode_from_rollout_items;
 
 static IN_MEMORY_THREAD_STORES: OnceLock<Mutex<HashMap<String, Arc<InMemoryThreadStore>>>> =
     OnceLock::new();
@@ -212,7 +213,6 @@ mod tests {
                 thread_id,
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
-                history_mode: ThreadHistoryMode::Legacy,
                 include_archived: false,
                 metadata: thread_metadata(),
             })
@@ -287,7 +287,6 @@ mod tests {
                     thread_id,
                     rollout_path: None,
                     history: None,
-                    history_mode: ThreadHistoryMode::Paginated,
                     include_archived: false,
                     metadata: thread_metadata(),
                 })
@@ -455,9 +454,14 @@ impl InMemoryThreadStore {
     }
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
-        reject_paginated_history_mode(params.history_mode)?;
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
+        let history_mode = params
+            .history
+            .as_deref()
+            .map(history_mode_from_rollout_items)
+            .unwrap_or_else(|| history_mode_from_state(&state, params.thread_id));
+        reject_paginated_history_mode(history_mode)?;
         if let Some(history) = params.history {
             state
                 .histories

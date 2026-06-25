@@ -109,12 +109,21 @@ pub struct ResumeThreadParams {
     pub rollout_path: Option<PathBuf>,
     /// Known replay history for the resumed thread, if already loaded by the caller.
     pub history: Option<Arc<Vec<RolloutItem>>>,
-    /// Persisted thread history contract for the resumed thread.
-    pub history_mode: ThreadHistoryMode,
     /// Whether archived threads may be reopened.
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
     pub metadata: ThreadPersistenceMetadata,
+}
+
+pub(crate) fn history_mode_from_rollout_items(items: &[RolloutItem]) -> ThreadHistoryMode {
+    items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.history_mode),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Parameters for appending rollout items to a live thread.
