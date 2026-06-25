@@ -258,6 +258,7 @@ async fn schedule_startup_prewarm_inner(
     }
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
+    // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
     let step_context = session
         .capture_step_context(Arc::clone(&startup_turn_context))
         .await;

@@ -1,3 +1,4 @@
+mod agents_md;
 mod environment;
 
 use crate::context::ContextualUserFragment;
@@ -9,6 +10,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub(crate) use agents_md::AgentsMdState;
 pub(crate) use environment::EnvironmentsState;
 
 trait ErasedWorldStateSection: Send + Sync {

@@ -7,6 +7,7 @@ use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionTrigger;
 use codex_protocol::error::CodexErr;
@@ -34,10 +35,9 @@ pub(crate) async fn run_manual_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    let world_state = Arc::new(
-        sess.build_world_state_for_environments(&turn_context, &turn_context.environments)
-            .await,
-    );
+    // Manual compaction runs outside run_turn, so it captures its own current step.
+    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await);
     run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Manual).await
 }
 
@@ -48,17 +48,17 @@ pub(crate) async fn run_manual_compact_task(
 /// observe the same lifecycle as local or remote compaction.
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
     let world_state = match initial_context_injection {
         InitialContextInjection::BeforeLastUserMessage(world_state) => world_state,
-        InitialContextInjection::DoNotInject => Arc::new(
-            sess.build_world_state_for_environments(&turn_context, &turn_context.environments)
-                .await,
-        ),
+        InitialContextInjection::DoNotInject => {
+            Arc::new(sess.build_world_state_for_step(&step_context).await)
+        }
     };
-    run_compact_task_inner(&sess, &turn_context, world_state, CompactionTrigger::Auto).await
+    run_compact_task_inner(&sess, turn_context, world_state, CompactionTrigger::Auto).await
 }
 
 async fn run_compact_task_inner(

@@ -304,6 +304,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let mut items = session
         .build_initial_context_with_world_state(&turn_context, &world_state)

@@ -686,7 +686,11 @@ async fn environment_tools_follow_the_step_context() {
 
     let environments = turn.environments.clone();
     turn.environments.turn_environments.clear();
-    let step_context = Arc::new(StepContext::new(Arc::new(turn), environments));
+    let step_context = Arc::new(StepContext::new(
+        Arc::new(turn),
+        environments,
+        /*loaded_agents_md*/ None,
+    ));
 
     let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
         step_context.as_ref(),
