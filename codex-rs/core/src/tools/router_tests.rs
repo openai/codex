@@ -110,8 +110,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let mcp_tools = session
         .services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager()
         .list_all_tools()
         .await;
     let router = ToolRouter::from_context(

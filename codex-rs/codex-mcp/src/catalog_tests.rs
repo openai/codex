@@ -304,6 +304,17 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         }]
     );
 
+    let refreshed = server("https://refreshed.example/mcp");
+    let catalog =
+        catalog.with_materialized_servers(HashMap::from([("docs".to_string(), refreshed.clone())]));
+    assert_eq!(
+        catalog.server("docs"),
+        Some(&super::ResolvedMcpServer {
+            source: selected_plugin_source("selected-alpha"),
+            config: refreshed,
+        })
+    );
+
     let mut builder = catalog.to_builder();
     let configured = server("https://config.example/mcp");
     builder.register(McpServerRegistration::from_config(

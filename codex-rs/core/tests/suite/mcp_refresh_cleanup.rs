@@ -16,7 +16,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn refresh_shuts_down_superseded_mcp_stdio_server() -> anyhow::Result<()> {
+async fn refresh_keeps_superseded_mcp_server_alive_for_in_flight_calls() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -84,7 +84,7 @@ async fn refresh_shuts_down_superseded_mcp_stdio_server() -> anyhow::Result<()> 
                     "sync",
                     Some(serde_json::json!({
                         "barrier": barrier,
-                        "sleep_after_ms": 30_000
+                        "sleep_after_ms": 300_000
                     })),
                     /*meta*/ None,
                 )
@@ -119,9 +119,16 @@ async fn refresh_shuts_down_superseded_mcp_stdio_server() -> anyhow::Result<()> 
 
     let replacement_pid = wait_for_pid_file(&pid_file).await?;
     assert_ne!(replacement_pid, superseded_pid);
+    assert!(process_is_alive(&superseded_pid)?);
+    long_call.abort();
+    assert!(
+        long_call
+            .await
+            .expect_err("call should be aborted")
+            .is_cancelled()
+    );
     wait_for_process_exit(&superseded_pid).await?;
     assert!(process_is_alive(&replacement_pid)?);
-    assert!(long_call.await?.is_err());
 
     fixture.codex.shutdown_and_wait().await?;
     wait_for_process_exit(&replacement_pid).await

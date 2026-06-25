@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::McpRuntimeSnapshot;
 use crate::session::turn_context::TurnContext;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 
@@ -12,6 +13,8 @@ pub(crate) struct StepContext {
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Capability roots bound to ready environments in this exact step.
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    /// The exact MCP config and manager used to advertise and execute tools for this step.
+    pub(crate) mcp: Arc<McpRuntimeSnapshot>,
     /// The canonical AGENTS.md value observed with this environment snapshot.
     pub(crate) loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
 }
@@ -21,12 +24,14 @@ impl StepContext {
         turn: Arc<TurnContext>,
         environments: TurnEnvironmentSnapshot,
         selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
+        mcp: Arc<McpRuntimeSnapshot>,
         loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
     ) -> Self {
         Self {
             turn,
             environments,
             selected_capability_roots,
+            mcp,
             loaded_agents_md,
         }
     }
