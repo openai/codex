@@ -1,0 +1,25 @@
+{
+  "oneOf": [
+    {
+      "properties": {
+        "method": {
+          "const": "test/method",
+          "type": "string"
+        },
+        "params": {
+          "properties": {
+            "other": {
+              "type": "boolean"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": ["method", "params"],
+      "type": "object"
+    }
+  ]
+}

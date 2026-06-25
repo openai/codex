@@ -1,0 +1,10 @@
+version = 1
+
+[[breakages]]
+id = 1
+kind = "requiredPropertyAdded"
+method = "test/method"
+path = "params.value"
+before_json = "false"
+after_json = "true"
+justification = "Accepts the documented wire-format compatibility tradeoff."

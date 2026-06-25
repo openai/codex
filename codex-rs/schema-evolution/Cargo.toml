@@ -9,6 +9,10 @@ name = "codex_schema_evolution"
 path = "src/lib.rs"
 doctest = false
 
+[[bin]]
+name = "codex-schema-evolution"
+path = "src/bin/schema_evolution.rs"
+
 [lints]
 workspace = true
 
@@ -19,4 +23,5 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
