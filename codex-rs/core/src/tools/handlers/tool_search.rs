@@ -11,6 +11,7 @@ use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
 use codex_tools::LoadableToolSpec;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolName;
@@ -21,6 +22,12 @@ use codex_tools::coalesce_loadable_tool_specs;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::instrument;
+
+use crate::tool_search_debug::ToolSearchInspection;
+use crate::tool_search_debug::ToolSearchInspectionOutputTool;
+use crate::tool_search_debug::ToolSearchInspectionResult;
+use crate::tool_search_debug::ToolSearchInspectionSource;
+use crate::tool_search_debug::ToolSearchInspectionTool;
 
 pub struct ToolSearchHandler {
     search_infos: Vec<ToolSearchInfo>,
@@ -152,7 +159,56 @@ impl ToolSearchHandler {
     }
 }
 
-impl CoreToolRuntime for ToolSearchHandler {}
+impl ToolSearchHandler {
+    fn inspect(&self, query: &str, limit: usize) -> ToolSearchInspection {
+        let results = self.search_engine.search(query, None);
+        let matching_tool_count = results.len();
+        let effective_limit = limit.min(matching_tool_count);
+        let result_entries = results
+            .iter()
+            .take(effective_limit)
+            .enumerate()
+            .filter_map(|(rank, result)| {
+                let search_info = self.search_infos.get(result.document.id)?;
+                Some(inspect_result(
+                    rank + 1,
+                    result.document.id,
+                    result.score,
+                    search_info,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let output_tools = self
+            .search_output_tools(
+                results
+                    .iter()
+                    .take(effective_limit)
+                    .map(|result| result.document.id)
+                    .filter_map(|id| self.search_infos.get(id))
+                    .map(|search_info| &search_info.entry),
+            )
+            .unwrap_or_default()
+            .iter()
+            .map(inspect_output_tool)
+            .collect();
+
+        ToolSearchInspection {
+            indexed_tool_count: self.search_infos.len(),
+            matching_tool_count,
+            requested_limit: limit,
+            effective_limit,
+            top_k_truncated: matching_tool_count > limit,
+            results: result_entries,
+            output_tools,
+        }
+    }
+}
+
+impl CoreToolRuntime for ToolSearchHandler {
+    fn inspect_tool_search(&self, query: &str, limit: usize) -> Option<ToolSearchInspection> {
+        Some(self.inspect(query, limit))
+    }
+}
 
 impl ToolSearchHandler {
     fn search(
@@ -177,6 +233,70 @@ impl ToolSearchHandler {
         Ok(coalesce_loadable_tool_specs(
             results.into_iter().map(|entry| entry.output.clone()),
         ))
+    }
+}
+
+fn inspect_result(
+    rank: usize,
+    index: usize,
+    score: f32,
+    search_info: &ToolSearchInfo,
+) -> ToolSearchInspectionResult {
+    ToolSearchInspectionResult {
+        rank,
+        index,
+        score: score.is_finite().then_some(score),
+        source: search_info
+            .source_info
+            .as_ref()
+            .map(|source_info| ToolSearchInspectionSource {
+                name: source_info.name.clone(),
+                description: source_info.description.clone(),
+            }),
+        tools: inspect_entry_tools(&search_info.entry.output),
+        searchable_text: search_info.entry.search_text.clone(),
+    }
+}
+
+fn inspect_entry_tools(output: &LoadableToolSpec) -> Vec<ToolSearchInspectionTool> {
+    match output {
+        LoadableToolSpec::Function(tool) => vec![ToolSearchInspectionTool {
+            namespace: None,
+            name: tool.name.clone(),
+            canonical_name: tool.name.clone(),
+        }],
+        LoadableToolSpec::Namespace(namespace) => namespace
+            .tools
+            .iter()
+            .map(|tool| {
+                let ResponsesApiNamespaceTool::Function(tool) = tool;
+                ToolSearchInspectionTool {
+                    namespace: Some(namespace.name.clone()),
+                    name: tool.name.clone(),
+                    canonical_name: format!("{}.{}", namespace.name, tool.name),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn inspect_output_tool(output: &LoadableToolSpec) -> ToolSearchInspectionOutputTool {
+    match output {
+        LoadableToolSpec::Function(tool) => ToolSearchInspectionOutputTool {
+            namespace: None,
+            tool_names: vec![tool.name.clone()],
+        },
+        LoadableToolSpec::Namespace(namespace) => ToolSearchInspectionOutputTool {
+            namespace: Some(namespace.name.clone()),
+            tool_names: namespace
+                .tools
+                .iter()
+                .map(|tool| {
+                    let ResponsesApiNamespaceTool::Function(tool) = tool;
+                    tool.name.clone()
+                })
+                .collect(),
+        },
     }
 }
 
@@ -325,7 +445,154 @@ mod tests {
         );
     }
 
+    #[test]
+    fn inspect_reports_broad_query_top_k_truncation_and_omission() {
+        let mut search_infos = (0..10)
+            .map(|index| {
+                McpHandler::new(tool_info(
+                    &format!("distractor_{index}"),
+                    "semantic_match",
+                    "OpenAI Topics list topics",
+                ))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info")
+            })
+            .collect::<Vec<_>>();
+        search_infos.push(
+            McpHandler::new(tool_info(
+                "openai_topics",
+                "list_topics",
+                "Connector metadata",
+            ))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
+        );
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let inspection = handler.inspect("OpenAI Topics list topics", 8);
+
+        assert_eq!(inspection.indexed_tool_count, 11);
+        assert_eq!(inspection.matching_tool_count, 10);
+        assert_eq!(inspection.requested_limit, 8);
+        assert_eq!(inspection.effective_limit, 8);
+        assert!(inspection.top_k_truncated);
+        assert_eq!(inspection.results.len(), 8);
+        assert!(
+            inspection
+                .results
+                .iter()
+                .all(|result| result.tools[0].canonical_name != "mcp__openai_topics.list_topics")
+        );
+    }
+
+    #[test]
+    fn inspect_named_openai_topics_query_recovers_target_first() {
+        let search_infos = vec![
+            McpHandler::new(tool_info("calendar", "list_events", "Calendar events"))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info"),
+            McpHandler::new(tool_info(
+                "openai_topics",
+                "list_topics",
+                "List OpenAI topics",
+            ))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
+        ];
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let inspection = handler.inspect("list topics", 8);
+
+        assert_eq!(
+            inspection.results[0].tools[0].canonical_name,
+            "mcp__openai_topics.list_topics"
+        );
+        assert_eq!(inspection.results[0].rank, 1);
+        assert!(inspection.results[0].score.is_some());
+    }
+
+    #[test]
+    fn inspect_output_tools_match_namespace_coalescing() {
+        let search_infos = vec![
+            McpHandler::new(tool_info("calendar", "create_event", "events"))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info"),
+            McpHandler::new(tool_info("calendar", "list_events", "events"))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info"),
+        ];
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let inspection = handler.inspect("events", 2);
+        let mut tool_names = inspection.output_tools[0].tool_names.clone();
+        tool_names.sort();
+
+        assert_eq!(
+            inspection.output_tools[0].namespace,
+            Some("mcp__calendar".to_string())
+        );
+        assert_eq!(
+            tool_names,
+            vec!["create_event".to_string(), "list_events".to_string()]
+        );
+    }
+
+    #[test]
+    fn inspect_exposes_metadata_without_arguments_or_results() {
+        let search_infos = vec![
+            McpHandler::new(tool_info_with_schema(
+                "secrets",
+                "lookup",
+                "Lookup metadata",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "api_token": { "type": "string" }
+                    },
+                    "additionalProperties": false,
+                }),
+            ))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
+        ];
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let inspection = handler.inspect("api_token", 8);
+        let debug = format!("{inspection:?}");
+
+        assert!(inspection.results[0].searchable_text.contains("api_token"));
+        assert!(!debug.contains("arguments:"));
+        assert!(!debug.contains("tool_input"));
+        assert!(!debug.contains("tool_response"));
+        assert!(!debug.contains("secret-token-value"));
+    }
+
     fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
+        tool_info_with_schema(
+            server_name,
+            tool_name,
+            description_prefix,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        )
+    }
+
+    fn tool_info_with_schema(
+        server_name: &str,
+        tool_name: &str,
+        description_prefix: &str,
+        input_schema: serde_json::Value,
+    ) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
             supports_parallel_tool_calls: false,
@@ -336,11 +603,7 @@ mod tests {
             tool: Tool::new(
                 tool_name.to_string(),
                 format!("{description_prefix} desktop tool"),
-                Arc::new(rmcp::model::object(serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false,
-                }))),
+                Arc::new(rmcp::model::object(input_schema)),
             ),
             connector_id: None,
             connector_name: None,

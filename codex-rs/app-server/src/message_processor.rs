@@ -1382,6 +1382,9 @@ impl MessageProcessor {
                     .mcp_server_status_list(&request_id, params)
                     .await
             }
+            ClientRequest::ToolSearchInspect { params, .. } => {
+                self.mcp_processor.tool_search_inspect(params).await
+            }
             ClientRequest::McpResourceRead { params, .. } => {
                 self.mcp_processor
                     .mcp_resource_read(&request_id, params)
