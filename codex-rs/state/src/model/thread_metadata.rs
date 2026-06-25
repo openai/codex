@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn thread_row_rejects_unknown_history_mode() {
-        let mut row = thread_row(None);
+        let mut row = thread_row(/*reasoning_effort*/ None);
         row.history_mode = "future".to_string();
 
         assert!(ThreadMetadata::try_from(row).is_err());
