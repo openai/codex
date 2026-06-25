@@ -2830,7 +2830,7 @@ impl Session {
             .environment_manager()
             .resolve_selected_capability_roots(
                 &self.services.selected_capability_roots,
-                &environments.captured_environment_availability(),
+                &environments.captured_environments(),
             )
             .await;
         let extra_skill_sources = self

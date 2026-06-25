@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -12,7 +13,7 @@ use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_capability_roots_follow_captured_availability() -> anyhow::Result<()> {
+async fn selected_capability_roots_use_captured_handle_after_replacement() -> anyhow::Result<()> {
     let mut executor = exec_server().await?;
     let manager = EnvironmentManager::without_environments();
     let selected_root = SelectedCapabilityRoot {
@@ -28,23 +29,32 @@ async fn selected_capability_roots_follow_captured_availability() -> anyhow::Res
         executor.websocket_url().to_string(),
         /*connect_timeout*/ None,
     )?;
-    let environment = manager
+    let environment_a = manager
         .get_environment("tools")
-        .expect("executor should be registered");
-    environment.wait_until_ready().await?;
+        .expect("executor A should be registered");
+    environment_a.wait_until_ready().await?;
 
     let unavailable = manager
         .resolve_selected_capability_roots(
             std::slice::from_ref(&selected_root),
-            &HashMap::from([("tools".to_string(), false)]),
+            &HashMap::from([("tools".to_string(), None)]),
         )
         .await;
     assert!(unavailable.is_empty());
 
+    let captured_environments =
+        HashMap::from([("tools".to_string(), Some(Arc::clone(&environment_a)))]);
+    // Replace only the process-local handle; the stable environment ID and executor stay the same.
+    manager.upsert_environment(
+        "tools".to_string(),
+        executor.websocket_url().to_string(),
+        /*connect_timeout*/ None,
+    )?;
+
     let available = manager
         .resolve_selected_capability_roots(
             std::slice::from_ref(&selected_root),
-            &HashMap::from([("tools".to_string(), true)]),
+            &captured_environments,
         )
         .await;
     let [resolved] = available.as_slice() else {
@@ -52,7 +62,7 @@ async fn selected_capability_roots_follow_captured_availability() -> anyhow::Res
     };
 
     assert_eq!(resolved.selected_root(), &selected_root);
-    assert!(std::sync::Arc::ptr_eq(resolved.environment(), &environment));
+    assert!(Arc::ptr_eq(resolved.environment(), &environment_a));
 
     executor.shutdown().await?;
     Ok(())

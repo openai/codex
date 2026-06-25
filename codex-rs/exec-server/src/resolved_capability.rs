@@ -21,13 +21,6 @@ pub struct ResolvedSelectedCapabilityRoot {
 }
 
 impl ResolvedSelectedCapabilityRoot {
-    fn new(selected_root: SelectedCapabilityRoot, environment: Arc<Environment>) -> Self {
-        Self {
-            selected_root,
-            environment,
-        }
-    }
-
     pub fn selected_root(&self) -> &SelectedCapabilityRoot {
         &self.selected_root
     }
@@ -44,14 +37,14 @@ impl ResolvedSelectedCapabilityRoot {
 impl EnvironmentManager {
     /// Resolves selected roots whose stable environments are ready for the current model step.
     ///
-    /// Environment identity comes from the selected root's stable environment ID. Captured
-    /// availability keeps this projection consistent with the step's environment World State;
-    /// it is not an executor-identity or content cache key. Missing, starting, or failed
+    /// Environment identity comes from the selected root's stable environment ID. A ready
+    /// environment captured for the step carries its exact process-local handle so readiness and
+    /// execution cannot come from different registry snapshots. Missing, starting, or failed
     /// environments are omitted. A lazy environment is started for a later step.
     pub async fn resolve_selected_capability_roots(
         &self,
         selected_roots: &[SelectedCapabilityRoot],
-        captured_availability: &HashMap<String, bool>,
+        captured_environments: &HashMap<String, Option<Arc<Environment>>>,
     ) -> Vec<ResolvedSelectedCapabilityRoot> {
         let candidates = {
             let environments = self
@@ -63,14 +56,17 @@ impl EnvironmentManager {
                 .filter_map(|selected_root| {
                     let CapabilityRootLocation::Environment { environment_id, .. } =
                         &selected_root.location;
-                    let already_ready = match captured_availability.get(environment_id) {
-                        Some(true) => true,
-                        Some(false) => return None,
-                        None => false,
-                    };
-                    let environment = Arc::clone(environments.get(environment_id)?);
+                    let (environment, already_ready) =
+                        match captured_environments.get(environment_id) {
+                            Some(Some(environment)) => (Arc::clone(environment), true),
+                            Some(None) => return None,
+                            None => (Arc::clone(environments.get(environment_id)?), false),
+                        };
                     Some((
-                        ResolvedSelectedCapabilityRoot::new(selected_root.clone(), environment),
+                        ResolvedSelectedCapabilityRoot {
+                            selected_root: selected_root.clone(),
+                            environment,
+                        },
                         already_ready,
                     ))
                 })
