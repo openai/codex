@@ -260,7 +260,7 @@ pub enum MarketplaceAllowedSourceKind {
 
 impl PluginRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.is_none()
+        self.mcp_servers.as_ref().is_none_or(BTreeMap::is_empty)
     }
 }
 
