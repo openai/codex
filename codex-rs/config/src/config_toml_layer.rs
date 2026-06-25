@@ -1,7 +1,9 @@
 use crate::config_toml::ConfigToml;
 use crate::mcp_types::RawMcpServerConfig;
+use crate::strict_config::ignored_toml_value_field;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde::de::Error as _;
 use std::collections::HashMap;
 use std::path::Path;
 use toml::Value as TomlValue;
@@ -17,6 +19,13 @@ impl ParsedConfigTomlLayer {
     pub fn parse(raw: TomlValue, base_dir: &Path) -> Result<Self, toml::de::Error> {
         let parts = split_config_toml_layer(raw.clone());
         let _guard = AbsolutePathBufGuard::new(base_dir);
+        if let Some(ignored_field) =
+            ignored_toml_value_field::<ConfigTomlComposableSections>(parts.composable.clone())
+        {
+            return Err(toml::de::Error::custom(format!(
+                "unknown configuration field `{ignored_field}`"
+            )));
+        }
         let _: ConfigTomlComposableSections = parts.composable.try_into()?;
         let self_contained_config = parts.self_contained.try_into()?;
 

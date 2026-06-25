@@ -494,6 +494,49 @@ enabled = false
 }
 
 #[tokio::test]
+async fn write_value_rejects_unknown_mcp_field_hidden_by_cloud_config() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "")?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_config(
+            r#"[mcp_servers.docs]
+command = "cloud-docs-server"
+enabled = false
+"#,
+        ),
+    );
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(config_path.display().to_string()),
+            key_path: "mcp_servers.docs.typo".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("the cloud transport must not hide an unknown user-layer field");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("unknown configuration field `mcp_servers.docs.typo`"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(config_path)?, "");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_includes_origins_and_layers() {
     let tmp = tempdir().expect("tempdir");
     let user_path = tmp.path().join(CONFIG_TOML_FILE);
