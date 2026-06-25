@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -33,6 +34,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::StartedExecProcess;
+use crate::bash_env_snapshot::BashEnvSnapshotCache;
 use crate::process::ExecProcessEventLog;
 use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
@@ -126,7 +128,10 @@ impl AcceptedStdinWriteIds {
     }
 }
 
-struct ProcessStart;
+#[derive(Default)]
+struct ProcessStart {
+    cancelled: AtomicBool,
+}
 
 enum ProcessEntry {
     Starting(Arc<ProcessStart>),
@@ -136,6 +141,27 @@ enum ProcessEntry {
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    bash_env_snapshots: BashEnvSnapshotCache,
+}
+
+struct ProcessStartGuard(Option<(Arc<Inner>, ProcessId, Arc<ProcessStart>)>);
+
+impl Drop for ProcessStartGuard {
+    fn drop(&mut self) {
+        let Some((inner, process_id, start)) = self.0.take() else {
+            return;
+        };
+        start.cancelled.store(true, Ordering::Release);
+        tokio::spawn(async move {
+            let mut process_map = inner.processes.lock().await;
+            if matches!(
+                process_map.get(&process_id),
+                Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
+            ) {
+                process_map.remove(&process_id);
+            }
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -184,12 +210,14 @@ impl LocalProcess {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
+                bash_env_snapshots: BashEnvSnapshotCache::default(),
             }),
             runtime_paths,
         }
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.clear_bash_env_snapshots();
         let remaining = {
             let mut processes = self.inner.processes.lock().await;
             processes
@@ -214,22 +242,27 @@ impl LocalProcess {
         *notification_sender = notifications;
     }
 
+    pub(crate) fn clear_bash_env_snapshots(&self) {
+        self.inner.bash_env_snapshots.clear();
+    }
+
     async fn start_process(
         &self,
-        params: ExecParams,
+        mut params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
+        if params.argv.is_empty() {
+            return Err(invalid_params("argv must not be empty".to_string()));
+        }
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
-        let (program, args) = prepared
-            .command
-            .split_first()
-            .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-
-        let start = Arc::new(ProcessStart);
+        let start = Arc::new(ProcessStart::default());
         {
             let mut process_map = self.inner.processes.lock().await;
-            if process_map.contains_key(&process_id) {
+            let reusable = match process_map.get(&process_id) {
+                None => true,
+                Some(ProcessEntry::Starting(current)) => current.cancelled.load(Ordering::Acquire),
+                Some(ProcessEntry::Running(_)) => false,
+            };
+            if !reusable {
                 return Err(invalid_request(format!(
                     "process {process_id} already exists"
                 )));
@@ -239,6 +272,33 @@ impl LocalProcess {
                 ProcessEntry::Starting(Arc::clone(&start)),
             );
         }
+        let mut start_guard = ProcessStartGuard(Some((
+            Arc::clone(&self.inner),
+            process_id.clone(),
+            Arc::clone(&start),
+        )));
+
+        let environment = child_env(&params);
+        let (argv, environment) = self
+            .inner
+            .bash_env_snapshots
+            .prepare_launch(&params, &environment, self.runtime_paths.as_ref())
+            .await;
+        params.argv = argv;
+        let prepared = match prepare_exec_request(&params, environment, self.runtime_paths.as_ref())
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.remove_starting_process(&process_id, &start).await;
+                start_guard.0 = None;
+                return Err(err);
+            }
+        };
+        let Some((program, args)) = prepared.command.split_first() else {
+            self.remove_starting_process(&process_id, &start).await;
+            start_guard.0 = None;
+            return Err(invalid_params("argv must not be empty".to_string()));
+        };
 
         let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
@@ -272,13 +332,8 @@ impl LocalProcess {
         let spawned = match spawned_result {
             Ok(spawned) => spawned,
             Err(err) => {
-                let mut process_map = self.inner.processes.lock().await;
-                if matches!(
-                    process_map.get(&process_id),
-                    Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, &start)
-                ) {
-                    process_map.remove(&process_id);
-                }
+                self.remove_starting_process(&process_id, &start).await;
+                start_guard.0 = None;
                 return Err(internal_error(err.to_string()));
             }
         };
@@ -324,6 +379,7 @@ impl LocalProcess {
                 })),
             );
         }
+        start_guard.0 = None;
 
         tokio::spawn(stream_output(
             process_id.clone(),
@@ -355,6 +411,16 @@ impl LocalProcess {
         ));
 
         Ok((ExecResponse { process_id }, wake_tx, events))
+    }
+
+    async fn remove_starting_process(&self, process_id: &ProcessId, start: &Arc<ProcessStart>) {
+        let mut process_map = self.inner.processes.lock().await;
+        if matches!(
+            process_map.get(process_id),
+            Some(ProcessEntry::Starting(current)) if Arc::ptr_eq(current, start)
+        ) {
+            process_map.remove(process_id);
+        }
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
@@ -964,6 +1030,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         }
@@ -991,6 +1058,71 @@ mod tests {
         };
 
         assert_eq!(error, expected);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_snapshot_capture_allows_immediate_retry_and_kills_descendants() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bash_env = temp.path().join("bash_env.sh");
+        let child_pid_file = temp.path().join("child.pid");
+        std::fs::write(
+            &bash_env,
+            format!(
+                "sleep 10 & printf '%s' \"$!\" > '{}'; wait\n",
+                child_pid_file.display()
+            ),
+        )
+        .expect("write slow BASH_ENV");
+        let cwd = PathUri::from_host_native_path(temp.path()).expect("cwd URI");
+        let mut params = test_exec_params(HashMap::from([
+            ("BASH_ENV".to_string(), bash_env.display().to_string()),
+            ("PATH".to_string(), std::env::var("PATH").expect("PATH")),
+        ]));
+        params.argv = vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            "true".to_string(),
+        ];
+        params.cwd = cwd.clone();
+        params.bash_env_snapshot = Some(crate::protocol::BashEnvSnapshotParams {
+            workspace_root: cwd,
+            preserve_env_keys: Vec::new(),
+        });
+        let backend = LocalProcess::default();
+        let task = tokio::spawn({
+            let (backend, params) = (backend.clone(), params.clone());
+            async move { backend.start_process(params).await }
+        });
+        let child_pid = timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(contents) = std::fs::read_to_string(&child_pid_file)
+                    && let Ok(pid) = contents.parse::<libc::pid_t>()
+                {
+                    break pid;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("capture should start a descendant");
+        task.abort();
+        let _ = task.await;
+        std::fs::write(&bash_env, ":\n").expect("replace slow BASH_ENV");
+        timeout(Duration::from_secs(2), backend.start_process(params))
+            .await
+            .expect("retry should not time out")
+            .expect("process id should be reusable");
+        timeout(Duration::from_secs(2), async {
+            while unsafe { libc::kill(child_pid, 0) } == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            unsafe { libc::kill(child_pid, libc::SIGKILL) };
+            panic!("capture descendant {child_pid} should be terminated");
+        });
     }
 
     #[test]

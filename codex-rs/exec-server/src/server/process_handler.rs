@@ -33,6 +33,10 @@ impl ProcessHandler {
         self.process.shutdown().await;
     }
 
+    pub(crate) fn clear_bash_env_snapshots(&self) {
+        self.process.clear_bash_env_snapshots();
+    }
+
     pub(crate) fn set_notification_sender(&self, notifications: Option<RpcNotificationSender>) {
         self.process.set_notification_sender(notifications);
     }

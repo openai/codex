@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
+#[cfg(unix)]
+use codex_exec_server::BashEnvSnapshotParams;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecOutputStream;
@@ -82,6 +84,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -226,6 +229,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -260,6 +264,7 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -310,6 +315,7 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -361,6 +367,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -437,6 +444,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -477,6 +485,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
             pipe_stdin: true,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -513,6 +522,7 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -550,6 +560,7 @@ async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Resu
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -606,6 +617,7 @@ async fn assert_exec_process_signal_reports_unsupported_on_windows(use_remote: b
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -649,6 +661,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -710,6 +723,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
             pipe_stdin: true,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         })
@@ -813,6 +827,49 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
         format!("ready:{pid}\nduring:{pid}\nafter:{pid}:hello\n")
     );
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(remote_exec_server)]
+async fn remote_bash_env_snapshot_is_reused_across_execs() -> Result<()> {
+    let server = exec_server().await?;
+    let backend =
+        Environment::create_for_tests(Some(server.websocket_url().to_string()))?.get_exec_backend();
+    let temp = tempfile::tempdir()?;
+    let bash_env = temp.path().join("bash_env.sh");
+    std::fs::write(&bash_env, "printf x >> counter\nexport SENTINEL=ready\n")?;
+    let workspace_uri = PathUri::from_host_native_path(temp.path())?;
+    for index in 0..2 {
+        let session = backend
+            .start(ExecParams {
+                process_id: format!("bash-snapshot-{index}").into(),
+                argv: vec![
+                    "/bin/bash".into(),
+                    "-c".into(),
+                    "printf %s \"$SENTINEL\"".into(),
+                ],
+                cwd: workspace_uri.clone(),
+                env_policy: None,
+                env: HashMap::from([("BASH_ENV".to_string(), bash_env.display().to_string())]),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: None,
+                enforce_managed_network: false,
+                managed_network: None,
+                bash_env_snapshot: Some(BashEnvSnapshotParams {
+                    workspace_root: workspace_uri.clone(),
+                    preserve_env_keys: Vec::new(),
+                }),
+            })
+            .await?;
+        let wake = session.process.subscribe_wake();
+        let (output, ..) = collect_process_output_from_reads(session.process, wake).await?;
+        assert_eq!(output, "ready");
+    }
+    assert_eq!(std::fs::read_to_string(temp.path().join("counter"))?, "x");
     Ok(())
 }
 

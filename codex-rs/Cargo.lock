@@ -2923,6 +2923,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2 0.10.9",
  "tempfile",
  "test-case",
  "thiserror 2.0.18",

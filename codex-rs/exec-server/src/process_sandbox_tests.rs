@@ -45,6 +45,7 @@ fn sandbox_request_wraps_native_argv_on_executor() {
         pipe_stdin: false,
         arg0: None,
         sandbox: Some(sandbox),
+        bash_env_snapshot: None,
         enforce_managed_network: false,
         managed_network: None,
     };
@@ -106,6 +107,7 @@ fn sandbox_request_allows_prepared_managed_proxy_port() {
         pipe_stdin: false,
         arg0: None,
         sandbox: Some(sandbox),
+        bash_env_snapshot: None,
         enforce_managed_network: true,
         managed_network: Some(ManagedNetworkSandboxContext {
             loopback_ports: vec![43123],
@@ -142,6 +144,7 @@ fn native_request_preserves_native_launch_fields() {
         pipe_stdin: false,
         arg0: Some("custom-arg0".to_string()),
         sandbox: None,
+        bash_env_snapshot: None,
         enforce_managed_network: false,
         managed_network: None,
     };

@@ -540,6 +540,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            bash_env_snapshot: None,
             enforce_managed_network: false,
             managed_network: None,
         }
