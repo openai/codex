@@ -1284,6 +1284,9 @@
           },
           "type": "array"
         },
+        "UserInstructions": {
+          "$ref": "#/definitions/HookHandlerConfig"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {
