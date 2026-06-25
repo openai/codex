@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -128,6 +129,11 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         .to_path_buf()
         .abs()
         .canonicalize()?;
+    let cwd = cwd.canonicalize()?;
+    let runtime_workspace_roots = runtime_workspace_roots
+        .into_iter()
+        .map(|root| root.canonicalize())
+        .collect::<std::io::Result<Vec<_>>>()?;
     assert_eq!(
         (cwd, runtime_workspace_roots, active_permission_profile),
         (
@@ -229,13 +235,25 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
         .to_path_buf()
         .abs()
         .canonicalize()?;
-    let host_workspace_roots = format!(
-        "<workspace_roots><root>{}</root></workspace_roots>",
-        host_cwd.as_path().display()
-    );
+    let model_workspace_root = environment_context
+        .split_once("<workspace_roots><root>")
+        .and_then(|(_, rest)| rest.split_once("</root></workspace_roots>"))
+        .map(|(root, _)| {
+            // Decode ampersands last so entity-like path text stays literal.
+            PathBuf::from(
+                root.replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"")
+                    .replace("&apos;", "'")
+                    .replace("&amp;", "&"),
+            )
+            .abs()
+        })
+        .context("model context should include a workspace root")?
+        .canonicalize()?;
     // TODO(anp): Derive model-visible workspace roots from the selected remote environment and
     // render them using its native path convention.
-    assert!(environment_context.contains(&host_workspace_roots));
+    assert_eq!(model_workspace_root, host_cwd);
 
     Ok(())
 }
