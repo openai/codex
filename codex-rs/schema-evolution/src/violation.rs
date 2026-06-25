@@ -39,6 +39,10 @@ pub enum Violation {
         before: Option<ValueSet>,
         after: ValueSet,
     },
+    UnionVariantRemoved {
+        at: Location,
+        variant: VariantLabel,
+    },
     AdditionalPropertiesNarrowed {
         at: Location,
         before: AdditionalPropertiesValue,
@@ -73,6 +77,9 @@ enum PathSegment {
     TupleItem(usize),
     AdditionalProperties,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VariantLabel(pub String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdditionalPropertiesValue {
@@ -193,6 +200,12 @@ impl Violation {
                 before.as_ref().map_or(Value::Null, ValueSet::to_json),
                 after.to_json(),
             ),
+            Self::UnionVariantRemoved { at, variant } => at_location(
+                ViolationKind::UnionVariantRemoved,
+                at,
+                Value::String(variant.0.clone()),
+                Value::Null,
+            ),
             Self::AdditionalPropertiesNarrowed { at, before, after } => at_location(
                 ViolationKind::AdditionalPropertiesNarrowed,
                 at,
@@ -215,6 +228,7 @@ impl Violation {
             | Self::RequiredPropertyAdded { at }
             | Self::TypeNarrowed { at, .. }
             | Self::EnumNarrowed { at, .. }
+            | Self::UnionVariantRemoved { at, .. }
             | Self::AdditionalPropertiesNarrowed { at, .. }
             | Self::ConstraintChanged { at, .. } => Some(at),
         }
@@ -233,6 +247,7 @@ impl Violation {
             | Self::RequiredPropertyAdded { at }
             | Self::TypeNarrowed { at, .. }
             | Self::EnumNarrowed { at, .. }
+            | Self::UnionVariantRemoved { at, .. }
             | Self::AdditionalPropertiesNarrowed { at, .. }
             | Self::ConstraintChanged { at, .. } => Some(at),
         }

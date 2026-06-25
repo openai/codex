@@ -1,5 +1,6 @@
 mod array;
 mod object;
+mod union;
 mod value;
 
 use crate::ApiSchema;
@@ -81,6 +82,34 @@ impl<'a> CompareCx<'a> {
             after: SchemaSnapshot(after),
         });
     }
+
+    pub(super) fn probe(
+        &self,
+        base: SchemaId,
+        current: SchemaId,
+        path: &SchemaPath,
+    ) -> Result<Vec<Violation>> {
+        let mut probe = Self::new(self.base, self.current, self.method);
+        probe.active.clone_from(&self.active);
+        base.compare(&current, &mut probe, path)?;
+        Ok(probe.violations)
+    }
+
+    pub(super) fn reverse_probe(
+        &self,
+        current: SchemaId,
+        base: SchemaId,
+        path: &SchemaPath,
+    ) -> Result<Vec<Violation>> {
+        let mut probe = Self::new(self.current, self.base, self.method);
+        probe.active = self
+            .active
+            .iter()
+            .map(|(base, current)| (*current, *base))
+            .collect();
+        current.compare(&base, &mut probe, path)?;
+        Ok(probe.violations)
+    }
 }
 
 impl CompareNarrowing for Method {
@@ -135,7 +164,7 @@ impl CompareNarrowing for SchemaId {
                 Ok(())
             }
             (SchemaNode::Rules(base), SchemaNode::Rules(current)) => {
-                compare_rules(base, current, cx, path)
+                compare_rules(base_id, base, current_id, current, cx, path)
             }
             (SchemaNode::Reference(_), _) | (_, SchemaNode::Reference(_)) => {
                 unreachable!("resolve returns concrete schema nodes")
@@ -147,13 +176,31 @@ impl CompareNarrowing for SchemaId {
 }
 
 fn compare_rules(
+    base_id: SchemaId,
     base: &SchemaRules,
+    current_id: SchemaId,
     current: &SchemaRules,
     cx: &mut CompareCx<'_>,
     path: &SchemaPath,
 ) -> Result<()> {
     value::compare_values(base.values.as_ref(), current.values.as_ref(), cx, path);
     value::compare_types(base.types.as_ref(), current.types.as_ref(), cx, path);
+    union::compare_optional(
+        base.any_of.as_ref(),
+        current.any_of.as_ref(),
+        base_id,
+        current_id,
+        cx,
+        path,
+    )?;
+    union::compare_optional(
+        base.one_of.as_ref(),
+        current.one_of.as_ref(),
+        base_id,
+        current_id,
+        cx,
+        path,
+    )?;
     object::compare_optional(base.object.as_ref(), current.object.as_ref(), cx, path)?;
     array::compare_optional(base.array.as_ref(), current.array.as_ref(), cx, path)?;
     value::compare_constraints(&base.constraints, &current.constraints, cx, path);

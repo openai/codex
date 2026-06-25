@@ -54,6 +54,26 @@ fn compares_typed_arguments_with_the_full_request_schema() -> Result<()> {
 }
 
 #[test]
+fn detects_request_level_union_narrowing_that_constrains_params() -> Result<()> {
+    let base = request_schema(json!({ "type": "number" }));
+    let mut current = base.clone();
+    current["oneOf"][0]["anyOf"] = json!([{
+        "properties": {
+            "id": { "type": ["string", "integer"] },
+            "method": { "enum": ["test/method"], "type": "string" },
+            "params": { "type": "integer" }
+        },
+        "type": "object"
+    }]);
+
+    let violations = compare(&base, &current)?;
+    assert!(violations.iter().any(|violation| {
+        violation.kind == ViolationKind::ConstraintChanged && violation.path == "request"
+    }));
+    Ok(())
+}
+
+#[test]
 fn retains_method_and_request_level_constraints_in_the_typed_envelope() -> Result<()> {
     let mut base = request_schema(json!({ "type": "null" }));
     base["oneOf"][0]["required"] = json!(["id", "params"]);
