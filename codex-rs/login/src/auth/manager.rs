@@ -85,7 +85,7 @@ pub enum AgentIdentityAuthPolicy {
     ChatGptAuth,
 }
 
-const AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+const AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug)]
 struct AgentIdentityBootstrapCooldown {
