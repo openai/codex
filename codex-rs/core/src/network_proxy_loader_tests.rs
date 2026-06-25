@@ -215,6 +215,55 @@ dangerously_allow_plaintext_credential_injection = true
 }
 
 #[test]
+fn managed_config_can_disable_plaintext_credential_injection() {
+    let managed_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::System {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/system.toml"))
+                .expect("system config path should be absolute"),
+        },
+        toml::toml! {
+            default_permissions = "workspace"
+
+            [permissions.workspace.network.mitm]
+            dangerously_allow_plaintext_credential_injection = false
+        }
+        .into(),
+    );
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User {
+            file: AbsolutePathBuf::try_from(std::path::PathBuf::from("/tmp/config.toml"))
+                .expect("user config path should be absolute"),
+            profile: None,
+        },
+        toml::toml! {
+            [permissions.workspace.network.mitm]
+            dangerously_allow_plaintext_credential_injection = true
+        }
+        .into(),
+    );
+    let layers = ConfigLayerStack::new(
+        vec![managed_layer, user_layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("layer stack should be valid");
+    let config = config_from_layers(&layers, &Policy::empty())
+        .expect("merged network proxy config should load");
+
+    assert!(
+        config
+            .network
+            .dangerously_allow_plaintext_credential_injection
+    );
+    let err = enforce_trusted_constraints(&layers, &config)
+        .expect_err("managed config should disable plaintext credential injection");
+    assert_eq!(
+        format!("{err:#}"),
+        "network proxy constraints: invalid value for network.dangerously_allow_plaintext_credential_injection: true (allowed false (disabled by managed config))"
+    );
+}
+
+#[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
     config
