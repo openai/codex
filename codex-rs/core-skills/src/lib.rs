@@ -7,6 +7,7 @@ pub mod model;
 pub mod remote;
 pub mod render;
 mod root_loader;
+pub mod runtime;
 pub mod service;
 mod skill_instructions;
 pub mod system;
