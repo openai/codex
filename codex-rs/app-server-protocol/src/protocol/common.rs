@@ -1930,6 +1930,7 @@ mod tests {
                 thread_id: Some("thread-1".to_string()),
                 server: "server-a".to_string(),
                 uri: "file:///tmp/resource".to_string(),
+                meta: None,
             },
         };
         assert_eq!(
@@ -2108,6 +2109,7 @@ mod tests {
                 thread_id: None,
                 server: "server-a".to_string(),
                 uri: "file:///tmp/resource".to_string(),
+                meta: None,
             },
         };
         assert_eq!(mcp_resource_read.serialization_scope(), None);
