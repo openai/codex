@@ -73,4 +73,6 @@ The patched zsh fork used by `shell_zsh_fork` is fetched from the DotSlash
 manifest at `scripts/codex_package/codex-zsh` when the selected target has a
 matching prebuilt artifact. Downloaded archives are cached under
 `$TMPDIR/codex-package/<target>-zsh` and installed at
-`codex-resources/zsh/bin/zsh`.
+`codex-resources/zsh/bin/zsh`. Pass `--zsh-manifest` to use a different
+DotSlash manifest, such as the manifest published with a standalone zsh
+artifact release.

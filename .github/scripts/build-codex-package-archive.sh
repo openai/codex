@@ -9,6 +9,7 @@ Usage: build-codex-package-archive.sh \
   --entrypoint-dir <dir> \
   --archive-dir <dir> \
   [--bwrap-bin <path>] \
+  [--zsh-manifest <path>] \
   [--codex-command-runner-bin <path>] \
   [--codex-windows-sandbox-setup-bin <path>] \
   [--target-suffixed-entrypoint]
@@ -46,6 +47,10 @@ while [[ $# -gt 0 ]]; do
     --bwrap-bin)
       resource_args+=(--bwrap-bin "${2:?--bwrap-bin requires a value}")
       bwrap_bin_provided="true"
+      shift 2
+      ;;
+    --zsh-manifest)
+      resource_args+=(--zsh-manifest "${2:?--zsh-manifest requires a value}")
       shift 2
       ;;
     --codex-command-runner-bin)
