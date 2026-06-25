@@ -56,6 +56,7 @@ mod request_user_input;
 mod request_validation;
 mod review;
 mod safety_check_downgrade;
+mod selected_environment;
 mod skills_list;
 mod sleep;
 mod thread_archive;
