@@ -11,7 +11,6 @@ use std::time::Instant;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
-use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
@@ -68,11 +67,11 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -1166,16 +1165,12 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
-    let mut builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
-    if let Some(tls_config) = maybe_build_rustls_client_config_with_custom_ca()? {
-        builder = builder.tls_backend_preconfigured(tls_config.as_ref().clone());
-    }
-    let oauth_metadata_client = builder.build()?;
-    // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
-    // shared HTTP client abstraction instead of always creating the local
-    // reqwest metadata client here.
+    let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
+        http_client.clone(),
+        default_headers.clone(),
+    ));
     let mut oauth_state =
-        OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
+        OAuthState::new_with_oauth_http_client(url.to_string(), oauth_http_client).await?;
 
     oauth_state
         .set_credentials(

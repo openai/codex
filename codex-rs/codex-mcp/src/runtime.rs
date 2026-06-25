@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
@@ -80,6 +82,20 @@ impl McpRuntimeContext {
             "MCP server `{server_name}` references unknown environment id `{}`",
             config.environment_id
         ))
+    }
+
+    /// Resolves the HTTP capability owned by the server's configured environment.
+    pub fn resolve_http_client(
+        &self,
+        server_name: &str,
+        config: &codex_config::McpServerConfig,
+    ) -> Result<Arc<dyn HttpClient>, String> {
+        Ok(self
+            .resolve_server_environment(server_name, config)?
+            .map_or_else(
+                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                |environment| environment.get_http_client(),
+            ))
     }
 }
 

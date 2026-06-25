@@ -18,8 +18,10 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core_plugins::PluginsManager;
+use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
@@ -558,6 +560,10 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        &McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
+            config.cwd.to_path_buf(),
+        ),
     )
     .await;
 

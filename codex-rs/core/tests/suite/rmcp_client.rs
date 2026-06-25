@@ -24,6 +24,7 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
+use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
@@ -2934,6 +2935,7 @@ async fn wait_for_remote_streamable_http_server(
             headers: Vec::new(),
             body: None,
             timeout_ms: Some(remaining.as_millis().clamp(1, 1_000) as u64),
+            redirect_policy: HttpRedirectPolicy::Follow,
             request_id: "buffered-request".to_string(),
             stream_response: false,
         };

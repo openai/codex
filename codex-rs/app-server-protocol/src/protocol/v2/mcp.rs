@@ -186,6 +186,8 @@ pub struct McpServerRefreshResponse {}
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginParams {
     pub name: String,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub scopes: Option<Vec<String>>,
@@ -215,6 +217,7 @@ pub struct McpToolCallProgressNotification {
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginCompletedNotification {
     pub name: String,
+    pub thread_id: Option<String>,
     pub success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -211,7 +211,7 @@ impl ExecServerHandler {
         if stream_response {
             self.reserve_http_body_stream(&http_request_id).await?;
         }
-        let response = ReqwestHttpRequestRunner::new(params.timeout_ms)?
+        let response = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)?
             .run(params)
             .await;
         if response.is_err() && stream_response {

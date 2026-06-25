@@ -24,6 +24,7 @@ use super::response_body_stream::send_body_delta;
 use crate::HttpClient;
 use crate::client::ExecServerError;
 use crate::protocol::HttpHeader;
+use crate::protocol::HttpRedirectPolicy;
 use crate::protocol::HttpRequestBodyDeltaNotification;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::HttpRequestResponse;
@@ -50,12 +51,19 @@ pub(crate) struct ReqwestHttpRequestRunner {
 }
 
 impl ReqwestHttpClient {
-    fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
+    fn build_client(
+        timeout_ms: Option<u64>,
+        redirect_policy: HttpRedirectPolicy,
+    ) -> Result<reqwest::Client, ExecServerError> {
         let builder = match timeout_ms {
             None => reqwest::Client::builder(),
             Some(timeout_ms) => {
                 reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
             }
+        };
+        let builder = match redirect_policy {
+            HttpRedirectPolicy::Follow => builder,
+            HttpRedirectPolicy::Stop => builder.redirect(reqwest::redirect::Policy::none()),
         };
         build_reqwest_client_with_custom_ca(builder)
             .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
@@ -68,7 +76,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, _) = runner
                 .run(HttpRequestParams {
@@ -87,7 +95,7 @@ impl HttpClient for ReqwestHttpClient {
         params: HttpRequestParams,
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         async move {
-            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms)
+            let runner = ReqwestHttpRequestRunner::new(params.timeout_ms, params.redirect_policy)
                 .map_err(|error| ExecServerError::HttpRequest(error.message))?;
             let (response, pending_stream) = runner
                 .run(HttpRequestParams {
@@ -111,8 +119,11 @@ impl HttpClient for ReqwestHttpClient {
 }
 
 impl ReqwestHttpRequestRunner {
-    pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
-        let client = ReqwestHttpClient::build_client(timeout_ms)
+    pub(crate) fn new(
+        timeout_ms: Option<u64>,
+        redirect_policy: HttpRedirectPolicy,
+    ) -> Result<Self, JSONRPCErrorError> {
+        let client = ReqwestHttpClient::build_client(timeout_ms, redirect_policy)
             .map_err(|error| internal_error(error.to_string()))?;
         Ok(Self { client })
     }
