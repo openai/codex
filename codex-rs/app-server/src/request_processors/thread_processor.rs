@@ -3,7 +3,6 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -1070,26 +1069,6 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let current_cli_overrides = config_manager.current_cli_overrides();
-        let has_cli_override = |key: &str| {
-            current_cli_overrides
-                .iter()
-                .any(|(path, _value)| path == key)
-        };
-        let has_explicit_model = has_cli_override("model")
-            || typesafe_overrides.model.is_some()
-            || config_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.contains_key("model"));
-        let has_explicit_reasoning_effort = has_cli_override("model_reasoning_effort")
-            || config_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
-        let has_explicit_service_tier = has_cli_override("service_tier")
-            || typesafe_overrides.service_tier.is_some()
-            || config_overrides
-                .as_ref()
-                .is_some_and(|overrides| overrides.contains_key("service_tier"));
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
@@ -1114,6 +1093,7 @@ impl ThreadRequestProcessor {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
                 .unwrap_or_else(|| config.cwd.clone());
+            let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
                 codex_core::config::set_project_trust_level(
@@ -1157,31 +1137,6 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
-        }
-
-        if let Some(defaults) = config
-            .config_layer_stack
-            .requirements_toml()
-            .models
-            .as_ref()
-            .and_then(|models| models.new_thread.as_ref())
-        {
-            if !has_explicit_model && let Some(model) = defaults.model.as_ref() {
-                config.model = Some(model.clone());
-            }
-            if !has_explicit_reasoning_effort
-                && let Some(reasoning_effort) = defaults.model_reasoning_effort.as_ref()
-            {
-                config.model_reasoning_effort = Some(reasoning_effort.clone());
-            }
-            if !has_explicit_service_tier && let Some(service_tier) = defaults.service_tier.as_ref()
-            {
-                config.service_tier = Some(
-                    ServiceTier::from_request_value(service_tier)
-                        .map(|tier| tier.request_value().to_string())
-                        .unwrap_or_else(|| service_tier.clone()),
-                );
-            }
         }
 
         let environments = environments.unwrap_or_else(|| {
