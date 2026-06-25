@@ -33,12 +33,12 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
 
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
-    if !env_map.contains_key("PATH")
+    if windows_env_value(env_map, "PATH").is_none()
         && let Ok(path) = env::var("PATH")
     {
         env_map.insert("PATH".into(), path);
     }
-    if !env_map.contains_key("PATHEXT")
+    if windows_env_value(env_map, "PATHEXT").is_none()
         && let Ok(pathext) = env::var("PATHEXT")
     {
         env_map.insert("PATHEXT".into(), pathext);
@@ -46,10 +46,8 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
 }
 
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
-    let existing = env_map
-        .get("PATH")
+    let existing = windows_env_value(env_map, "PATH")
         .cloned()
-        .or_else(|| env::var("PATH").ok())
         .unwrap_or_default();
     let parts: Vec<String> = existing.split(';').map(ToString::to_string).collect();
     if parts
@@ -65,14 +63,12 @@ fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
         new_path.push(';');
         new_path.push_str(&existing);
     }
-    env_map.insert("PATH".into(), new_path);
+    set_windows_env_value(env_map, "PATH", new_path);
 }
 
 fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
-    let default = env_map
-        .get("PATHEXT")
+    let default = windows_env_value(env_map, "PATHEXT")
         .cloned()
-        .or_else(|| env::var("PATHEXT").ok())
         .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string());
     let exts: Vec<String> = default
         .split(';')
@@ -99,7 +95,21 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
     let mut combined = Vec::new();
     combined.extend(front);
     combined.extend(rest);
-    env_map.insert("PATHEXT".into(), combined.join(";"));
+    set_windows_env_value(env_map, "PATHEXT", combined.join(";"));
+}
+
+fn windows_env_value<'a>(env_map: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
+    env_map.get(key).or_else(|| {
+        env_map
+            .iter()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value)
+    })
+}
+
+fn set_windows_env_value(env_map: &mut HashMap<String, String>, key: &str, value: String) {
+    env_map.retain(|existing, _| !existing.eq_ignore_ascii_case(key));
+    env_map.insert(key.to_string(), value);
 }
 
 fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf> {
@@ -175,3 +185,7 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     reorder_pathext_for_stubs(env_map);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "env_tests.rs"]
+mod tests;

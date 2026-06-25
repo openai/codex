@@ -250,6 +250,60 @@ fn legacy_non_tty_uses_explicit_application_path() {
 }
 
 #[test]
+fn legacy_resolves_request_pathext_in_a_long_working_directory() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let fixture = TempDir::new().expect("tempdir");
+        let tools = fixture.path().join("tools");
+        fs::create_dir_all(&tools).expect("create tools directory");
+        let executable = tools.join("path-only-tool.BIN");
+        fs::copy(r"C:\Windows\System32\cmd.exe", &executable).expect("copy executable fixture");
+        let mut cwd = fixture.path().join("workspace");
+        while cwd.to_string_lossy().len() <= 270 {
+            cwd.push("long-working-directory-segment");
+        }
+        fs::create_dir_all(&cwd).expect("create long working directory");
+        let codex_home = sandbox_home("legacy-long-cwd-resolution");
+        let permission_profile = PermissionProfile::workspace_write();
+        let env_map = HashMap::from([
+            ("Path".to_string(), tools.to_string_lossy().into_owned()),
+            ("PathExt".to_string(), ".BIN".to_string()),
+        ]);
+
+        let spawned = spawn_windows_sandbox_session_legacy(
+            &permission_profile,
+            workspace_roots_for(cwd.as_path()).as_slice(),
+            codex_home.path(),
+            vec![
+                "path-only-tool".to_string(),
+                "/c".to_string(),
+                "echo REQUEST-PATHEXT-LONG-CWD".to_string(),
+            ],
+            cwd.as_path(),
+            env_map,
+            /*timeout_ms*/ Some(5_000),
+            &[],
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect("spawn request-resolved executable");
+
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(10)).await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        assert_eq!(exit_code, 0, "stdout={stdout:?}");
+        assert!(
+            stdout.contains("REQUEST-PATHEXT-LONG-CWD"),
+            "stdout={stdout:?}"
+        );
+    });
+}
+
+#[test]
 fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();

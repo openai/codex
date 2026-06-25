@@ -1054,6 +1054,22 @@ impl UnifiedExecProcessManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
+        #[cfg(target_os = "windows")]
+        let resolved_program = codex_windows_sandbox::resolve_windows_executable(
+            &request.command,
+            native_cwd.as_path(),
+            &request.env,
+        )
+        .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        #[cfg(target_os = "windows")]
+        let program = resolved_program.to_str().ok_or_else(|| {
+            UnifiedExecError::create_process(format!(
+                "resolved Windows executable is not Unicode: {}",
+                resolved_program.display()
+            ))
+        })?;
+        #[cfg(not(target_os = "windows"))]
+        let program = program.as_str();
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,

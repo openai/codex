@@ -1,4 +1,5 @@
 use super::windows_common::finish_driver_spawn;
+use crate::command_resolution::resolve_windows_launch;
 use crate::conpty::ConptyInstance;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
@@ -296,6 +297,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
             add_git_safe_directory: false,
         },
     )?;
+    let launch = resolve_windows_launch(launch, cwd, &env_map)?;
     if !common.permissions.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }

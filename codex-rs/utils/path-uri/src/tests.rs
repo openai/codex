@@ -187,6 +187,24 @@ fn file_uri_falls_back_for_windows_prefixes_without_a_uri_representation() {
 
 #[cfg(windows)]
 #[test]
+fn file_uri_preserves_localhost_unc_path() {
+    let path = AbsolutePathBuf::from_absolute_path_checked(r"\\localhost\C$\workspace\src")
+        .expect("localhost UNC path should be absolute");
+
+    let uri = PathUri::from_abs_path(&path);
+
+    assert!(uri.to_string().starts_with(BAD_PATH_URI_PREFIX));
+    assert_eq!(
+        PathUri::parse(&uri.to_string())
+            .expect("fallback URI should parse")
+            .to_abs_path()
+            .expect("fallback URI should decode"),
+        path
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn file_uri_fallback_round_trips_non_unicode_windows_paths() {
     let path_wide = r"C:\bad\"
         .encode_utf16()

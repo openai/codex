@@ -24,14 +24,7 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
 
 mod windows_impl {
     use super::ElevatedSandboxProfileCaptureRequest;
-    use crate::acl::allow_null_device;
-    use crate::cap::load_or_create_cap_sids;
-    use crate::cap::workspace_write_cap_sid_for_root;
-    use crate::env::ensure_non_interactive_pager;
-    use crate::env::inherit_path_env;
-    use crate::env::normalize_null_device_env;
     use crate::identity::refresh_logon_sandbox_creds;
-    use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
     use crate::ipc_framed::Message;
@@ -41,20 +34,15 @@ mod windows_impl {
     use crate::ipc_framed::read_frame;
     use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
-    use crate::logging::log_start;
     use crate::logging::log_success;
     use crate::process::WindowsProcessLaunch;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::runner_client::retry_runner_spawn_once;
     use crate::runner_client::spawn_runner_transport;
-    use crate::sandbox_utils::ensure_codex_home_exists;
-    use crate::sandbox_utils::inject_git_safe_directory;
-    use crate::setup::effective_write_roots_for_permissions;
-    use crate::token::LocalSid;
+    use crate::spawn_prep::prepare_elevated_spawn_context_for_permissions;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::fs::File;
-    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -130,21 +118,15 @@ mod windows_impl {
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
             .collect::<Vec<_>>();
-        normalize_null_device_env(&mut env_map);
-        ensure_non_interactive_pager(&mut env_map);
-        inherit_path_env(&mut env_map);
-        inject_git_safe_directory(&mut env_map, cwd);
-        // Use a temp-based log dir that the sandbox user can write.
-        let sandbox_base = codex_home.join(".sandbox");
-        ensure_codex_home_exists(&sandbox_base)?;
-
-        let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
-        log_start(&command, logs_base_dir);
-        let sandbox_creds = require_logon_sandbox_creds(
-            &permissions,
-            cwd,
-            &env_map,
+        let elevated = prepare_elevated_spawn_context_for_permissions(
+            permissions.clone(),
             codex_home,
+            cwd,
+            &mut env_map,
+            WindowsProcessLaunch {
+                application_path: None,
+                command: command.clone(),
+            },
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
@@ -153,40 +135,17 @@ mod windows_impl {
             proxy_enforced,
             crate::WindowsSandboxProxySettingsMode::Reconcile,
         )?;
-        // Build capability SID for ACL grants.
-        let caps = load_or_create_cap_sids(codex_home)?;
-        let (sid_for_null, cap_sids) = if permissions.uses_write_capabilities_for_cwd(cwd, &env_map)
-        {
-            let write_roots = effective_write_roots_for_permissions(
-                &permissions,
-                cwd,
-                &env_map,
-                codex_home,
-                write_roots_override,
-            );
-            let cap_sids = write_roots
-                .iter()
-                .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
-                .collect::<Result<Vec<_>>>()?;
-            if cap_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-            }
-            (LocalSid::from_string(&cap_sids[0])?, cap_sids)
-        } else {
-            let sid = LocalSid::from_string(&caps.readonly)?;
-            (sid, vec![caps.readonly])
-        };
-
-        unsafe {
-            allow_null_device(sid_for_null.as_ptr());
-        }
+        let sandbox_creds = elevated.sandbox_creds;
+        let sandbox_base = elevated.sandbox_base;
+        let logs_base_dir = elevated.logs_base_dir;
+        let cap_sids = elevated.cap_sids;
+        let launch = elevated.launch;
+        let resolved_read_roots = elevated.read_roots_override;
+        let logs_base_dir = logs_base_dir.as_deref();
 
         (|| -> Result<CaptureResult> {
             let spawn_request = SpawnRequest {
-                launch: WindowsProcessLaunch {
-                    application_path: None,
-                    command: command.clone(),
-                },
+                launch,
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
@@ -201,7 +160,7 @@ mod windows_impl {
             };
             let transport = retry_runner_spawn_once(
                 sandbox_creds,
-                &spawn_request.launch.command,
+                &spawn_request.launch,
                 |sandbox_creds| {
                     spawn_runner_transport(
                         codex_home,
@@ -217,7 +176,7 @@ mod windows_impl {
                         cwd,
                         &env_map,
                         codex_home,
-                        read_roots_override,
+                        Some(&resolved_read_roots),
                         read_roots_include_platform_defaults,
                         write_roots_override,
                         &deny_read_paths_override,

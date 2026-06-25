@@ -8,6 +8,7 @@ use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
 use crate::cap::workspace_write_root_specificity;
+use crate::command_resolution::resolve_windows_launch;
 use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
@@ -17,10 +18,12 @@ use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
+use crate::process::WindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
 use crate::setup::effective_write_roots_for_permissions;
+use crate::setup::gather_read_roots;
 use crate::token::LocalSid;
 use crate::token::create_readonly_token_with_cap;
 use crate::token::create_workspace_write_token_with_caps_from;
@@ -52,6 +55,8 @@ pub(crate) struct ElevatedSpawnContext {
     pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) sandbox_creds: SandboxCreds,
     pub(crate) cap_sids: Vec<String>,
+    pub(crate) launch: WindowsProcessLaunch,
+    pub(crate) read_roots_override: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -350,7 +355,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     codex_home: &Path,
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
-    command: &[String],
+    launch: WindowsProcessLaunch,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
@@ -363,12 +368,13 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     ensure_non_interactive_pager(env_map);
     inherit_path_env(env_map);
     inject_git_safe_directory(env_map, cwd);
+    let launch = resolve_windows_launch(launch, cwd, env_map)?;
 
     // Use a temp-based log dir that the sandbox user can write.
     let sandbox_base = codex_home.join(".sandbox");
     ensure_codex_home_exists(&sandbox_base)?;
     let logs_base_dir = Some(sandbox_base.clone());
-    log_start(command, logs_base_dir.as_deref());
+    log_start(&launch.command, logs_base_dir.as_deref());
 
     let uses_write_capabilities = permissions.uses_write_capabilities_for_cwd(cwd, env_map);
 
@@ -398,12 +404,22 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     } else {
         write_roots_override
     };
+    let mut resolved_read_roots = read_roots_override
+        .map(<[PathBuf]>::to_vec)
+        .unwrap_or_else(|| gather_read_roots(cwd, &permissions, env_map, codex_home));
+    let application_path = launch
+        .application_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("resolved Windows launch is missing an application path"))?;
+    if !resolved_read_roots.contains(application_path) {
+        resolved_read_roots.push(application_path.clone());
+    }
     let sandbox_creds = require_logon_sandbox_creds(
         &permissions,
         cwd,
         env_map,
         codex_home,
-        read_roots_override,
+        Some(&resolved_read_roots),
         read_roots_include_platform_defaults,
         setup_write_roots_override,
         deny_read_paths_override,
@@ -441,6 +457,8 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         logs_base_dir,
         sandbox_creds,
         cap_sids,
+        launch,
+        read_roots_override: resolved_read_roots,
     })
 }
 

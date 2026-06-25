@@ -93,6 +93,8 @@ where
 
     // Step 4 - Apply user-provided overrides.
     for (key, val) in &policy.r#set {
+        #[cfg(target_os = "windows")]
+        env_map.retain(|existing, _| !existing.eq_ignore_ascii_case(key));
         env_map.insert(key.clone(), val.clone());
     }
 
@@ -208,6 +210,22 @@ mod windows_tests {
         let expected = HashMap::from([("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string())]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn user_override_replaces_differently_cased_inherited_variable() {
+        let vars = make_vars(&[("PATH", r"C:\parent")]);
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            r#set: HashMap::from([("Path".to_string(), r"C:\child".to_string())]),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            populate_env(vars, &policy, /*thread_id*/ None),
+            HashMap::from([("Path".to_string(), r"C:\child".to_string())])
+        );
     }
 }
 
