@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -94,44 +93,10 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
-    completion: ProcessCompletion,
+    metrics: Option<ProcessMetricGuard>,
+    termination_requested: bool,
     sandbox: SandboxType,
     sandbox_denied: bool,
-}
-
-#[derive(Clone)]
-struct ProcessCompletion {
-    metrics: ProcessMetricGuard,
-    termination_requested: Arc<AtomicBool>,
-}
-
-impl ProcessCompletion {
-    fn new(metrics: ProcessMetricGuard) -> Self {
-        Self {
-            metrics,
-            termination_requested: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    fn request_termination(&self) {
-        self.termination_requested.store(true, Ordering::SeqCst);
-    }
-
-    fn shutdown(&self) {
-        self.request_termination();
-        self.metrics.finish("terminated");
-    }
-
-    fn exited(&self, exit_code: i32) {
-        let result = if self.termination_requested.load(Ordering::SeqCst) {
-            "terminated"
-        } else if exit_code == 0 {
-            "success"
-        } else {
-            "error"
-        };
-        self.metrics.finish(result);
-    }
 }
 
 /// Bounded cache of stdin write ids that have already been accepted for one process.
@@ -247,8 +212,10 @@ impl LocalProcess {
                 })
                 .collect::<Vec<_>>()
         };
-        for process in remaining {
-            process.completion.shutdown();
+        for mut process in remaining {
+            if let Some(metrics) = process.metrics.take() {
+                metrics.finish("terminated");
+            }
             process.session.terminate();
         }
     }
@@ -337,7 +304,7 @@ impl LocalProcess {
             PROCESS_EVENT_CHANNEL_CAPACITY,
             RETAINED_OUTPUT_BYTES_PER_PROCESS,
         );
-        let completion = {
+        {
             let mut process_map = self.inner.processes.lock().await;
             if !matches!(
                 process_map.get(&process_id),
@@ -349,7 +316,6 @@ impl LocalProcess {
                     "process {process_id} start was cancelled"
                 )));
             }
-            let completion = ProcessCompletion::new(self.inner.telemetry.process_started());
             process_map.insert(
                 process_id.clone(),
                 ProcessEntry::Running(Box::new(RunningProcess {
@@ -368,13 +334,13 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
-                    completion: completion.clone(),
+                    metrics: Some(self.inner.telemetry.process_started()),
+                    termination_requested: false,
                     sandbox: prepared.sandbox,
                     sandbox_denied: false,
                 })),
             );
-            completion
-        };
+        }
         tokio::spawn(stream_output(
             process_id.clone(),
             if params.tty {
@@ -402,7 +368,6 @@ impl LocalProcess {
             spawned.exit_rx,
             Arc::clone(&self.inner),
             output_notify,
-            completion,
         ));
 
         Ok((ExecResponse { process_id }, wake_tx, events))
@@ -592,7 +557,7 @@ impl LocalProcess {
                     if process.exit_code.is_some() {
                         return Ok(TerminateResponse { running: false });
                     }
-                    process.completion.request_termination();
+                    process.termination_requested = true;
                     process.session.terminate();
                     true
                 }
@@ -856,17 +821,28 @@ async fn watch_exit(
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
-    completion: ProcessCompletion,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    completion.exited(exit_code);
-    let sandboxed = {
-        let processes = inner.processes.lock().await;
-        matches!(
-            processes.get(&process_id),
-            Some(ProcessEntry::Running(process)) if process.sandbox != SandboxType::None
-        )
+    let (sandboxed, metrics, termination_requested) = {
+        let mut processes = inner.processes.lock().await;
+        match processes.get_mut(&process_id) {
+            Some(ProcessEntry::Running(process)) => (
+                process.sandbox != SandboxType::None,
+                process.metrics.take(),
+                process.termination_requested,
+            ),
+            Some(ProcessEntry::Starting(_)) | None => (false, None, false),
+        }
     };
+    if let Some(metrics) = metrics {
+        metrics.finish(if termination_requested {
+            "terminated"
+        } else if exit_code == 0 {
+            "success"
+        } else {
+            "error"
+        });
+    }
     if sandboxed {
         let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
     }
@@ -1027,6 +1003,62 @@ mod tests {
         }
     }
 
+    fn telemetry_backend() -> (
+        LocalProcess,
+        codex_otel::MetricsClient,
+        InMemoryMetricExporter,
+    ) {
+        let exporter = InMemoryMetricExporter::default();
+        let metrics = codex_otel::MetricsClient::new(MetricsConfig::in_memory(
+            "test",
+            "codex-exec-server",
+            env!("CARGO_PKG_VERSION"),
+            exporter.clone(),
+        ))
+        .expect("metrics");
+        let telemetry = ExecServerTelemetry::new(metrics.clone());
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        (
+            LocalProcess::with_runtime_paths(
+                RpcNotificationSender::new(outgoing_tx),
+                telemetry,
+                /*runtime_paths*/ None,
+            ),
+            metrics,
+            exporter,
+        )
+    }
+
+    fn assert_finished_process_result(
+        metrics: codex_otel::MetricsClient,
+        exporter: &InMemoryMetricExporter,
+        expected: &str,
+    ) {
+        metrics.shutdown().expect("shutdown metrics");
+        let resource_metrics = exporter
+            .get_finished_metrics()
+            .expect("finished metrics")
+            .into_iter()
+            .last()
+            .expect("metrics export");
+        let finished_processes = resource_metrics
+            .scope_metrics()
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .find(|metric| metric.name() == "exec_server_processes_finished_total")
+            .expect("finished process metric");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = finished_processes.data() else {
+            panic!("finished process metric should be a u64 sum");
+        };
+        let results = sum
+            .data_points()
+            .flat_map(opentelemetry_sdk::metrics::data::SumDataPoint::attributes)
+            .filter(|attribute| attribute.key.as_str() == "result")
+            .map(|attribute| attribute.value.as_str().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(results, vec![expected.to_string()]);
+    }
+
     #[tokio::test]
     async fn start_process_rejects_non_native_cwd_before_launch() {
         #[cfg(unix)]
@@ -1086,44 +1118,48 @@ mod tests {
         assert_eq!(child_env(&params), expected);
     }
 
-    #[test]
-    fn observed_exit_result_wins_over_later_shutdown() {
-        let exporter = InMemoryMetricExporter::default();
-        let metrics = codex_otel::MetricsClient::new(MetricsConfig::in_memory(
-            "test",
-            "codex-exec-server",
-            env!("CARGO_PKG_VERSION"),
-            exporter.clone(),
-        ))
-        .expect("metrics");
-        let telemetry = ExecServerTelemetry::new(metrics.clone());
-        let completion = ProcessCompletion::new(telemetry.process_started());
+    #[tokio::test]
+    async fn exit_before_shutdown_records_success() {
+        let (backend, metrics, exporter) = telemetry_backend();
+        let mut process = spawn_test_process(&backend, "exit-before-shutdown").await;
 
-        completion.exited(/*exit_code*/ 0);
-        completion.shutdown();
-        metrics.shutdown().expect("shutdown metrics");
+        process.exit(/*exit_code*/ 0);
+        let _ = read_process_until_change(&backend, &process.process_id, /*after_seq*/ None).await;
+        backend.shutdown().await;
 
-        let resource_metrics = exporter
-            .get_finished_metrics()
-            .expect("finished metrics")
-            .into_iter()
-            .last()
-            .expect("metrics export");
-        let finished_processes = resource_metrics
-            .scope_metrics()
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .find(|metric| metric.name() == "exec_server_processes_finished_total")
-            .expect("finished process metric");
-        let AggregatedMetrics::U64(MetricData::Sum(sum)) = finished_processes.data() else {
-            panic!("finished process metric should be a u64 sum");
-        };
-        let results = sum
-            .data_points()
-            .flat_map(opentelemetry_sdk::metrics::data::SumDataPoint::attributes)
-            .filter(|attribute| attribute.key.as_str() == "result")
-            .map(|attribute| attribute.value.as_str().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(results, vec!["success"]);
+        assert_finished_process_result(metrics, &exporter, "success");
+    }
+
+    #[tokio::test]
+    async fn termination_request_before_exit_records_terminated() {
+        let (backend, metrics, exporter) = telemetry_backend();
+        let mut process = spawn_test_process(&backend, "terminate-before-exit").await;
+
+        assert_eq!(
+            backend
+                .terminate_process(TerminateParams {
+                    process_id: process.process_id.clone(),
+                })
+                .await
+                .expect("terminate process"),
+            TerminateResponse { running: true },
+        );
+        process.exit(/*exit_code*/ 0);
+        let _ = read_process_until_change(&backend, &process.process_id, /*after_seq*/ None).await;
+        backend.shutdown().await;
+
+        assert_finished_process_result(metrics, &exporter, "terminated");
+    }
+
+    #[tokio::test]
+    async fn shutdown_before_exit_records_terminated() {
+        let (backend, metrics, exporter) = telemetry_backend();
+        let mut process = spawn_test_process(&backend, "shutdown-before-exit").await;
+
+        backend.shutdown().await;
+        process.exit(/*exit_code*/ 0);
+
+        assert_finished_process_result(metrics, &exporter, "terminated");
     }
 
     #[tokio::test]
@@ -1250,7 +1286,6 @@ mod tests {
             PROCESS_EVENT_CHANNEL_CAPACITY,
             RETAINED_OUTPUT_BYTES_PER_PROCESS,
         );
-        let completion = ProcessCompletion::new(backend.inner.telemetry.process_started());
 
         let mut processes = backend.inner.processes.lock().await;
         let previous = processes.insert(
@@ -1269,7 +1304,8 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
-                completion: completion.clone(),
+                metrics: Some(backend.inner.telemetry.process_started()),
+                termination_requested: false,
                 sandbox: SandboxType::None,
                 sandbox_denied: false,
             })),
@@ -1296,7 +1332,6 @@ mod tests {
             exit_rx,
             Arc::clone(&backend.inner),
             output_notify,
-            completion,
         ));
 
         TestProcess {

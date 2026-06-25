@@ -62,12 +62,7 @@ pub(crate) struct ConnectionMetricGuard {
     transport: ConnectionTransport,
 }
 
-#[derive(Clone)]
 pub(crate) struct ProcessMetricGuard {
-    measurement: Arc<Mutex<Option<ProcessMetricMeasurement>>>,
-}
-
-struct ProcessMetricMeasurement {
     telemetry: ExecServerTelemetry,
     started_at: Instant,
     result: &'static str,
@@ -92,10 +87,7 @@ impl ExecServerTelemetry {
             inner.counter(
                 CONNECTIONS_TOTAL_METRIC,
                 CONNECTIONS_TOTAL_DESCRIPTION,
-                &[
-                    ("transport", transport.metric_tag()),
-                    ("result", "accepted"),
-                ],
+                &[("transport", transport.metric_tag())],
             );
         });
         ConnectionMetricGuard {
@@ -127,11 +119,9 @@ impl ExecServerTelemetry {
             inner.adjust_process_count(/*delta*/ 1);
         });
         ProcessMetricGuard {
-            measurement: Arc::new(Mutex::new(Some(ProcessMetricMeasurement {
-                telemetry: self.clone(),
-                started_at: Instant::now(),
-                result: "unknown",
-            }))),
+            telemetry: self.clone(),
+            started_at: Instant::now(),
+            result: "unknown",
         }
     }
 
@@ -172,19 +162,12 @@ impl Drop for ConnectionMetricGuard {
 }
 
 impl ProcessMetricGuard {
-    pub(crate) fn finish(&self, result: &'static str) {
-        let measurement = self
-            .measurement
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(mut measurement) = measurement {
-            measurement.result = result;
-        }
+    pub(crate) fn finish(mut self, result: &'static str) {
+        self.result = result;
     }
 }
 
-impl Drop for ProcessMetricMeasurement {
+impl Drop for ProcessMetricGuard {
     fn drop(&mut self) {
         self.telemetry
             .process_finished(self.result, self.started_at.elapsed());

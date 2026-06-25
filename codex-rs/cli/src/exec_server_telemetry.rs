@@ -7,8 +7,7 @@ const OTEL_SERVICE_NAME: &str = "codex-exec-server";
 
 pub(crate) fn init(
     config: Option<&codex_core::config::Config>,
-) -> Result<(impl Send + Sync, codex_exec_server::ExecServerTelemetry), Box<dyn std::error::Error>>
-{
+) -> (impl Send + Sync, codex_exec_server::ExecServerTelemetry) {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_filter(stderr_env_filter());
@@ -18,9 +17,13 @@ pub(crate) fn init(
             env!("CARGO_PKG_VERSION"),
             Some(OTEL_SERVICE_NAME),
             DEFAULT_ANALYTICS_ENABLED,
-        ),
-        None => Ok(None),
-    }?;
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("Could not create otel exporter: {error}");
+            None
+        }),
+        None => None,
+    };
     let provider = otel.as_ref();
     codex_core::otel_init::record_process_start(provider, OTEL_SERVICE_NAME);
 
@@ -37,22 +40,7 @@ pub(crate) fn init(
         .with(otel_logger_layer)
         .try_init();
     tracing::callsite::rebuild_interest_cache();
-    Ok((otel, telemetry))
-}
-
-pub(crate) fn init_or_default(
-    config: Option<&codex_core::config::Config>,
-) -> (impl Send + Sync, codex_exec_server::ExecServerTelemetry) {
-    match init(config) {
-        Ok(initialized) => initialized,
-        Err(error) => {
-            eprintln!("Could not create otel exporter: {error}");
-            match init(/*config*/ None) {
-                Ok(initialized) => initialized,
-                Err(error) => panic!("failed to initialize exec-server logging: {error}"),
-            }
-        }
-    }
+    (otel, telemetry)
 }
 
 fn stderr_env_filter() -> EnvFilter {
