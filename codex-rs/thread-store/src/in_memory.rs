@@ -459,6 +459,7 @@ impl InMemoryThreadStore {
         let history_mode = params
             .history
             .as_deref()
+            .map(Vec::as_slice)
             .map(history_mode_from_rollout_items)
             .unwrap_or_else(|| history_mode_from_state(&state, params.thread_id));
         reject_paginated_history_mode(history_mode)?;
