@@ -190,9 +190,12 @@ Weekly schedules require one or more weekdays and a local wall-clock time:
 
 ### Authoring guidance
 
-Choose a task that genuinely repeats, then confirm its cadence, source scope, expected output, and
-whether it may make changes. A Scheduled template does not need to use another component from the
-same plugin; a plugin may simply bundle a useful collection of automations.
+Add a template only when the user asks for recurring behavior and gives an unambiguous cadence. If
+the cadence is missing, ask instead of inventing one; do not turn a one-time request into a
+recurring template or split a broad request into multiple templates unless asked. Confirm the
+source scope, expected output, and whether it may make changes. A Scheduled template does not need
+to use another component from the same plugin; a plugin may simply bundle a useful collection of
+automations.
 
 Keep the default prompt concise but useful before personalization. Include the source and time
 window, what deserves attention, the expected output, and an explicit read-only boundary when
@@ -204,6 +207,10 @@ Write real templates rather than placeholders, then run
 use the cachebuster and reinstall flow so Codex reads the updated materialized copy.
 
 ### Instance semantics
+
+Plugin Scheduled task templates are currently consumed only by the Codex desktop app. The CLI can
+author and validate template JSON, but do not tell users they can browse templates or create
+Scheduled tasks from them in the CLI.
 
 Installing a plugin does not activate its templates. Each template is copied into an independent,
 user-owned Scheduled task, so later plugin changes do not update existing tasks.
