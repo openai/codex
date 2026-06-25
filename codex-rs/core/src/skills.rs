@@ -27,6 +27,7 @@ pub use codex_core_skills::injection::build_skill_injections;
 pub use codex_core_skills::injection::collect_explicit_skill_mentions;
 pub use codex_core_skills::loader;
 pub use codex_core_skills::model;
+pub use codex_core_skills::remote;
 pub use codex_core_skills::render;
 pub use codex_core_skills::render::SkillRenderSideEffects;
 pub use codex_core_skills::service;

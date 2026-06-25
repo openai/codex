@@ -22,10 +22,14 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
+use rmcp::model::CustomNotification;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
+use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
 use rmcp::model::ListResourceTemplatesResult;
@@ -621,6 +625,59 @@ impl RmcpClient {
             .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
+    }
+
+    pub async fn send_custom_notification(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.refresh_oauth_if_needed().await;
+        self.run_service_operation(
+            "notifications/custom",
+            /*timeout*/ None,
+            move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_notification(ClientNotification::CustomNotification(
+                            CustomNotification {
+                                method: method.to_string(),
+                                params,
+                                extensions: Extensions::new(),
+                            },
+                        ))
+                        .await
+                }
+                .boxed()
+            },
+        )
+        .await?;
+        self.persist_oauth_tokens().await;
+        Ok(())
+    }
+
+    pub async fn send_custom_request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<ServerResult> {
+        self.refresh_oauth_if_needed().await;
+        let response = self
+            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                            method, params,
+                        )))
+                        .await
+                }
+                .boxed()
+            })
+            .await?;
+        self.persist_oauth_tokens().await;
+        Ok(response)
     }
 
     async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {

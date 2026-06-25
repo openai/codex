@@ -1,43 +1,47 @@
 use codex_plugin::AppConnectorId;
-use codex_plugin::PluginCapabilitySummary;
 use pretty_assertions::assert_eq;
 
 use super::ConnectorSnapshot;
+use super::PluginConnectorSource;
 
 #[test]
-fn snapshot_preserves_connector_order_and_dedupes_provenance() {
-    let snapshot = ConnectorSnapshot::from_plugin_capability_summaries(&[
-        summary("skills", "Skills only", &[]),
-        summary("host", "Zulu", &["calendar", "calendar"]),
-        summary("selected-a", "Alpha", &["drive", "calendar"]),
-        summary("selected-b", "Alpha", &["calendar"]),
+fn snapshot_merges_sources_in_order_and_dedupes_provenance() {
+    let host_source = source("host", "Zulu", &["calendar", "calendar"]);
+    let host = ConnectorSnapshot::from_plugin_sources([
+        source("skills", "Skills only", &[]),
+        host_source.clone(),
+    ]);
+    let selected = ConnectorSnapshot::from_plugin_sources([
+        source("selected-a", "Alpha", &["drive", "calendar"]),
+        source("selected-b", "Alpha", &["calendar"]),
     ]);
 
+    let merged = host.merged_with(&selected);
+
+    assert_eq!(host.sources, vec![host_source]);
     assert_eq!(
-        snapshot.connector_ids(),
+        merged.connector_ids(),
         &[
             AppConnectorId("calendar".to_string()),
             AppConnectorId("drive".to_string()),
         ]
     );
     assert_eq!(
-        snapshot.plugin_display_names_for_connector_id("calendar"),
+        merged.plugin_display_names_for_connector_id("calendar"),
         &["Alpha".to_string(), "Zulu".to_string()]
     );
     assert_eq!(
-        snapshot.plugin_display_names_for_connector_id("missing"),
+        merged.plugin_display_names_for_connector_id("missing"),
         &[] as &[String]
     );
 }
 
-fn summary(id: &str, display_name: &str, connector_ids: &[&str]) -> PluginCapabilitySummary {
-    PluginCapabilitySummary {
-        config_name: id.to_string(),
-        display_name: display_name.to_string(),
-        app_connector_ids: connector_ids
+fn source(id: &str, display_name: &str, connector_ids: &[&str]) -> PluginConnectorSource {
+    PluginConnectorSource::from_connector_ids(
+        id,
+        display_name,
+        connector_ids
             .iter()
-            .map(|id| AppConnectorId((*id).to_string()))
-            .collect(),
-        ..Default::default()
-    }
+            .map(|id| AppConnectorId((*id).to_string())),
+    )
 }

@@ -2817,6 +2817,8 @@ dependencies = [
  "codex-config",
  "codex-context-fragments",
  "codex-exec-server",
+ "codex-login",
+ "codex-model-provider",
  "codex-otel",
  "codex-protocol",
  "codex-shell-command",
@@ -2830,12 +2832,14 @@ dependencies = [
  "futures",
  "pretty_assertions",
  "serde",
+ "serde_json",
  "serde_yaml",
  "shlex",
  "tempfile",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
+ "zip 2.4.2",
 ]
 
 [[package]]

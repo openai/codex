@@ -32,6 +32,7 @@ pub use directory_cache::ConnectorDirectoryCacheContext;
 pub use plugin_config::parse_plugin_app_config;
 pub use plugin_config::parse_plugin_app_config_value;
 pub use snapshot::ConnectorSnapshot;
+pub use snapshot::PluginConnectorSource;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
