@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -227,6 +228,24 @@ pub(crate) struct TurnEnvironmentSnapshot {
 }
 
 impl TurnEnvironmentSnapshot {
+    /// Maps each captured environment to its exact ready handle, or `None` when it was starting.
+    pub(crate) fn captured_environments(&self) -> HashMap<String, Option<Arc<Environment>>> {
+        self.turn_environments
+            .iter()
+            .map(|environment| {
+                (
+                    environment.environment_id.clone(),
+                    Some(Arc::clone(&environment.environment)),
+                )
+            })
+            .chain(
+                self.starting
+                    .iter()
+                    .map(|environment| (environment.selection.environment_id.clone(), None)),
+            )
+            .collect()
+    }
+
     pub(crate) fn primary(&self) -> Option<&TurnEnvironment> {
         self.turn_environments.first()
     }

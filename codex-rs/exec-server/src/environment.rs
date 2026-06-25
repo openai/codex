@@ -54,7 +54,7 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
-    environments: RwLock<HashMap<String, Arc<Environment>>>,
+    pub(super) environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
@@ -571,6 +571,25 @@ impl Environment {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if startup_task.is_none() {
             *startup_task = client.start_connecting();
+        }
+    }
+
+    /// Starts the initial connection after an environment is actually selected for use.
+    pub(crate) fn start_connecting_for_use(environment: &Arc<Self>) {
+        if environment.remote_client.is_none() {
+            return;
+        }
+        let mut startup_task = environment
+            .startup_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if startup_task.is_none() {
+            let environment = Arc::clone(environment);
+            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+                if let Err(error) = environment.wait_until_ready().await {
+                    tracing::debug!(%error, "exec-server environment startup failed");
+                }
+            })));
         }
     }
 

@@ -101,6 +101,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
+            selected_capability_roots: Vec::new(),
             memory_mode: None,
             multi_agent_version: None,
             context_window: None,

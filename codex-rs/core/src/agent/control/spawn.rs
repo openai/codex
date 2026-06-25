@@ -1,5 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -433,6 +434,16 @@ impl AgentControl {
                 ))
             })?;
 
+        let selected_capability_roots = parent_history
+            .items
+            .iter()
+            .find_map(|item| {
+                let RolloutItem::SessionMeta(meta_line) = item else {
+                    return None;
+                };
+                Some(meta_line.meta.selected_capability_roots.clone())
+            })
+            .unwrap_or_default();
         let mut forked_rollout_items = parent_history.items;
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
@@ -504,6 +515,8 @@ impl AgentControl {
         {
             forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
         }
+        let mut thread_extension_init = ExtensionDataInit::new();
+        thread_extension_init.insert(selected_capability_roots);
 
         state
             .fork_thread_with_source(
@@ -517,6 +530,7 @@ impl AgentControl {
                 inherited_environments,
                 inherited_exec_policy,
                 options.environments.clone(),
+                thread_extension_init,
             )
             .await
     }

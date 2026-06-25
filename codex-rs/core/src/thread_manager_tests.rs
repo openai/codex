@@ -20,6 +20,8 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -607,6 +609,71 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     assert_eq!(
         selected_servers(&second_resolved),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
+    );
+}
+
+#[tokio::test]
+async fn selected_capability_roots_round_trip_through_fork() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "demo@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "build".to_string(),
+            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
+        },
+    }];
+    let inherited = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                SessionMetaLine {
+                    meta: SessionMeta {
+                        selected_capability_roots: selected_roots.clone(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                },
+            )]),
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start inherited fork");
+    inherited.thread.ensure_rollout_materialized().await;
+    inherited
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush inherited fork");
+    let inherited_history = RolloutRecorder::get_rollout_history(
+        &inherited
+            .thread
+            .rollout_path()
+            .expect("inherited fork rollout path"),
+    )
+    .await
+    .expect("read inherited fork rollout");
+
+    assert_eq!(
+        inherited_history.get_selected_capability_roots(),
+        selected_roots
     );
 }
 

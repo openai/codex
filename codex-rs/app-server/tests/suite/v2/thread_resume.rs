@@ -2070,6 +2070,7 @@ stream_max_retries = 0
         model_provider: Some("mock_provider".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        selected_capability_roots: Vec::new(),
         memory_mode: None,
         multi_agent_version: None,
         context_window: None,
