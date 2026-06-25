@@ -49,6 +49,38 @@ pub fn span_w3c_trace_context(span: &Span) -> Option<W3cTraceContext> {
     })
 }
 
+/// Injects the W3C trace context for `span` into HTTP headers.
+///
+/// Existing `traceparent` and `tracestate` values are replaced so callers can
+/// safely reuse a request header map while keeping the supplied span as the
+/// source of truth.
+pub fn inject_span_w3c_trace_headers(span: &Span, headers: &mut http::HeaderMap) -> bool {
+    let Some(trace) = span_w3c_trace_context(span) else {
+        return false;
+    };
+    match trace.traceparent {
+        Some(traceparent) => {
+            if let Ok(value) = http::HeaderValue::from_str(&traceparent) {
+                headers.insert("traceparent", value);
+            }
+        }
+        None => {
+            headers.remove("traceparent");
+        }
+    }
+    match trace.tracestate {
+        Some(tracestate) => {
+            if let Ok(value) = http::HeaderValue::from_str(&tracestate) {
+                headers.insert("tracestate", value);
+            }
+        }
+        None => {
+            headers.remove("tracestate");
+        }
+    }
+    true
+}
+
 pub(crate) fn set_tracestate_entries(
     entries: BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -304,6 +336,7 @@ mod tests {
     use super::context_from_trace_headers;
     use super::context_from_w3c_trace_context;
     use super::current_span_trace_id;
+    use super::inject_span_w3c_trace_headers;
     use codex_protocol::protocol::W3cTraceContext;
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceContextExt;
@@ -368,5 +401,39 @@ mod tests {
         assert_eq!(trace_id.len(), 32);
         assert!(trace_id.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert_ne!(trace_id, "00000000000000000000000000000000");
+    }
+
+    #[test]
+    fn inject_span_w3c_trace_headers_replaces_existing_context() {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("codex-otel-tests");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+        let span = trace_span!("test_span");
+        let expected = super::span_w3c_trace_context(&span).expect("trace context");
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            http::HeaderValue::from_static(
+                "00-00000000000000000000000000000033-0000000000000044-01",
+            ),
+        );
+        headers.insert("tracestate", http::HeaderValue::from_static("stale=value"));
+
+        assert!(inject_span_w3c_trace_headers(&span, &mut headers));
+
+        assert_eq!(
+            headers
+                .get("traceparent")
+                .and_then(|value| value.to_str().ok()),
+            expected.traceparent.as_deref()
+        );
+        assert_eq!(
+            headers
+                .get("tracestate")
+                .and_then(|value| value.to_str().ok()),
+            expected.tracestate.as_deref()
+        );
     }
 }

@@ -238,6 +238,7 @@ mod tests {
     use codex_exec_server_protocol::RequestId;
     use codex_utils_path_uri::PathUri;
     use opentelemetry::trace::SpanId;
+    use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::InMemorySpanExporter;
@@ -255,6 +256,11 @@ mod tests {
     use tokio::time::timeout;
     use tracing_subscriber::filter::filter_fn;
     use tracing_subscriber::prelude::*;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     use super::request_span;
     use super::run_connection;
@@ -268,6 +274,10 @@ mod tests {
     use crate::protocol::EnvironmentInfo;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::HTTP_REQUEST_METHOD;
+    use crate::protocol::HttpRedirectPolicy;
+    use crate::protocol::HttpRequestParams;
+    use crate::protocol::HttpRequestResponse;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
@@ -326,6 +336,122 @@ mod tests {
         );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_dispatch_continues_trace_through_http_egress() {
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let provider = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok"))
+            .expect(1)
+            .mount(&provider)
+            .await;
+
+        let registry = SessionRegistry::new();
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "traced-http");
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let trace_id = TraceId::from_hex("00000000000000000000000000000011").expect("trace id");
+        let parent_span_id = SpanId::from_hex("0000000000000022").expect("span id");
+        send_request_with_trace(
+            &mut writer,
+            /*id*/ 2,
+            HTTP_REQUEST_METHOD,
+            &HttpRequestParams {
+                method: "GET".to_string(),
+                url: format!("{}/mcp", provider.uri()),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: None,
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "request-1".to_string(),
+                stream_response: false,
+            },
+            Some(codex_protocol::protocol::W3cTraceContext {
+                traceparent: Some(format!("00-{trace_id}-{parent_span_id}-01")),
+                tracestate: None,
+            }),
+        )
+        .await;
+        let response: HttpRequestResponse = read_response(&mut lines, /*expected_id*/ 2).await;
+        assert_eq!(response.status, 200);
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+
+        let requests = provider
+            .received_requests()
+            .await
+            .expect("wiremock should retain requests");
+        let request = requests.first().expect("provider request");
+        let outbound_context = codex_otel::context_from_w3c_trace_context(
+            &codex_protocol::protocol::W3cTraceContext {
+                traceparent: request
+                    .headers
+                    .get("traceparent")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+                tracestate: request
+                    .headers
+                    .get("tracestate")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+            },
+        )
+        .expect("provider request should carry valid W3C context");
+        let outbound_span_context = outbound_context.span().span_context().clone();
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let request_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == HTTP_REQUEST_METHOD)
+            .expect("executor request span");
+        let http_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == "codex.exec_server.http_request")
+            .expect("HTTP client span");
+        assert_eq!(request_span.span_context.trace_id(), trace_id);
+        assert_eq!(request_span.parent_span_id, parent_span_id);
+        assert_eq!(http_span.span_context.trace_id(), trace_id);
+        assert_eq!(
+            http_span.parent_span_id,
+            request_span.span_context.span_id()
+        );
+        assert_eq!(outbound_span_context.trace_id(), trace_id);
+        assert_eq!(
+            outbound_span_context.span_id(),
+            http_span.span_context.span_id()
+        );
     }
 
     #[tokio::test]
@@ -476,13 +602,23 @@ mod tests {
         method: &str,
         params: &P,
     ) {
+        send_request_with_trace(writer, id, method, params, None).await;
+    }
+
+    async fn send_request_with_trace<P: Serialize>(
+        writer: &mut DuplexStream,
+        id: i64,
+        method: &str,
+        params: &P,
+        trace: Option<codex_protocol::protocol::W3cTraceContext>,
+    ) {
         write_message(
             writer,
             &JSONRPCMessage::Request(JSONRPCRequest {
                 id: RequestId::Integer(id),
                 method: method.to_string(),
                 params: Some(serde_json::to_value(params).expect("serialize params")),
-                trace: None,
+                trace,
             }),
         )
         .await;
