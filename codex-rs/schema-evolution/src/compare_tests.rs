@@ -39,22 +39,38 @@ fn compares_typed_arguments_with_the_full_request_schema() -> Result<()> {
         )]
     );
 
+    let base = request_schema(json!({ "type": "null" }));
+    let mut current = request_schema(json!({ "type": "null" }));
+    current["oneOf"][0]["properties"]["id"] = json!({ "type": "string" });
+    let mut expected = breakage(
+        ViolationKind::TypeNarrowed,
+        "id",
+        json!(["integer", "string"]),
+        json!("string"),
+    );
+    expected.method = "*".to_string();
+    assert_eq!(compare(&base, &current)?, vec![expected]);
     Ok(())
 }
 
 #[test]
-fn retains_request_level_constraints_in_the_typed_envelope() -> Result<()> {
-    let base = request_schema(json!({ "type": "null" }));
+fn retains_method_and_request_level_constraints_in_the_typed_envelope() -> Result<()> {
+    let mut base = request_schema(json!({ "type": "null" }));
+    base["oneOf"][0]["required"] = json!(["id", "params"]);
     let mut current = request_schema(json!({ "type": "null" }));
     current["oneOf"][0]["minProperties"] = json!(3);
 
-    let mut expected = breakage(
-        ViolationKind::ConstraintChanged,
-        "request",
-        json!({}),
-        json!({ "minProperties": 3 }),
-    );
-    expected.method = "*".to_string();
-    assert_eq!(compare(&base, &current)?, vec![expected]);
+    let violations = compare(&base, &current)?;
+    assert_eq!(violations.len(), 2);
+    assert!(violations.iter().any(|violation| {
+        violation.kind == ViolationKind::RequiredPropertyAdded
+            && violation.method == "*"
+            && violation.path == "method"
+    }));
+    assert!(violations.iter().any(|violation| {
+        violation.kind == ViolationKind::ConstraintChanged
+            && violation.method == "*"
+            && violation.path == "request"
+    }));
     Ok(())
 }

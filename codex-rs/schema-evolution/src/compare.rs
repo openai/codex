@@ -1,3 +1,5 @@
+mod array;
+mod object;
 mod value;
 
 use crate::ApiSchema;
@@ -152,6 +154,8 @@ fn compare_rules(
 ) -> Result<()> {
     value::compare_values(base.values.as_ref(), current.values.as_ref(), cx, path);
     value::compare_types(base.types.as_ref(), current.types.as_ref(), cx, path);
+    object::compare_optional(base.object.as_ref(), current.object.as_ref(), cx, path)?;
+    array::compare_optional(base.array.as_ref(), current.array.as_ref(), cx, path)?;
     value::compare_constraints(&base.constraints, &current.constraints, cx, path);
     Ok(())
 }

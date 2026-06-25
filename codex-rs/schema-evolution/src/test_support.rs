@@ -43,3 +43,8 @@ pub(crate) fn breakage(
         after,
     }
 }
+
+pub(crate) fn sorted(mut violations: Vec<SchemaBreakage>) -> Vec<SchemaBreakage> {
+    violations.sort_by_key(|violation| serde_json::to_string(violation).unwrap());
+    violations
+}
