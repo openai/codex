@@ -1,6 +1,6 @@
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
-use codex_core_plugins::ResolvedExecutorPlugin;
+use codex_core_plugins::ResolvedSelectedCapabilityRoot;
 use codex_exec_server::ExecutorFileSystem;
 use codex_mcp::parse_executor_plugin_mcp_config;
 use codex_plugin::PluginResourceLocator;
@@ -51,11 +51,14 @@ impl ExecutorPluginMcpProvider {
     /// Returns stdio servers declared by `plugin`, bound to its environment.
     pub(super) async fn load(
         &self,
-        plugin: &ResolvedExecutorPlugin,
+        selected_root: &ResolvedSelectedCapabilityRoot,
     ) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
-        let ResolvedPluginLocation::Environment { root, .. } = plugin.plugin().location();
+        let Some(plugin) = selected_root.plugin() else {
+            return Ok(Vec::new());
+        };
+        let ResolvedPluginLocation::Environment { root, .. } = plugin.location();
 
-        load_from_file_system(plugin.plugin(), root, plugin.file_system()).await
+        load_from_file_system(plugin, root, selected_root.file_system().as_ref()).await
     }
 }
 

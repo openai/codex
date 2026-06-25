@@ -1,60 +1,47 @@
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::PluginConnectorSource;
-use codex_core_plugins::ExecutorPluginProvider;
-use codex_exec_server::EnvironmentManager;
+use codex_core_plugins::SelectedCapabilityBindings;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ThreadExtensionInitContributor;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
-use std::sync::Arc;
 
 use crate::ExecutorPluginConnectorProvider;
 
 /// Resolves connector declarations from thread-selected executor plugins.
 #[derive(Clone, Debug)]
 pub struct SelectedExecutorConnectorProvider {
-    plugin_provider: ExecutorPluginProvider,
     connector_provider: ExecutorPluginConnectorProvider,
 }
 
 impl SelectedExecutorConnectorProvider {
-    /// Creates a provider backed by the active execution environments.
-    pub fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
+    /// Creates a provider for already-bound selected capability roots.
+    pub fn new() -> Self {
         Self {
-            plugin_provider: ExecutorPluginProvider::new(environment_manager),
             connector_provider: ExecutorPluginConnectorProvider,
         }
     }
 
     /// Resolves one immutable connector snapshot in selected-root order.
-    pub async fn snapshot_for_roots(
+    pub async fn snapshot_for_bindings(
         &self,
-        selected_roots: &[SelectedCapabilityRoot],
+        bindings: &SelectedCapabilityBindings,
     ) -> ConnectorSnapshot {
         let mut sources = Vec::new();
+        let snapshot = bindings.resolve_all().await;
 
-        for selected_root in selected_roots {
-            let plugin = match self.plugin_provider.resolve_bound(selected_root).await {
-                Ok(Some(plugin)) => plugin,
-                Ok(None) => continue,
-                Err(err) => {
-                    tracing::warn!(
-                        selected_root = selected_root.id,
-                        error = %err,
-                        "failed to resolve selected executor plugin for connector discovery"
-                    );
-                    continue;
-                }
+        for selected_root in snapshot.ready() {
+            let Some(plugin) = selected_root.plugin() else {
+                continue;
             };
-            match self.connector_provider.load(&plugin).await {
+            match self.connector_provider.load(selected_root).await {
                 Ok(declarations) => sources.push(PluginConnectorSource::new(
-                    plugin.plugin().selected_root_id(),
-                    plugin.plugin().manifest().display_name(),
+                    plugin.selected_root_id(),
+                    plugin.manifest().display_name(),
                     declarations,
                 )),
                 Err(err) => {
                     tracing::warn!(
-                        selected_root = selected_root.id,
+                        selected_root = selected_root.selected_root().id,
                         error = %err,
                         "failed to load selected executor plugin connectors"
                     );
@@ -72,10 +59,10 @@ impl ThreadExtensionInitContributor for SelectedExecutorConnectorProvider {
             if thread_init.get::<ConnectorSnapshot>().is_some() {
                 return;
             }
-            let Some(selected_roots) = thread_init.get::<Vec<SelectedCapabilityRoot>>() else {
+            let Some(bindings) = thread_init.get::<SelectedCapabilityBindings>() else {
                 return;
             };
-            let snapshot = self.snapshot_for_roots(selected_roots.as_ref()).await;
+            let snapshot = self.snapshot_for_bindings(bindings.as_ref()).await;
             thread_init.insert(snapshot);
         })
     }

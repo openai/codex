@@ -9,7 +9,6 @@ use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_exec_server::EnvironmentManager;
 use codex_extension_api::AgentSpawnFuture;
 use codex_extension_api::AgentSpawner;
 use codex_extension_api::ExtensionEventSink;
@@ -35,7 +34,6 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) thread_manager: Weak<ThreadManager>,
     pub(crate) goal_service: Arc<GoalService>,
-    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
     /// Process-scoped persistence backend for extensions that need stored thread history.
     pub(crate) thread_store: Arc<dyn ThreadStore>,
@@ -55,7 +53,6 @@ where
         analytics_events_client,
         thread_manager,
         goal_service,
-        environment_manager,
         executor_skill_provider,
         thread_store: _thread_store,
     } = dependencies;
@@ -73,12 +70,9 @@ where
     }
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     codex_memories_extension::install(&mut builder, codex_otel::global());
-    codex_connectors_extension::install_selected_executor_connectors(
-        &mut builder,
-        Arc::clone(&environment_manager),
-    );
+    codex_connectors_extension::install_selected_executor_connectors(&mut builder);
     codex_mcp_extension::install(&mut builder);
-    codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
+    codex_mcp_extension::install_executor_plugins(&mut builder);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
         Some(config.codex_home.clone())

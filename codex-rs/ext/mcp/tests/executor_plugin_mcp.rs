@@ -1,6 +1,7 @@
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core_plugins::SelectedCapabilityBindings;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionDataInit;
@@ -96,19 +97,21 @@ async fn selected_plugin_contributions(
     plugin_root: &std::path::Path,
 ) -> Result<Vec<ContributionSummary>, Box<dyn std::error::Error>> {
     let mut builder = ExtensionRegistryBuilder::new();
-    codex_mcp_extension::install_executor_plugins(
-        &mut builder,
-        Arc::new(EnvironmentManager::default_for_tests()),
-    );
+    codex_mcp_extension::install_executor_plugins(&mut builder);
     let registry = builder.build();
     let mut thread_init = ExtensionDataInit::new();
-    thread_init.insert(vec![SelectedCapabilityRoot {
+    let selected_roots = vec![SelectedCapabilityRoot {
         id: "selected-root".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             path: PathUri::from_host_native_path(plugin_root)?,
         },
-    }]);
+    }];
+    thread_init.insert(SelectedCapabilityBindings::new(
+        selected_roots.clone(),
+        Arc::new(EnvironmentManager::default_for_tests()),
+    ));
+    thread_init.insert(selected_roots);
     registry.initialize_thread_data(&mut thread_init).await;
 
     Ok(registry.mcp_server_contributors()[0]

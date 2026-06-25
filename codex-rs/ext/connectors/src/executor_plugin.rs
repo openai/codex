@@ -1,5 +1,5 @@
 use codex_connectors::parse_plugin_app_config;
-use codex_core_plugins::ResolvedExecutorPlugin;
+use codex_core_plugins::ResolvedSelectedCapabilityRoot;
 use codex_plugin::AppDeclaration;
 use codex_plugin::PluginResourceLocator;
 use codex_utils_path_uri::PathUri;
@@ -33,9 +33,11 @@ impl ExecutorPluginConnectorProvider {
     /// Returns the connector declarations contributed by `plugin`.
     pub async fn load(
         &self,
-        plugin: &ResolvedExecutorPlugin,
+        selected_root: &ResolvedSelectedCapabilityRoot,
     ) -> Result<Vec<AppDeclaration>, ExecutorPluginConnectorProviderError> {
-        let resolved_plugin = plugin.plugin();
+        let Some(resolved_plugin) = selected_root.plugin() else {
+            return Ok(Vec::new());
+        };
         let plugin_id = resolved_plugin.selected_root_id();
         let Some(PluginResourceLocator::Environment {
             path: config_path, ..
@@ -43,7 +45,7 @@ impl ExecutorPluginConnectorProvider {
         else {
             return Ok(Vec::new());
         };
-        let contents = plugin
+        let contents = selected_root
             .file_system()
             .read_file_text(config_path, /*sandbox*/ None)
             .await

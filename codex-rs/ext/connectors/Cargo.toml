@@ -16,7 +16,6 @@ workspace = true
 [dependencies]
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
-codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
