@@ -95,6 +95,26 @@ fn expected_provider_only_instruction_fragment(contents: &str) -> String {
     format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
+fn assert_instruction_replacement_once(
+    requests: &[responses::ResponsesRequest],
+    initial_contents: &str,
+    replacement_contents: &str,
+) {
+    let initial = expected_provider_only_instruction_fragment(initial_contents);
+    let replacement = expected_provider_only_instruction_fragment(&format!(
+        "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{replacement_contents}"
+    ));
+    assert_eq!(instruction_fragments(&requests[0]), vec![initial.clone()]);
+    assert_eq!(
+        instruction_fragments(&requests[1]),
+        vec![initial.clone(), replacement.clone()]
+    );
+    assert_eq!(
+        instruction_fragments(&requests[2]),
+        vec![initial, replacement]
+    );
+}
+
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
     assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
 }
@@ -750,11 +770,8 @@ async fn invalid_utf8_global_instructions_are_lossy() -> Result<()> {
     Ok(())
 }
 
-// TODO(anp): Align cold-resume instruction sources with the historical instructions replayed to
-// the model so the API source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resume_replays_rendered_instructions_but_reports_current_config_sources() -> Result<()>
-{
+async fn cold_resume_injects_changed_agents_md_once() -> Result<()> {
     // Set up an initial turn and a later cold-resumed turn against the same rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -767,6 +784,10 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
             responses::sse(vec![
                 responses::ev_response_created("resumed-response"),
                 responses::ev_completed("resumed-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("second-resumed-response"),
+                responses::ev_completed("second-resumed-response"),
             ]),
         ],
     )
@@ -820,9 +841,10 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     );
 
     resumed.submit_turn("continue resumed thread").await?;
+    resumed.submit_turn("continue again").await?;
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let initial_input = requests[0].input();
     let resumed_input = requests[1].input();
     assert_eq!(
@@ -830,15 +852,17 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         Some(initial_input.as_slice()),
         "cold resume should replay the original structured input prefix"
     );
-    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &expected_fragment);
-    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    assert_instruction_replacement_once(
+        &requests,
+        OLD_GLOBAL_INSTRUCTIONS,
+        NEW_GLOBAL_INSTRUCTIONS,
+    );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
+async fn fork_injects_changed_agents_md_once() -> Result<()> {
     // Set up a parent turn and a later fork turn against the parent's rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -851,6 +875,10 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
             responses::sse(vec![
                 responses::ev_response_created("fork-response"),
                 responses::ev_completed("fork-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("second-fork-response"),
+                responses::ev_completed("second-fork-response"),
             ]),
         ],
     )
@@ -908,27 +936,12 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         "fork config should reflect the newly loaded global source"
     );
 
-    forked
-        .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "continue fork".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await?;
-    wait_for_event(&forked.thread, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    submit_thread_turn(&forked.thread, "continue fork").await?;
+    submit_thread_turn(&forked.thread, "continue fork again").await?;
 
     // Assert the forked model request replays the parent's exact structured history.
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let parent_input = requests[0].input();
     let fork_input = requests[1].input();
     assert_eq!(
@@ -936,9 +949,11 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         Some(parent_input.as_slice()),
         "fork should replay the parent's original structured input prefix"
     );
-    let expected_fragment = expected_provider_only_instruction_fragment(OLD_GLOBAL_INSTRUCTIONS);
-    assert_single_instruction_fragment(&requests[0], &expected_fragment);
-    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+    assert_instruction_replacement_once(
+        &requests,
+        OLD_GLOBAL_INSTRUCTIONS,
+        NEW_GLOBAL_INSTRUCTIONS,
+    );
 
     Ok(())
 }

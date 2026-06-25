@@ -4811,11 +4811,17 @@ async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_m
         .submit_turn("after remote v2 compaction cold resume")
         .await?;
 
-    // Modern replacement-history resume replays the persisted checkpoint and its later old-context
-    // suffix even though the same source path now contains new text.
+    // Cold resume replays the persisted old context, then appends the newly loaded instructions as
+    // an explicit replacement.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 4);
-    assert_single_instruction_fragment(&requests[3], &old_fragment);
+    let replacement_fragment = expected_instruction_fragment(&format!(
+        "These AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{NEW_GLOBAL_INSTRUCTIONS}"
+    ));
+    assert_eq!(
+        instruction_fragments(&requests[3]),
+        vec![old_fragment.clone(), replacement_fragment]
+    );
     let resumed_input = requests[3].input();
     assert_eq!(
         resumed_input.get(..replacement_history.len()),

@@ -135,6 +135,7 @@ async fn record_initial_history_reconstructs_typed_inter_agent_message() {
 #[tokio::test]
 async fn record_initial_history_restores_world_state_baseline() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let rollout_items = completed_user_turn_rollout(
         turn_context.to_turn_context_item(),
@@ -150,8 +151,9 @@ async fn record_initial_history_restores_world_state_baseline() {
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
         .await;
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
 
     assert_eq!(session.clone_history().await.raw_items(), &[]);

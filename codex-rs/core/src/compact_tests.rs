@@ -12,6 +12,7 @@ async fn process_compacted_history_with_test_session(
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
     let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
