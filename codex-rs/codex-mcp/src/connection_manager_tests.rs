@@ -1272,7 +1272,7 @@ async fn list_all_tools_retries_failed_codex_apps_startup_twice() {
 }
 
 #[tokio::test]
-async fn list_all_tools_stops_retrying_after_codex_apps_recovery_is_exhausted() {
+async fn list_all_tools_waits_for_apps_recovery_cooldown() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_retry = Arc::clone(&attempts);
     let startup_retry = CodexAppsStartupRetry::new(Arc::new(move || {
@@ -1302,6 +1302,61 @@ async fn list_all_tools_stops_retrying_after_codex_apps_recovery_is_exhausted() 
         );
     }
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn list_all_tools_retries_apps_again_after_recovery_cooldown() {
+    let recovered_client = create_test_managed_client(vec![create_test_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "drive_search",
+    )])
+    .await;
+    let apps_available = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let apps_available_for_retry = Arc::clone(&apps_available);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_retry = Arc::clone(&attempts);
+    let startup_retry = CodexAppsStartupRetry::new_with_cooldown(
+        Arc::new(move || {
+            attempts_for_retry.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let outcome = if apps_available_for_retry.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(recovered_client.clone())
+            } else {
+                Err(StartupOutcomeError::Failed {
+                    error: "recreated startup failed".to_string(),
+                })
+            };
+            futures::future::ready(outcome).boxed().shared()
+        }),
+        Duration::ZERO,
+    );
+    let manager = create_test_manager_with_failed_apps_startup(
+        vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "cached_drive_search",
+        )],
+        startup_retry,
+    );
+
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["cached_drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    apps_available.store(true, std::sync::atomic::Ordering::SeqCst);
+    let tools = manager.list_all_tools().await;
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.callable_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["drive_search"]
+    );
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

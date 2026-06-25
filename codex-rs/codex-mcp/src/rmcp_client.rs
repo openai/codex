@@ -321,11 +321,14 @@ impl AsyncManagedClient {
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        let client = self
-            .startup_retry
-            .as_ref()
-            .and_then(|startup_retry| startup_retry.replacement())
-            .unwrap_or_else(|| self.client.clone());
+        let client = if let Some(startup_retry) = self.startup_retry.as_ref() {
+            startup_retry
+                .replacement()
+                .await
+                .unwrap_or_else(|| self.client.clone())
+        } else {
+            self.client.clone()
+        };
         client.await
     }
 
