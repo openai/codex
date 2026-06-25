@@ -661,10 +661,14 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
-        let mcp_runtime_context = McpRuntimeContext::new(
-            Arc::clone(&environment_manager),
-            session_configuration.cwd().to_path_buf(),
-        );
+        let mcp_runtime_cwd = session_configuration
+            .environment_selections()
+            .first()
+            .and_then(|environment| environment.cwd.to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
+        let mcp_runtime_context =
+            McpRuntimeContext::new(Arc::clone(&environment_manager), mcp_runtime_cwd);
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;

@@ -236,13 +236,17 @@ impl Session {
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        refresh_config: &Config,
+        mcp_config: Arc<McpConfig>,
+        configured_mcp_servers: HashMap<String, McpServerConfig>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let auth = self.services.auth_manager.auth().await;
-        let mcp_config = Arc::new(self.runtime_mcp_config(refresh_config).await);
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-        let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let mcp_servers = effective_mcp_servers_from_configured(
+            configured_mcp_servers,
+            &mcp_config,
+            auth.as_ref(),
+        );
         let environment_manager = self.services.turn_environments.environment_manager();
         // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
         // values can be used without falling back to the legacy host cwd.
@@ -348,10 +352,6 @@ impl Session {
             };
 
         let mut refresh_config = self.get_config().await.as_ref().clone();
-        if let Err(err) = refresh_config.mcp_servers.set(mcp_servers) {
-            warn!("failed to apply MCP server refresh config: {err}");
-            return;
-        }
         refresh_config.mcp_oauth_credentials_store_mode = store_mode;
         let secret_auth_storage_enabled = match keyring_backend_kind {
             AuthKeyringBackendKind::Direct => false,
@@ -365,7 +365,8 @@ impl Session {
             return;
         }
 
-        self.refresh_mcp_servers_inner(turn_context, &refresh_config, elicitation_reviewer)
+        let mcp_config = Arc::new(self.runtime_mcp_config(&refresh_config).await);
+        self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
             .await;
     }
 
@@ -403,7 +404,9 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        self.refresh_mcp_servers_inner(turn_context, refresh_config, elicitation_reviewer)
+        let mcp_config = Arc::new(self.runtime_mcp_config(refresh_config).await);
+        let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
+        self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
             .await;
     }
 
