@@ -121,7 +121,7 @@ fn duplicate_section_ids_are_rejected() {
 
 #[test]
 fn snapshot_merge_patch_changes_and_removes_nested_values() {
-    let previous = WorldStateSnapshot {
+    let mut previous = WorldStateSnapshot {
         sections: BTreeMap::from([
             (
                 "kept".to_string(),
@@ -144,5 +144,13 @@ fn snapshot_merge_patch_changes_and_removes_nested_values() {
             "removed_section": null,
         }))
     );
+    previous
+        .apply_merge_patch(
+            &current
+                .merge_patch_from(&previous)
+                .expect("changed snapshots should produce a patch"),
+        )
+        .expect("apply world-state merge patch");
+    assert_eq!(previous, current);
     assert_eq!(current.merge_patch_from(&current), None);
 }

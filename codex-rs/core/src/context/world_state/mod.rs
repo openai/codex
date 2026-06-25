@@ -100,6 +100,13 @@ impl WorldStateSnapshot {
         let current = Value::Object(self.sections.clone().into_iter().collect());
         create_merge_patch(&previous, &current)
     }
+
+    pub(crate) fn apply_merge_patch(&mut self, patch: &Value) -> serde_json::Result<()> {
+        let mut current = self.clone().into_value();
+        apply_merge_patch_value(&mut current, patch);
+        *self = serde_json::from_value(current)?;
+        Ok(())
+    }
 }
 
 impl fmt::Debug for WorldState {
@@ -191,6 +198,25 @@ fn create_merge_patch(previous: &Value, current: &Value) -> Option<Value> {
     }
 
     Some(Value::Object(patch))
+}
+
+fn apply_merge_patch_value(target: &mut Value, patch: &Value) {
+    let Value::Object(patch) = patch else {
+        target.clone_from(patch);
+        return;
+    };
+    if !target.is_object() {
+        *target = Value::Object(Map::new());
+    }
+    if let Value::Object(target) = target {
+        for (key, value) in patch {
+            if value.is_null() {
+                target.remove(key);
+            } else {
+                apply_merge_patch_value(target.entry(key.clone()).or_insert(Value::Null), value);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
