@@ -86,11 +86,11 @@ pub struct TokenBudgetConfigToml {
     /// Reminder template. `{n_remaining}` is replaced with the tokens remaining before
     /// auto-compaction.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(length(min = 1, max = 1000))]
+    #[schemars(length(min = 1, max = 2000))]
     pub reminder_message_template: Option<String>,
     /// Guidance appended to the context-window metadata in a developer message.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(length(max = 1000))]
+    #[schemars(length(max = 2000))]
     pub guidance_message: Option<String>,
 }
 
