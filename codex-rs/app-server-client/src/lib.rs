@@ -167,6 +167,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
+            | ServerNotification::CurrentTimeSleep(_)
             | ServerNotification::AgentMessageDelta(_)
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
@@ -2188,6 +2189,17 @@ mod tests {
                     codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
                         import_id: "import".to_string(),
                         item_type_results: Vec::new(),
+                    },
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::CurrentTimeSleep(
+                    codex_app_server_protocol::CurrentTimeSleepNotification {
+                        thread_id: "thread".to_string(),
+                        sleep_id: "sleep".to_string(),
+                        duration_ms: 1_000,
                     },
                 )
             )

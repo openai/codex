@@ -107,6 +107,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
+            | ServerNotification::CurrentTimeSleep(_)
     )
 }
 
@@ -731,6 +732,7 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::CurrentTimeSleepNotification;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
@@ -903,6 +905,13 @@ mod tests {
                     item_type_results: Vec::new(),
                 },
             )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::CurrentTimeSleep(CurrentTimeSleepNotification {
+                thread_id: "thread-1".to_string(),
+                sleep_id: "sleep-1".to_string(),
+                duration_ms: 1_000,
+            })
         ));
     }
 }
