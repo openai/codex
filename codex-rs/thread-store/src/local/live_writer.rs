@@ -35,6 +35,7 @@ pub(super) async fn resume_thread(
     store: &LocalThreadStore,
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
+    store.ensure_live_recorder_absent(params.thread_id).await?;
     let history_mode = if let Some(history) = params.history.as_deref() {
         history_mode_from_rollout_items(history)
     } else if let Some(rollout_path) = params.rollout_path.as_ref() {
@@ -59,7 +60,6 @@ pub(super) async fn resume_thread(
         .history_mode
     };
     reject_paginated_history_mode(history_mode)?;
-    store.ensure_live_recorder_absent(params.thread_id).await?;
     let rollout_path = match (params.rollout_path, params.history) {
         (Some(rollout_path), _history) => rollout_path,
         (None, history) => {
