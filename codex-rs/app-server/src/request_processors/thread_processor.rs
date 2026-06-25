@@ -2002,7 +2002,7 @@ impl ThreadRequestProcessor {
             ThreadSortKey::RecencyAt => StoreThreadSortKey::RecencyAt,
         };
         let store_sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
-        let (allowed_sources, source_kind_filter) = compute_source_filters(source_kinds);
+        let source_filter = ThreadSourceFilter::new(source_kinds);
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
         let mut remaining = requested_page_size;
@@ -2020,7 +2020,7 @@ impl ThreadRequestProcessor {
                         SortDirection::Asc => StoreSortDirection::Asc,
                         SortDirection::Desc => StoreSortDirection::Desc,
                     },
-                    allowed_sources: allowed_sources.clone(),
+                    allowed_sources: source_filter.store_sources().to_vec(),
                     archived: archived.unwrap_or(false),
                     search_term: search_term.clone(),
                 })
@@ -2033,10 +2033,7 @@ impl ThreadRequestProcessor {
                     result.thread.agent_nickname.clone(),
                     result.thread.agent_role.clone(),
                 );
-                if source_kind_filter
-                    .as_ref()
-                    .is_none_or(|filter| source_kind_matches(&source, filter))
-                {
+                if source_filter.matches(&source) {
                     search_results.push(result);
                     if search_results.len() >= requested_page_size {
                         break;
@@ -2106,46 +2103,14 @@ impl ThreadRequestProcessor {
         params: ThreadLoadedListParams,
     ) -> Result<ThreadLoadedListResponse, JSONRPCErrorError> {
         let ThreadLoadedListParams { cursor, limit } = params;
-        let mut data: Vec<String> = self
+        let data: Vec<String> = self
             .thread_manager
             .list_thread_ids()
             .await
             .into_iter()
             .map(|thread_id| thread_id.to_string())
             .collect();
-
-        if data.is_empty() {
-            return Ok(ThreadLoadedListResponse {
-                data,
-                next_cursor: None,
-            });
-        }
-
-        data.sort();
-        let total = data.len();
-        let start = match cursor {
-            Some(cursor) => {
-                let cursor = match ThreadId::from_string(&cursor) {
-                    Ok(id) => id.to_string(),
-                    Err(_) => return Err(invalid_request(format!("invalid cursor: {cursor}"))),
-                };
-                match data.binary_search(&cursor) {
-                    Ok(idx) => idx + 1,
-                    Err(idx) => idx,
-                }
-            }
-            None => 0,
-        };
-
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let end = start.saturating_add(effective_limit).min(total);
-        let page = data[start..end].to_vec();
-        let next_cursor = page.last().filter(|_| end < total).cloned();
-
-        Ok(ThreadLoadedListResponse {
-            data: page,
-            next_cursor,
-        })
+        crate::thread_views::paginate_loaded_thread_ids(data, cursor.as_deref(), limit)
     }
 
     async fn thread_read_response_inner(
@@ -3682,13 +3647,15 @@ impl ThreadRequestProcessor {
             None if relation_filter.is_some() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
-        let (allowed_sources_vec, source_kind_filter) =
-            if relation_filter.is_some() && source_kinds.is_none() {
-                (Vec::new(), None)
-            } else {
-                compute_source_filters(source_kinds)
-            };
-        let allowed_sources = allowed_sources_vec.as_slice();
+        let source_filter = if relation_filter.is_some() && source_kinds.is_none() {
+            None
+        } else {
+            Some(ThreadSourceFilter::new(source_kinds))
+        };
+        let allowed_sources = source_filter
+            .as_ref()
+            .map(ThreadSourceFilter::store_sources)
+            .unwrap_or_default();
         let store_sort_direction = match sort_direction {
             SortDirection::Asc => StoreSortDirection::Asc,
             SortDirection::Desc => StoreSortDirection::Desc,
@@ -3721,9 +3688,9 @@ impl ThreadRequestProcessor {
                     it.agent_nickname.clone(),
                     it.agent_role.clone(),
                 );
-                if source_kind_filter
+                if source_filter
                     .as_ref()
-                    .is_none_or(|filter| source_kind_matches(&source, filter))
+                    .is_none_or(|filter| filter.matches(&source))
                     && cwd_filters.as_ref().is_none_or(|expected_cwds| {
                         expected_cwds.iter().any(|expected_cwd| {
                             path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
@@ -3772,11 +3739,8 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
         && client_version.is_some_and(|version| version.starts_with("26.4"))
 }
 
-const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
-const THREAD_TURNS_MAX_LIMIT: usize = 100;
 const THREAD_ITEMS_DEFAULT_LIMIT: usize = 25;
 const THREAD_ITEMS_MAX_LIMIT: usize = 100;
-
 fn thread_backwards_cursor_for_sort_key(
     thread: &StoredThread,
     sort_key: StoreThreadSortKey,
@@ -3796,113 +3760,6 @@ fn thread_backwards_cursor_for_sort_key(
     Some(timestamp.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-struct ThreadTurnsPage {
-    pub(super) turns: Vec<Turn>,
-    pub(super) next_cursor: Option<String>,
-    pub(super) backwards_cursor: Option<String>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ThreadTurnsCursor {
-    turn_id: String,
-    include_anchor: bool,
-}
-
-fn paginate_thread_turns(
-    turns: Vec<Turn>,
-    cursor: Option<&str>,
-    limit: Option<u32>,
-    sort_direction: SortDirection,
-) -> Result<ThreadTurnsPage, JSONRPCErrorError> {
-    if turns.is_empty() {
-        return Ok(ThreadTurnsPage {
-            turns: Vec::new(),
-            next_cursor: None,
-            backwards_cursor: None,
-        });
-    }
-
-    let anchor = cursor.map(parse_thread_turns_cursor).transpose()?;
-    let page_size = limit
-        .map(|value| value as usize)
-        .unwrap_or(THREAD_TURNS_DEFAULT_LIMIT)
-        .clamp(1, THREAD_TURNS_MAX_LIMIT);
-
-    let anchor_index = anchor
-        .as_ref()
-        .and_then(|anchor| turns.iter().position(|turn| turn.id == anchor.turn_id));
-    if anchor.is_some() && anchor_index.is_none() {
-        return Err(invalid_request(
-            "invalid cursor: anchor turn is no longer present",
-        ));
-    }
-
-    let mut keyed_turns: Vec<_> = turns.into_iter().enumerate().collect();
-    match sort_direction {
-        SortDirection::Asc => {
-            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
-                keyed_turns.retain(|(index, _)| {
-                    if anchor.include_anchor {
-                        *index >= anchor_index
-                    } else {
-                        *index > anchor_index
-                    }
-                });
-            }
-        }
-        SortDirection::Desc => {
-            keyed_turns.reverse();
-            if let (Some(anchor), Some(anchor_index)) = (anchor.as_ref(), anchor_index) {
-                keyed_turns.retain(|(index, _)| {
-                    if anchor.include_anchor {
-                        *index <= anchor_index
-                    } else {
-                        *index < anchor_index
-                    }
-                });
-            }
-        }
-    }
-
-    let more_turns_available = keyed_turns.len() > page_size;
-    keyed_turns.truncate(page_size);
-    let backwards_cursor = keyed_turns
-        .first()
-        .map(|(_, turn)| serialize_thread_turns_cursor(&turn.id, /*include_anchor*/ true))
-        .transpose()?;
-    let next_cursor = if more_turns_available {
-        keyed_turns
-            .last()
-            .map(|(_, turn)| serialize_thread_turns_cursor(&turn.id, /*include_anchor*/ false))
-            .transpose()?
-    } else {
-        None
-    };
-    let turns = keyed_turns.into_iter().map(|(_, turn)| turn).collect();
-
-    Ok(ThreadTurnsPage {
-        turns,
-        next_cursor,
-        backwards_cursor,
-    })
-}
-
-fn serialize_thread_turns_cursor(
-    turn_id: &str,
-    include_anchor: bool,
-) -> Result<String, JSONRPCErrorError> {
-    serde_json::to_string(&ThreadTurnsCursor {
-        turn_id: turn_id.to_string(),
-        include_anchor,
-    })
-    .map_err(|err| internal_error(format!("failed to serialize cursor: {err}")))
-}
-
-fn parse_thread_turns_cursor(cursor: &str) -> Result<ThreadTurnsCursor, JSONRPCErrorError> {
-    serde_json::from_str(cursor).map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))
-}
-
 struct ThreadTurnsPageOptions<'a> {
     cursor: Option<&'a str>,
     limit: Option<u32>,
@@ -3917,19 +3774,19 @@ fn build_thread_turns_page_response(
     active_turn: Option<Turn>,
     options: ThreadTurnsPageOptions<'_>,
 ) -> Result<ThreadTurnsListResponse, JSONRPCErrorError> {
-    let mut turns = reconstruct_thread_turns_for_turns_list(
+    let turns = reconstruct_thread_turns_for_turns_list(
         items,
         loaded_status,
         has_live_running_thread,
         active_turn,
     );
-    apply_thread_turns_items_view(&mut turns, options.items_view);
-    let page = paginate_thread_turns(turns, options.cursor, options.limit, options.sort_direction)?;
-    Ok(ThreadTurnsListResponse {
-        data: page.turns,
-        next_cursor: page.next_cursor,
-        backwards_cursor: page.backwards_cursor,
-    })
+    crate::thread_views::paginate_turns(
+        turns,
+        options.cursor,
+        options.limit,
+        options.sort_direction,
+        options.items_view,
+    )
 }
 
 pub(super) fn build_thread_resume_initial_turns_page(
@@ -3952,44 +3809,6 @@ pub(super) fn build_thread_resume_initial_turns_page(
         },
     )
     .map(Into::into)
-}
-
-fn apply_thread_turns_items_view(turns: &mut [Turn], items_view: TurnItemsView) {
-    for turn in turns {
-        match items_view {
-            TurnItemsView::NotLoaded => {
-                turn.items.clear();
-                turn.items_view = TurnItemsView::NotLoaded;
-            }
-            TurnItemsView::Summary => {
-                let first_user_message = turn
-                    .items
-                    .iter()
-                    .find(|item| matches!(item, ThreadItem::UserMessage { .. }))
-                    .cloned();
-                let final_agent_message = turn
-                    .items
-                    .iter()
-                    .rev()
-                    .find(|item| matches!(item, ThreadItem::AgentMessage { .. }))
-                    .cloned();
-                turn.items = match (first_user_message, final_agent_message) {
-                    (Some(user_message), Some(agent_message))
-                        if user_message.id() != agent_message.id() =>
-                    {
-                        vec![user_message, agent_message]
-                    }
-                    (Some(user_message), _) => vec![user_message],
-                    (None, Some(agent_message)) => vec![agent_message],
-                    (None, None) => Vec::new(),
-                };
-                turn.items_view = TurnItemsView::Summary;
-            }
-            TurnItemsView::Full => {
-                turn.items_view = TurnItemsView::Full;
-            }
-        }
-    }
 }
 
 fn reconstruct_thread_turns_for_turns_list(
@@ -4189,62 +4008,6 @@ fn set_thread_name_from_title(thread: &mut Thread, title: String) {
         return;
     }
     thread.name = Some(title);
-}
-
-pub(crate) fn thread_from_stored_thread(
-    thread: StoredThread,
-    fallback_provider: &str,
-    fallback_cwd: &AbsolutePathBuf,
-) -> (Thread, Option<codex_thread_store::StoredThreadHistory>) {
-    let path = thread.rollout_path;
-    let git_info = thread.git_info.map(|info| ApiGitInfo {
-        sha: info.commit_hash.map(|sha| sha.0),
-        branch: info.branch,
-        origin_url: info.repository_url,
-    });
-    let cwd = AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(
-        thread.cwd,
-    ))
-    .unwrap_or_else(|err| {
-        warn!("failed to normalize thread cwd while reading stored thread: {err}");
-        fallback_cwd.clone()
-    });
-    let source = with_thread_spawn_agent_metadata(
-        thread.source,
-        thread.agent_nickname.clone(),
-        thread.agent_role.clone(),
-    );
-    let history = thread.history;
-    let thread_id = thread.thread_id.to_string();
-    let thread = Thread {
-        id: thread_id.clone(),
-        extra: None,
-        session_id: thread_id,
-        forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
-        parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
-        preview: thread.preview,
-        ephemeral: false,
-        model_provider: if thread.model_provider.is_empty() {
-            fallback_provider.to_string()
-        } else {
-            thread.model_provider
-        },
-        created_at: thread.created_at.timestamp(),
-        updated_at: thread.updated_at.timestamp(),
-        recency_at: Some(thread.recency_at.timestamp()),
-        status: ThreadStatus::NotLoaded,
-        path,
-        cwd,
-        cli_version: thread.cli_version,
-        agent_nickname: source.get_nickname(),
-        agent_role: source.get_agent_role(),
-        source: source.into(),
-        thread_source: thread.thread_source.map(Into::into),
-        git_info,
-        name: thread.name,
-        turns: Vec::new(),
-    };
-    (thread, history)
 }
 
 fn summary_from_stored_thread(
