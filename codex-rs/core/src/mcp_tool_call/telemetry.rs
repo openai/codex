@@ -7,7 +7,7 @@ use codex_protocol::mcp::CallToolResult;
 use serde_json::Value as JsonValue;
 use tracing::Span;
 
-pub(super) const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
+const MCP_CALL_COUNT_METRIC: &str = "codex.mcp.call";
 const MCP_CALL_DURATION_METRIC: &str = "codex.mcp.call.duration_ms";
 const MCP_CALL_ERROR_COUNT_METRIC: &str = "codex.mcp.call.error";
 // No CallToolResult was received. This includes request setup, transport, timeout, protocol, and
@@ -37,21 +37,22 @@ impl McpCallMetricOutcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum McpErrorCodeSource {
-    HostedPluginService,
-    Untrusted,
-}
-
 pub(super) fn emit_mcp_call_metrics(
     turn_context: &TurnContext,
     outcome: &McpCallMetricOutcome,
+    server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
     duration: Option<Duration>,
 ) {
-    let tags = mcp_call_metric_tags(outcome.status, tool_name, connector_id, connector_name);
+    let tags = mcp_call_metric_tags(
+        outcome.status,
+        server_name,
+        tool_name,
+        connector_id,
+        connector_name,
+    );
     let tag_refs: Vec<(&str, &str)> = tags
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -87,12 +88,14 @@ pub(super) fn emit_mcp_call_metrics(
 
 fn mcp_call_metric_tags(
     status: &str,
+    server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     let mut tags = vec![
         ("status", sanitize_metric_tag_value(status)),
+        ("server", sanitize_metric_tag_value(server_name)),
         ("tool", sanitize_metric_tag_value(tool_name)),
     ];
     if let Some(connector_id) = connector_id.filter(|connector_id| !connector_id.is_empty()) {
@@ -107,40 +110,35 @@ fn mcp_call_metric_tags(
 
 pub(super) fn mcp_call_metric_outcome(
     result: &Result<CallToolResult, String>,
-    error_code_source: McpErrorCodeSource,
 ) -> McpCallMetricOutcome {
     match result {
         Ok(result) if result.is_error.unwrap_or(false) => {
-            let error_code = if error_code_source == McpErrorCodeSource::HostedPluginService {
-                result
-                    .structured_content
-                    .as_ref()
-                    .and_then(JsonValue::as_object)
-                    .and_then(|structured_content| structured_content.get("error_code"))
-                    .and_then(JsonValue::as_str)
-                    .filter(|error_code| !error_code.is_empty())
-                    .or_else(|| {
-                        result
-                            .meta
-                            .as_ref()
-                            .and_then(JsonValue::as_object)
-                            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-                            .and_then(JsonValue::as_object)
-                            .and_then(|codex_apps| codex_apps.get("connector_auth_failure"))
-                            .and_then(JsonValue::as_object)
-                            .filter(|auth_failure| {
-                                auth_failure
-                                    .get("is_auth_failure")
-                                    .and_then(JsonValue::as_bool)
-                                    == Some(true)
-                            })
-                            .and_then(|auth_failure| auth_failure.get("error_code"))
-                            .and_then(JsonValue::as_str)
-                            .filter(|error_code| !error_code.is_empty())
-                    })
-            } else {
-                None
-            };
+            let error_code = result
+                .structured_content
+                .as_ref()
+                .and_then(JsonValue::as_object)
+                .and_then(|structured_content| structured_content.get("error_code"))
+                .and_then(JsonValue::as_str)
+                .filter(|error_code| !error_code.is_empty())
+                .or_else(|| {
+                    result
+                        .meta
+                        .as_ref()
+                        .and_then(JsonValue::as_object)
+                        .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+                        .and_then(JsonValue::as_object)
+                        .and_then(|codex_apps| codex_apps.get("connector_auth_failure"))
+                        .and_then(JsonValue::as_object)
+                        .filter(|auth_failure| {
+                            auth_failure
+                                .get("is_auth_failure")
+                                .and_then(JsonValue::as_bool)
+                                == Some(true)
+                        })
+                        .and_then(|auth_failure| auth_failure.get("error_code"))
+                        .and_then(JsonValue::as_str)
+                        .filter(|error_code| !error_code.is_empty())
+                });
             let error_code: String = error_code
                 .unwrap_or(MCP_CALL_ERROR_CODE_UNKNOWN)
                 .chars()
@@ -164,9 +162,8 @@ pub(super) fn mcp_call_metric_outcome(
 pub(super) fn record_mcp_call_outcome_span_telemetry(
     span: &Span,
     result: &Result<CallToolResult, String>,
-    error_code_source: McpErrorCodeSource,
 ) {
-    let outcome = mcp_call_metric_outcome(result, error_code_source);
+    let outcome = mcp_call_metric_outcome(result);
     let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code) else {
         return;
     };
