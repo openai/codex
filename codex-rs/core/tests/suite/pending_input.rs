@@ -361,8 +361,9 @@ async fn any_new_input_interrupts_sleep() {
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             FIRST_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),
@@ -370,8 +371,9 @@ async fn any_new_input_interrupts_sleep() {
     ];
     let second_chunks = vec![
         chunk(ev_response_created("resp-2")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             SECOND_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),

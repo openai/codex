@@ -32,8 +32,9 @@ async fn sleep_emits_started_and_completed_items() -> Result<()> {
         vec![
             responses::sse(vec![
                 responses::ev_response_created("resp-1"),
-                responses::ev_function_call(
+                responses::ev_function_call_with_namespace(
                     CALL_ID,
+                    "clock",
                     "sleep",
                     &serde_json::json!({ "duration_ms": DURATION_MS }).to_string(),
                 ),
