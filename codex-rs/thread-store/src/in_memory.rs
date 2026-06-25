@@ -455,9 +455,9 @@ impl InMemoryThreadStore {
     }
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
+        reject_paginated_history_mode(params.history_mode)?;
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
-        reject_paginated_history_mode(params.history_mode)?;
         if let Some(history) = params.history {
             state
                 .histories

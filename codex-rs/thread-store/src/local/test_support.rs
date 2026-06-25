@@ -27,14 +27,13 @@ pub(super) fn write_session_file_with_history_mode(
     uuid: Uuid,
     history_mode: ThreadHistoryMode,
 ) -> std::io::Result<PathBuf> {
-    write_session_file_with_fork_and_history_mode(
+    write_session_file_with(
         root,
         root.join("sessions/2025/01/03"),
         ts,
         uuid,
         "Hello from user",
         Some("test-provider"),
-        /*forked_from_id*/ None,
         history_mode,
     )
 }
@@ -51,6 +50,7 @@ pub(super) fn write_archived_session_file(
         uuid,
         "Archived user message",
         Some("test-provider"),
+        ThreadHistoryMode::Legacy,
     )
 }
 
@@ -61,6 +61,7 @@ pub(super) fn write_session_file_with(
     uuid: Uuid,
     first_user_message: &str,
     model_provider: Option<&str>,
+    history_mode: ThreadHistoryMode,
 ) -> std::io::Result<PathBuf> {
     write_session_file_with_fork(
         root,
@@ -70,32 +71,12 @@ pub(super) fn write_session_file_with(
         first_user_message,
         model_provider,
         /*forked_from_id*/ None,
-    )
-}
-
-pub(super) fn write_session_file_with_fork(
-    root: &Path,
-    day_dir: PathBuf,
-    ts: &str,
-    uuid: Uuid,
-    first_user_message: &str,
-    model_provider: Option<&str>,
-    forked_from_id: Option<Uuid>,
-) -> std::io::Result<PathBuf> {
-    write_session_file_with_fork_and_history_mode(
-        root,
-        day_dir,
-        ts,
-        uuid,
-        first_user_message,
-        model_provider,
-        forked_from_id,
-        ThreadHistoryMode::Legacy,
+        history_mode,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_session_file_with_fork_and_history_mode(
+pub(super) fn write_session_file_with_fork(
     root: &Path,
     day_dir: PathBuf,
     ts: &str,

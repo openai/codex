@@ -696,7 +696,7 @@ impl ThreadHistoryMode {
     }
 }
 
-impl std::str::FromStr for ThreadHistoryMode {
+impl FromStr for ThreadHistoryMode {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {

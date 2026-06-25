@@ -495,6 +495,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -703,6 +704,7 @@ mod tests {
             "Forked user message",
             Some("test-provider"),
             Some(parent_uuid),
+            ThreadHistoryMode::Legacy,
         )
         .expect("forked session file");
 

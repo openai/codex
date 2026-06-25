@@ -1140,7 +1140,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_sha,
         git_origin_url,
         source,
-        history_mode: _history_mode,
+        history_mode: _,
         parent_thread_id,
         agent_nickname,
         agent_role,
