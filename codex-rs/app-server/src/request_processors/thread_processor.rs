@@ -1091,12 +1091,7 @@ impl ThreadRequestProcessor {
                 .as_ref()
                 .is_some_and(|overrides| overrides.contains_key("service_tier"));
         let mut config = config_manager
-            .load_with_cli_overrides(
-                &current_cli_overrides,
-                config_overrides.clone(),
-                typesafe_overrides.clone(),
-                /*fallback_cwd*/ None,
-            )
+            .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
 
