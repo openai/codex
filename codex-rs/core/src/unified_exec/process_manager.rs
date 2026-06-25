@@ -1050,7 +1050,7 @@ impl UnifiedExecProcessManager {
                 path: request.cwd.clone(),
             })?;
 
-        let (program, args) = request
+        let (_program, args) = request
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
@@ -1069,7 +1069,7 @@ impl UnifiedExecProcessManager {
             ))
         })?;
         #[cfg(not(target_os = "windows"))]
-        let program = program.as_str();
+        let program = _program.as_str();
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,

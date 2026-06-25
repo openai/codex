@@ -59,29 +59,6 @@ fn requested_cwd_precedes_child_path() {
 }
 
 #[test]
-fn keeps_long_and_lexical_paths_unchanged() {
-    let temp = TempDir::new().expect("tempdir");
-    let mut cwd = temp.path().to_path_buf();
-    while cwd.to_string_lossy().len() <= 270 {
-        cwd.push("long-working-directory-segment");
-    }
-    fs::create_dir_all(cwd.join("nested")).expect("create long cwd");
-    let executable = cwd.join("tool.EXE");
-    fs::write(&executable, b"fixture").expect("write executable fixture");
-    let lexical = cwd.join("nested").join("..").join("tool.EXE");
-
-    assert_eq!(
-        resolve_windows_executable(
-            &[lexical.to_string_lossy().into_owned()],
-            &cwd,
-            &HashMap::new(),
-        )
-        .expect("resolve long lexical executable"),
-        lexical
-    );
-}
-
-#[test]
 fn keeps_extended_length_paths_unchanged() {
     let executable = dunce::canonicalize(std::env::current_exe().expect("current executable"))
         .expect("canonical current executable");

@@ -380,7 +380,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
     let wait_handle = Arc::clone(&process_handle);
-    let command_for_wait = launch.command.clone();
+    let command_for_wait = launch.command;
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;

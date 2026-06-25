@@ -107,7 +107,7 @@ fn windows_search_dirs(cwd: &Path, env_map: &HashMap<String, String>) -> Vec<Pat
                 .filter(|dir| {
                     !dir.as_os_str().is_empty()
                         && !is_drive_relative(dir)
-                        && !(dir.has_root() && !dir.is_absolute())
+                        && (!dir.has_root() || dir.is_absolute())
                 })
                 .map(|dir| {
                     if dir.is_absolute() {

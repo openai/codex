@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
@@ -20,6 +21,32 @@ pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     let mut v: Vec<u16> = s.as_ref().encode_wide().collect();
     v.push(0);
     v
+}
+
+const MAX_PATH_UTF16_UNITS: usize = 260;
+const EXTENDED_PATH_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+const DEVICE_PATH_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16];
+
+/// Encodes a CreateProcess path, adding an extended-length prefix only when needed.
+pub(crate) fn to_win32_path_wide(path: &Path) -> Vec<u16> {
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if !path.is_absolute()
+        || wide.len() < MAX_PATH_UTF16_UNITS
+        || wide.starts_with(EXTENDED_PATH_PREFIX)
+        || wide.starts_with(DEVICE_PATH_PREFIX)
+    {
+        return wide.into_iter().chain([0]).collect();
+    }
+
+    let mut extended = EXTENDED_PATH_PREFIX.to_vec();
+    if wide.starts_with(&[b'\\' as u16, b'\\' as u16]) {
+        extended.extend("UNC\\".encode_utf16());
+        extended.extend_from_slice(&wide[2..]);
+    } else {
+        extended.extend(wide);
+    }
+    extended.push(0);
+    extended
 }
 
 /// Quote a single Windows command-line argument following the rules used by
@@ -208,7 +235,10 @@ fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::argv_to_command_line;
+    use super::to_wide;
+    use super::to_win32_path_wide;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     #[test]
     fn argv_to_command_line_quotes_each_argument_independently() {
@@ -237,5 +267,24 @@ mod tests {
             argv_to_command_line(&argv),
             "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
         );
+    }
+
+    #[test]
+    fn create_process_paths_add_extended_prefixes_only_for_long_paths() {
+        let long_tail = ["long-working-directory-segment"; 10].join(r"\");
+        let long_drive = format!(r"C:\{long_tail}");
+        let long_unc = format!(r"\\localhost\C$\{long_tail}");
+
+        assert_eq!(
+            to_win32_path_wide(Path::new(&long_drive)),
+            to_wide(format!(r"\\?\{long_drive}"))
+        );
+        assert_eq!(
+            to_win32_path_wide(Path::new(&long_unc)),
+            to_wide(format!(r"\\?\UNC\{}", &long_unc[2..]))
+        );
+        for path in [r"C:\short", r"\\localhost\C$\short", r"\\?\C:\already"] {
+            assert_eq!(to_win32_path_wide(Path::new(path)), to_wide(path));
+        }
     }
 }

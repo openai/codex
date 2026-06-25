@@ -12,6 +12,7 @@ use crate::process::WindowsProcessLaunch;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
+use crate::winutil::to_win32_path_wide;
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_pty::PsuedoCon;
@@ -143,7 +144,7 @@ pub fn spawn_conpty_process_as_user(
             0,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
             env_block.as_ptr() as *mut c_void,
-            to_wide(cwd).as_ptr(),
+            to_win32_path_wide(cwd).as_ptr(),
             &si.StartupInfo,
             &mut pi,
         )
