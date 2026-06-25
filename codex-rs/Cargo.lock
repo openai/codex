@@ -2813,9 +2813,7 @@ name = "codex-core-skills"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-analytics",
  "codex-config",
- "codex-context-fragments",
  "codex-exec-server",
  "codex-login",
  "codex-model-provider",

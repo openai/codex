@@ -25,6 +25,7 @@ use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
+use codex_core_skills::ExecutorSkillCatalogCache;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
@@ -66,6 +67,9 @@ pub(crate) struct SessionServices {
     pub(crate) guardian_rejection_circuit_breaker: Mutex<GuardianRejectionCircuitBreaker>,
     pub(crate) runtime_handle: Handle,
     pub(crate) skills_service: Arc<SkillsService>,
+    /// Catalogs discovered from executor capability roots. The cache is session-scoped because
+    /// selected environment contents are stable for the session lifetime.
+    pub(crate) executor_skill_catalog_cache: ExecutorSkillCatalogCache,
     pub(crate) agents_md_manager: Arc<AgentsMdManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,

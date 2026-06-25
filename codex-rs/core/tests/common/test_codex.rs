@@ -37,6 +37,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -382,6 +383,14 @@ impl TestCodexBuilder {
 
     pub fn with_thread_extension_init(mut self, thread_extension_init: ExtensionDataInit) -> Self {
         self.thread_extension_init = thread_extension_init;
+        self
+    }
+
+    pub fn with_selected_capability_roots(
+        mut self,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    ) -> Self {
+        self.thread_extension_init.insert(selected_capability_roots);
         self
     }
 

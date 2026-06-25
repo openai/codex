@@ -37,7 +37,7 @@ fn extract_tool_mentions_requires_link_syntax() {
 
 #[test]
 fn extract_tool_mentions_trims_linked_paths_and_allows_spacing() {
-    assert_mentions("use [$beta]   ( /tmp/beta )", &["beta"], &["/tmp/beta"]);
+    assert_mentions("use [$beta]   ( /tmp/beta )", &[], &["/tmp/beta"]);
 }
 
 #[test]

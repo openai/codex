@@ -1,4 +1,5 @@
 pub mod config_rules;
+mod executor_runtime;
 pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod loader;
@@ -13,6 +14,7 @@ mod runtime_snapshot;
 pub mod service;
 pub mod system;
 
+pub use executor_runtime::ExecutorSkillCatalogCache;
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use invocation_utils::detect_implicit_skill_invocation_for_command;
 pub use mention_counts::build_skill_name_counts;

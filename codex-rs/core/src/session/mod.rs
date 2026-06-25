@@ -2840,6 +2840,7 @@ impl Session {
         let skills = Arc::new(
             codex_core_skills::SkillsSnapshot::load(
                 turn_context.turn_skills.snapshot.clone(),
+                &self.services.executor_skill_catalog_cache,
                 &selected_capability_roots,
                 extra_skill_sources.as_deref(),
                 turn_context.session_source.restriction_product(),

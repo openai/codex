@@ -488,6 +488,10 @@ async fn serve_environment_with_skill(
             _ = &mut shutdown => return reads,
         };
         let response = match request["method"].as_str() {
+            Some("fs/canonicalize") => json!({
+                "id": request["id"],
+                "result": { "path": request["params"]["path"] }
+            }),
             Some("fs/walk") => json!({
                 "id": request["id"],
                 "result": {
@@ -781,7 +785,7 @@ async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_replaces_a_colliding_host_skill_for_the_next_step() -> Result<()> {
+async fn deferred_executor_caches_replacement_skill_catalog_for_later_steps() -> Result<()> {
     const HOST_BODY: &str = "HOST_SKILL_BODY_MARKER";
     const EXECUTOR_BODY: &str = "EXECUTOR_SKILL_BODY_MARKER";
     const SKILL_REPLACEMENT_NOTICE: &str =
@@ -817,6 +821,11 @@ async fn deferred_executor_replaces_a_colliding_host_skill_for_the_next_step() -
                 ev_response_created("resp-2"),
                 ev_assistant_message("msg-2", "done"),
                 ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "still done"),
+                ev_completed("resp-3"),
             ]),
         ],
     )
@@ -870,11 +879,27 @@ async fn deferred_executor_replaces_a_colliding_host_skill_for_the_next_step() -
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Continue without loading another skill".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     shutdown_tx.send(()).expect("stop exec server");
     assert_eq!(exec_server.await?, 2);
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     let first_user_context = requests[0].message_input_texts("user");
     let host_skill = first_user_context
         .iter()

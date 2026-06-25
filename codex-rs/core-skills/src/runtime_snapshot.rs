@@ -4,17 +4,16 @@ use std::fmt;
 use std::sync::Arc;
 
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
-use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
 use codex_protocol::user_input::UserInput;
 
 use crate::AvailableSkills;
+use crate::ExecutorSkillCatalogCache;
 use crate::HostSkillsSnapshot;
 use crate::SkillMetadata;
 use crate::collect_runtime_skill_mentions;
 use crate::default_skill_metadata_budget;
-use crate::loader::EnvironmentSkillMetadata;
-use crate::loader::load_environment_skills_from_root;
+use crate::executor_runtime::ExecutorSkillSource;
 use crate::render::SkillRenderSideEffects;
 use crate::render::build_available_skills_from_catalog;
 use crate::runtime::SkillAuthority;
@@ -85,24 +84,50 @@ impl SkillsSnapshot {
 
     pub async fn load(
         host: HostSkillsSnapshot,
+        executor_catalog_cache: &ExecutorSkillCatalogCache,
         executor_roots: &[ResolvedSelectedCapabilityRoot],
         extra_sources: Option<&SkillSources>,
         restriction_product: Option<Product>,
         context_window: Option<i64>,
     ) -> Self {
-        let mut sources =
-            SkillSources::new().with_source("host", Arc::new(HostSkillSource::new(host.clone())));
+        let host_source: Arc<dyn SkillSource> = Arc::new(HostSkillSource::new(host.clone()));
+        let mut catalog = SkillCatalog::default();
+        let mut source_by_entry = HashMap::new();
+        merge_bound_catalog(
+            &mut catalog,
+            &mut source_by_entry,
+            &host_catalog(&host),
+            &host_source,
+        );
         for root in executor_roots {
-            sources = sources.with_source(
-                format!("executor root `{}`", root.selected_root().id),
-                Arc::new(ExecutorSkillSource::new(root.clone(), restriction_product)),
+            let executor_source =
+                Arc::new(ExecutorSkillSource::new(root.clone(), restriction_product));
+            let source_catalog = executor_catalog_cache
+                .catalog_for_stable_root(executor_source.as_ref())
+                .await;
+            let source: Arc<dyn SkillSource> = executor_source;
+            merge_bound_catalog(
+                &mut catalog,
+                &mut source_by_entry,
+                source_catalog.as_ref(),
+                &source,
             );
         }
         if let Some(extra_sources) = extra_sources {
-            sources.extend(extra_sources.clone());
+            let (extra_catalog, extra_source_by_entry) = extra_sources.list_with_sources().await;
+            catalog.warnings.extend(extra_catalog.warnings);
+            for entry in extra_catalog.entries {
+                let key = (entry.authority.clone(), entry.id.clone());
+                if let std::collections::hash_map::Entry::Vacant(route) =
+                    source_by_entry.entry(key.clone())
+                    && let Some(source) = extra_source_by_entry.get(&key)
+                {
+                    route.insert(Arc::clone(source));
+                    catalog.entries.push(entry);
+                }
+            }
         }
 
-        let (catalog, source_by_entry) = sources.list_with_sources().await;
         Self::new(host, catalog, source_by_entry, context_window)
     }
 
@@ -225,6 +250,24 @@ impl SkillsSnapshot {
     }
 }
 
+fn merge_bound_catalog(
+    catalog: &mut SkillCatalog,
+    source_by_entry: &mut HashMap<EntryKey, Arc<dyn SkillSource>>,
+    source_catalog: &SkillCatalog,
+    source: &Arc<dyn SkillSource>,
+) {
+    catalog
+        .warnings
+        .extend(source_catalog.warnings.iter().cloned());
+    for entry in &source_catalog.entries {
+        let key = (entry.authority.clone(), entry.id.clone());
+        if let std::collections::hash_map::Entry::Vacant(route) = source_by_entry.entry(key) {
+            route.insert(Arc::clone(source));
+            catalog.entries.push(entry.clone());
+        }
+    }
+}
+
 impl fmt::Debug for SkillsSnapshot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -322,130 +365,4 @@ fn host_catalog(snapshot: &HostSkillsSnapshot) -> SkillCatalog {
         catalog.push_entry(entry);
     }
     catalog
-}
-
-struct ExecutorSkillSource {
-    root: ResolvedSelectedCapabilityRoot,
-    authority: SkillAuthority,
-    restriction_product: Option<Product>,
-    identity: SkillSourceIdentity,
-}
-
-impl ExecutorSkillSource {
-    fn new(root: ResolvedSelectedCapabilityRoot, restriction_product: Option<Product>) -> Self {
-        Self {
-            authority: SkillAuthority::new(
-                SkillSourceKind::Executor,
-                root.selected_root().id.clone(),
-            ),
-            identity: SkillSourceIdentity::from_owner(Arc::clone(root.environment())),
-            root,
-            restriction_product,
-        }
-    }
-}
-
-impl SkillSource for ExecutorSkillSource {
-    fn identity(&self) -> SkillSourceIdentity {
-        self.identity.clone()
-    }
-
-    fn list(&self) -> SkillSourceFuture<'_, SkillCatalog> {
-        Box::pin(async move {
-            let CapabilityRootLocation::Environment {
-                environment_id,
-                path,
-            } = &self.root.selected_root().location;
-            let outcome = load_environment_skills_from_root(
-                self.root.file_system().as_ref(),
-                path,
-                self.restriction_product,
-            )
-            .await;
-            let mut catalog = SkillCatalog {
-                warnings: outcome.warnings,
-                ..Default::default()
-            };
-            for skill in outcome.skills {
-                catalog.push_entry(executor_catalog_entry(
-                    skill,
-                    self.authority.clone(),
-                    &self.root.selected_root().id,
-                    environment_id,
-                ));
-            }
-            Ok(catalog)
-        })
-    }
-
-    fn read(&self, request: SkillReadRequest) -> SkillSourceFuture<'_, SkillReadResult> {
-        Box::pin(async move {
-            if request.authority != self.authority || request.package.0 != request.resource.as_str()
-            {
-                return Err(SkillSourceError::new(
-                    "executor skill resource does not match its captured source",
-                ));
-            }
-            let CapabilityRootLocation::Environment { environment_id, .. } =
-                &self.root.selected_root().location;
-            let Some((resource_environment, path)) = request.resource.environment_path() else {
-                return Err(SkillSourceError::new(
-                    "executor skill resource has no environment path",
-                ));
-            };
-            if resource_environment != environment_id {
-                return Err(SkillSourceError::new(
-                    "executor skill resource belongs to a different environment",
-                ));
-            }
-            let contents = self
-                .root
-                .file_system()
-                .read_file_text(path, /*sandbox*/ None)
-                .await
-                .map_err(|err| {
-                    SkillSourceError::new(format!(
-                        "failed to read executor skill resource {}: {err}",
-                        request.resource.as_str()
-                    ))
-                })?;
-            Ok(SkillReadResult {
-                resource: request.resource,
-                contents,
-            })
-        })
-    }
-}
-
-fn executor_catalog_entry(
-    skill: EnvironmentSkillMetadata,
-    authority: SkillAuthority,
-    root_id: &str,
-    environment_id: &str,
-) -> SkillCatalogEntry {
-    let prompt_visible = skill.allows_implicit_invocation();
-    let path = skill.path_to_skills_md.inferred_native_path_string();
-    let display_path = format!(
-        "skill://{root_id}/{}",
-        path.replace('\\', "/").trim_start_matches('/')
-    );
-    let entry = SkillCatalogEntry::new(
-        SkillPackageId(display_path.clone()),
-        authority,
-        skill.name,
-        skill.description,
-        SkillResourceId::environment(
-            display_path.clone(),
-            environment_id,
-            skill.path_to_skills_md,
-        ),
-    )
-    .with_short_description(skill.short_description)
-    .with_display_path(display_path)
-    .with_dependencies(skill.dependencies);
-    if prompt_visible {
-        entry
-    } else {
-        entry.hidden_from_prompt()
-    }
 }
