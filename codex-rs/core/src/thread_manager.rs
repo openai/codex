@@ -264,6 +264,19 @@ pub fn build_models_manager(
     )
 }
 
+/// Builds the process-scoped plugin manager used by a [`ThreadManager`].
+pub fn build_plugins_manager(
+    config: &Config,
+    auth_manager: &AuthManager,
+    session_source: &SessionSource,
+) -> Arc<PluginsManager> {
+    Arc::new(PluginsManager::new_with_options(
+        config.codex_home.to_path_buf(),
+        session_source.restriction_product(),
+        auth_manager.get_api_auth_mode(),
+    ))
+}
+
 pub fn thread_store_from_config(
     config: &Config,
     state_db: Option<StateDbHandle>,
@@ -310,14 +323,43 @@ impl ThreadManager {
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
+        let plugins_manager = build_plugins_manager(config, auth_manager.as_ref(), &session_source);
+        Self::new_with_plugins_manager(
+            config,
+            auth_manager,
+            plugins_manager,
+            session_source,
+            environment_manager,
+            extensions,
+            user_instructions_provider,
+            analytics_events_client,
+            thread_store,
+            agent_graph_store,
+            installation_id,
+            attestation_provider,
+            external_time_provider,
+        )
+    }
+
+    /// Constructs a thread manager with a caller-owned process-scoped plugin manager.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_plugins_manager(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        plugins_manager: Arc<PluginsManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
+        user_instructions_provider: Arc<dyn UserInstructionsProvider>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
+        installation_id: String,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        external_time_provider: Option<Arc<dyn TimeProvider>>,
+    ) -> Self {
         let codex_home = config.codex_home.clone();
-        let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new_with_options(
-            codex_home.to_path_buf(),
-            restriction_product,
-            auth_manager.get_api_auth_mode(),
-        ));
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
             Arc::clone(&plugins_manager),
             Arc::clone(&extensions),
@@ -325,7 +367,7 @@ impl ThreadManager {
         let skills_service = Arc::new(SkillsService::new_with_restriction_product(
             codex_home,
             config.bundled_skills_enabled(),
-            restriction_product,
+            session_source.restriction_product(),
         ));
         Self {
             state: Arc::new(ThreadManagerState {

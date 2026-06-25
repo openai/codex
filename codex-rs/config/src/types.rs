@@ -11,6 +11,7 @@ pub use crate::mcp_types::McpServerEnvVar;
 pub use crate::mcp_types::McpServerOAuthConfig;
 pub use crate::mcp_types::McpServerToolConfig;
 pub use crate::mcp_types::McpServerTransportConfig;
+pub use crate::mcp_types::McpToolApproval;
 pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
@@ -226,6 +227,23 @@ pub struct FeedbackConfigToml {
 pub enum ToolSuggestDiscoverableType {
     Connector,
     Plugin,
+}
+
+impl ToolSuggestDiscoverableType {
+    pub fn from_config_str(value: &str) -> Option<Self> {
+        match value {
+            "connector" => Some(Self::Connector),
+            "plugin" => Some(Self::Plugin),
+            _ => None,
+        }
+    }
+
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Connector => "connector",
+            Self::Plugin => "plugin",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
@@ -851,7 +869,7 @@ pub struct PluginMcpServerConfig {
 
     /// Approval mode for tools in this server unless a tool override exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_approval_mode: Option<McpToolApproval>,
 
     /// Explicit allow-list of tools exposed from this server.
     #[serde(default, skip_serializing_if = "Option::is_none")]

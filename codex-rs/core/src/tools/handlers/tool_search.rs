@@ -333,6 +333,8 @@ mod tests {
             callable_name: tool_name.to_string(),
             callable_namespace: format!("mcp__{server_name}"),
             namespace_description: None,
+            namespace_title: None,
+            search_aliases: Vec::new(),
             tool: Tool::new(
                 tool_name.to_string(),
                 format!("{description_prefix} desktop tool"),
@@ -342,8 +344,6 @@ mod tests {
                     "additionalProperties": false,
                 }))),
             ),
-            connector_id: None,
-            connector_name: None,
             plugin_display_names: Vec::new(),
         }
     }

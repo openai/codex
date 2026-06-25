@@ -18,12 +18,16 @@ pub const DEFAULT_MCP_SERVER_ENVIRONMENT_ID: &str = "local";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum AppToolApproval {
+#[schemars(rename = "AppToolApproval")]
+pub enum McpToolApproval {
     #[default]
     Auto,
     Prompt,
     Approve,
 }
+
+/// Backward-compatible name used by Apps-specific configuration.
+pub type AppToolApproval = McpToolApproval;
 
 /// Human-readable reason a configured MCP server was disabled after requirements
 /// were applied.
@@ -56,7 +60,7 @@ impl fmt::Display for McpServerDisabledReason {
 pub struct McpServerToolConfig {
     /// Approval mode for this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_mode: Option<AppToolApproval>,
+    pub approval_mode: Option<McpToolApproval>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -194,7 +198,7 @@ pub struct McpServerConfig {
 
     /// Approval mode for tools in this server unless a tool override exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_approval_mode: Option<McpToolApproval>,
 
     /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -284,7 +288,7 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default)]
-    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_approval_mode: Option<McpToolApproval>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]

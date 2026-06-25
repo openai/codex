@@ -318,7 +318,6 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
-        self.clear_connector_selection().await;
         self.start_task(turn_context, input, task).await;
     }
 

@@ -37,6 +37,8 @@ mod agents_md;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
+mod apps_auth_refresh;
+mod apps_cold_start;
 mod auto_review;
 mod cli_stream;
 mod client;
@@ -106,6 +108,7 @@ mod review;
 mod rmcp_client;
 mod rollout_budget;
 mod rollout_list_find;
+mod runtime_mcp_contributions;
 mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;

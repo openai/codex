@@ -15,8 +15,6 @@ fn guardian_meta(tool_params: Option<Value>) -> Option<Meta> {
     let mut value = json!({
         "codex_approval_kind": "mcp_tool_call",
         "codex_request_type": "approval_request",
-        "connector_id": "browser-use",
-        "connector_name": "Browser Use",
         "tool_name": "access_browser_origin",
         "tool_title": "Access browser origin",
     });
@@ -39,14 +37,27 @@ fn form_request(meta: Option<Meta>) -> ElicitationReviewRequest {
                     .expect("schema should build"),
             },
         ),
+        server_runtime_metadata: codex_mcp::McpElicitationRuntimeMetadata::default(),
     }
 }
 
 #[test]
 fn guardian_elicitation_review_request_builds_mcp_tool_call() {
-    let request = form_request(guardian_meta(Some(json!({
+    let source = codex_protocol::mcp_approval_meta::McpToolSource::new(
+        "browser", "Browser", /*description*/ None,
+    )
+    .expect("valid source");
+    let mut request = form_request(guardian_meta(Some(json!({
         "origin": "https://example.com",
     }))));
+    let runtime_metadata = codex_mcp::McpServerRuntimeMetadata::default().with_tool(
+        "raw_access_browser_origin",
+        codex_mcp::McpToolRuntimeMetadata::default()
+            .with_approval_source(source.clone())
+            .with_search_aliases(["access_browser_origin"]),
+    );
+    request.server_runtime_metadata =
+        codex_mcp::McpElicitationRuntimeMetadata::from(&runtime_metadata);
 
     let GuardianElicitationReview::ApprovalRequest(guardian_request) =
         guardian_elicitation_review_request(&request)
@@ -58,9 +69,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
         server,
         tool_name,
         arguments,
-        connector_id,
-        connector_name,
-        connector_description,
+        approval_source,
         connected_account_email,
         tool_title,
         tool_description,
@@ -74,9 +83,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
     assert_eq!(server, "browser-use");
     assert_eq!(tool_name, "access_browser_origin");
     assert_eq!(arguments, Some(json!({ "origin": "https://example.com" })));
-    assert_eq!(connector_id.as_deref(), Some("browser-use"));
-    assert_eq!(connector_name.as_deref(), Some("Browser Use"));
-    assert_eq!(connector_description, None);
+    assert_eq!(approval_source, Some(source));
     assert_eq!(connected_account_email, None);
     assert_eq!(tool_title.as_deref(), Some("Access browser origin"));
     assert_eq!(tool_description, None);
@@ -104,7 +111,7 @@ fn guardian_elicitation_review_request_defaults_missing_tool_params() {
 fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestion() {
     let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
         turn_id: Some("turn-1".to_string()),
-        server_name: "codex_apps".to_string(),
+        server_name: "plugin_installer".to_string(),
         id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
         request: codex_protocol::approvals::ElicitationRequest::Form {
             meta: Some(json!({
@@ -133,7 +140,7 @@ fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestio
 
     let enable_event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
         turn_id: Some("turn-1".to_string()),
-        server_name: "codex_apps".to_string(),
+        server_name: "plugin_installer".to_string(),
         id: codex_protocol::mcp::RequestId::String("request-2".to_string()),
         request: codex_protocol::approvals::ElicitationRequest::Form {
             meta: Some(json!({
@@ -183,6 +190,7 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
                 elicitation_id: "elicit-1".to_string(),
             },
         ),
+        server_runtime_metadata: codex_mcp::McpElicitationRuntimeMetadata::default(),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&url_request),
@@ -202,6 +210,7 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
                     .expect("schema should build"),
             },
         ),
+        server_runtime_metadata: codex_mcp::McpElicitationRuntimeMetadata::default(),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&non_empty_schema_request),

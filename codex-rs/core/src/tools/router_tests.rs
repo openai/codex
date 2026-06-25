@@ -157,7 +157,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
         id: None,
         name: tool_name.clone(),
-        namespace: Some("mcp__codex_apps__calendar".to_string()),
+        namespace: Some("mcp__calendar".to_string()),
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
         internal_chat_message_metadata_passthrough: None,
@@ -166,7 +166,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 
     assert_eq!(
         call.tool_name,
-        ToolName::namespaced("mcp__codex_apps__calendar", tool_name)
+        ToolName::namespaced("mcp__calendar", tool_name)
     );
     assert_eq!(call.call_id, "call-namespace");
     match call.payload {
@@ -325,6 +325,8 @@ fn mcp_tool_info(
         callable_name: tool_name.to_string(),
         callable_namespace: callable_namespace.to_string(),
         namespace_description: None,
+        namespace_title: None,
+        search_aliases: Vec::new(),
         tool: rmcp::model::Tool::new(
             tool_name.to_string(),
             "Test MCP tool",
@@ -332,8 +334,6 @@ fn mcp_tool_info(
                 "type": "object",
             }))),
         ),
-        connector_id: None,
-        connector_name: None,
         plugin_display_names: Vec::new(),
     }
 }

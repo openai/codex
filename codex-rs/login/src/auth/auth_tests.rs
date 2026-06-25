@@ -17,6 +17,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use wiremock::Mock;
@@ -1025,6 +1026,73 @@ fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
     assert_eq!(
         err.to_string(),
         "external auth tokens are missing ChatGPT metadata"
+    );
+}
+
+struct GatedExternalApiKeyAuth {
+    resolve_calls: AtomicUsize,
+    first_resolve_started: tokio::sync::Notify,
+    release_first_resolve: tokio::sync::Notify,
+}
+
+impl ExternalAuth for GatedExternalApiKeyAuth {
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
+    }
+
+    fn resolve(&self) -> ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async move {
+            let call = self.resolve_calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                self.first_resolve_started.notify_one();
+                self.release_first_resolve.notified().await;
+            }
+            Ok(Some(ExternalAuthTokens::access_token_only(
+                "external-api-key",
+            )))
+        })
+    }
+
+    fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async { Ok(ExternalAuthTokens::access_token_only("external-api-key")) })
+    }
+}
+
+#[tokio::test]
+async fn auth_with_revision_retries_when_auth_changes_during_resolution() {
+    let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("cached-api-key"));
+    let external_auth = Arc::new(GatedExternalApiKeyAuth {
+        resolve_calls: AtomicUsize::new(0),
+        first_resolve_started: tokio::sync::Notify::new(),
+        release_first_resolve: tokio::sync::Notify::new(),
+    });
+    manager.set_external_auth(external_auth.clone());
+
+    let resolve = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move { manager.auth_with_revision().await }
+    });
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        external_auth.first_resolve_started.notified(),
+    )
+    .await
+    .expect("first auth resolution should start");
+    assert!(manager.set_cached_auth(/*new_auth*/ None));
+    external_auth.release_first_resolve.notify_one();
+
+    let (auth, revision) = tokio::time::timeout(Duration::from_secs(1), resolve)
+        .await
+        .expect("auth resolution should finish")
+        .expect("auth resolution task should not panic");
+    assert_eq!(revision, *manager.auth_change_receiver().borrow());
+    assert_eq!(external_auth.resolve_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        auth.and_then(|auth| auth.api_key().map(str::to_string)),
+        Some("external-api-key".to_string())
     );
 }
 

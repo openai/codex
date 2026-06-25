@@ -5,11 +5,14 @@ use std::collections::HashSet;
 pub use codex_utils_plugins::mention_syntax;
 pub use codex_utils_plugins::plugin_namespace_for_skill_path;
 
+mod app_config;
 mod load_outcome;
 pub mod manifest;
 mod plugin_id;
 mod provider;
 
+pub use app_config::parse_plugin_app_config;
+pub use app_config::parse_plugin_app_config_value;
 use codex_config::HookEventsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use load_outcome::EffectiveSkillRoots;

@@ -558,6 +558,66 @@ impl FileChangeItem {
 }
 
 impl McpToolCallItem {
+    pub fn new(
+        id: String,
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+        status: McpToolCallStatus,
+    ) -> Self {
+        Self {
+            id,
+            server,
+            tool,
+            arguments,
+            connector_id: None,
+            mcp_app_resource_uri: None,
+            link_id: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+            plugin_id: None,
+            status,
+            result: None,
+            error: None,
+            duration: None,
+        }
+    }
+
+    pub fn with_presentation(
+        mut self,
+        mcp_app_resource_uri: Option<String>,
+        link_id: Option<String>,
+        plugin_id: Option<String>,
+    ) -> Self {
+        self.mcp_app_resource_uri = mcp_app_resource_uri;
+        self.link_id = link_id;
+        self.plugin_id = plugin_id;
+        self
+    }
+
+    pub fn with_attempt_outcome(
+        mut self,
+        result: Option<CallToolResult>,
+        error: Option<McpToolCallError>,
+        duration: Duration,
+    ) -> Self {
+        self.result = result;
+        self.error = error;
+        self.duration = Some(duration);
+        self
+    }
+
+    pub fn with_skipped_outcome(
+        mut self,
+        result: Option<CallToolResult>,
+        error: Option<McpToolCallError>,
+    ) -> Self {
+        self.result = result;
+        self.error = error;
+        self
+    }
+
     pub fn as_legacy_begin_event(&self) -> EventMsg {
         EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: self.id.clone(),
@@ -597,7 +657,7 @@ impl McpToolCallItem {
             template_id: self.template_id.clone(),
             action_name: self.action_name.clone(),
             plugin_id: self.plugin_id.clone(),
-            duration: self.duration?,
+            duration: self.duration.unwrap_or_default(),
             result,
         }))
     }

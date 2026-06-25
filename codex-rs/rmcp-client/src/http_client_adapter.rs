@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -31,7 +32,9 @@ use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ClientNotification;
 use rmcp::model::ConstString;
+use rmcp::model::ErrorData;
 use rmcp::model::JsonRpcMessage;
+use rmcp::model::RequestId;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::InsufficientScopeError;
@@ -50,11 +53,37 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
+#[derive(Clone, Copy)]
+struct ResponseBodyBudget {
+    limit: NonZeroUsize,
+    remaining: usize,
+}
+
+impl ResponseBodyBudget {
+    fn new(limit: NonZeroUsize) -> Self {
+        Self {
+            limit,
+            remaining: limit.get(),
+        }
+    }
+
+    fn consume(&mut self, bytes: usize) -> Result<(), StreamableHttpClientAdapterError> {
+        if bytes > self.remaining {
+            return Err(StreamableHttpClientAdapterError::ResponseBodyTooLarge {
+                limit: self.limit.get(),
+            });
+        }
+        self.remaining -= bytes;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamableHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
     auth_provider: Option<SharedAuthProvider>,
+    max_post_response_body_bytes: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +94,8 @@ pub(crate) enum StreamableHttpClientAdapterError {
     HttpRequest(#[from] ExecServerError),
     #[error("invalid HTTP header: {0}")]
     Header(String),
+    #[error("streamable HTTP POST response body exceeds the {limit}-byte limit")]
+    ResponseBodyTooLarge { limit: usize },
 }
 
 impl StreamableHttpClientAdapter {
@@ -77,6 +108,21 @@ impl StreamableHttpClientAdapter {
             http_client,
             default_headers,
             auth_provider,
+            max_post_response_body_bytes: None,
+        }
+    }
+
+    pub(crate) fn new_with_post_response_body_limit(
+        http_client: Arc<dyn HttpClient>,
+        default_headers: HeaderMap,
+        auth_provider: Option<SharedAuthProvider>,
+        max_post_response_body_bytes: NonZeroUsize,
+    ) -> Self {
+        Self {
+            http_client,
+            default_headers,
+            auth_provider,
+            max_post_response_body_bytes: Some(max_post_response_body_bytes),
         }
     }
 }
@@ -93,6 +139,10 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         custom_headers: HashMap<HeaderName, reqwest::header::HeaderValue>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let (mcp_method, mcp_request_id) = client_jsonrpc_message_fields(&message);
+        let response_request_id = match &message {
+            JsonRpcMessage::Request(request) => Some(request.id.clone()),
+            _ => None,
+        };
         let has_session_id = session_id.is_some();
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
@@ -189,8 +239,9 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 
         let content_type = response_header(&response.headers, CONTENT_TYPE);
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
+        enforce_declared_body_limit(&response.headers, self.max_post_response_body_bytes)?;
         if !status_is_success(response.status) {
-            let body = collect_body(&mut body_stream).await?;
+            let body = collect_body(&mut body_stream, self.max_post_response_body_bytes).await?;
             if !retryable_post_response_status(mcp_method.as_deref(), response.status)
                 && content_type
                     .as_deref()
@@ -210,17 +261,23 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         }
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
-                let event_stream = sse_stream_from_body(body_stream);
+                let event_stream = sse_stream_from_body(
+                    body_stream,
+                    self.max_post_response_body_bytes,
+                    response_request_id,
+                );
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
-                let body = collect_body(&mut body_stream).await?;
+                let body =
+                    collect_body(&mut body_stream, self.max_post_response_body_bytes).await?;
                 let message: ServerJsonRpcMessage =
                     serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
                 Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
             _ => {
-                let body = collect_body(&mut body_stream).await?;
+                let body =
+                    collect_body(&mut body_stream, self.max_post_response_body_bytes).await?;
                 let content_type = content_type.unwrap_or_else(|| "missing-content-type".into());
                 Err(StreamableHttpError::UnexpectedContentType(Some(format!(
                     "{content_type}; body: {}",
@@ -367,7 +424,11 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             }
         }
 
-        Ok(sse_stream_from_body(body_stream))
+        Ok(sse_stream_from_body(
+            body_stream,
+            /*max_body_bytes*/ None,
+            /*response_request_id*/ None,
+        ))
     }
 }
 
@@ -539,14 +600,21 @@ fn parse_json_rpc_error(body: &[u8]) -> Option<ServerJsonRpcMessage> {
 
 async fn collect_body(
     body_stream: &mut HttpResponseBodyStream,
+    max_body_bytes: Option<NonZeroUsize>,
 ) -> std::result::Result<Vec<u8>, StreamableHttpError<StreamableHttpClientAdapterError>> {
     let mut body = Vec::new();
+    let mut budget = max_body_bytes.map(ResponseBodyBudget::new);
     while let Some(chunk) = body_stream
         .recv()
         .await
         .map_err(StreamableHttpClientAdapterError::from)
         .map_err(StreamableHttpError::Client)?
     {
+        if let Some(budget) = budget.as_mut() {
+            budget
+                .consume(chunk.len())
+                .map_err(StreamableHttpError::Client)?;
+        }
         body.extend_from_slice(&chunk);
     }
     Ok(body)
@@ -554,13 +622,120 @@ async fn collect_body(
 
 fn sse_stream_from_body(
     body_stream: HttpResponseBodyStream,
+    max_body_bytes: Option<NonZeroUsize>,
+    response_request_id: Option<RequestId>,
 ) -> BoxStream<'static, std::result::Result<Sse, sse_stream::Error>> {
-    SseStream::from_byte_stream(stream::unfold(body_stream, |mut body_stream| async move {
-        match body_stream.recv().await {
-            Ok(Some(bytes)) => Some((Ok(Bytes::from(bytes)), body_stream)),
+    struct State {
+        body_stream: HttpResponseBodyStream,
+        budget: Option<ResponseBodyBudget>,
+        done: bool,
+    }
+
+    let state = State {
+        body_stream,
+        budget: max_body_bytes.map(ResponseBodyBudget::new),
+        done: false,
+    };
+    SseStream::from_byte_stream(stream::unfold(state, |mut state| async move {
+        if state.done {
+            return None;
+        }
+        match state.body_stream.recv().await {
+            Ok(Some(bytes)) => {
+                if let Some(budget) = state.budget.as_mut()
+                    && let Err(error) = budget.consume(bytes.len())
+                {
+                    state.done = true;
+                    return Some((Err(io::Error::other(error)), state));
+                }
+                Some((Ok(Bytes::from(bytes)), state))
+            }
             Ok(None) => None,
-            Err(error) => Some((Err(io::Error::other(error)), body_stream)),
+            Err(error) => {
+                state.done = true;
+                Some((Err(io::Error::other(error)), state))
+            }
         }
     }))
+    .map({
+        let mut response_request_id = response_request_id;
+        move |event| match event {
+            Err(error) => {
+                // RMCP logs errors raised after a POST has returned its SSE stream, but it does
+                // not route them to the request that opened that stream. Convert only this
+                // client-owned limit error into a correlated JSON-RPC error so the pending
+                // request completes; all other SSE errors retain RMCP's existing behavior.
+                let Some(limit_error) = response_body_limit_error(&error) else {
+                    return Err(error);
+                };
+                let Some(request_id) = response_request_id.take() else {
+                    return Err(error);
+                };
+                response_body_limit_error_event(request_id, limit_error).map_err(|_| error)
+            }
+            event => event,
+        }
+    })
     .boxed()
+}
+
+fn response_body_limit_error_event(
+    request_id: RequestId,
+    error: &StreamableHttpClientAdapterError,
+) -> serde_json::Result<Sse> {
+    let message: ServerJsonRpcMessage = JsonRpcMessage::error(
+        ErrorData::internal_error(
+            format!("client rejected Streamable HTTP response: {error}"),
+            /*data*/ None,
+        ),
+        Some(request_id),
+    );
+    let message = serde_json::to_string(&message)?;
+    Ok(Sse {
+        event: Some("message".to_string()),
+        data: Some(message),
+        ..Default::default()
+    })
+}
+
+fn response_body_limit_error(
+    error: &sse_stream::Error,
+) -> Option<&StreamableHttpClientAdapterError> {
+    let sse_stream::Error::Body(error) = error else {
+        return None;
+    };
+    error
+        .downcast_ref::<io::Error>()?
+        .get_ref()?
+        .downcast_ref::<StreamableHttpClientAdapterError>()
+}
+
+#[cfg(test)]
+#[path = "http_client_adapter_tests.rs"]
+mod tests;
+
+fn enforce_declared_body_limit(
+    headers: &[HttpHeader],
+    max_body_bytes: Option<NonZeroUsize>,
+) -> std::result::Result<(), StreamableHttpError<StreamableHttpClientAdapterError>> {
+    let Some(limit) = max_body_bytes else {
+        return Ok(());
+    };
+    let Some(content_length) = response_header(headers, reqwest::header::CONTENT_LENGTH)
+        .and_then(|content_length| content_length.parse::<u64>().ok())
+    else {
+        return Ok(());
+    };
+    if content_length > limit.get() as u64 {
+        return Err(response_body_too_large(limit));
+    }
+    Ok(())
+}
+
+fn response_body_too_large(
+    limit: NonZeroUsize,
+) -> StreamableHttpError<StreamableHttpClientAdapterError> {
+    StreamableHttpError::Client(StreamableHttpClientAdapterError::ResponseBodyTooLarge {
+        limit: limit.get(),
+    })
 }

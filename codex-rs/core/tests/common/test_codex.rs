@@ -23,6 +23,7 @@ use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_core::thread_store_from_config;
+use codex_core_plugins::PluginsManager;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -32,6 +33,7 @@ use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -73,6 +75,14 @@ use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
+type ExtensionFactory = dyn Fn(
+        Arc<AuthManager>,
+        Arc<codex_exec_server::EnvironmentManager>,
+        Arc<PluginsManager>,
+        &Config,
+    ) -> Arc<ExtensionRegistry<Config>>
+    + Send
+    + Sync;
 type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
@@ -287,6 +297,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    extension_factory: Option<Arc<ExtensionFactory>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -375,6 +386,23 @@ impl TestCodexBuilder {
 
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
+        self.extension_factory = None;
+        self
+    }
+
+    pub fn with_extension_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(
+                Arc<AuthManager>,
+                Arc<codex_exec_server::EnvironmentManager>,
+                Arc<PluginsManager>,
+                &Config,
+            ) -> Arc<ExtensionRegistry<Config>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.extension_factory = Some(Arc::new(factory));
         self
     }
 
@@ -590,6 +618,21 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+        let plugins_manager =
+            codex_core::build_plugins_manager(&config, auth_manager.as_ref(), &SessionSource::Exec);
+        let extensions = self
+            .extension_factory
+            .as_ref()
+            .map(|factory| {
+                factory(
+                    Arc::clone(&auth_manager),
+                    Arc::clone(&environment_manager),
+                    Arc::clone(&plugins_manager),
+                    &config,
+                )
+            })
+            .unwrap_or_else(|| Arc::clone(&self.extensions));
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
         let installation_id = resolve_installation_id(&config.codex_home).await?;
@@ -599,12 +642,13 @@ impl TestCodexBuilder {
                     config.codex_home.clone(),
                 ))
             });
-        let thread_manager = ThreadManager::new(
+        let thread_manager = ThreadManager::new_with_plugins_manager(
             &config,
-            codex_core::test_support::auth_manager_from_auth(auth.clone()),
+            Arc::clone(&auth_manager),
+            plugins_manager,
             SessionSource::Exec,
             Arc::clone(&environment_manager),
-            Arc::clone(&self.extensions),
+            extensions,
             user_instructions_provider,
             /*analytics_events_client*/ None,
             thread_store,
@@ -616,63 +660,60 @@ impl TestCodexBuilder {
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 
-        let new_conversation = match (resume_from, user_shell_override) {
-            (Some(path), Some(user_shell_override)) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
-                Box::pin(
+        let new_conversation =
+            match (resume_from, user_shell_override) {
+                (Some(path), Some(user_shell_override)) => Box::pin(
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
                         config.clone(),
                         path,
-                        auth_manager,
+                        Arc::clone(&auth_manager),
                         user_shell_override,
                         self.supports_openai_form_elicitation,
                     ),
                 )
-                .await?
-            }
-            (Some(path), None) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
-                Box::pin(thread_manager.resume_thread_from_rollout(
-                    config.clone(),
-                    path,
-                    auth_manager,
-                    /*parent_trace*/ None,
-                    self.supports_openai_form_elicitation,
-                ))
-                .await?
-            }
-            (None, Some(user_shell_override)) => {
-                Box::pin(
-                    codex_core::test_support::start_thread_with_user_shell_override(
-                        thread_manager.as_ref(),
+                .await?,
+                (Some(path), None) => {
+                    Box::pin(thread_manager.resume_thread_from_rollout(
                         config.clone(),
-                        user_shell_override,
+                        path,
+                        Arc::clone(&auth_manager),
+                        /*parent_trace*/ None,
                         self.supports_openai_form_elicitation,
-                    ),
-                )
-                .await?
-            }
-            (None, None) => {
-                let environments = thread_manager.default_environment_selections(&config.cwd);
-                Box::pin(
-                    thread_manager.start_thread_with_options(StartThreadOptions {
-                        config: config.clone(),
-                        allow_provider_model_fallback: false,
-                        initial_history: InitialHistory::New,
-                        session_source: None,
-                        thread_source: None,
-                        dynamic_tools: Vec::new(),
-                        metrics_service_name: None,
-                        parent_trace: None,
-                        environments,
-                        thread_extension_init: Default::default(),
-                        supports_openai_form_elicitation: self.supports_openai_form_elicitation,
-                    }),
-                )
-                .await?
-            }
-        };
+                    ))
+                    .await?
+                }
+                (None, Some(user_shell_override)) => {
+                    Box::pin(
+                        codex_core::test_support::start_thread_with_user_shell_override(
+                            thread_manager.as_ref(),
+                            config.clone(),
+                            user_shell_override,
+                            self.supports_openai_form_elicitation,
+                        ),
+                    )
+                    .await?
+                }
+                (None, None) => {
+                    let environments = thread_manager.default_environment_selections(&config.cwd);
+                    Box::pin(
+                        thread_manager.start_thread_with_options(StartThreadOptions {
+                            config: config.clone(),
+                            allow_provider_model_fallback: false,
+                            initial_history: InitialHistory::New,
+                            session_source: None,
+                            thread_source: None,
+                            dynamic_tools: Vec::new(),
+                            metrics_service_name: None,
+                            parent_trace: None,
+                            environments,
+                            thread_extension_init: Default::default(),
+                            supports_openai_form_elicitation: self.supports_openai_form_elicitation,
+                        }),
+                    )
+                    .await?
+                }
+            };
 
         Ok(TestCodex {
             home,
@@ -1215,6 +1256,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        extension_factory: None,
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
         external_time_provider: None,

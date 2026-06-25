@@ -328,6 +328,9 @@ pub(crate) async fn apply_turn_item_contributors(
 ) {
     let contributors = sess.services.extensions.turn_item_contributors().to_vec();
     for contributor in contributors {
+        if !contributor.applies_to(item) {
+            continue;
+        }
         if let Err(err) = contributor
             .contribute(&sess.services.thread_extension_data, turn_store, item)
             .await

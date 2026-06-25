@@ -19,8 +19,6 @@ use super::ListResourceTemplatesPayload;
 use super::call_tool_result_from_content;
 use super::emit_tool_call_begin;
 use super::emit_tool_call_end;
-use super::ensure_model_can_access_mcp_server;
-use super::model_can_access_mcp_server;
 use super::normalize_optional_string;
 use super::parse_args_with_default;
 use super::parse_arguments;
@@ -87,7 +85,6 @@ impl ListMcpResourceTemplatesHandler {
 
         let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
-                ensure_model_can_access_mcp_server(turn.as_ref(), &server_name)?;
                 let params = cursor
                     .clone()
                     .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
@@ -110,11 +107,7 @@ impl ListMcpResourceTemplatesHandler {
                     ));
                 }
 
-                let templates = manager
-                    .list_all_resource_templates(|server_name| {
-                        model_can_access_mcp_server(turn.as_ref(), server_name)
-                    })
-                    .await;
+                let templates = manager.list_all_resource_templates(|_| true).await;
                 Ok(ListResourceTemplatesPayload::from_all_servers(templates))
             }
         }

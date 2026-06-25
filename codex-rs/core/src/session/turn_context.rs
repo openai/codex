@@ -194,17 +194,6 @@ impl TurnContext {
             })
     }
 
-    pub(crate) fn apps_enabled(&self) -> bool {
-        let uses_codex_backend = self
-            .auth_manager
-            .as_deref()
-            .is_some_and(AuthManager::current_auth_uses_codex_backend);
-        self.config
-            .features
-            .apps_enabled_for_auth(uses_codex_backend)
-            && self.config.orchestrator_mcp_enabled
-    }
-
     pub(crate) async fn with_model(
         &self,
         model: String,
@@ -668,14 +657,32 @@ impl Session {
         .await
     }
 
+    fn new_turn_context_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+        final_output_json_schema: Option<Option<Value>>,
+        multi_agent_runtime: TurnMultiAgentRuntime,
+    ) -> BoxFuture<'_, Arc<TurnContext>> {
+        Box::pin(self.build_turn_context_from_configuration(
+            sub_id,
+            session_configuration,
+            final_output_json_schema,
+            multi_agent_runtime,
+        ))
+    }
+
     #[instrument(name = "turn_context.build", level = "trace", skip_all)]
-    async fn new_turn_context_from_configuration(
+    async fn build_turn_context_from_configuration(
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
+        self.services
+            .turn_environments
+            .update_selections(session_configuration.environment_selections());
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary().cloned();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so

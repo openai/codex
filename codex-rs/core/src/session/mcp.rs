@@ -1,3 +1,4 @@
+use super::session::PendingMcpServerRefresh;
 use super::*;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ElicitationReviewRequest;
@@ -9,9 +10,6 @@ use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPR
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION as MCP_ELICITATION_APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY as MCP_ELICITATION_APPROVALS_REVIEWER_KEY;
-use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY;
-use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_ELICITATION_CONNECTOR_ID_KEY;
-use codex_protocol::mcp_approval_meta::CONNECTOR_NAME_KEY as MCP_ELICITATION_CONNECTOR_NAME_KEY;
 use codex_protocol::mcp_approval_meta::REQUEST_TYPE_APPROVAL_REQUEST as MCP_ELICITATION_REQUEST_TYPE_APPROVAL_REQUEST;
 use codex_protocol::mcp_approval_meta::REQUEST_TYPE_KEY as MCP_ELICITATION_REQUEST_TYPE_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_TOOL_DESCRIPTION_KEY;
@@ -45,6 +43,35 @@ pub(crate) struct McpServerElicitationOutcome {
     pub(crate) sent: bool,
 }
 
+#[derive(Clone, Copy)]
+enum McpRefreshMode {
+    Restart,
+    ReuseUnchanged,
+}
+
+enum McpRefreshSource {
+    /// An intentional override, such as an ephemeral skill dependency snapshot.
+    Independent {
+        configured_base: McpConfiguredBase,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+    },
+    /// A queued base that must be rebuilt if the session config advances before publication.
+    SessionConfig {
+        contributor_config: Arc<Config>,
+        configured_base: McpConfiguredBase,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+    },
+}
+
+struct McpRuntimeReplacement {
+    mcp_config: McpConfig,
+    runtime_context: McpRuntimeContext,
+    available_environment_ids: Vec<String>,
+    inputs: McpRuntimeInputs,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct PluginInstallElicitationTelemetryMetadata {
     tool_type: String,
@@ -76,6 +103,30 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    pub(super) fn mcp_runtime_context_for_environments(
+        environment_manager: Arc<EnvironmentManager>,
+        environments: &TurnEnvironmentSnapshot,
+        fallback_cwd: PathBuf,
+    ) -> McpRuntimeContext {
+        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
+        // values can be used without falling back to the legacy host cwd.
+        let cwd = environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or(fallback_cwd);
+        McpRuntimeContext::new_with_environment_overrides(
+            environment_manager,
+            cwd,
+            environments.turn_environments.iter().map(|environment| {
+                (
+                    environment.environment_id.clone(),
+                    Arc::clone(&environment.environment),
+                )
+            }),
+        )
+    }
+
     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
         let environments = self.services.turn_environments.snapshot().await;
         let selected_capability_roots = self
@@ -101,44 +152,155 @@ impl Session {
         codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
     }
 
+    pub(crate) async fn configured_mcp_base(&self, config: &Config) -> McpConfiguredBase {
+        self.services.mcp_manager.configured_base(config).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn queue_mcp_server_refresh_from_config(&self, config: &Config) {
+        let contributor_config = self.mcp_source_config().await;
+        let configured_base = self.configured_mcp_base(config).await;
+        *self.pending_mcp_server_refresh.lock().await = Some(PendingMcpServerRefresh::Sourceful {
+            contributor_config,
+            configured_base,
+            store_mode: config.mcp_oauth_credentials_store_mode,
+            keyring_backend_kind: config.auth_keyring_backend_kind(),
+        });
+    }
+
+    pub(crate) async fn queue_mcp_server_refresh_from_current_config(&self) {
+        let config = self.mcp_source_config().await;
+        let configured_base = self.configured_mcp_base(config.as_ref()).await;
+        *self.pending_mcp_server_refresh.lock().await = Some(PendingMcpServerRefresh::Sourceful {
+            contributor_config: Arc::clone(&config),
+            configured_base,
+            store_mode: config.mcp_oauth_credentials_store_mode,
+            keyring_backend_kind: config.auth_keyring_backend_kind(),
+        });
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "MCP runtime comparison and publication must remain serialized"
     )]
     pub(crate) async fn mcp_runtime_for_step(
-        self: &Arc<Self>,
+        &self,
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
         selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
     ) -> Arc<McpRuntimeSnapshot> {
         let available_environment_ids =
             Self::available_selected_environment_ids(selected_capability_roots);
-        let current = self.services.latest_mcp_runtime();
-        if current.available_environment_ids() == available_environment_ids {
-            return current;
+        let contributor_config = self.mcp_source_config().await;
+        let contributors_revision = self.services.mcp_manager.contributors_revision();
+        let mcp_runtime_context = Self::mcp_runtime_context_for_environments(
+            self.services.turn_environments.environment_manager(),
+            environments,
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        );
+        {
+            let current = self.services.latest_mcp_runtime();
+            if current.matches(
+                &contributor_config,
+                &contributors_revision,
+                &mcp_runtime_context,
+                &available_environment_ids,
+            ) {
+                return current;
+            }
         }
 
-        let _guard = self.services.mcp_projection_lock.lock().await;
+        let _guard = self.services.mcp_refresh_lock.lock().await;
+        let contributor_config = self.mcp_source_config().await;
+        let contributors_revision = self.services.mcp_manager.contributors_revision();
+        let mcp_runtime_context = Self::mcp_runtime_context_for_environments(
+            self.services.turn_environments.environment_manager(),
+            environments,
+            {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            },
+        );
         let current = self.services.latest_mcp_runtime();
-        if current.available_environment_ids() == available_environment_ids {
+        if current.matches(
+            &contributor_config,
+            &contributors_revision,
+            &mcp_runtime_context,
+            &available_environment_ids,
+        ) {
             return current;
         }
-        let mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config_for_step(
-                &turn_context.config,
-                &self.services.mcp_thread_init,
-                &self.services.thread_extension_data,
-                &available_environment_ids,
-            )
-            .await;
-        self.refresh_mcp_servers_inner(
+        let inputs = current.inputs();
+        let published_inputs =
+            Arc::ptr_eq(&inputs.contributor_config, &contributor_config).then(|| {
+                (
+                    inputs.configured_base.clone(),
+                    inputs.store_mode,
+                    inputs.keyring_backend_kind,
+                )
+            });
+        let (mcp_config, configured_base, contributors_revision, store_mode, keyring_backend_kind) =
+            match published_inputs {
+                Some((configured_base, store_mode, keyring_backend_kind)) => {
+                    let (mcp_config, contributors_revision) = self
+                        .services
+                        .mcp_manager
+                        .runtime_config_for_step_from_base_with_revision(
+                            contributor_config.as_ref(),
+                            &self.services.mcp_thread_init,
+                            &self.services.thread_extension_data,
+                            &available_environment_ids,
+                            &configured_base,
+                        )
+                        .await;
+                    (
+                        mcp_config,
+                        configured_base,
+                        contributors_revision,
+                        store_mode,
+                        keyring_backend_kind,
+                    )
+                }
+                None => {
+                    let (mcp_config, configured_base, contributors_revision) = self
+                        .services
+                        .mcp_manager
+                        .runtime_config_for_step_with_base_and_revision(
+                            contributor_config.as_ref(),
+                            &self.services.mcp_thread_init,
+                            &self.services.thread_extension_data,
+                            &available_environment_ids,
+                        )
+                        .await;
+                    (
+                        mcp_config,
+                        configured_base,
+                        contributors_revision,
+                        contributor_config.mcp_oauth_credentials_store_mode,
+                        contributor_config.auth_keyring_backend_kind(),
+                    )
+                }
+            };
+        let elicitation_reviewer = current.manager().elicitation_reviewer();
+        self.replace_mcp_servers(
             turn_context,
-            mcp_config,
-            environments,
-            &available_environment_ids,
-            Some(self.mcp_elicitation_reviewer()),
+            McpRuntimeReplacement {
+                mcp_config,
+                runtime_context: mcp_runtime_context,
+                available_environment_ids,
+                inputs: McpRuntimeInputs::new(
+                    contributor_config,
+                    configured_base,
+                    store_mode,
+                    keyring_backend_kind,
+                    contributors_revision,
+                ),
+            },
+            elicitation_reviewer,
+            McpRefreshMode::ReuseUnchanged,
         )
         .await
     }
@@ -276,38 +438,108 @@ impl Session {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP runtime refresh and publication must remain serialized"
+    )]
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        mcp_config: McpConfig,
-        environments: &TurnEnvironmentSnapshot,
-        available_environment_ids: &[String],
+        source: McpRefreshSource,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) -> Arc<McpRuntimeSnapshot> {
-        let auth = self.services.auth_manager.auth().await;
-        let mcp_config = Arc::new(mcp_config);
-        let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-        let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let environment_manager = self.services.turn_environments.environment_manager();
-        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
-        // values can be used without falling back to the legacy host cwd.
-        let cwd = environments
-            .primary()
-            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
-            .map(|cwd| cwd.to_path_buf())
-            .unwrap_or_else(|| {
+    ) {
+        let _refresh_guard = self.services.mcp_refresh_lock.lock().await;
+        let contributor_config = self.mcp_source_config().await;
+        let (configured_base, store_mode, keyring_backend_kind) = match source {
+            McpRefreshSource::Independent {
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            } => (configured_base, store_mode, keyring_backend_kind),
+            McpRefreshSource::SessionConfig {
+                contributor_config: expected,
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            } if Arc::ptr_eq(&expected, &contributor_config) => {
+                (configured_base, store_mode, keyring_backend_kind)
+            }
+            McpRefreshSource::SessionConfig { .. } => (
+                self.configured_mcp_base(contributor_config.as_ref()).await,
+                contributor_config.mcp_oauth_credentials_store_mode,
+                contributor_config.auth_keyring_backend_kind(),
+            ),
+        };
+        let available_environment_ids = self
+            .services
+            .latest_mcp_runtime()
+            .available_environment_ids()
+            .to_vec();
+        let (mcp_config, contributors_revision) = self
+            .services
+            .mcp_manager
+            .refresh_runtime_config_for_step_with_revision(
+                contributor_config.as_ref(),
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+                &configured_base,
+            )
+            .await;
+        let mcp_runtime_context = Self::mcp_runtime_context_for_environments(
+            self.services.turn_environments.environment_manager(),
+            &turn_context.environments,
+            {
                 #[allow(deprecated)]
                 turn_context.cwd.to_path_buf()
-            });
-        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
-        let auth_statuses = compute_auth_statuses(
-            mcp_servers.iter(),
-            mcp_config.mcp_oauth_credentials_store_mode,
-            mcp_config.auth_keyring_backend_kind,
-            auth.as_ref(),
-            &mcp_runtime_context,
+            },
+        );
+        self.replace_mcp_servers(
+            turn_context,
+            McpRuntimeReplacement {
+                mcp_config,
+                runtime_context: mcp_runtime_context,
+                available_environment_ids,
+                inputs: McpRuntimeInputs::new(
+                    contributor_config,
+                    configured_base,
+                    store_mode,
+                    keyring_backend_kind,
+                    contributors_revision,
+                ),
+            },
+            elicitation_reviewer,
+            McpRefreshMode::Restart,
         )
         .await;
+    }
+
+    async fn replace_mcp_servers(
+        &self,
+        turn_context: &TurnContext,
+        replacement: McpRuntimeReplacement,
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        refresh_mode: McpRefreshMode,
+    ) -> Arc<McpRuntimeSnapshot> {
+        let McpRuntimeReplacement {
+            mcp_config,
+            runtime_context,
+            available_environment_ids,
+            inputs,
+        } = replacement;
+        let (auth, auth_revision) = self.services.auth_manager.auth_with_revision().await;
+        let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
+        let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config);
+        let auth_statuses = compute_auth_statuses(
+            mcp_servers.iter(),
+            inputs.store_mode,
+            inputs.keyring_backend_kind,
+            auth.as_ref(),
+            &runtime_context,
+        )
+        .await;
+        let current_runtime = self.services.latest_mcp_runtime();
+        let current_manager = current_runtime.manager();
         let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             // The previous runtime owns the old token and may still be serving an in-flight step.
@@ -316,129 +548,132 @@ impl Session {
             *guard = cancellation_token.clone();
             cancellation_token
         };
-        let current_runtime = self.services.latest_mcp_runtime();
-        let refreshed_manager = McpConnectionManager::new(
+        let refresh = match refresh_mode {
+            McpRefreshMode::Restart => {
+                McpConnectionRefresh::RestartPreservingState(current_manager)
+            }
+            McpRefreshMode::ReuseUnchanged => McpConnectionRefresh::ReuseUnchanged(current_manager),
+        };
+        let refreshed_manager = McpConnectionManager::new_with_refresh(
             &mcp_servers,
-            mcp_config.mcp_oauth_credentials_store_mode,
-            mcp_config.auth_keyring_backend_kind,
-            auth_statuses,
-            &turn_context.approval_policy,
-            turn_context.sub_id.clone(),
-            self.get_tx_event(),
-            mcp_startup_cancellation_token,
-            turn_context.permission_profile(),
-            mcp_runtime_context.clone(),
-            mcp_config.codex_home.clone(),
-            self.services.mcp_manager.codex_apps_tools_cache(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            mcp_config.prefix_mcp_tool_names,
-            mcp_config.client_elicitation_capability.clone(),
-            self.services
-                .supports_openai_form_elicitation
-                .load(std::sync::atomic::Ordering::Relaxed),
-            tool_plugin_provenance,
-            auth.as_ref(),
-            elicitation_reviewer,
-            current_runtime.manager().elicitation_router(),
+            McpConnectionManagerInput {
+                store_mode: inputs.store_mode,
+                keyring_backend_kind: inputs.keyring_backend_kind,
+                auth_entries: auth_statuses,
+                approval_policy: &turn_context.approval_policy,
+                submit_id: turn_context.sub_id.clone(),
+                tx_event: self.get_tx_event(),
+                startup_cancellation_token: mcp_startup_cancellation_token,
+                initial_permission_profile: turn_context.permission_profile(),
+                runtime_context: runtime_context.clone(),
+                prefix_mcp_tool_names: mcp_config.prefix_mcp_tool_names,
+                client_elicitation_capability: mcp_config.client_elicitation_capability.clone(),
+                supports_openai_form_elicitation: self
+                    .services
+                    .supports_openai_form_elicitation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                tool_plugin_provenance,
+                auth_snapshot: McpAuthSnapshot::new(auth.as_ref(), auth_revision),
+                elicitation_reviewer,
+            },
+            refresh,
         )
         .await;
-        refreshed_manager
-            .set_elicitations_auto_deny(current_runtime.manager().elicitations_auto_deny());
+        refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         self.services.publish_mcp_runtime(
-            mcp_config,
-            mcp_runtime_context,
-            available_environment_ids.to_vec(),
+            Arc::new(mcp_config),
+            runtime_context,
+            available_environment_ids,
+            inputs,
             refreshed_manager,
         )
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP runtime refresh and publication must remain serialized"
-    )]
+    #[cfg(test)]
+    pub(crate) async fn refresh_mcp_servers_if_contributions_changed(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let environments = if turn_context
+            .config
+            .features
+            .enabled(Feature::DeferredExecutor)
+        {
+            self.services.turn_environments.snapshot().await
+        } else {
+            turn_context.environments.clone()
+        };
+        let selected_capability_roots = self
+            .resolve_selected_capability_roots_for_step(&environments)
+            .await;
+        self.mcp_runtime_for_step(turn_context, &environments, &selected_capability_roots)
+            .await;
+    }
+
     pub(crate) async fn refresh_mcp_servers_if_requested(
         &self,
         turn_context: &TurnContext,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
-        let Some(refresh_config) = refresh_config else {
+        let refresh = { self.pending_mcp_server_refresh.lock().await.take() };
+        let Some(refresh) = refresh else {
             return;
         };
 
-        let McpServerRefreshConfig {
-            mcp_servers,
-            mcp_oauth_credentials_store_mode,
-            auth_keyring_backend_kind,
-        } = refresh_config;
-
-        let mcp_servers =
-            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
-                Ok(servers) => servers,
-                Err(err) => {
-                    warn!("failed to parse MCP server refresh config: {err}");
-                    return;
+        let source = match refresh {
+            PendingMcpServerRefresh::Sourceful {
+                contributor_config,
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            } => McpRefreshSource::SessionConfig {
+                contributor_config,
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            },
+            PendingMcpServerRefresh::SourceLess(refresh_config) => {
+                let McpServerRefreshConfig {
+                    mcp_servers,
+                    mcp_oauth_credentials_store_mode,
+                    auth_keyring_backend_kind,
+                } = refresh_config;
+                let configured_servers =
+                    match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
+                        Ok(servers) => servers,
+                        Err(err) => {
+                            warn!("failed to parse MCP server refresh config: {err}");
+                            return;
+                        }
+                    };
+                let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+                    mcp_oauth_credentials_store_mode,
+                ) {
+                    Ok(mode) => mode,
+                    Err(err) => {
+                        warn!("failed to parse MCP OAuth refresh config: {err}");
+                        return;
+                    }
+                };
+                let keyring_backend_kind = match serde_json::from_value::<AuthKeyringBackendKind>(
+                    auth_keyring_backend_kind,
+                ) {
+                    Ok(kind) => kind,
+                    Err(err) => {
+                        warn!("failed to parse MCP auth keyring backend refresh config: {err}");
+                        return;
+                    }
+                };
+                McpRefreshSource::Independent {
+                    configured_base: McpConfiguredBase::from_servers(configured_servers),
+                    store_mode,
+                    keyring_backend_kind,
                 }
-            };
-        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
-            mcp_oauth_credentials_store_mode,
-        ) {
-            Ok(mode) => mode,
-            Err(err) => {
-                warn!("failed to parse MCP OAuth refresh config: {err}");
-                return;
             }
         };
-        let keyring_backend_kind =
-            match serde_json::from_value::<AuthKeyringBackendKind>(auth_keyring_backend_kind) {
-                Ok(kind) => kind,
-                Err(err) => {
-                    warn!("failed to parse MCP auth keyring backend refresh config: {err}");
-                    return;
-                }
-            };
 
-        let mut refresh_config = self.get_config().await.as_ref().clone();
-        refresh_config.mcp_oauth_credentials_store_mode = store_mode;
-        let secret_auth_storage_enabled = match keyring_backend_kind {
-            AuthKeyringBackendKind::Direct => false,
-            AuthKeyringBackendKind::Secrets => true,
-        };
-        if let Err(err) = refresh_config
-            .features
-            .set_enabled(Feature::SecretAuthStorage, secret_auth_storage_enabled)
-        {
-            warn!("failed to apply MCP auth keyring backend refresh config: {err}");
-            return;
-        }
-
-        let _guard = self.services.mcp_projection_lock.lock().await;
-        let available_environment_ids = self
-            .services
-            .latest_mcp_runtime()
-            .available_environment_ids()
-            .to_vec();
-        let mut mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config_for_step(
-                &refresh_config,
-                &self.services.mcp_thread_init,
-                &self.services.thread_extension_data,
-                &available_environment_ids,
-            )
+        self.refresh_mcp_servers_inner(turn_context, source, elicitation_reviewer)
             .await;
-        mcp_config.mcp_server_catalog = mcp_config
-            .mcp_server_catalog
-            .with_materialized_servers(mcp_servers);
-        self.refresh_mcp_servers_inner(
-            turn_context,
-            mcp_config,
-            &turn_context.environments,
-            &available_environment_ids,
-            elicitation_reviewer,
-        )
-        .await;
     }
 
     pub(crate) async fn set_openai_form_elicitation_support(
@@ -454,52 +689,82 @@ impl Session {
             return Ok(());
         }
 
-        let config = self.get_config().await;
-        let refresh_config = McpServerRefreshConfig {
-            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
-            mcp_oauth_credentials_store_mode: serde_json::to_value(
-                config.mcp_oauth_credentials_store_mode,
-            )?,
-            auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())?,
+        let refresh = {
+            let runtime = self.services.latest_mcp_runtime();
+            let inputs = runtime.inputs();
+            PendingMcpServerRefresh::Sourceful {
+                contributor_config: Arc::clone(&inputs.contributor_config),
+                configured_base: inputs.configured_base.clone(),
+                store_mode: inputs.store_mode,
+                keyring_backend_kind: inputs.keyring_backend_kind,
+            }
         };
         self.services
             .supports_openai_form_elicitation
             .store(supported, std::sync::atomic::Ordering::Relaxed);
-        *self.pending_mcp_server_refresh_config.lock().await = Some(refresh_config);
+        *self.pending_mcp_server_refresh.lock().await = Some(refresh);
         Ok(())
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP runtime refresh and publication must remain serialized"
-    )]
+    #[cfg(test)]
     pub(crate) async fn refresh_mcp_servers_now(
         &self,
         turn_context: &TurnContext,
-        refresh_config: &Config,
+        configured_base: McpConfiguredBase,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let _guard = self.services.mcp_projection_lock.lock().await;
-        let available_environment_ids = self
-            .services
-            .latest_mcp_runtime()
-            .available_environment_ids()
-            .to_vec();
-        let mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config_for_step(
-                refresh_config,
-                &self.services.mcp_thread_init,
-                &self.services.thread_extension_data,
-                &available_environment_ids,
-            )
-            .await;
         self.refresh_mcp_servers_inner(
             turn_context,
-            mcp_config,
-            &turn_context.environments,
-            &available_environment_ids,
+            McpRefreshSource::Independent {
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            },
+            elicitation_reviewer,
+        )
+        .await;
+    }
+
+    pub(crate) async fn refresh_mcp_servers_now_from_supplied_config(
+        &self,
+        turn_context: &TurnContext,
+        config: Arc<Config>,
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+    ) {
+        let configured_base = self.configured_mcp_base(config.as_ref()).await;
+        let store_mode = config.mcp_oauth_credentials_store_mode;
+        let keyring_backend_kind = config.auth_keyring_backend_kind();
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            McpRefreshSource::Independent {
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            },
+            elicitation_reviewer,
+        )
+        .await;
+    }
+
+    pub(crate) async fn refresh_mcp_servers_now_from_current_config(
+        &self,
+        turn_context: &TurnContext,
+        elicitation_reviewer: Option<ElicitationReviewerHandle>,
+    ) {
+        let contributor_config = self.mcp_source_config().await;
+        let configured_base = self.configured_mcp_base(contributor_config.as_ref()).await;
+        let store_mode = contributor_config.mcp_oauth_credentials_store_mode;
+        let keyring_backend_kind = contributor_config.auth_keyring_backend_kind();
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            McpRefreshSource::SessionConfig {
+                contributor_config,
+                configured_base,
+                store_mode,
+                keyring_backend_kind,
+            },
             elicitation_reviewer,
         )
         .await;
@@ -530,6 +795,10 @@ impl Session {
 
     pub(crate) async fn cancel_mcp_startup(&self) {
         self.services
+            .latest_mcp_runtime()
+            .manager()
+            .cancel_startup();
+        self.services
             .mcp_startup_cancellation_token
             .lock()
             .await
@@ -547,11 +816,10 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
-    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
-        turn_context.config.as_ref(),
-        request.server_name.as_str(),
-        elicitation_connector_id(&request.elicitation),
-    );
+    let approvals_reviewer = request
+        .server_runtime_metadata
+        .approvals_reviewer()
+        .unwrap_or(turn_context.config.approvals_reviewer);
     if !crate::guardian::routes_approval_to_guardian_with_reviewer(
         turn_context.as_ref(),
         approvals_reviewer,
@@ -572,7 +840,6 @@ async fn review_guardian_mcp_elicitation(
         }
         GuardianElicitationReview::ApprovalRequest(guardian_request) => *guardian_request,
     };
-
     let review_id = crate::guardian::new_guardian_review_id();
     let decision = crate::guardian::review_approval_request(
         &session,
@@ -638,6 +905,10 @@ fn guardian_elicitation_review_request(
             "guardian MCP elicitation metadata must include a non-empty tool_name",
         );
     };
+    let approval_source = request
+        .server_runtime_metadata
+        .approval_source_by_name_or_alias(&tool_name)
+        .cloned();
     let arguments = match meta.get(MCP_ELICITATION_TOOL_PARAMS_KEY) {
         Some(value @ Value::Object(_)) => Some(value.clone()),
         Some(_) => {
@@ -658,24 +929,13 @@ fn guardian_elicitation_review_request(
             server: request.server_name.clone(),
             tool_name,
             arguments,
-            connector_id: metadata_owned_string(meta, MCP_ELICITATION_CONNECTOR_ID_KEY),
-            connector_name: metadata_owned_string(meta, MCP_ELICITATION_CONNECTOR_NAME_KEY),
-            connector_description: metadata_owned_string(
-                meta,
-                MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY,
-            ),
+            approval_source,
             connected_account_email: None,
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,
         },
     ))
-}
-
-fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {
-    elicitation
-        .meta()
-        .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY))
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {

@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use codex_exec_server_protocol::JSONRPCResponse;
 use codex_exec_server_protocol::RequestId;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
+use common::exec_server::exec_server_with_env;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -106,6 +108,53 @@ async fn exec_server_http_request_buffers_response_body() -> anyhow::Result<()> 
         (201, Some("buffered".to_string()), b"response-body".to_vec(),)
     );
 
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// What this tests: literal loopback MCP endpoints bypass ambient proxy variables at the actual
+/// transport layer, even when the child process has no `NO_PROXY` exemptions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_http_request_bypasses_proxy_for_literal_loopback() -> anyhow::Result<()> {
+    let target_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = OsString::from(format!("http://{}", proxy_listener.local_addr()?));
+    let empty = OsString::new();
+    let env = vec![
+        (OsString::from("HTTP_PROXY"), proxy_url.clone()),
+        (OsString::from("http_proxy"), proxy_url.clone()),
+        (OsString::from("ALL_PROXY"), proxy_url.clone()),
+        (OsString::from("all_proxy"), proxy_url),
+        (OsString::from("NO_PROXY"), empty.clone()),
+        (OsString::from("no_proxy"), empty),
+    ];
+    let mut server = exec_server_with_env(env).await?;
+    initialize_exec_server(&mut server).await?;
+
+    let request_id = server
+        .send_request(
+            "http/request",
+            serde_json::to_value(HttpRequestParams {
+                method: "GET".to_string(),
+                url: format!("http://{}/mcp", target_listener.local_addr()?),
+                headers: Vec::new(),
+                body: None,
+                timeout_ms: Some(5_000),
+                redirect_policy: HttpRedirectPolicy::Follow,
+                request_id: "loopback-proxy-bypass".to_string(),
+                stream_response: false,
+            })?,
+        )
+        .await?;
+
+    let captured = accept_http_request(&target_listener).await?;
+    assert_eq!(captured.request_line, "GET /mcp HTTP/1.1");
+    respond_with_status_and_headers(captured.stream, "200 OK", &[], b"direct").await?;
+    let response: HttpRequestResponse = wait_for_response(&mut server, request_id).await?;
+    assert_eq!(
+        (response.status, response.body.into_inner()),
+        (200, b"direct".to_vec())
+    );
     server.shutdown().await?;
     Ok(())
 }

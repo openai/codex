@@ -1,9 +1,6 @@
 use crate::config_manager::ConfigManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::McpServerRefreshConfig;
-use codex_protocol::protocol::Op;
 use std::io;
 use std::sync::Arc;
 use tracing::warn;
@@ -21,11 +18,11 @@ pub(crate) async fn queue_strict_refresh(
             .get_thread(thread_id)
             .await
             .map_err(|err| io::Error::other(format!("failed to load thread {thread_id}: {err}")))?;
-        let config = build_refresh_config(thread.as_ref(), config_manager).await?;
-        refreshes.push((thread_id, thread, config));
+        let config = load_refresh_config(thread.as_ref(), config_manager).await?;
+        refreshes.push((thread, config));
     }
-    for (thread_id, thread, config) in refreshes {
-        queue_refresh(thread_id, thread, config).await?;
+    for (thread, config) in refreshes {
+        install_config_and_queue_refresh(thread.as_ref(), config).await?;
     }
     Ok(())
 }
@@ -42,54 +39,38 @@ pub(crate) async fn queue_best_effort_refresh(
                 continue;
             }
         };
-        let config = match build_refresh_config(thread.as_ref(), config_manager).await {
+        let config = match load_refresh_config(thread.as_ref(), config_manager).await {
             Ok(config) => config,
             Err(err) => {
                 warn!("failed to build MCP refresh config for thread {thread_id}: {err}");
                 continue;
             }
         };
-        if let Err(err) = queue_refresh(thread_id, thread, config).await {
-            warn!("{err}");
+        if let Err(err) = install_config_and_queue_refresh(thread.as_ref(), config).await {
+            warn!("failed to queue MCP refresh for thread {thread_id}: {err}");
         }
     }
 }
 
-async fn build_refresh_config(
+async fn install_config_and_queue_refresh(
     thread: &CodexThread,
-    config_manager: &ConfigManager,
-) -> io::Result<McpServerRefreshConfig> {
-    let thread_config = thread.config().await;
-    let config = config_manager
-        .load_latest_config_for_thread(thread_config.as_ref())
-        .await?;
-    let mcp_config = thread.runtime_mcp_config(&config).await;
-    let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
-    Ok(McpServerRefreshConfig {
-        mcp_servers: serde_json::to_value(mcp_servers).map_err(io::Error::other)?,
-        mcp_oauth_credentials_store_mode: serde_json::to_value(
-            config.mcp_oauth_credentials_store_mode,
-        )
-        .map_err(io::Error::other)?,
-        auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())
-            .map_err(io::Error::other)?,
-    })
+    config: codex_core::config::Config,
+) -> io::Result<()> {
+    thread.refresh_runtime_config(config).await;
+    thread
+        .queue_mcp_server_refresh_from_current_config()
+        .await
+        .map_err(io::Error::other)
 }
 
-async fn queue_refresh(
-    thread_id: ThreadId,
-    thread: Arc<CodexThread>,
-    config: McpServerRefreshConfig,
-) -> io::Result<()> {
-    thread
-        .submit(Op::RefreshMcpServers { config })
+async fn load_refresh_config(
+    thread: &CodexThread,
+    config_manager: &ConfigManager,
+) -> io::Result<codex_core::config::Config> {
+    let thread_config = thread.config().await;
+    config_manager
+        .load_latest_config_for_thread(thread_config.as_ref())
         .await
-        .map(|_| ())
-        .map_err(|err| {
-            io::Error::other(format!(
-                "failed to queue MCP refresh for thread {thread_id}: {err}"
-            ))
-        })
 }
 
 #[cfg(test)]
@@ -107,6 +88,7 @@ mod tests {
     use codex_config::ThreadConfigLoader;
     use codex_config::ThreadConfigSource;
     use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::ToolSuggestDisabledTool;
     use codex_core::config::ConfigOverrides;
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
@@ -136,12 +118,31 @@ mod tests {
 
     #[tokio::test]
     async fn best_effort_refresh_attempts_every_loaded_thread() -> anyhow::Result<()> {
-        let (_temp_dir, thread_manager, config_manager, loader) = refresh_test_state().await?;
+        let (temp_dir, thread_manager, config_manager, loader) = refresh_test_state().await?;
+        std::fs::write(
+            temp_dir.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"[tool_suggest]
+disabled_tools = [{ type = "plugin", id = "calendar@openai-curated" }]
+"#,
+        )?;
 
         queue_best_effort_refresh(&thread_manager, &config_manager).await;
 
         assert_eq!(loader.good_loads.load(Ordering::Relaxed), 1);
         assert_eq!(loader.bad_loads.load(Ordering::Relaxed), 1);
+        let mut updated_good_thread = false;
+        for thread_id in thread_manager.list_thread_ids().await {
+            let thread = thread_manager.get_thread(thread_id).await?;
+            let config = thread.config().await;
+            if config.cwd.ends_with("good") {
+                assert_eq!(
+                    config.tool_suggest.disabled_tools,
+                    vec![ToolSuggestDisabledTool::plugin("calendar@openai-curated")]
+                );
+                updated_good_thread = true;
+            }
+        }
+        assert!(updated_good_thread, "good test thread should exist");
         Ok(())
     }
 
@@ -164,16 +165,33 @@ mod tests {
         }
         let thread = good_thread.expect("good test thread should exist");
 
-        let refresh_config = build_refresh_config(thread.as_ref(), &config_manager).await?;
-        let backend = serde_json::from_value::<AuthKeyringBackendKind>(
-            refresh_config.auth_keyring_backend_kind,
-        )?;
+        let refresh_config = load_refresh_config(thread.as_ref(), &config_manager).await?;
+        let backend = refresh_config.auth_keyring_backend_kind();
 
         assert_eq!(
             thread.config().await.auth_keyring_backend_kind(),
             AuthKeyringBackendKind::Direct
         );
         assert_eq!(backend, AuthKeyringBackendKind::Secrets);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sourceful_refresh_rejects_a_terminated_thread() -> anyhow::Result<()> {
+        let (_temp_dir, thread_manager, _config_manager, _loader) = refresh_test_state().await?;
+        let thread_id = thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .next()
+            .expect("test thread should exist");
+        let thread = thread_manager.get_thread(thread_id).await?;
+        thread.shutdown_and_wait().await?;
+
+        assert!(matches!(
+            thread.queue_mcp_server_refresh_from_current_config().await,
+            Err(codex_protocol::error::CodexErr::InternalAgentDied)
+        ));
         Ok(())
     }
 
@@ -216,16 +234,27 @@ mod tests {
             .expect("refresh tests require state db");
         let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
         let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+        let plugins_manager = codex_core::build_plugins_manager(
+            &good_config,
+            auth_manager.as_ref(),
+            &SessionSource::Exec,
+        );
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
                 Arc::clone(&environment_manager),
                 SessionSource::Exec.restriction_product(),
             ),
         );
+        let codex_apps = Arc::new(codex_mcp_extension::CodexAppsMcpExtension::new(
+            auth_manager.clone(),
+            Arc::clone(&environment_manager),
+            Arc::clone(&plugins_manager),
+        ));
         let thread_manager = Arc::new_cyclic(|thread_manager| {
-            ThreadManager::new(
+            ThreadManager::new_with_plugins_manager(
                 &good_config,
                 auth_manager.clone(),
+                Arc::clone(&plugins_manager),
                 SessionSource::Exec,
                 Arc::clone(&environment_manager),
                 thread_extensions(
@@ -233,6 +262,7 @@ mod tests {
                     ThreadExtensionDependencies {
                         event_sink: Arc::new(NoopExtensionEventSink),
                         auth_manager: auth_manager.clone(),
+                        codex_apps: Arc::clone(&codex_apps),
                         state_db: Some(state_db.clone()),
                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
                         thread_manager: thread_manager.clone(),

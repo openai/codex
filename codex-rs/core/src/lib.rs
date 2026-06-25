@@ -6,7 +6,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod apps;
 mod client;
 mod client_common;
 mod realtime_context;
@@ -35,7 +34,6 @@ mod attestation;
 mod codex_delegate;
 mod command_canonicalization;
 pub mod config;
-pub mod connectors;
 pub mod context;
 mod context_manager;
 mod current_time;
@@ -53,7 +51,6 @@ pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
-mod mcp_tool_approval_templates;
 mod mcp_tool_exposure;
 mod network_policy_decision;
 pub(crate) mod network_proxy_loader;
@@ -63,7 +60,6 @@ pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
 mod original_image_detail;
 pub use codex_mcp::SandboxState;
-mod mcp_openai_file;
 mod mcp_tool_call;
 pub(crate) mod mention_syntax;
 pub(crate) mod utils;
@@ -77,11 +73,7 @@ pub(crate) mod prompt_debug;
 #[doc(hidden)]
 pub use prompt_debug::build_prompt_input;
 pub(crate) mod mentions {
-    pub(crate) use crate::plugins::build_connector_slug_counts;
-    pub(crate) use crate::plugins::build_skill_name_counts;
-    pub(crate) use crate::plugins::collect_explicit_app_ids;
     pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
-    pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
 }
 mod sandbox_tags;
 pub mod sandboxing;
@@ -93,7 +85,6 @@ pub(crate) use skills::SkillMetadata;
 pub(crate) use skills::SkillsService;
 pub(crate) use skills::build_available_skills;
 pub(crate) use skills::build_skill_injections;
-pub(crate) use skills::build_skill_name_counts;
 pub(crate) use skills::collect_explicit_skill_mentions;
 pub(crate) use skills::default_skill_metadata_budget;
 pub(crate) use skills::injection;
@@ -118,6 +109,7 @@ pub use thread_manager::StartThreadOptions;
 pub use thread_manager::ThreadManager;
 pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;
+pub use thread_manager::build_plugins_manager;
 pub use thread_manager::local_agent_graph_store_from_state_db;
 pub use thread_manager::thread_store_from_config;
 pub use web_search::web_search_action_detail;

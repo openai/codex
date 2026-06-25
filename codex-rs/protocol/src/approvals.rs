@@ -1,4 +1,5 @@
 use crate::mcp::RequestId;
+use crate::mcp_approval_meta::McpToolSource;
 use crate::models::AdditionalPermissionProfile;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
@@ -167,6 +168,23 @@ pub enum GuardianAssessmentAction {
         reason: Option<String>,
         permissions: RequestPermissionProfile,
     },
+}
+
+impl GuardianAssessmentAction {
+    pub fn mcp_tool_call(
+        server: String,
+        tool_name: String,
+        tool_title: Option<String>,
+        source: Option<&McpToolSource>,
+    ) -> Self {
+        Self::McpToolCall {
+            server,
+            tool_name,
+            connector_id: source.map(McpToolSource::id).map(str::to_string),
+            connector_name: source.map(McpToolSource::name).map(str::to_string),
+            tool_title,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -378,6 +396,8 @@ pub struct ElicitationRequestEvent {
     #[ts(optional)]
     pub turn_id: Option<String>,
     pub server_name: String,
+    /// Opaque Codex-facing identifier. Clients must echo this value unchanged when resolving the
+    /// elicitation; it is not necessarily the upstream MCP request identifier.
     #[ts(type = "string | number")]
     pub id: RequestId,
     pub request: ElicitationRequest,
@@ -434,6 +454,34 @@ mod tests {
                 command: "rm -rf /tmp/guardian".to_string(),
                 cwd: test_path_buf("/tmp").abs(),
             }
+        );
+    }
+
+    #[test]
+    fn guardian_assessment_mcp_source_preserves_compatibility_fields() {
+        let source = McpToolSource::new(
+            "source-1",
+            "Documents",
+            Some("Search company documents.".to_string()),
+        )
+        .expect("valid source");
+        let action = GuardianAssessmentAction::mcp_tool_call(
+            "documents".to_string(),
+            "search".to_string(),
+            Some("Search".to_string()),
+            Some(&source),
+        );
+
+        assert_eq!(
+            serde_json::to_value(action).expect("serialize guardian assessment"),
+            serde_json::json!({
+                "type": "mcp_tool_call",
+                "server": "documents",
+                "tool_name": "search",
+                "connector_id": "source-1",
+                "connector_name": "Documents",
+                "tool_title": "Search",
+            })
         );
     }
 

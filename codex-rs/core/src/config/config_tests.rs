@@ -37,7 +37,6 @@ use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
-use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
@@ -46,6 +45,7 @@ use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::McpToolApproval;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
@@ -448,7 +448,7 @@ async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
         r#"
 [features.code_mode]
 enabled = true
-excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
+excluded_tool_namespaces = ["mcp__docs", "multi_agent_v1"]
 direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 "#,
     )
@@ -462,7 +462,7 @@ direct_only_tool_namespaces = ["mcp__history", "mcp__notes"]
 
     assert_eq!(
         config.code_mode.excluded_tool_namespaces,
-        vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]
+        vec!["mcp__docs".to_string(), "multi_agent_v1".to_string()]
     );
     assert_eq!(
         config.code_mode.direct_only_tool_namespaces,
@@ -5871,13 +5871,13 @@ approval_mode = "approve"
 
     assert_eq!(
         server.default_tools_approval_mode,
-        Some(AppToolApproval::Prompt)
+        Some(McpToolApproval::Prompt)
     );
 
     assert_eq!(
         server.tools.get("search"),
         Some(&McpServerToolConfig {
-            approval_mode: Some(AppToolApproval::Approve),
+            approval_mode: Some(McpToolApproval::Approve),
         })
     );
 }
@@ -5920,7 +5920,7 @@ approval_mode = "approve"
     assert_eq!(
         tool,
         &McpServerToolConfig {
-            approval_mode: Some(AppToolApproval::Approve),
+            approval_mode: Some(McpToolApproval::Approve),
         }
     );
 }
@@ -5972,33 +5972,6 @@ pane = { selected = "console", expanded = false }
     let serialized = toml::to_string(&parsed)?;
     let reparsed = toml::from_str::<ConfigToml>(&serialized)?;
     assert_eq!(reparsed.desktop, parsed.desktop);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    config.apps_mcp_product_sku = Some("tpp".to_string());
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(mcp_config.apps_enabled);
-    assert_eq!(mcp_config.apps_mcp_product_sku.as_deref(), Some("tpp"));
-
-    let _ = config.features.disable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(!mcp_config.apps_enabled);
-
-    let _ = config.features.enable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(mcp_config.apps_enabled);
 
     Ok(())
 }
@@ -8845,29 +8818,8 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
     let fixture = create_test_fixture()?;
 
     let requirements_toml = codex_config::ConfigRequirementsToml {
-        allowed_approval_policies: None,
-        allowed_approvals_reviewers: None,
-        allowed_sandbox_modes: None,
-        allowed_permission_profiles: None,
-        default_permissions: None,
-        remote_sandbox_config: None,
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
-        allow_managed_hooks_only: None,
-        allow_appshots: None,
-        allow_remote_control: None,
-        computer_use: None,
-        windows: None,
-        feature_requirements: None,
-        hooks: None,
-        mcp_servers: None,
-        plugins: None,
-        marketplaces: None,
-        apps: None,
-        rules: None,
-        enforce_residency: None,
-        network: None,
-        permissions: None,
-        guardian_policy_config: None,
+        ..Default::default()
     };
     let requirement_source = codex_config::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -9358,27 +9310,6 @@ allow_login_shell = false
     .await?;
 
     assert!(!config.permissions.allow_login_shell);
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let toml = r#"
-model = "gpt-5.4"
-apps_mcp_product_sku = "tpp"
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP SKU");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.apps_mcp_product_sku.as_deref(), Some("tpp"));
     Ok(())
 }
 
@@ -10085,7 +10016,6 @@ async fn prompt_instruction_blocks_can_be_disabled_from_config() -> std::io::Res
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"include_permissions_instructions = false
-include_apps_instructions = false
 include_collaboration_mode_instructions = false
 include_environment_context = false
 
@@ -10101,7 +10031,6 @@ include_instructions = false
         .await?;
 
     assert!(!config.include_permissions_instructions);
-    assert!(!config.include_apps_instructions);
     assert!(!config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(!config.include_environment_context);
@@ -10855,9 +10784,8 @@ async fn tool_suggest_discoverables_load_from_config_toml() -> std::io::Result<(
         r#"
 [tool_suggest]
 discoverables = [
-  { type = "connector", id = "connector_alpha" },
   { type = "plugin", id = "plugin_alpha@openai-curated" },
-  { type = "connector", id = "   " }
+  { type = "plugin", id = "   " }
 ]
 "#,
     )
@@ -10868,15 +10796,11 @@ discoverables = [
         Some(ToolSuggestConfig {
             discoverables: vec![
                 ToolSuggestDiscoverable {
-                    kind: ToolSuggestDiscoverableType::Connector,
-                    id: "connector_alpha".to_string(),
-                },
-                ToolSuggestDiscoverable {
                     kind: ToolSuggestDiscoverableType::Plugin,
                     id: "plugin_alpha@openai-curated".to_string(),
                 },
                 ToolSuggestDiscoverable {
-                    kind: ToolSuggestDiscoverableType::Connector,
+                    kind: ToolSuggestDiscoverableType::Plugin,
                     id: "   ".to_string(),
                 },
             ],
@@ -10895,16 +10819,10 @@ discoverables = [
     assert_eq!(
         config.tool_suggest,
         ToolSuggestConfig {
-            discoverables: vec![
-                ToolSuggestDiscoverable {
-                    kind: ToolSuggestDiscoverableType::Connector,
-                    id: "connector_alpha".to_string(),
-                },
-                ToolSuggestDiscoverable {
-                    kind: ToolSuggestDiscoverableType::Plugin,
-                    id: "plugin_alpha@openai-curated".to_string(),
-                },
-            ],
+            discoverables: vec![ToolSuggestDiscoverable {
+                kind: ToolSuggestDiscoverableType::Plugin,
+                id: "plugin_alpha@openai-curated".to_string(),
+            },],
             disabled_tools: Vec::new(),
         }
     );
@@ -10917,10 +10835,9 @@ async fn tool_suggest_disabled_tools_load_from_config_toml() -> std::io::Result<
         r#"
 [tool_suggest]
 disabled_tools = [
-  { type = "connector", id = " connector_calendar " },
-  { type = "connector", id = "connector_calendar" },
-  { type = "connector", id = "   " },
-  { type = "plugin", id = "slack@openai-curated" }
+  { type = "plugin", id = " slack@openai-curated " },
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "plugin", id = "   " }
 ]
 "#,
     )
@@ -10931,10 +10848,9 @@ disabled_tools = [
         Some(ToolSuggestConfig {
             discoverables: Vec::new(),
             disabled_tools: vec![
-                ToolSuggestDisabledTool::connector(" connector_calendar "),
-                ToolSuggestDisabledTool::connector("connector_calendar"),
-                ToolSuggestDisabledTool::connector("   "),
+                ToolSuggestDisabledTool::plugin(" slack@openai-curated "),
                 ToolSuggestDisabledTool::plugin("slack@openai-curated"),
+                ToolSuggestDisabledTool::plugin("   "),
             ],
         })
     );
@@ -10951,10 +10867,7 @@ disabled_tools = [
         config.tool_suggest,
         ToolSuggestConfig {
             discoverables: Vec::new(),
-            disabled_tools: vec![
-                ToolSuggestDisabledTool::connector("connector_calendar"),
-                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
-            ],
+            disabled_tools: vec![ToolSuggestDisabledTool::plugin("slack@openai-curated")],
         }
     );
     Ok(())
@@ -10974,9 +10887,9 @@ trust_level = "trusted"
 
 [tool_suggest]
 disabled_tools = [
-  {{ type = "connector", id = " user_connector " }},
+  {{ type = "plugin", id = " user_plugin " }},
   {{ type = "plugin", id = "shared_plugin" }},
-  {{ type = "connector", id = "project_connector" }},
+  {{ type = "plugin", id = "project_plugin" }},
 ]
 "#
         ),
@@ -10989,9 +10902,9 @@ disabled_tools = [
         r#"
 [tool_suggest]
 disabled_tools = [
-  { type = "connector", id = "project_connector" },
   { type = "plugin", id = "project_plugin" },
   { type = "plugin", id = "shared_plugin" },
+  { type = "plugin", id = "second_project_plugin" },
 ]
 "#,
     )?;
@@ -11008,10 +10921,10 @@ disabled_tools = [
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
-            ToolSuggestDisabledTool::connector("user_connector"),
+            ToolSuggestDisabledTool::plugin("user_plugin"),
             ToolSuggestDisabledTool::plugin("shared_plugin"),
-            ToolSuggestDisabledTool::connector("project_connector"),
             ToolSuggestDisabledTool::plugin("project_plugin"),
+            ToolSuggestDisabledTool::plugin("second_project_plugin"),
         ]
     );
     Ok(())

@@ -5,6 +5,8 @@ use std::collections::HashMap;
 
 use codex_config::McpServerConfig;
 
+use crate::server::EffectiveMcpServer;
+
 /// Plugin identity retained with an MCP registration for tool attribution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpPluginAttribution {
@@ -37,9 +39,6 @@ pub enum McpServerSource {
     /// A plugin explicitly selected for this thread through a capability root.
     SelectedPlugin(McpPluginAttribution),
     Config,
-    Compatibility {
-        id: String,
-    },
     Extension {
         id: String,
     },
@@ -58,7 +57,6 @@ enum RegistrationPrecedence {
     Plugin(Reverse<usize>),
     SelectedPlugin(Reverse<usize>),
     Config,
-    Compatibility,
     Extension(usize),
 }
 
@@ -68,8 +66,7 @@ impl RegistrationPrecedence {
             Self::Plugin(_) => 0,
             Self::SelectedPlugin(_) => 1,
             Self::Config => 2,
-            Self::Compatibility => 3,
-            Self::Extension(_) => 4,
+            Self::Extension(_) => 3,
         }
     }
 }
@@ -79,8 +76,30 @@ impl RegistrationPrecedence {
 pub struct McpServerRegistration {
     name: String,
     source: McpServerSource,
-    config: McpServerConfig,
+    server: McpServerRegistrationValue,
     precedence: RegistrationPrecedence,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum McpServerRegistrationValue {
+    Configured(Box<McpServerConfig>),
+    Effective(EffectiveMcpServer),
+}
+
+impl McpServerRegistrationValue {
+    fn config(&self) -> &McpServerConfig {
+        match self {
+            Self::Configured(config) => config.as_ref(),
+            Self::Effective(server) => server.config(),
+        }
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        match self {
+            Self::Configured(config) => config.enabled = enabled,
+            Self::Effective(server) => server.set_enabled(enabled),
+        }
+    }
 }
 
 impl McpServerRegistration {
@@ -88,7 +107,7 @@ impl McpServerRegistration {
         Self::new(
             name,
             McpServerSource::Config,
-            config,
+            McpServerRegistrationValue::Configured(Box::new(config)),
             RegistrationPrecedence::Config,
         )
     }
@@ -102,7 +121,7 @@ impl McpServerRegistration {
         Self::new(
             name,
             McpServerSource::Plugin(attribution),
-            config,
+            McpServerRegistrationValue::Configured(Box::new(config)),
             RegistrationPrecedence::Plugin(Reverse(plugin_order)),
         )
     }
@@ -117,21 +136,8 @@ impl McpServerRegistration {
         Self::new(
             name,
             McpServerSource::SelectedPlugin(attribution),
-            config,
+            McpServerRegistrationValue::Configured(Box::new(config)),
             RegistrationPrecedence::SelectedPlugin(Reverse(selection_order)),
-        )
-    }
-
-    pub fn from_compatibility(
-        name: String,
-        id: impl Into<String>,
-        config: McpServerConfig,
-    ) -> Self {
-        Self::new(
-            name,
-            McpServerSource::Compatibility { id: id.into() },
-            config,
-            RegistrationPrecedence::Compatibility,
         )
     }
 
@@ -144,7 +150,21 @@ impl McpServerRegistration {
         Self::new(
             name,
             McpServerSource::Extension { id: id.into() },
-            config,
+            McpServerRegistrationValue::Configured(Box::new(config)),
+            RegistrationPrecedence::Extension(contribution_order),
+        )
+    }
+
+    pub fn from_effective_extension(
+        name: String,
+        id: impl Into<String>,
+        contribution_order: usize,
+        server: EffectiveMcpServer,
+    ) -> Self {
+        Self::new(
+            name,
+            McpServerSource::Extension { id: id.into() },
+            McpServerRegistrationValue::Effective(server),
             RegistrationPrecedence::Extension(contribution_order),
         )
     }
@@ -152,13 +172,13 @@ impl McpServerRegistration {
     fn new(
         name: String,
         source: McpServerSource,
-        config: McpServerConfig,
+        server: McpServerRegistrationValue,
         precedence: RegistrationPrecedence,
     ) -> Self {
         Self {
             name,
             source,
-            config,
+            server,
             precedence,
         }
     }
@@ -219,7 +239,8 @@ impl CatalogAction {
 #[derive(Clone, Debug, Default)]
 pub struct McpCatalogBuilder {
     actions: Vec<CatalogAction>,
-    disabled_server_names: BTreeSet<String>,
+    explicit_disabled_server_names: BTreeSet<String>,
+    inherited_disabled_server_names: BTreeSet<String>,
 }
 
 impl McpCatalogBuilder {
@@ -230,15 +251,7 @@ impl McpCatalogBuilder {
 
     /// Applies the legacy name-scoped disabled veto after source resolution.
     pub fn disable(&mut self, name: String) {
-        self.disabled_server_names.insert(name);
-    }
-
-    pub fn remove_compatibility(&mut self, name: String, id: impl Into<String>) {
-        self.actions.push(CatalogAction::Remove {
-            name,
-            source: McpServerSource::Compatibility { id: id.into() },
-            precedence: RegistrationPrecedence::Compatibility,
-        });
+        self.explicit_disabled_server_names.insert(name);
     }
 
     pub fn remove_extension(
@@ -286,36 +299,37 @@ impl McpCatalogBuilder {
             });
         }
 
-        let mut disabled_server_names = self.disabled_server_names;
-        let servers = winners
-            .into_iter()
-            .filter_map(|(name, action)| match action {
-                CatalogAction::Register(registration) => {
-                    let mut registration = *registration;
-                    let persist_disabled_name =
-                        registration.source.disabled_registration_is_name_veto();
-                    if !registration.config.enabled || disabled_server_names.contains(&name) {
-                        registration.config.enabled = false;
-                        if persist_disabled_name {
-                            // Preserve legacy disabled winners across later runtime overlays.
-                            disabled_server_names.insert(name.clone());
-                        }
-                    }
-                    Some((
-                        name,
-                        ResolvedMcpServer {
-                            source: registration.source,
-                            config: registration.config,
-                        },
-                    ))
+        let mut disabled_server_names = self.explicit_disabled_server_names.clone();
+        disabled_server_names.extend(self.inherited_disabled_server_names.iter().cloned());
+        let mut derived_disabled_server_names = self.inherited_disabled_server_names;
+        let mut servers = BTreeMap::new();
+        for (name, action) in winners {
+            let CatalogAction::Register(registration) = action else {
+                continue;
+            };
+            let mut registration = *registration;
+            let persist_disabled_name = registration.source.disabled_registration_is_name_veto();
+            if !registration.server.config().enabled || disabled_server_names.contains(&name) {
+                registration.server.set_enabled(/*enabled*/ false);
+                if persist_disabled_name {
+                    // Preserve legacy disabled winners across later runtime overlays.
+                    disabled_server_names.insert(name.clone());
+                    derived_disabled_server_names.insert(name.clone());
                 }
-                CatalogAction::Remove { .. } => None,
-            })
-            .collect();
+            }
+            servers.insert(
+                name,
+                ResolvedMcpServer {
+                    source: registration.source,
+                    server: registration.server,
+                },
+            );
+        }
 
         ResolvedMcpCatalog {
             actions: self.actions,
-            disabled_server_names,
+            explicit_disabled_server_names: self.explicit_disabled_server_names,
+            derived_disabled_server_names,
             servers,
             conflicts,
         }
@@ -326,7 +340,7 @@ impl McpCatalogBuilder {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedMcpServer {
     source: McpServerSource,
-    config: McpServerConfig,
+    server: McpServerRegistrationValue,
 }
 
 impl ResolvedMcpServer {
@@ -335,7 +349,21 @@ impl ResolvedMcpServer {
     }
 
     pub fn config(&self) -> &McpServerConfig {
-        &self.config
+        self.server.config()
+    }
+
+    fn configured_config(&self) -> Option<&McpServerConfig> {
+        match &self.server {
+            McpServerRegistrationValue::Configured(config) => Some(config.as_ref()),
+            McpServerRegistrationValue::Effective(_) => None,
+        }
+    }
+
+    fn effective_server(&self) -> Option<&EffectiveMcpServer> {
+        match &self.server {
+            McpServerRegistrationValue::Configured(_) => None,
+            McpServerRegistrationValue::Effective(server) => Some(server),
+        }
     }
 }
 
@@ -343,7 +371,8 @@ impl ResolvedMcpServer {
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedMcpCatalog {
     actions: Vec<CatalogAction>,
-    disabled_server_names: BTreeSet<String>,
+    explicit_disabled_server_names: BTreeSet<String>,
+    derived_disabled_server_names: BTreeSet<String>,
     servers: BTreeMap<String, ResolvedMcpServer>,
     conflicts: Vec<McpServerConflict>,
 }
@@ -356,10 +385,25 @@ impl ResolvedMcpCatalog {
     pub fn to_builder(&self) -> McpCatalogBuilder {
         McpCatalogBuilder {
             actions: self.actions.clone(),
-            disabled_server_names: self.disabled_server_names.clone(),
+            explicit_disabled_server_names: self.explicit_disabled_server_names.clone(),
+            inherited_disabled_server_names: self.derived_disabled_server_names.clone(),
         }
     }
 
+    /// Rebuilds the catalog while retaining only explicit disabled-name vetoes.
+    ///
+    /// Use this when inserting a source that participates in base source resolution. Disabled
+    /// winners from the previous resolution are recomputed after the new source is registered.
+    /// Runtime overlays should continue to use [`Self::to_builder`] so resolved vetoes persist.
+    pub fn to_builder_recomputing_disabled_vetoes(&self) -> McpCatalogBuilder {
+        McpCatalogBuilder {
+            actions: self.actions.clone(),
+            explicit_disabled_server_names: self.explicit_disabled_server_names.clone(),
+            inherited_disabled_server_names: BTreeSet::new(),
+        }
+    }
+
+    /// Returns the winning registration, including runtime-only servers.
     pub fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
         self.servers.get(name)
     }
@@ -367,32 +411,23 @@ impl ResolvedMcpCatalog {
     pub fn configured_servers(&self) -> HashMap<String, McpServerConfig> {
         self.servers
             .iter()
-            .map(|(name, server)| (name.clone(), server.config.clone()))
+            .filter_map(|(name, server)| {
+                server
+                    .configured_config()
+                    .map(|config| (name.clone(), config.clone()))
+            })
             .collect()
     }
 
-    /// Replaces the resolved server set while preserving known server sources.
-    ///
-    /// Names not present in the existing catalog are treated as config-owned.
-    pub fn with_materialized_servers(&self, servers: HashMap<String, McpServerConfig>) -> Self {
-        let mut builder = Self::builder();
-        for (name, config) in servers {
-            let source = self
-                .server(&name)
-                .map(|server| server.source.clone())
-                .unwrap_or(McpServerSource::Config);
-            let precedence = match &source {
-                McpServerSource::Plugin(_) => RegistrationPrecedence::Plugin(Reverse(0)),
-                McpServerSource::SelectedPlugin(_) => {
-                    RegistrationPrecedence::SelectedPlugin(Reverse(0))
-                }
-                McpServerSource::Config => RegistrationPrecedence::Config,
-                McpServerSource::Compatibility { .. } => RegistrationPrecedence::Compatibility,
-                McpServerSource::Extension { .. } => RegistrationPrecedence::Extension(0),
-            };
-            builder.register(McpServerRegistration::new(name, source, config, precedence));
-        }
-        builder.build()
+    pub(crate) fn effective_servers(&self) -> HashMap<String, EffectiveMcpServer> {
+        self.servers
+            .iter()
+            .filter_map(|(name, server)| {
+                server
+                    .effective_server()
+                    .map(|server| (name.clone(), server.clone()))
+            })
+            .collect()
     }
 
     /// Returns package attribution for each winning plugin-owned server.
@@ -404,9 +439,7 @@ impl ResolvedMcpCatalog {
                 | McpServerSource::SelectedPlugin(attribution) => {
                     Some((name.clone(), attribution.clone()))
                 }
-                McpServerSource::Config
-                | McpServerSource::Compatibility { .. }
-                | McpServerSource::Extension { .. } => None,
+                McpServerSource::Config | McpServerSource::Extension { .. } => None,
             })
             .collect()
     }

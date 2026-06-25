@@ -55,6 +55,13 @@ impl<'a> AppToolPolicyEvaluator<'a> {
         app_tool_policy_from_apps_config(self.apps_config.as_ref(), input, managed_approval)
     }
 
+    /// Returns app-level enablement after user config and managed requirements are merged.
+    pub fn app_is_enabled(&self, connector_id: &str) -> bool {
+        self.apps_config
+            .as_ref()
+            .is_none_or(|apps_config| app_is_enabled(apps_config, Some(connector_id)))
+    }
+
     fn from_parts(
         apps_config: Option<AppsConfigToml>,
         requirements_apps_config: Option<&'a AppsRequirementsToml>,

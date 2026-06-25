@@ -19,7 +19,7 @@ pub(crate) fn write_curated_plugin(root: &Path, plugin_name: &str) {
         &format!(
             r#"{{
   "name": "{plugin_name}",
-  "description": "Plugin that includes skills, MCP servers, and app connectors"
+  "description": "Plugin that includes skills and MCP servers"
 }}"#
         ),
     );
@@ -34,16 +34,6 @@ pub(crate) fn write_curated_plugin(root: &Path, plugin_name: &str) {
     "sample-docs": {
       "type": "http",
       "url": "https://sample.example/mcp"
-    }
-  }
-}"#,
-    );
-    write_file(
-        &plugin_root.join(".app.json"),
-        r#"{
-  "apps": {
-    "calendar": {
-      "id": "connector_calendar"
     }
   }
 }"#,

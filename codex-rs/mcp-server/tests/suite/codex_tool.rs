@@ -3,12 +3,19 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_login::AuthDotJson;
+use codex_login::AuthKeyringBackendKind;
+use codex_login::TokenData;
+use codex_login::save_auth;
+use codex_login::token_data::parse_chatgpt_jwt_claims;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
 use codex_mcp_server::PatchApprovalResponse;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_shell_command::parse_command;
@@ -21,6 +28,11 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::recorded_apps_tool_call_by_name;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
@@ -445,6 +457,99 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_tool_exposes_apps_from_the_mcp_server_host() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const TOOL_CALL_ID: &str = "calendar-list-events-call";
+    let server = create_mock_responses_server(vec![
+        create_final_assistant_message_sse_response("Apps warmed up")?,
+        responses::sse(vec![
+            responses::ev_response_created("resp-calendar-list-events"),
+            responses::ev_function_call_with_namespace(
+                TOOL_CALL_ID,
+                SEARCH_CALENDAR_NAMESPACE,
+                SEARCH_CALENDAR_LIST_TOOL,
+                "{}",
+            ),
+            responses::ev_completed("resp-calendar-list-events"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let codex_home = TempDir::new()?;
+    create_apps_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &apps_server.chatgpt_base_url,
+    )?;
+    save_chatgpt_auth(codex_home.path())?;
+
+    let mut mcp_process = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    let warmup_request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "Warm up Apps".to_string(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Number(warmup_request_id)),
+    )
+    .await??;
+
+    let request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "List my calendar events".to_string(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Number(request_id)),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("failed to read mock server requests"))?;
+    let model_request = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/responses")
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("expected a second Responses API request"))?;
+    let body = model_request.body_json::<serde_json::Value>()?;
+    let tool_names = body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(
+        tool_names.contains(&SEARCH_CALENDAR_NAMESPACE),
+        "expected Apps namespace in MCP-hosted Codex request, got {tool_names:?}"
+    );
+
+    let apps_tool_call = recorded_apps_tool_call_by_name(&server, "calendar_list_events").await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/_codex_apps/call_id"),
+        Some(&json!(TOOL_CALL_ID))
+    );
+    assert_eq!(
+        apps_tool_call.pointer("/params/arguments"),
+        Some(&json!({}))
+    );
+
+    Ok(())
+}
+
 fn create_expected_patch_approval_elicitation_request_params(
     changes: HashMap<PathBuf, FileChange>,
     grant_root: Option<PathBuf>,
@@ -503,7 +608,31 @@ async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle>
 /// It also uses `approval_policy = "untrusted"` so that we exercise the
 /// elicitation code path for shell commands.
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    create_config_toml_with_apps(codex_home, server_uri, /*chatgpt_base_url*/ None)
+}
+
+fn create_apps_config_toml(
+    codex_home: &Path,
+    server_uri: &str,
+    chatgpt_base_url: &str,
+) -> std::io::Result<()> {
+    create_config_toml_with_apps(codex_home, server_uri, Some(chatgpt_base_url))
+}
+
+fn create_config_toml_with_apps(
+    codex_home: &Path,
+    server_uri: &str,
+    chatgpt_base_url: Option<&str>,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
+    let chatgpt_base_url = chatgpt_base_url
+        .map(|url| format!("chatgpt_base_url = {url:?}\n"))
+        .unwrap_or_default();
+    let apps_config = if chatgpt_base_url.is_empty() {
+        "[features]\n"
+    } else {
+        "[orchestrator.mcp]\nenabled = true\n\n[features]\napps = true\n"
+    };
     std::fs::write(
         config_toml,
         format!(
@@ -513,6 +642,7 @@ approval_policy = "untrusted"
 sandbox_policy = "workspace-write"
 
 model_provider = "mock_provider"
+{chatgpt_base_url}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -521,8 +651,31 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
-[features]
+{apps_config}
 "#
         ),
     )
+}
+
+fn save_chatgpt_auth(codex_home: &Path) -> anyhow::Result<()> {
+    save_auth(
+        codex_home,
+        &AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: parse_chatgpt_jwt_claims("eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.e30.c2ln")?,
+                access_token: "test-access-token".to_string(),
+                refresh_token: "test-refresh-token".to_string(),
+                account_id: Some("test-account".to_string()),
+            }),
+            last_refresh: Some(std::time::SystemTime::now().into()),
+            agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
+        },
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    Ok(())
 }

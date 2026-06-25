@@ -303,6 +303,33 @@ pub async fn wait_for_mcp_server(codex: &CodexThread, server_name: &str) -> anyh
     Ok(())
 }
 
+/// Waits for a named server to appear in the thread's current runtime MCP catalog.
+pub async fn wait_for_mcp_server_registration(
+    codex: &CodexThread,
+    server_name: &str,
+) -> anyhow::Result<()> {
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let runtime = codex.current_mcp_runtime().await;
+            if runtime
+                .config()
+                .mcp_server_catalog
+                .server(server_name)
+                .is_some()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .with_context(|| format!("timeout waiting for MCP server registration: {server_name}"))?;
+    Ok(())
+}
+
 pub async fn submit_thread_settings(
     codex: &CodexThread,
     thread_settings: codex_protocol::protocol::ThreadSettingsOverrides,

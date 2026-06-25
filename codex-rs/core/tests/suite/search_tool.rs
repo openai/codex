@@ -22,6 +22,7 @@ use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI;
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
+use core_test_support::apps_test_server::CALENDAR_MCP_SERVER_NAME;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_CREATE_EVENT_TOOL as CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_LIST_EVENTS_TOOL as CALENDAR_LIST_TOOL;
 use core_test_support::apps_test_server::LINK_ID;
@@ -50,6 +51,7 @@ use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use core_test_support::wait_for_mcp_server_registration;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -195,6 +197,7 @@ async fn small_app_tool_sets_are_deferred_by_default() -> Result<()> {
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -261,6 +264,7 @@ async fn app_only_tools_are_not_visible_or_runnable_by_direct_model_calls() -> R
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
     test.submit_turn_with_approval_and_permission_profile(
         "Try to call the app-only calendar tool.",
         AskForApproval::Never,
@@ -366,6 +370,7 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
@@ -408,6 +413,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "hello tools",
@@ -444,6 +450,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Use [$calendar](app://calendar) and then call tools.",
@@ -524,6 +531,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -571,8 +579,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert_eq!(
         end.invocation,
         McpInvocation {
-            server: "codex_apps".to_string(),
-            tool: "calendar_create_event".to_string(),
+            server: CALENDAR_MCP_SERVER_NAME.to_string(),
+            tool: SEARCH_CALENDAR_CREATE_TOOL.to_string(),
             arguments: Some(json!({
                 "title": "Lunch",
                 "starts_at": "2026-03-10T12:00:00Z"
@@ -1125,6 +1133,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
         });
     let test = builder.build(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo and image tools.",
@@ -1252,6 +1261,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
         });
     let test = builder.build(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.codex
         .submit(Op::UserInput {
@@ -1401,6 +1411,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
         });
     let test = builder.build(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Find the rmcp echo tool.",
@@ -1463,6 +1474,7 @@ async fn tool_search_matches_mcp_tools_by_distinct_name_description_and_schema_t
 
     let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
 
     test.submit_turn_with_approval_and_permission_profile(
         "Search for calendar tooling.",

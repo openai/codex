@@ -112,6 +112,8 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         .contribute(
             TurnInputContext {
                 turn_id: "turn-1".to_string(),
+                model_slug: "test-model".to_string(),
+                product_client_id: "test-client".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "$demo".to_string(),
                     text_elements: Vec::new(),
@@ -228,6 +230,8 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute(
             TurnInputContext {
                 turn_id: "turn-1".to_string(),
+                model_slug: "test-model".to_string(),
+                product_client_id: "test-client".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "$lint-fix please".to_string(),
                     text_elements: Vec::new(),
@@ -513,6 +517,8 @@ async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
             .contribute(
                 TurnInputContext {
                     turn_id: turn_id.to_string(),
+                    model_slug: "test-model".to_string(),
+                    product_client_id: "test-client".to_string(),
                     user_input: vec![UserInput::Text {
                         text: "$first".to_string(),
                         text_elements: Vec::new(),
@@ -605,6 +611,8 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         .contribute(
             TurnInputContext {
                 turn_id: "turn-1".to_string(),
+                model_slug: "test-model".to_string(),
+                product_client_id: "test-client".to_string(),
                 user_input: vec![UserInput::Mention {
                     name: "lint-fix".to_string(),
                     path: root_b_locator.to_string(),
@@ -680,6 +688,8 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
         .contribute(
             TurnInputContext {
                 turn_id: "turn-1".to_string(),
+                model_slug: "test-model".to_string(),
+                product_client_id: "test-client".to_string(),
                 user_input: vec![UserInput::Text {
                     text: "$hidden-skill".to_string(),
                     text_elements: Vec::new(),

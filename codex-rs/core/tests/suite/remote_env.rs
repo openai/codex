@@ -351,7 +351,7 @@ async fn deferred_executor_does_not_duplicate_initial_environment_context() -> R
     Ok(())
 }
 
-async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
+pub(super) async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
     loop {
         match timeout(Duration::from_secs(5), websocket.next())
             .await
@@ -371,7 +371,9 @@ async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Va
     }
 }
 
-async fn accept_initialized_exec_server(listener: TcpListener) -> WebSocketStream<TcpStream> {
+pub(super) async fn accept_initialized_exec_server(
+    listener: TcpListener,
+) -> WebSocketStream<TcpStream> {
     let (stream, _) = listener.accept().await.expect("connection");
     let mut websocket = accept_async(stream).await.expect("websocket handshake");
 

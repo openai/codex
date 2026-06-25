@@ -31,6 +31,7 @@ use crate::thread_state::ThreadStateManager;
 pub(crate) struct ThreadExtensionDependencies {
     pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) thread_manager: Weak<ThreadManager>,
@@ -51,6 +52,7 @@ where
     let ThreadExtensionDependencies {
         event_sink,
         auth_manager,
+        codex_apps,
         state_db,
         analytics_events_client,
         thread_manager,
@@ -73,8 +75,11 @@ where
     }
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     codex_memories_extension::install(&mut builder, codex_otel::global());
-    codex_mcp_extension::install(&mut builder);
-    codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);
+    codex_mcp_extension::install_with_executor_plugins(
+        &mut builder,
+        codex_apps,
+        environment_manager,
+    );
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
         Some(config.codex_home.clone())

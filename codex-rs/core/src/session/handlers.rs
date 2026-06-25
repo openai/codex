@@ -12,6 +12,7 @@ use tracing::info_span;
 
 use crate::session::SteerInputError;
 use crate::session::TurnInput;
+use crate::session::session::PendingMcpServerRefresh;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
@@ -433,8 +434,12 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
 }
 
 pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
-    let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
-    *guard = Some(refresh_config);
+    let mut guard = sess.pending_mcp_server_refresh.lock().await;
+    *guard = Some(PendingMcpServerRefresh::SourceLess(refresh_config));
+}
+
+pub async fn refresh_mcp_servers_from_current_config(sess: &Arc<Session>) {
+    sess.queue_mcp_server_refresh_from_current_config().await;
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
@@ -793,6 +798,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::RefreshMcpServers { config } => {
                     refresh_mcp_servers(&sess, config).await;
+                    false
+                }
+                Op::RefreshMcpServersFromCurrentConfig => {
+                    refresh_mcp_servers_from_current_config(&sess).await;
                     false
                 }
                 Op::ReloadUserConfig => {

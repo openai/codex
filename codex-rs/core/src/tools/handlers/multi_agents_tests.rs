@@ -236,7 +236,7 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
         "spawn_agent",
         function_payload(json!({
             "message": "hello",
-            "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
+            "items": [{"type": "mention", "name": "drive", "path": "file:///tmp/drive"}]
         })),
     );
     let Err(err) = SpawnAgentHandler::default().handle(invocation).await else {
@@ -1870,7 +1870,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
         function_payload(json!({
             "target": agent_id.to_string(),
             "items": [
-                {"type": "mention", "name": "drive", "path": "app://google_drive"},
+                {"type": "mention", "name": "drive", "path": "file:///tmp/google_drive"},
                 {"type": "text", "text": "read the folder"}
             ]
         })),
@@ -2571,7 +2571,7 @@ async fn send_input_rejects_when_message_and_items_are_both_set() {
         function_payload(json!({
             "target": ThreadId::new().to_string(),
             "message": "hello",
-            "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
+            "items": [{"type": "mention", "name": "drive", "path": "file:///tmp/drive"}]
         })),
     );
     let Err(err) = SendInputHandler.handle(invocation).await else {
@@ -2684,7 +2684,7 @@ async fn send_input_accepts_structured_items() {
         function_payload(json!({
             "target": agent_id.to_string(),
             "items": [
-                {"type": "mention", "name": "drive", "path": "app://google_drive"},
+                {"type": "mention", "name": "drive", "path": "file:///tmp/google_drive"},
                 {"type": "text", "text": "read the folder"}
             ]
         })),
@@ -2698,7 +2698,7 @@ async fn send_input_accepts_structured_items() {
         items: vec![
             UserInput::Mention {
                 name: "drive".to_string(),
-                path: "app://google_drive".to_string(),
+                path: "file:///tmp/google_drive".to_string(),
             },
             UserInput::Text {
                 text: "read the folder".to_string(),

@@ -78,8 +78,7 @@ use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
 use codex_tools::DiscoverablePluginInfo;
-use codex_tools::DiscoverableTool;
-use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
+use codex_tools::filter_request_plugin_install_candidates_for_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
 use std::collections::HashMap;
@@ -1178,7 +1177,7 @@ impl PluginsManager {
     pub async fn recommended_plugin_candidates_for_config(
         &self,
         input: RecommendedPluginCandidatesInput<'_>,
-    ) -> Option<Vec<DiscoverableTool>> {
+    ) -> Option<Vec<DiscoverablePluginInfo>> {
         let RecommendedPluginsMode::Endpoint { plugins } = self
             .recommended_plugins_mode_for_config(input.plugins_config, input.auth)
             .await
@@ -1222,19 +1221,17 @@ impl PluginsManager {
                     && !installed_remote_plugin_ids.contains(plugin.remote_plugin_id.as_str())
                     && !disabled_plugin_ids.contains(plugin.config_id.as_str())
             })
-            .map(|plugin| {
-                DiscoverableTool::from(DiscoverablePluginInfo {
-                    id: plugin.config_id,
-                    remote_plugin_id: Some(plugin.remote_plugin_id),
-                    name: plugin.display_name,
-                    description: None,
-                    has_skills: false,
-                    mcp_server_names: Vec::new(),
-                    app_connector_ids: plugin.app_connector_ids,
-                })
+            .map(|plugin| DiscoverablePluginInfo {
+                id: plugin.config_id,
+                remote_plugin_id: Some(plugin.remote_plugin_id),
+                name: plugin.display_name,
+                description: None,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: plugin.app_connector_ids,
             })
             .collect();
-        Some(filter_request_plugin_install_discoverable_tools_for_client(
+        Some(filter_request_plugin_install_candidates_for_client(
             candidates,
             input.app_server_client_name,
         ))

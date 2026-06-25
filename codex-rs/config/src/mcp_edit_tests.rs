@@ -31,7 +31,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
-            default_tools_approval_mode: Some(AppToolApproval::Auto),
+            default_tools_approval_mode: Some(McpToolApproval::Auto),
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -41,13 +41,13 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                 (
                     "search".to_string(),
                     McpServerToolConfig {
-                        approval_mode: Some(AppToolApproval::Approve),
+                        approval_mode: Some(McpToolApproval::Approve),
                     },
                 ),
                 (
                     "read".to_string(),
                     McpServerToolConfig {
-                        approval_mode: Some(AppToolApproval::Prompt),
+                        approval_mode: Some(McpToolApproval::Prompt),
                     },
                 ),
             ]),

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use codex_config::ConfigEditsBuilder;
 use codex_config::McpServerConfig;
@@ -199,8 +200,12 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
         return;
     }
-    sess.refresh_mcp_servers_now(turn_context, &refresh_config, elicitation_reviewer)
-        .await;
+    sess.refresh_mcp_servers_now_from_supplied_config(
+        turn_context,
+        Arc::new(refresh_config),
+        elicitation_reviewer,
+    )
+    .await;
 }
 
 async fn should_install_mcp_dependencies(

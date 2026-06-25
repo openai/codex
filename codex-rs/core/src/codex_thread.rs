@@ -605,6 +605,14 @@ impl CodexThread {
             .clone()
     }
 
+    /// Queues a strict MCP rebuild from the session's sourceful config.
+    pub async fn queue_mcp_server_refresh_from_current_config(&self) -> CodexResult<()> {
+        self.codex
+            .submit(Op::RefreshMcpServersFromCurrentConfig)
+            .await
+            .map(|_| ())
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }

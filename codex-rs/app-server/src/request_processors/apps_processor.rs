@@ -7,6 +7,7 @@ pub(crate) struct AppsRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
     shutdown_token: CancellationToken,
     _shutdown_drop_guard: DropGuard,
 }
@@ -18,6 +19,7 @@ impl AppsRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
         shutdown_token: CancellationToken,
     ) -> Self {
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
@@ -27,6 +29,7 @@ impl AppsRequestProcessor {
             outgoing,
             config_manager,
             workspace_settings_cache,
+            codex_apps,
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         }
@@ -88,9 +91,8 @@ impl AppsRequestProcessor {
 
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
-        let environment_manager = self.thread_manager.environment_manager();
-        let mcp_manager = self.thread_manager.mcp_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
+        let codex_apps = Arc::clone(&self.codex_apps);
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
@@ -100,9 +102,8 @@ impl AppsRequestProcessor {
                     request,
                     params,
                     config,
-                    environment_manager,
-                    mcp_manager,
                     plugins_manager,
+                    codex_apps,
                 ) => {}
             }
         });
@@ -118,27 +119,25 @@ impl AppsRequestProcessor {
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
-        environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
+        codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
-        let retry_environment_manager = Arc::clone(&environment_manager);
-        let retry_mcp_manager = Arc::clone(&mcp_manager);
         let retry_plugins_manager = Arc::clone(&plugins_manager);
+        let retry_codex_apps = Arc::clone(&codex_apps);
         let result = Self::apps_list_response(
             &outgoing,
             params,
             config,
-            environment_manager,
-            mcp_manager,
             plugins_manager,
+            codex_apps,
+            /*join_cached_apps_refresh*/ false,
         )
         .await;
         let should_retry = result
             .as_ref()
-            .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
+            .is_ok_and(|(_, live_inventory)| !live_inventory);
         outgoing
             .send_result(request_id, result.map(|(response, _)| response))
             .await;
@@ -150,13 +149,13 @@ impl AppsRequestProcessor {
                 &outgoing,
                 retry_params,
                 retry_config,
-                retry_environment_manager,
-                retry_mcp_manager,
                 retry_plugins_manager,
+                retry_codex_apps,
+                /*join_cached_apps_refresh*/ true,
             )
             .await
             {
-                warn!("failed to refresh app list after codex-apps readiness retry: {err:?}");
+                warn!("failed to refresh app list after cached Apps inventory: {err:?}");
             }
         }
     }
@@ -165,9 +164,9 @@ impl AppsRequestProcessor {
         outgoing: &Arc<OutgoingMessageSender>,
         params: AppsListParams,
         config: Config,
-        environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
+        codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
+        join_cached_apps_refresh: bool,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -191,25 +190,52 @@ impl AppsRequestProcessor {
                 loaded_plugins.capability_summaries(),
             );
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
-        let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
+        let (current_snapshot, mut all_connectors) = tokio::join!(
+            codex_apps.current_snapshot(&config),
             connectors::list_cached_all_connectors(&config, &plugin_apps)
         );
+        let mut accessible_connectors = current_snapshot
+            .as_ref()
+            .map(|snapshot| app_infos_from_snapshot(snapshot, &connector_snapshot));
         let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let accessible_config = config.clone();
+        let accessible_connector_snapshot = connector_snapshot.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-                &accessible_config,
-                force_refetch,
-                Arc::clone(&environment_manager),
-                mcp_manager,
-            )
-            .await
-            .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let snapshot = if join_cached_apps_refresh {
+                codex_apps.snapshot(&accessible_config).await
+            } else if force_refetch {
+                codex_apps.refresh_snapshot(&accessible_config).await
+            } else {
+                match current_snapshot {
+                    Some(snapshot) if !snapshot.is_live_inventory() => Ok(Some(snapshot)),
+                    Some(_) => codex_apps.snapshot(&accessible_config).await,
+                    None => {
+                        codex_apps
+                            .snapshot_allowing_cached(&accessible_config)
+                            .await
+                    }
+                }
+            };
+            let result = snapshot
+                .map(|snapshot| {
+                    let live_inventory = snapshot
+                        .as_ref()
+                        .is_none_or(codex_apps::CodexAppsSnapshot::is_live_inventory);
+                    AccessibleApps {
+                        apps: snapshot
+                            .as_ref()
+                            .map(|snapshot| {
+                                app_infos_from_snapshot(snapshot, &accessible_connector_snapshot)
+                            })
+                            .unwrap_or_default(),
+                        live_inventory,
+                    }
+                })
+                .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
@@ -229,11 +255,11 @@ impl AppsRequestProcessor {
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
         let mut all_loaded = false;
-        let mut codex_apps_ready = true;
+        let mut live_inventory = true;
         let mut last_notified_apps = None;
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
-            let merged = connectors::with_app_enabled_state(
+            let merged = with_app_enabled_state(
                 merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
                 &config,
             );
@@ -262,10 +288,10 @@ impl AppsRequestProcessor {
             };
 
             match result {
-                AppListLoadResult::Accessible(Ok(status)) => {
-                    accessible_connectors = Some(status.connectors);
+                AppListLoadResult::Accessible(Ok(accessible)) => {
+                    accessible_connectors = Some(accessible.apps);
+                    live_inventory = accessible.live_inventory;
                     accessible_loaded = true;
-                    codex_apps_ready = status.codex_apps_ready;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
                     return Err(internal_error(err));
@@ -292,7 +318,7 @@ impl AppsRequestProcessor {
                 } else {
                     accessible_connectors.as_deref()
                 };
-            let merged = connectors::with_app_enabled_state(
+            let merged = with_app_enabled_state(
                 merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
                 &config,
             );
@@ -307,8 +333,8 @@ impl AppsRequestProcessor {
             }
 
             if accessible_loaded && all_loaded {
-                let response = paginate_apps(merged.as_slice(), start, limit)?;
-                return Ok((response, codex_apps_ready));
+                return paginate_apps(merged.as_slice(), start, limit)
+                    .map(|response| (response, live_inventory));
             }
         }
     }
@@ -365,8 +391,66 @@ impl AppsRequestProcessor {
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
 enum AppListLoadResult {
-    Accessible(Result<AccessibleConnectorsStatus, String>),
+    Accessible(Result<AccessibleApps, String>),
     Directory(Result<Vec<AppInfo>, String>),
+}
+
+struct AccessibleApps {
+    apps: Vec<AppInfo>,
+    live_inventory: bool,
+}
+
+pub(super) fn app_infos_from_snapshot(
+    snapshot: &codex_apps::CodexAppsSnapshot,
+    plugin_connectors: &codex_connectors::ConnectorSnapshot,
+) -> Vec<AppInfo> {
+    app_infos_from_connectors(snapshot.apps(), plugin_connectors)
+}
+
+pub(super) fn accessible_app_infos_from_snapshot(
+    snapshot: &codex_apps::CodexAppsSnapshot,
+    plugin_connectors: &codex_connectors::ConnectorSnapshot,
+) -> Vec<AppInfo> {
+    app_infos_from_connectors(snapshot.all_connectors(), plugin_connectors)
+}
+
+fn app_infos_from_connectors(
+    connectors: &[codex_apps::CodexApp],
+    plugin_connectors: &codex_connectors::ConnectorSnapshot,
+) -> Vec<AppInfo> {
+    connectors
+        .iter()
+        .map(|app| AppInfo {
+            id: app.id().to_string(),
+            name: app.name().to_string(),
+            description: app.description().map(str::to_string),
+            logo_url: None,
+            logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some(codex_connectors::metadata::connector_install_url(
+                app.name(),
+                app.id(),
+            )),
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: plugin_connectors
+                .plugin_display_names_for_connector_id(app.id())
+                .to_vec(),
+        })
+        .collect()
+}
+
+fn with_app_enabled_state(mut apps: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
+    let evaluator = codex_connectors::AppToolPolicyEvaluator::new(&config.config_layer_stack);
+    for app in &mut apps {
+        app.is_enabled = evaluator.app_is_enabled(&app.id);
+    }
+    apps
 }
 
 fn merge_loaded_apps(

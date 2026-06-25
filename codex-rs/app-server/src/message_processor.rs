@@ -188,6 +188,7 @@ pub(crate) struct MessageProcessor {
     models_refresh_worker: ModelsRefreshWorker,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
+    codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,
@@ -338,6 +339,11 @@ impl MessageProcessor {
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();
+        let plugins_manager = codex_core::build_plugins_manager(
+            config.as_ref(),
+            auth_manager.as_ref(),
+            &session_source,
+        );
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
                 Arc::clone(&environment_manager_for_extensions),
@@ -345,10 +351,19 @@ impl MessageProcessor {
             ),
         );
         let goal_service = Arc::new(GoalService::new());
+        let codex_apps = Arc::new(
+            codex_mcp_extension::CodexAppsMcpExtension::new_with_analytics(
+                auth_manager.clone(),
+                Arc::clone(&environment_manager_for_extensions),
+                Arc::clone(&plugins_manager),
+                analytics_events_client.clone(),
+            ),
+        );
         let thread_manager = Arc::new_cyclic(|thread_manager| {
-            ThreadManager::new(
+            ThreadManager::new_with_plugins_manager(
                 config.as_ref(),
                 auth_manager.clone(),
+                Arc::clone(&plugins_manager),
                 session_source,
                 environment_manager,
                 thread_extensions(
@@ -359,6 +374,7 @@ impl MessageProcessor {
                             thread_state_manager.clone(),
                         ),
                         auth_manager: auth_manager.clone(),
+                        codex_apps: Arc::clone(&codex_apps),
                         state_db: state_db.clone(),
                         analytics_events_client: analytics_events_client.clone(),
                         thread_manager: thread_manager.clone(),
@@ -412,6 +428,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
             Arc::clone(&workspace_settings_cache),
+            Arc::clone(&codex_apps),
             app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
@@ -460,6 +477,7 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
             outgoing.clone(),
             config_manager.clone(),
+            Arc::clone(&codex_apps),
         );
         let plugin_processor = PluginRequestProcessor::new(
             auth_manager.clone(),
@@ -468,6 +486,7 @@ impl MessageProcessor {
             analytics_events_client.clone(),
             config_manager.clone(),
             workspace_settings_cache,
+            Arc::clone(&codex_apps),
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
@@ -557,6 +576,7 @@ impl MessageProcessor {
             models_refresh_worker,
             skills_watcher,
             account_processor,
+            codex_apps,
             apps_processor,
             catalog_processor,
             command_exec_processor,
@@ -583,6 +603,7 @@ impl MessageProcessor {
 
     pub(crate) fn clear_runtime_references(&self) {
         self.account_processor.clear_external_auth();
+        self.codex_apps.begin_shutdown();
         self.apps_processor.shutdown();
         self.models_refresh_worker.shutdown();
         self.skills_watcher.shutdown();
@@ -762,6 +783,7 @@ impl MessageProcessor {
 
     pub(crate) async fn drain_background_tasks(&self) {
         self.models_refresh_worker.shutdown();
+        self.codex_apps.begin_shutdown();
         self.thread_processor.drain_background_tasks().await;
     }
 
@@ -775,6 +797,7 @@ impl MessageProcessor {
 
     pub(crate) async fn shutdown_threads(&self) {
         self.thread_processor.shutdown_threads().await;
+        self.codex_apps.shutdown().await;
     }
 
     pub(crate) async fn connection_closed(

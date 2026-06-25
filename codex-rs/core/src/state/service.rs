@@ -15,6 +15,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::session::McpRuntimeInputs;
 use crate::session::McpRuntimeSnapshot;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -51,9 +52,8 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     /// The latest atomically published MCP config and manager pair.
     pub(crate) mcp_runtime: ArcSwapOption<McpRuntimeSnapshot>,
-    /// Serializes environment-driven runtime rebuilds.
-    pub(crate) mcp_projection_lock: Mutex<()>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
+    pub(crate) mcp_refresh_lock: Mutex<()>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) shell_zsh_path: Option<PathBuf>,
@@ -109,10 +109,16 @@ impl SessionServices {
         config: Arc<McpConfig>,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
+        inputs: McpRuntimeInputs,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        let runtime =
-            self.publish_mcp_runtime(config, runtime_context, available_environment_ids, manager);
+        let runtime = self.publish_mcp_runtime(
+            config,
+            runtime_context,
+            available_environment_ids,
+            inputs,
+            manager,
+        );
         runtime.manager().validate_required_servers().await
     }
 
@@ -121,6 +127,7 @@ impl SessionServices {
         config: Arc<McpConfig>,
         runtime_context: McpRuntimeContext,
         available_environment_ids: Vec<String>,
+        inputs: McpRuntimeInputs,
         manager: McpConnectionManager,
     ) -> Arc<McpRuntimeSnapshot> {
         let manager = Arc::new(manager);
@@ -132,6 +139,7 @@ impl SessionServices {
             manager,
             runtime_context,
             available_environment_ids,
+            inputs,
         ));
         self.mcp_runtime.store(Some(Arc::clone(&runtime)));
         runtime

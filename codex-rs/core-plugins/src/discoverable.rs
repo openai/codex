@@ -1,9 +1,11 @@
 use anyhow::Context;
+use codex_analytics::PluginInstallRequestedPlugin;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
+use codex_tools::DiscoverablePluginInfo;
 use std::collections::HashSet;
 use tracing::warn;
 
@@ -52,7 +54,21 @@ pub struct ToolSuggestPluginDiscoveryInput {
     pub plugins: PluginsConfigInput,
     pub configured_plugin_ids: HashSet<String>,
     pub disabled_plugin_ids: HashSet<String>,
-    pub loaded_plugin_app_connector_ids: HashSet<String>,
+}
+
+impl ToolSuggestPluginDiscoveryInput {
+    /// Creates discovery input from plugin configuration and selection state.
+    pub fn new(
+        plugins: PluginsConfigInput,
+        configured_plugin_ids: HashSet<String>,
+        disabled_plugin_ids: HashSet<String>,
+    ) -> Self {
+        Self {
+            plugins,
+            configured_plugin_ids,
+            disabled_plugin_ids,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +80,35 @@ pub struct ToolSuggestDiscoverablePlugin {
     pub has_skills: bool,
     pub mcp_server_names: Vec<String>,
     pub app_connector_ids: Vec<String>,
+}
+
+impl From<ToolSuggestDiscoverablePlugin> for DiscoverablePluginInfo {
+    fn from(plugin: ToolSuggestDiscoverablePlugin) -> Self {
+        Self {
+            id: plugin.id,
+            remote_plugin_id: plugin.remote_plugin_id,
+            name: plugin.name,
+            description: plugin.description,
+            has_skills: plugin.has_skills,
+            mcp_server_names: plugin.mcp_server_names,
+            app_connector_ids: plugin.app_connector_ids,
+        }
+    }
+}
+
+/// Builds the analytics payload for a model-requested plugin install.
+///
+/// Plugin capability details stay owned by the plugin subsystem instead of leaking into the
+/// generic tool handler.
+pub fn plugin_install_requested_metadata(
+    plugin: &DiscoverablePluginInfo,
+) -> PluginInstallRequestedPlugin {
+    PluginInstallRequestedPlugin {
+        plugin_id: plugin.id.clone(),
+        remote_plugin_id: plugin.remote_plugin_id.clone(),
+        plugin_name: plugin.name.clone(),
+        connector_ids: plugin.app_connector_ids.clone(),
+    }
 }
 
 impl PluginsManager {
@@ -141,7 +186,7 @@ impl PluginsManager {
             }
         }
         if let Some(remote_installed_marketplaces) = remote_installed_marketplaces.as_ref() {
-            let mut installed_app_connector_ids = self
+            let installed_app_connector_ids = self
                 .plugins_for_config(&input.plugins)
                 .await
                 .capability_summaries()
@@ -149,8 +194,6 @@ impl PluginsManager {
                 .flat_map(|plugin| plugin.app_connector_ids.iter())
                 .map(|connector_id| connector_id.0.clone())
                 .collect::<HashSet<_>>();
-            installed_app_connector_ids
-                .extend(input.loaded_plugin_app_connector_ids.iter().cloned());
             let installed_remote_plugin_ids = remote_installed_marketplaces
                 .iter()
                 .flat_map(|marketplace| marketplace.plugins.iter())

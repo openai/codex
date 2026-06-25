@@ -1087,7 +1087,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
 }
 
 #[tokio::test]
-async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
+async fn plugin_install_treats_synthetic_only_app_as_accessible() -> Result<()> {
     let connectors = vec![
         AppInfo {
             id: "alpha".to_string(),
@@ -1124,7 +1124,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             plugin_display_names: Vec::new(),
         },
     ];
-    let tools = vec![connector_tool("beta", "Beta App")?];
+    let tools = vec![synthetic_connector_tool("beta", "Beta App")?];
     let (server_url, server_handle, server_control) = start_apps_server(connectors, tools).await?;
 
     let codex_home = TempDir::new()?;
@@ -1933,6 +1933,15 @@ fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
     meta.0
         .insert("connector_name".to_string(), json!(connector_name));
     tool.meta = Some(meta);
+    Ok(tool)
+}
+
+fn synthetic_connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
+    let mut tool = connector_tool(connector_id, connector_name)?;
+    tool.meta
+        .as_mut()
+        .expect("connector metadata")
+        .insert("_codex_apps".to_string(), json!({"synthetic_link": true}));
     Ok(tool)
 }
 

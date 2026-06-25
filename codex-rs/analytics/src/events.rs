@@ -30,6 +30,7 @@ use codex_login::default_client::originator;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::mcp_approval_meta::McpToolSource;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
@@ -258,6 +259,23 @@ pub enum GuardianReviewedAction {
         tool_title: Option<String>,
     },
     RequestPermissions {},
+}
+
+impl GuardianReviewedAction {
+    pub fn mcp_tool_call(
+        server: String,
+        tool_name: String,
+        tool_title: Option<String>,
+        source: Option<&McpToolSource>,
+    ) -> Self {
+        Self::McpToolCall {
+            server,
+            tool_name,
+            connector_id: source.map(McpToolSource::id).map(str::to_string),
+            connector_name: source.map(McpToolSource::name).map(str::to_string),
+            tool_title,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]

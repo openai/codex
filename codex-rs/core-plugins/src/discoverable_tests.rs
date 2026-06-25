@@ -1,5 +1,6 @@
 use super::ToolSuggestDiscoverablePlugin;
 use super::ToolSuggestPluginDiscoveryInput;
+use super::plugin_install_requested_metadata;
 use crate::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use crate::PluginInstallRequest;
 use crate::PluginsConfigInput;
@@ -18,6 +19,7 @@ use crate::test_support::write_openai_curated_marketplace;
 use codex_config::CONFIG_TOML_FILE;
 use codex_login::CodexAuth;
 use codex_protocol::auth::AuthMode;
+use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -34,6 +36,32 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+#[test]
+fn install_candidate_conversion_and_analytics_preserve_declared_apps() {
+    let discovered = ToolSuggestDiscoverablePlugin {
+        id: "calendar@marketplace".to_string(),
+        remote_plugin_id: Some("remote-calendar".to_string()),
+        name: "Calendar".to_string(),
+        description: None,
+        has_skills: false,
+        mcp_server_names: vec!["calendar".to_string()],
+        app_connector_ids: vec!["connector-calendar".to_string()],
+    };
+    let plugin = DiscoverablePluginInfo::from(discovered);
+
+    let metadata = plugin_install_requested_metadata(&plugin);
+
+    assert_eq!(
+        metadata,
+        codex_analytics::PluginInstallRequestedPlugin {
+            plugin_id: plugin.id,
+            remote_plugin_id: plugin.remote_plugin_id,
+            plugin_name: plugin.name,
+            connector_ids: plugin.app_connector_ids,
+        }
+    );
+}
+
 #[tokio::test]
 async fn returns_fallback_plugins_when_remote_disabled_for_codex_auth() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -46,7 +74,7 @@ async fn returns_fallback_plugins_when_remote_disabled_for_codex_auth() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         Some(&auth),
     )
     .await;
@@ -76,7 +104,7 @@ async fn returns_api_curated_fallback_plugins_for_direct_provider_auth() {
     let auth = CodexAuth::from_api_key("test-api-key");
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         Some(&auth),
     )
     .await;
@@ -107,7 +135,7 @@ async fn returns_microsoft_fallback_plugins() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -168,7 +196,7 @@ source = "/tmp/{bundled_marketplace_name}"
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         Some(&auth),
     )
     .await;
@@ -193,7 +221,7 @@ async fn includes_openai_curated_when_remote_enabled_without_auth() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -252,7 +280,7 @@ source = "/tmp/{marketplace_name}"
     assert!(plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt)));
     let chatgpt_projection = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins.clone(), &[plugin_id.as_str()], &[], &[]),
+        discovery_input(plugins.clone(), &[plugin_id.as_str()], &[]),
         /*auth*/ None,
     )
     .await;
@@ -272,7 +300,7 @@ source = "/tmp/{marketplace_name}"
     assert!(plugins_manager.set_auth_mode(Some(AuthMode::ApiKey)));
     let api_key_projection = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[plugin_id.as_str()], &[], &[]),
+        discovery_input(plugins, &[plugin_id.as_str()], &[]),
         /*auth*/ None,
     )
     .await;
@@ -307,7 +335,7 @@ async fn reprojects_cached_skill_availability_for_current_config() {
     };
     let initial = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -323,7 +351,7 @@ enabled = false
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let after_skill_disabled = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -350,7 +378,7 @@ async fn does_not_advertise_skills_when_skill_loading_fails() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -387,7 +415,7 @@ async fn clear_cache_invalidates_cached_tool_suggest_metadata() {
 
     let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-    let input = discovery_input(plugins, &[], &[], &[]);
+    let input = discovery_input(plugins, &[], &[]);
     let expected_cached = vec![ToolSuggestDiscoverablePlugin {
         id: "slack@openai-curated".to_string(),
         remote_plugin_id: None,
@@ -461,7 +489,7 @@ source = "/tmp/{marketplace_name}"
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -488,7 +516,7 @@ async fn normalizes_description() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -518,7 +546,7 @@ async fn omits_installed_curated_plugins() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -572,7 +600,7 @@ async fn omits_not_available_curated_plugins() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -624,7 +652,7 @@ async fn does_not_reload_marketplace_per_plugin() {
 
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -661,7 +689,7 @@ async fn does_not_expand_local_plugins_by_installed_apps() {
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -670,7 +698,7 @@ async fn does_not_expand_local_plugins_by_installed_apps() {
 }
 
 #[tokio::test]
-async fn does_not_read_local_plugins_for_loaded_apps() {
+async fn does_not_read_uninstalled_local_plugin_app_declarations() {
     let hubspot_app_id = "asdk_app_697acb8e53d88191bf7a79e62012ae14";
     let granola_app_id = "asdk_app_697761cab6f48191b5ed345919a3ce8b";
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -698,7 +726,7 @@ async fn does_not_read_local_plugins_for_loaded_apps() {
 
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[hubspot_app_id]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -773,7 +801,7 @@ source = "/tmp/{sales_marketplace_name}"
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &[]),
+        discovery_input(plugins, &[], &[]),
         /*auth*/ None,
     )
     .await;
@@ -782,15 +810,50 @@ source = "/tmp/{sales_marketplace_name}"
 }
 
 #[tokio::test]
-async fn expands_cached_remote_plugins_by_loaded_apps() {
+async fn expands_cached_remote_plugins_by_installed_plugin_apps() {
     let codex_home = tempdir().expect("tempdir should succeed");
+    let marketplace_name = "loaded-apps";
+    let marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{marketplace_name}"));
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{marketplace_name}",
+  "plugins": [
+    {{"name": "installed-app-source", "source": {{"source": "local", "path": "./plugins/installed-app-source"}}}}
+  ]
+}}
+"#,
+        ),
+    );
+    write_curated_plugin(&marketplace_root, "installed-app-source");
+    write_plugin_app(
+        &marketplace_root,
+        "installed-app-source",
+        "remote-unlisted",
+        "remote-unlisted-app",
+    );
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
+        &format!(
+            r#"[features]
 plugins = true
 remote_plugin = true
+
+[marketplaces.{marketplace_name}]
+source_type = "git"
+source = "/tmp/{marketplace_name}"
 "#,
+        ),
     );
+    install_marketplace_plugin(
+        codex_home.path(),
+        marketplace_root.as_path(),
+        "installed-app-source",
+    )
+    .await;
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -846,6 +909,19 @@ remote_plugin = true
     let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     plugins.chatgpt_base_url = format!("{}/backend-api", server.uri());
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
+    assert!(plugins_manager.set_auth_mode(Some(AuthMode::Chatgpt)));
+    let loaded_app_connector_ids = plugins_manager
+        .plugins_for_config(&plugins)
+        .await
+        .capability_summaries()
+        .iter()
+        .flat_map(|plugin| plugin.app_connector_ids.iter())
+        .map(|connector_id| connector_id.0.clone())
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        loaded_app_connector_ids,
+        HashSet::from(["remote-unlisted-app".to_string()])
+    );
     fetch_and_cache_global_remote_plugin_catalog(
         codex_home.path(),
         &RemotePluginServiceConfig {
@@ -882,7 +958,7 @@ remote_plugin = true
 
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
-        discovery_input(plugins, &[], &[], &["remote-unlisted-app"]),
+        discovery_input(plugins, &[], &[]),
         Some(&auth),
     )
     .await;
@@ -905,13 +981,11 @@ fn discovery_input(
     plugins: PluginsConfigInput,
     configured_plugin_ids: &[&str],
     disabled_plugin_ids: &[&str],
-    loaded_plugin_app_connector_ids: &[&str],
 ) -> ToolSuggestPluginDiscoveryInput {
     ToolSuggestPluginDiscoveryInput {
         plugins,
         configured_plugin_ids: string_set(configured_plugin_ids),
         disabled_plugin_ids: string_set(disabled_plugin_ids),
-        loaded_plugin_app_connector_ids: string_set(loaded_plugin_app_connector_ids),
     }
 }
 

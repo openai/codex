@@ -66,6 +66,7 @@ pub use environment::CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;
+pub use environment::EnvironmentRegistrySnapshot;
 pub use environment::LOCAL_ENVIRONMENT_ID;
 pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use environment_provider::DefaultEnvironmentProvider;

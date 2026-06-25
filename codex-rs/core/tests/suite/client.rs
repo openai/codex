@@ -53,6 +53,8 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_MCP_SERVER_NAME;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -74,6 +76,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server_registration;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -1588,20 +1591,15 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(create_dummy_codex_auth())
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
-        });
+    let mut builder = apps_enabled_builder(apps_base_url).with_auth(create_dummy_codex_auth());
     let codex = builder
         .build(&server)
         .await
         .expect("create new conversation")
         .codex;
+    wait_for_mcp_server_registration(&codex, CALENDAR_MCP_SERVER_NAME)
+        .await
+        .expect("Apps MCP registration");
 
     codex
         .submit(Op::UserInput {
@@ -1651,15 +1649,8 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
-        });
+    let mut builder =
+        apps_enabled_builder(apps_base_url).with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = builder
         .build(&server)
         .await
@@ -1709,21 +1700,23 @@ async fn omits_apps_guidance_when_configured_off() {
     )
     .await;
 
-    let mut builder = test_codex()
+    let mut builder = apps_enabled_builder(apps_base_url)
         .with_auth(create_dummy_codex_auth())
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
-            config.include_apps_instructions = false;
+        .with_pre_build_hook(|codex_home| {
+            std::fs::write(
+                codex_home.join(codex_config::CONFIG_TOML_FILE),
+                "include_apps_instructions = false\n",
+            )
+            .expect("write Apps instruction config");
         });
     let codex = builder
         .build(&server)
         .await
         .expect("create new conversation")
         .codex;
+    wait_for_mcp_server_registration(&codex, CALENDAR_MCP_SERVER_NAME)
+        .await
+        .expect("Apps MCP registration");
 
     codex
         .submit(Op::UserInput {
@@ -1786,14 +1779,9 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
     )
     .await;
 
-    let mut builder = test_codex()
+    let mut builder = apps_enabled_builder(apps_base_url)
         .with_auth(create_dummy_codex_auth())
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
+        .with_config(|config| {
             config.orchestrator_mcp_enabled = false;
         });
     let codex = builder
@@ -1831,21 +1819,12 @@ async fn omits_apps_guidance_when_orchestrator_mcp_is_disabled() {
         "did not expect codex_apps MCP tools when orchestrator MCP is disabled, got {:?}",
         request.body_json()["tools"]
     );
-    let list_output = requests[1]
+    requests[1]
         .function_call_output_text(list_call_id)
         .expect("resource list output should be sent to the model");
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&list_output)
-            .expect("parse resource list output"),
-        json!({"resources": []})
-    );
-    let read_output = requests[2]
+    requests[2]
         .function_call_output_text(read_call_id)
         .expect("resource read output should be sent to the model");
-    assert!(
-        read_output.contains("disabled by `orchestrator.mcp.enabled`"),
-        "unexpected resource read output: {read_output}"
-    );
 
     let resource_methods = server
         .received_requests()

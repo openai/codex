@@ -23,6 +23,9 @@ jobs:
       - name: Verify codex-tui does not import codex-core directly
         run: python3 .github/scripts/verify_tui_core_boundary.py
 
+      - name: Verify Codex Apps stays outside core and the generic MCP runtime
+        run: python3 .github/scripts/verify_codex_apps_mcp_boundary.py
+
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 

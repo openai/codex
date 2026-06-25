@@ -125,6 +125,7 @@ pub use mcp_types::McpServerEnvVar;
 pub use mcp_types::McpServerOAuthConfig;
 pub use mcp_types::McpServerToolConfig;
 pub use mcp_types::McpServerTransportConfig;
+pub use mcp_types::McpToolApproval;
 pub use mcp_types::RawMcpServerConfig;
 pub use merge::merge_toml_values;
 pub use overrides::build_cli_overrides_layer;

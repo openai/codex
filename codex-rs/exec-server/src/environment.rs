@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::Weak;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -27,6 +28,7 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use tokio_util::task::AbortOnDropHandle;
+use uuid::Uuid;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
@@ -55,8 +57,48 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 pub struct EnvironmentManager {
     default_environment: Option<String>,
     pub(super) environments: RwLock<HashMap<String, Arc<Environment>>>,
+    retired_environments: Mutex<HashMap<(String, String), Weak<Environment>>>,
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+/// Immutable view of the named environments available at one point in time.
+///
+/// The map is cloned under the registry lock so callers retain the exact environment instances
+/// they resolved against while concurrent updates publish replacements.
+#[derive(Clone, Debug)]
+pub struct EnvironmentRegistrySnapshot {
+    environments: HashMap<String, Arc<Environment>>,
+}
+
+impl EnvironmentRegistrySnapshot {
+    /// Returns the named environment retained by this snapshot.
+    pub fn get_environment(&self, environment_id: &str) -> Option<Arc<Environment>> {
+        self.environments.get(environment_id).cloned()
+    }
+
+    /// Replaces named entries with concrete generations pinned by a thread or turn.
+    pub fn with_overrides(
+        mut self,
+        overrides: impl IntoIterator<Item = (String, Arc<Environment>)>,
+    ) -> Self {
+        self.environments.extend(overrides);
+        self
+    }
+
+    /// Returns whether both snapshots retain the same named environment generations.
+    pub fn retains_same_instances(&self, other: &Self) -> bool {
+        self.environments.len() == other.environments.len()
+            && self
+                .environments
+                .iter()
+                .all(|(environment_id, environment)| {
+                    other
+                        .environments
+                        .get(environment_id)
+                        .is_some_and(|other| Arc::ptr_eq(environment, other))
+                })
+    }
 }
 
 pub const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -71,6 +113,7 @@ impl EnvironmentManager {
                 LOCAL_ENVIRONMENT_ID.to_string(),
                 Arc::new(Environment::default_for_tests()),
             )])),
+            retired_environments: Mutex::new(HashMap::new()),
             local_environment: Some(Arc::new(Environment::default_for_tests())),
             local_runtime_paths: None,
         }
@@ -81,6 +124,7 @@ impl EnvironmentManager {
         Self {
             default_environment: None,
             environments: RwLock::new(HashMap::new()),
+            retired_environments: Mutex::new(HashMap::new()),
             local_environment: None,
             local_runtime_paths: None,
         }
@@ -141,6 +185,7 @@ impl EnvironmentManager {
         let manager = Self {
             default_environment: Some(REMOTE_ENVIRONMENT_ID.to_string()),
             environments: RwLock::new(HashMap::new()),
+            retired_environments: Mutex::new(HashMap::new()),
             local_environment: None,
             local_runtime_paths,
         };
@@ -229,6 +274,7 @@ impl EnvironmentManager {
         Ok(Self {
             default_environment,
             environments: RwLock::new(environment_map),
+            retired_environments: Mutex::new(HashMap::new()),
             local_environment,
             local_runtime_paths,
         })
@@ -286,6 +332,59 @@ impl EnvironmentManager {
             .cloned()
     }
 
+    /// Resolves one concrete environment generation retained by an active caller.
+    pub fn get_environment_instance(
+        &self,
+        environment_id: &str,
+        instance_id: &str,
+    ) -> Option<Arc<Environment>> {
+        if let Some(environment) = self.get_environment(environment_id)
+            && environment.instance_id() == instance_id
+        {
+            return Some(environment);
+        }
+        let key = (environment_id.to_string(), instance_id.to_string());
+        let mut retired = self
+            .retired_environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let environment = retired.get(&key).and_then(Weak::upgrade);
+        if environment.is_none() {
+            retired.remove(&key);
+        }
+        environment
+    }
+
+    /// Captures the current named environments atomically.
+    pub fn registry_snapshot(&self) -> EnvironmentRegistrySnapshot {
+        let environments = self
+            .environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        EnvironmentRegistrySnapshot {
+            environments: environments.clone(),
+        }
+    }
+
+    fn publish_environment(&self, environment_id: String, environment: Arc<Environment>) {
+        let mut environments = self
+            .environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let replaced = environments.insert(environment_id.clone(), environment);
+        let mut retired = self
+            .retired_environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retired.retain(|_, environment| environment.strong_count() > 0);
+        if let Some(replaced) = replaced {
+            retired.insert(
+                (environment_id, replaced.instance_id().to_string()),
+                Arc::downgrade(&replaced),
+            );
+        }
+    }
+
     /// Adds or replaces a named remote environment without changing the
     /// manager's default environment selection. Uses the default WebSocket
     /// connection timeout when none is provided.
@@ -319,10 +418,7 @@ impl EnvironmentManager {
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+        self.publish_environment(environment_id, environment);
         Ok(())
     }
 
@@ -351,10 +447,7 @@ impl EnvironmentManager {
             self.local_runtime_paths.clone(),
         ));
         environment.start_connecting();
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, environment);
+        self.publish_environment(environment_id, environment);
         Ok(())
     }
 }
@@ -412,6 +505,7 @@ fn optional_environment_value(name: &str) -> Option<String> {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
+    instance_id: String,
     exec_server_url: Option<String>,
     remote_client: Option<LazyRemoteExecServerClient>,
     // Dropping the environment stops unfinished background startup work.
@@ -426,6 +520,7 @@ impl Environment {
     /// Builds a test-only local environment without configured sandbox helper paths.
     pub fn default_for_tests() -> Self {
         Self {
+            instance_id: Uuid::new_v4().simple().to_string(),
             exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -483,6 +578,7 @@ impl Environment {
 
     pub(crate) fn local(local_runtime_paths: ExecServerRuntimePaths) -> Self {
         Self {
+            instance_id: Uuid::new_v4().simple().to_string(),
             exec_server_url: None,
             remote_client: None,
             startup_task: Arc::new(Mutex::new(None)),
@@ -528,6 +624,7 @@ impl Environment {
             Arc::new(RemoteFileSystem::new(client.clone()));
 
         Self {
+            instance_id: Uuid::new_v4().simple().to_string(),
             exec_server_url,
             remote_client: Some(client.clone()),
             startup_task: Arc::new(Mutex::new(None)),
@@ -540,6 +637,14 @@ impl Environment {
 
     pub fn is_remote(&self) -> bool {
         self.remote_client.is_some()
+    }
+
+    /// Returns the opaque identity of this concrete environment instance.
+    ///
+    /// Clones retain the same identity, while a replacement environment gets a
+    /// new identity even when it is registered under the same name.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
@@ -653,6 +758,42 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
+    }
+
+    #[tokio::test]
+    async fn replaced_environment_instance_remains_resolvable_only_while_pinned() {
+        let manager = EnvironmentManager::without_environments();
+        manager
+            .upsert_environment(
+                "workspace".to_string(),
+                "ws://127.0.0.1:1".to_string(),
+                /*connect_timeout*/ None,
+            )
+            .expect("publish first environment");
+        let pinned = manager
+            .get_environment("workspace")
+            .expect("first environment");
+        let pinned_instance_id = pinned.instance_id().to_string();
+
+        manager
+            .upsert_environment(
+                "workspace".to_string(),
+                "ws://127.0.0.1:2".to_string(),
+                /*connect_timeout*/ None,
+            )
+            .expect("replace environment");
+        let retained = manager
+            .get_environment_instance("workspace", &pinned_instance_id)
+            .expect("pinned generation remains resolvable");
+        assert!(Arc::ptr_eq(&pinned, &retained));
+
+        drop(pinned);
+        drop(retained);
+        assert!(
+            manager
+                .get_environment_instance("workspace", &pinned_instance_id)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1030,6 +1171,7 @@ mod tests {
         assert!(second.is_remote());
         assert_eq!(second.exec_server_url(), Some("ws://127.0.0.1:9876"));
         assert!(!Arc::ptr_eq(&first, &second));
+        assert_ne!(first.instance_id(), second.instance_id());
     }
 
     #[tokio::test]

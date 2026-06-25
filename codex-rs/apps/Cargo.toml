@@ -1,0 +1,55 @@
+[package]
+name = "codex-apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+axum = { workspace = true, default-features = false, features = ["http1", "tokio"] }
+base64 = { workspace = true }
+codex-api = { workspace = true }
+codex-config = { workspace = true }
+codex-connectors = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-mcp = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+codex-rmcp-client = { workspace = true }
+codex-utils-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+codex-utils-string = { workspace = true }
+constant_time_eq = { workspace = true }
+futures = { workspace = true }
+rand = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "client",
+    "elicitation",
+    "server",
+    "transport-async-rw",
+    "transport-streamable-http-server",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+async-channel = { workspace = true }
+codex-test-binary-support = { workspace = true }
+ctor = { workspace = true }
+http = { workspace = true }
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync", "test-util", "time"] }
+wiremock = { workspace = true }
+
+[lib]
+doctest = false

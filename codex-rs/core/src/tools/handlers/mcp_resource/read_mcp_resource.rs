@@ -19,7 +19,6 @@ use super::ReadResourcePayload;
 use super::call_tool_result_from_content;
 use super::emit_tool_call_begin;
 use super::emit_tool_call_end;
-use super::ensure_model_can_access_mcp_server;
 use super::normalize_required_string;
 use super::parse_args;
 use super::parse_arguments;
@@ -85,7 +84,6 @@ impl ReadMcpResourceHandler {
         let start = Instant::now();
 
         let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
-            ensure_model_can_access_mcp_server(turn.as_ref(), &server)?;
             let result = manager
                 .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
                 .await

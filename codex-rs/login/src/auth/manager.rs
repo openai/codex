@@ -2028,6 +2028,23 @@ impl AuthManager {
         self.auth_change_tx.subscribe()
     }
 
+    /// Returns auth together with a revision that stayed unchanged while auth was resolved.
+    ///
+    /// Resolving auth can refresh and replace the cached credentials. Callers that retain auth
+    /// alongside revision-scoped runtime state should use this method instead of coordinating
+    /// [`Self::auth`] with [`Self::auth_change_receiver`] themselves.
+    pub async fn auth_with_revision(&self) -> (Option<CodexAuth>, u64) {
+        let revision = self.auth_change_receiver();
+        loop {
+            let before = *revision.borrow();
+            let auth = self.auth().await;
+            let after = *revision.borrow();
+            if before == after {
+                return (auth, after);
+            }
+        }
+    }
+
     pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
         self.inner.read().ok().and_then(|cached| {
             cached

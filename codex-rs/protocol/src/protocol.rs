@@ -591,7 +591,7 @@ pub enum Op {
     ResolveElicitation {
         /// Name of the MCP server that issued the request.
         server_name: String,
-        /// Request identifier from the MCP server.
+        /// Opaque identifier from the corresponding elicitation request event.
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
@@ -627,6 +627,9 @@ pub enum Op {
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
+
+    /// Rebuild MCP servers from the session's current sourceful config.
+    RefreshMcpServersFromCurrentConfig,
 
     /// Reload user config layer overrides for the active session.
     ///
@@ -838,6 +841,7 @@ impl Op {
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
+            Self::RefreshMcpServersFromCurrentConfig => "refresh_mcp_servers_from_current_config",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
