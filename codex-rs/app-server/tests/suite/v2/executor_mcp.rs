@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
+use axum::Router;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -17,13 +18,32 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
+use rmcp::handler::server::ServerHandler;
+use rmcp::model::CallToolRequestParams;
+use rmcp::model::CallToolResult;
+use rmcp::model::JsonObject;
+use rmcp::model::ListToolsResult;
+use rmcp::model::ServerCapabilities;
+use rmcp::model::ServerInfo;
+use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
+use rmcp::service::RequestContext;
+use rmcp::service::RoleServer;
+use rmcp::transport::StreamableHttpServerConfig;
+use rmcp::transport::StreamableHttpService;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::json;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
+const EXECUTOR_HTTP_MCP_URL: &str = "http://executor-only.invalid/mcp";
+const HTTP_MCP_SERVER_NAME: &str = "executor_http";
 const MCP_SERVER_NAME: &str = "executor_demo";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
 const EXECUTOR_ENV_VALUE: &str = "executor-only";
@@ -32,8 +52,19 @@ const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_executor_plugin_exposes_its_stdio_mcp_only_to_that_thread() -> Result<()> {
+async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
+    let http_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let http_addr = http_listener.local_addr()?;
+    let http_mcp_service = StreamableHttpService::new(
+        || Ok(ExecutorHttpMcpServer),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default().with_allowed_hosts(["executor-only.invalid"]),
+    );
+    let http_router = Router::new().nest_service("/mcp", http_mcp_service);
+    let http_server_handle = tokio::spawn(async move {
+        let _ = axum::serve(http_listener, http_router).await;
+    });
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
         codex_home.path(),
@@ -44,6 +75,12 @@ async fn selected_executor_plugin_exposes_its_stdio_mcp_only_to_that_thread() ->
         "mock_provider",
         "compact",
     )?;
+    let codex_bin = toml::Value::String(
+        codex_utils_cargo_bin::cargo_bin("codex")?
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let http_proxy = toml::Value::String(format!("http://{http_addr}"));
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
@@ -52,16 +89,12 @@ include_local = true
 
 [[environments]]
 id = "{EXECUTOR_ID}"
-program = {}
+program = {codex_bin}
 args = ["exec-server", "--listen", "stdio"]
 [environments.env]
 {EXECUTOR_ENV_NAME} = "{EXECUTOR_ENV_VALUE}"
-"#,
-            toml::Value::String(
-                codex_utils_cargo_bin::cargo_bin("codex")?
-                    .to_string_lossy()
-                    .into_owned()
-            )
+HTTP_PROXY = {http_proxy}
+"#
         ),
     )?;
 
@@ -78,6 +111,11 @@ args = ["exec-server", "--listen", "stdio"]
                 (MCP_SERVER_NAME): {
                     "command": stdio_server_bin()?,
                     "env_vars": [EXECUTOR_ENV_NAME],
+                    "startup_timeout_sec": 10,
+                },
+                (HTTP_MCP_SERVER_NAME): {
+                    "url": EXECUTOR_HTTP_MCP_URL,
+                    "environment_id": "local",
                     "startup_timeout_sec": 10,
                 }
             }
@@ -181,6 +219,26 @@ startup_timeout_sec = 10
     let request_id = app_server
         .send_mcp_server_tool_call_request(McpServerToolCallParams {
             thread_id: selected_thread.clone(),
+            server: HTTP_MCP_SERVER_NAME.to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({"message": "hello over executor HTTP"})),
+            meta: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(response)?;
+    assert_eq!(
+        response.structured_content,
+        Some(json!({"echo": "ECHOING: hello over executor HTTP"}))
+    );
+
+    let request_id = app_server
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: selected_thread.clone(),
             server: REFRESH_PROBE_SERVER_NAME.to_string(),
             tool: "echo".to_string(),
             arguments: Some(json!({"message": "refresh applied"})),
@@ -200,23 +258,82 @@ startup_timeout_sec = 10
         Some(json!("ECHOING: refresh applied"))
     );
 
+    let selected_server_names = mcp_server_names(&mut app_server, selected_thread).await?;
     assert!(
-        mcp_server_names(&mut app_server, selected_thread)
-            .await?
+        selected_server_names
             .iter()
             .any(|name| name == MCP_SERVER_NAME)
+    );
+    assert!(
+        selected_server_names
+            .iter()
+            .any(|name| name == HTTP_MCP_SERVER_NAME)
     );
 
     let unselected_thread =
         start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
+    let unselected_server_names = mcp_server_names(&mut app_server, unselected_thread).await?;
     assert!(
-        mcp_server_names(&mut app_server, unselected_thread)
-            .await?
+        unselected_server_names
             .iter()
-            .all(|name| name != MCP_SERVER_NAME)
+            .all(|name| { name != MCP_SERVER_NAME && name != HTTP_MCP_SERVER_NAME })
     );
 
+    http_server_handle.abort();
+    let _ = http_server_handle.await;
+
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ExecutorHttpMcpServer;
+
+impl ServerHandler for ExecutorHttpMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        let input_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+            "additionalProperties": false
+        }))
+        .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))?;
+        let mut tool = Tool::new(
+            Cow::Borrowed("echo"),
+            Cow::Borrowed("Echo a message."),
+            Arc::new(input_schema),
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+
+        Ok(ListToolsResult {
+            tools: vec![tool],
+            next_cursor: None,
+            meta: None,
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let message = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("message"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        Ok(CallToolResult::structured(json!({
+            "echo": format!("ECHOING: {message}")
+        })))
+    }
 }
 
 async fn mcp_server_names(
