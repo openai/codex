@@ -12,6 +12,7 @@ use crate::render::available_skills_fragment;
 pub(crate) const SKILLS_WORLD_STATE_ID: &str = "skills";
 const NO_EXECUTOR_SKILLS_BODY: &str =
     "\n## Skills update\nNo selected-environment skills are currently available.\n";
+const HIDDEN_EXECUTOR_SKILLS_BODY: &str = "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
 
 pub(crate) fn executor_skills_world_state_section(
     catalog: &SkillCatalog,
@@ -22,24 +23,25 @@ pub(crate) fn executor_skills_world_state_section(
     } else {
         None
     };
-    let snapshot = json!({"body": body});
+    let snapshot = json!({
+        "body": body,
+        "includeInstructions": include_instructions,
+    });
+    let current_snapshot = snapshot.clone();
 
     WorldStateSectionContribution::new(SKILLS_WORLD_STATE_ID, snapshot, move |previous| {
         let previous_is_absent = matches!(&previous, PreviousWorldStateSection::Absent);
-        let previous_is_known = matches!(&previous, PreviousWorldStateSection::Known(_));
-        let previous_body = match &previous {
-            PreviousWorldStateSection::Known(previous) => {
-                previous.get("body").and_then(serde_json::Value::as_str)
-            }
-            PreviousWorldStateSection::Absent | PreviousWorldStateSection::Unknown => None,
-        };
-        if previous_is_known && previous_body == body.as_deref() {
+        if matches!(
+            &previous,
+            PreviousWorldStateSection::Known(previous) if *previous == &current_snapshot
+        ) {
             return None;
         }
 
         let body = match body.as_deref() {
             Some(body) => body,
             None if previous_is_absent => return None,
+            None if !include_instructions => HIDDEN_EXECUTOR_SKILLS_BODY,
             None => NO_EXECUTOR_SKILLS_BODY,
         };
         Some(RenderedWorldStateFragment::new(

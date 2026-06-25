@@ -286,11 +286,40 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             turn_store: &restored_turn_store,
         })
         .await;
+    let restored_snapshot = restored_sections[0].snapshot().clone();
     let restored_fragment = restored_sections[0]
         .render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot))
         .ok_or("restored skills should render")?;
     assert!(restored_fragment.body().contains("lint-fix"));
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
+
+    let mut listing_disabled_config = config.clone();
+    listing_disabled_config.include_instructions = false;
+    registry.config_contributors()[0].on_config_changed(
+        &session_store,
+        &thread_store,
+        &config,
+        &listing_disabled_config,
+    );
+    let listing_disabled_turn_store = ExtensionData::new("turn-4");
+    let listing_disabled_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-4",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &listing_disabled_turn_store,
+        })
+        .await;
+    let listing_disabled_fragment = listing_disabled_sections[0]
+        .render_diff(PreviousWorldStateSection::Known(&restored_snapshot))
+        .ok_or("disabled skill listing should render")?;
+    assert_eq!(
+        "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n",
+        listing_disabled_fragment.body()
+    );
 
     Ok(())
 }
