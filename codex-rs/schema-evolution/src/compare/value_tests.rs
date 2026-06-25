@@ -2,58 +2,59 @@ use crate::ViolationKind;
 use crate::test_support::breakage;
 use crate::test_support::compare;
 use crate::test_support::request_schema;
+use crate::test_support::sorted;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
 fn detects_enum_type_and_bound_narrowing() -> anyhow::Result<()> {
+    let base = request_schema(json!({
+        "properties": {
+            "choice": { "enum": ["a", "b"], "type": "string" },
+            "length": { "minLength": 1, "type": "string" },
+            "numeric": { "type": "number" },
+            "value": { "type": ["string", "null"] }
+        },
+        "type": "object"
+    }));
+    let current = request_schema(json!({
+        "properties": {
+            "choice": { "enum": ["a"], "type": "string" },
+            "length": { "minLength": 2, "type": "string" },
+            "numeric": { "type": "integer" },
+            "value": { "type": "string" }
+        },
+        "type": "object"
+    }));
+
     assert_eq!(
-        compare(
-            &request_schema(json!({ "enum": ["a", "b"], "type": "string" })),
-            &request_schema(json!({ "enum": ["a"], "type": "string" })),
-        )?,
-        vec![breakage(
-            ViolationKind::EnumNarrowed,
-            "params",
-            json!(["a", "b"]),
-            json!(["a"]),
-        )]
-    );
-    assert_eq!(
-        compare(
-            &request_schema(json!({ "type": "number" })),
-            &request_schema(json!({ "type": "integer" })),
-        )?,
-        vec![breakage(
-            ViolationKind::TypeNarrowed,
-            "params",
-            json!("number"),
-            json!("integer"),
-        )]
-    );
-    assert_eq!(
-        compare(
-            &request_schema(json!({ "type": ["string", "null"] })),
-            &request_schema(json!({ "type": "string" })),
-        )?,
-        vec![breakage(
-            ViolationKind::TypeNarrowed,
-            "params",
-            json!(["null", "string"]),
-            json!("string"),
-        )]
-    );
-    assert_eq!(
-        compare(
-            &request_schema(json!({ "minLength": 1, "type": "string" })),
-            &request_schema(json!({ "minLength": 2, "type": "string" })),
-        )?,
-        vec![breakage(
-            ViolationKind::ConstraintChanged,
-            "params",
-            json!({ "minLength": 1 }),
-            json!({ "minLength": 2 }),
-        )]
+        compare(&base, &current)?,
+        sorted(vec![
+            breakage(
+                ViolationKind::EnumNarrowed,
+                "params.choice",
+                json!(["a", "b"]),
+                json!(["a"]),
+            ),
+            breakage(
+                ViolationKind::ConstraintChanged,
+                "params.length",
+                json!({ "minLength": 1 }),
+                json!({ "minLength": 2 }),
+            ),
+            breakage(
+                ViolationKind::TypeNarrowed,
+                "params.numeric",
+                json!("number"),
+                json!("integer"),
+            ),
+            breakage(
+                ViolationKind::TypeNarrowed,
+                "params.value",
+                json!(["null", "string"]),
+                json!("string"),
+            ),
+        ])
     );
     Ok(())
 }

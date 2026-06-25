@@ -5,7 +5,9 @@ mod object;
 mod union;
 mod value;
 
+pub(crate) use array::AdditionalItems;
 pub(crate) use array::ArraySchema;
+pub(crate) use array::Items;
 pub(crate) use constraints::ConstraintSet;
 pub(crate) use constraints::annotation;
 pub(crate) use constraints::normalized;
@@ -13,6 +15,7 @@ pub(crate) use constraints::normalized;
 pub(crate) use method::Argument;
 pub(crate) use method::Arguments;
 pub(crate) use method::Method;
+pub(crate) use object::AdditionalProperties;
 pub(crate) use object::ObjectSchema;
 pub(crate) use union::UnionKind;
 pub(crate) use union::UnionSchema;

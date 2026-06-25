@@ -39,6 +39,11 @@ pub enum Violation {
         before: Option<ValueSet>,
         after: ValueSet,
     },
+    AdditionalPropertiesNarrowed {
+        at: Location,
+        before: AdditionalPropertiesValue,
+        after: AdditionalPropertiesValue,
+    },
     ConstraintChanged {
         at: Location,
         before: SchemaSnapshot,
@@ -64,6 +69,16 @@ pub struct SchemaPath(Vec<PathSegment>);
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum PathSegment {
     Property(String),
+    Items,
+    TupleItem(usize),
+    AdditionalProperties,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdditionalPropertiesValue {
+    Any,
+    Forbidden,
+    Schema(Value),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,6 +110,24 @@ impl SchemaPath {
         path
     }
 
+    pub(crate) fn items(&self) -> Self {
+        let mut path = self.clone();
+        path.0.push(PathSegment::Items);
+        path
+    }
+
+    pub(crate) fn tuple_item(&self, index: usize) -> Self {
+        let mut path = self.clone();
+        path.0.push(PathSegment::TupleItem(index));
+        path
+    }
+
+    pub(crate) fn additional_properties(&self) -> Self {
+        let mut path = self.clone();
+        path.0.push(PathSegment::AdditionalProperties);
+        path
+    }
+
     pub(crate) fn starts_with_params(&self) -> bool {
         matches!(self.0.first(), Some(PathSegment::Property(name)) if name == "params")
     }
@@ -106,9 +139,23 @@ impl fmt::Display for SchemaPath {
             match segment {
                 PathSegment::Property(name) if index == 0 => formatter.write_str(name)?,
                 PathSegment::Property(name) => write!(formatter, ".{name}")?,
+                PathSegment::Items => formatter.write_str("[]")?,
+                PathSegment::TupleItem(index) => write!(formatter, "[{index}]")?,
+                PathSegment::AdditionalProperties if index == 0 => formatter.write_str("*")?,
+                PathSegment::AdditionalProperties => formatter.write_str(".*")?,
             }
         }
         Ok(())
+    }
+}
+
+impl AdditionalPropertiesValue {
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Any => Value::Bool(true),
+            Self::Forbidden => Value::Bool(false),
+            Self::Schema(value) => value.clone(),
+        }
     }
 }
 
@@ -146,6 +193,12 @@ impl Violation {
                 before.as_ref().map_or(Value::Null, ValueSet::to_json),
                 after.to_json(),
             ),
+            Self::AdditionalPropertiesNarrowed { at, before, after } => at_location(
+                ViolationKind::AdditionalPropertiesNarrowed,
+                at,
+                before.to_json(),
+                after.to_json(),
+            ),
             Self::ConstraintChanged { at, before, after } => at_location(
                 ViolationKind::ConstraintChanged,
                 at,
@@ -162,6 +215,7 @@ impl Violation {
             | Self::RequiredPropertyAdded { at }
             | Self::TypeNarrowed { at, .. }
             | Self::EnumNarrowed { at, .. }
+            | Self::AdditionalPropertiesNarrowed { at, .. }
             | Self::ConstraintChanged { at, .. } => Some(at),
         }
     }
@@ -179,6 +233,7 @@ impl Violation {
             | Self::RequiredPropertyAdded { at }
             | Self::TypeNarrowed { at, .. }
             | Self::EnumNarrowed { at, .. }
+            | Self::AdditionalPropertiesNarrowed { at, .. }
             | Self::ConstraintChanged { at, .. } => Some(at),
         }
     }
@@ -199,3 +254,7 @@ fn at_location(kind: ViolationKind, at: &Location, before: Value, after: Value) 
         after,
     }
 }
+
+#[cfg(test)]
+#[path = "violation_tests.rs"]
+mod tests;
