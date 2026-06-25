@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_permission_profile_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
@@ -1110,6 +1111,8 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
+        let active_permission_profile = context.turn.config.permissions.active_permission_profile();
+        inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(
