@@ -2158,7 +2158,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
     PluginSummary {
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
-        local_version: None,
+        local_version: summary.local_version,
         name: summary.name,
         share_context: summary
             .share_context
