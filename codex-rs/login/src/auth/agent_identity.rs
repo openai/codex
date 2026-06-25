@@ -59,10 +59,6 @@ pub enum AgentIdentityAuthError {
 }
 
 impl AgentIdentityAuthError {
-    pub fn is_bootstrap_unavailable(error: &std::io::Error) -> bool {
-        Self::bootstrap_unavailable(error).is_some()
-    }
-
     pub(super) fn bootstrap_unavailable(error: &std::io::Error) -> Option<&Self> {
         match error
             .get_ref()
