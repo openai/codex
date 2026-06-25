@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
@@ -21,6 +22,8 @@ use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
+use codex_otel::SessionTelemetry;
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
@@ -133,7 +136,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             cwd: turn_context.cwd.clone(),
             transcript_path: sess.hook_transcript_path().await,
             model: turn_context.model_info.slug.clone(),
-            permission_mode: hook_permission_mode(turn_context),
+            permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
             target,
         };
         let hooks = sess.hooks();
@@ -175,7 +178,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
+        permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
         tool_name: tool_name.name().to_string(),
         matcher_aliases: tool_name.matcher_aliases().to_vec(),
         tool_use_id,
@@ -236,7 +239,7 @@ pub(crate) async fn run_permission_request_hooks(
         cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
+        permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
         tool_name: payload.tool_name.name().to_string(),
         matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
         run_id_suffix: run_id_suffix.to_string(),
@@ -278,7 +281,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
+        permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
         tool_name,
         matcher_aliases,
         tool_use_id,
@@ -352,7 +355,7 @@ pub(crate) async fn run_turn_stop_hooks(
         cwd: turn_context.cwd.clone(),
         transcript_path,
         model: turn_context.model_info.slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
+        permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
         stop_hook_active,
         last_assistant_message,
         target,
@@ -512,7 +515,7 @@ pub(crate) async fn inspect_pending_input(
                 cwd: turn_context.cwd.clone(),
                 transcript_path: sess.hook_transcript_path().await,
                 model: turn_context.model_info.slug.clone(),
-                permission_mode: hook_permission_mode(turn_context),
+                permission_mode: hook_permission_mode(turn_context.approval_policy.value()),
                 prompt: UserMessageItem::new(content).message(),
             };
             let hooks = sess.hooks();
@@ -637,22 +640,47 @@ pub(crate) async fn emit_hook_completed_events(
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {
-        emit_hook_completed_metrics(turn_context, &completed);
+        emit_hook_completed_metrics(&turn_context.session_telemetry, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
 }
 
-fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompletedEvent) {
+/// Records a thread-scoped hook completion before a [`TurnContext`] exists.
+///
+/// Ordinary hooks flow through [`emit_hook_completed_events`]. Instruction
+/// resolution happens earlier, so it needs the same metrics and analytics
+/// without routing an unrelated queued event through the startup event loop.
+pub(crate) fn record_hook_completed_without_turn_context(
+    session_telemetry: &SessionTelemetry,
+    analytics_events_client: &AnalyticsEventsClient,
+    thread_id: ThreadId,
+    model_slug: &str,
+    originator: &str,
+    completed: &HookCompletedEvent,
+) {
+    emit_hook_completed_metrics(session_telemetry, completed);
+    let (tracking, hook) = hook_run_analytics_payload_from_parts(
+        model_slug.to_string(),
+        thread_id.to_string(),
+        completed.turn_id.clone().unwrap_or_default(),
+        originator.to_string(),
+        completed,
+    );
+    analytics_events_client.track_hook_run(tracking, hook);
+}
+
+fn emit_hook_completed_metrics(
+    session_telemetry: &SessionTelemetry,
+    completed: &HookCompletedEvent,
+) {
     let tags = hook_run_metric_tags(&completed.run);
-    turn_context
-        .session_telemetry
-        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
+    session_telemetry.counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
     if let Some(duration_ms) = completed.run.duration_ms
         && let Ok(duration_ms) = u64::try_from(duration_ms)
     {
-        turn_context.session_telemetry.record_duration(
+        session_telemetry.record_duration(
             HOOK_RUN_DURATION_METRIC,
             Duration::from_millis(duration_ms),
             &tags,
@@ -677,16 +705,27 @@ fn hook_run_analytics_payload(
     turn_context: &TurnContext,
     completed: &HookCompletedEvent,
 ) -> (codex_analytics::TrackEventsContext, HookRunFact) {
+    hook_run_analytics_payload_from_parts(
+        turn_context.model_info.slug.clone(),
+        thread_id,
+        completed
+            .turn_id
+            .clone()
+            .unwrap_or_else(|| turn_context.sub_id.clone()),
+        turn_context.originator.clone(),
+        completed,
+    )
+}
+
+fn hook_run_analytics_payload_from_parts(
+    model_slug: String,
+    thread_id: String,
+    turn_id: String,
+    originator: String,
+    completed: &HookCompletedEvent,
+) -> (codex_analytics::TrackEventsContext, HookRunFact) {
     (
-        build_track_events_context(
-            turn_context.model_info.slug.clone(),
-            thread_id,
-            completed
-                .turn_id
-                .clone()
-                .unwrap_or_else(|| turn_context.sub_id.clone()),
-            turn_context.originator.clone(),
-        ),
+        build_track_events_context(model_slug, thread_id, turn_id, originator),
         HookRunFact {
             event_name: completed.run.event_name,
             hook_source: completed.run.source,
@@ -737,8 +776,8 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
     ]
 }
 
-fn hook_permission_mode(turn_context: &TurnContext) -> String {
-    match turn_context.approval_policy.value() {
+pub(crate) fn hook_permission_mode(approval_policy: AskForApproval) -> String {
+    match approval_policy {
         AskForApproval::Never => "bypassPermissions",
         AskForApproval::UnlessTrusted | AskForApproval::OnRequest | AskForApproval::Granular(_) => {
             "default"

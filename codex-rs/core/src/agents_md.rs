@@ -32,6 +32,9 @@ use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
 
+mod hook_loading;
+pub(crate) use hook_loading::resolve_user_instructions;
+
 /// Default filename scanned for AGENTS.md instructions.
 pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for AGENTS.md instructions.
