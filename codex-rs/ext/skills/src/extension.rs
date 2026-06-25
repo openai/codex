@@ -18,7 +18,10 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_extension_api::WorldStateContributionInput;
+use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
+use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -40,9 +43,11 @@ use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
 use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
+use crate::state::ExecutorSkillsStepState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 use crate::tools::skill_tools;
+use crate::world_state::executor_skills_world_state_section;
 
 struct SkillsExtension<C> {
     providers: SkillProviders,
@@ -120,7 +125,7 @@ where
                 .list_skills(
                     SkillListQuery {
                         turn_id: thread_store.level_id().to_string(),
-                        executor_roots: thread_state.selected_roots().to_vec(),
+                        executor_roots: Vec::new(),
                         host_snapshot: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,
@@ -137,6 +142,51 @@ where
                 .map(|fragment| PromptFragment::developer_capability(fragment.render()))
                 .into_iter()
                 .collect()
+        })
+    }
+
+    fn contribute_world_state<'a>(
+        &'a self,
+        input: WorldStateContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        Box::pin(async move {
+            let Some(thread_state) = input.thread_store.get::<SkillsThreadState>() else {
+                return Vec::new();
+            };
+            let config = thread_state.config();
+            let ready_roots = thread_state
+                .selected_roots()
+                .iter()
+                .filter(|root| {
+                    let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+                    input
+                        .environments
+                        .iter()
+                        .any(|environment| environment.environment_id == *environment_id)
+                })
+                .cloned()
+                .collect();
+            let catalog = thread_state
+                .executor_catalog_snapshot(
+                    &self.providers,
+                    SkillListQuery {
+                        turn_id: input.turn_id.to_string(),
+                        executor_roots: ready_roots,
+                        host_snapshot: None,
+                        include_host_skills: false,
+                        include_bundled_skills: config.bundled_skills_enabled,
+                        include_orchestrator_skills: false,
+                        mcp_resources: input.session_store.get::<McpResourceClient>(),
+                    },
+                )
+                .await;
+            input
+                .turn_store
+                .insert(ExecutorSkillsStepState(catalog.clone()));
+            vec![executor_skills_world_state_section(
+                &catalog,
+                config.include_instructions,
+            )]
         })
     }
 }
@@ -187,14 +237,17 @@ where
             let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
-                executor_roots: thread_state.selected_roots().to_vec(),
+                executor_roots: Vec::new(),
                 host_snapshot: host_snapshot.clone(),
                 include_host_skills: true,
                 include_bundled_skills: config.bundled_skills_enabled,
                 include_orchestrator_skills: thread_state.orchestrator_skills_enabled(),
                 mcp_resources: session_store.get::<McpResourceClient>(),
             };
-            let catalog = self.list_skills(query, &thread_state).await;
+            let mut catalog = self.list_skills(query, &thread_state).await;
+            if let Some(executor_skills) = turn_store.get::<ExecutorSkillsStepState>() {
+                catalog.extend(executor_skills.0.clone());
+            }
             for warning in &catalog.warnings {
                 self.emit_warning(&input.turn_id, warning.clone());
             }
