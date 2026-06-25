@@ -1,7 +1,8 @@
 //! Strict config validation built on top of serde's ignored-field tracking.
 
-use crate::RawMcpServerConfig;
 use crate::config_toml::ConfigToml;
+use crate::config_toml_layer::ConfigTomlComposableSections;
+use crate::config_toml_layer::split_config_toml_layer;
 use crate::diagnostics::ConfigDiagnosticSource;
 use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml_for_source;
@@ -10,17 +11,9 @@ use crate::diagnostics::span_for_config_path;
 use crate::diagnostics::span_for_toml_key_path;
 use crate::diagnostics::text_range_from_span;
 use codex_features::is_known_feature_key;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::path::Path;
 use toml::Value as TomlValue;
-
-#[derive(Deserialize)]
-struct ConfigTomlMcpServersLayer {
-    #[serde(default, rename = "mcp_servers")]
-    _mcp_servers: HashMap<String, RawMcpServerConfig>,
-}
 
 pub fn config_error_from_ignored_toml_fields<T: DeserializeOwned>(
     path: impl AsRef<Path>,
@@ -59,31 +52,25 @@ pub(crate) fn config_error_from_config_toml_layer_for_source_name(
     )
 }
 
-/// Strictly validate one config layer while allowing MCP server fragments to
-/// receive their transport from a lower-precedence layer.
 pub(crate) fn config_error_from_config_toml_layer_for_source(
     source: ConfigDiagnosticSource<'_>,
     contents: &str,
-    mut value: TomlValue,
+    value: TomlValue,
 ) -> Option<ConfigError> {
-    let mcp_servers = value
-        .as_table_mut()
-        .and_then(|table| table.remove("mcp_servers"));
+    let parts = split_config_toml_layer(value);
 
     if let Some(error) = config_error_from_ignored_toml_value_fields_for_source::<ConfigToml>(
-        source, contents, value,
+        source,
+        contents,
+        parts.self_contained,
     ) {
         return Some(error);
     }
 
-    let mcp_servers_layer = TomlValue::Table(toml::map::Map::from_iter([(
-        "mcp_servers".to_string(),
-        mcp_servers?,
-    )]));
-    config_error_from_ignored_toml_value_fields_for_source::<ConfigTomlMcpServersLayer>(
+    config_error_from_ignored_toml_value_fields_for_source::<ConfigTomlComposableSections>(
         source,
         contents,
-        mcp_servers_layer,
+        parts.composable,
     )
 }
 
