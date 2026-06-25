@@ -8,6 +8,28 @@ use serde::Serialize;
 use serde::Serializer;
 use serde::de::Error as _;
 
+/// Correlates one client operation request with the host's response.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct RequestId(i64);
+
+impl RequestId {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+}
+
+/// Correlates one host delegate request with the client's response.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct DelegateRequestId(i64);
+
+impl DelegateRequestId {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ProtocolVersion(NonZeroU32);
