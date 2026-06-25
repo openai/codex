@@ -19,8 +19,6 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
@@ -58,6 +56,8 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::ExplicitTurnState;
+use codex_rollout::RolloutTurnLifecycleTracker;
 use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -1754,28 +1754,22 @@ struct SnapshotTurnState {
 
 fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     let rollout_items = history.get_rollout_items();
-    let mut builder = ThreadHistoryBuilder::new();
+    let mut tracker = RolloutTurnLifecycleTracker::new();
     for item in rollout_items {
-        builder.handle_rollout_item(item);
+        tracker.handle_rollout_item(item);
     }
-    let active_turn_id = builder.active_turn_id_if_explicit();
-    if builder.has_active_turn() && active_turn_id.is_some() {
-        let active_turn_snapshot = builder.active_turn_snapshot();
-        if active_turn_snapshot
-            .as_ref()
-            .is_some_and(|turn| turn.status != TurnStatus::InProgress)
-        {
-            return SnapshotTurnState {
+    if let Some(active_turn) = tracker.current_explicit_turn() {
+        return match active_turn.state {
+            ExplicitTurnState::InProgress => SnapshotTurnState {
+                ends_mid_turn: true,
+                active_turn_id: Some(active_turn.turn_id.clone()),
+                active_turn_start_index: Some(active_turn.rollout_start_index),
+            },
+            ExplicitTurnState::Terminal => SnapshotTurnState {
                 ends_mid_turn: false,
                 active_turn_id: None,
                 active_turn_start_index: None,
-            };
-        }
-
-        return SnapshotTurnState {
-            ends_mid_turn: true,
-            active_turn_id,
-            active_turn_start_index: builder.active_turn_start_index(),
+            },
         };
     }
 

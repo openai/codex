@@ -15,6 +15,7 @@ pub(crate) mod search;
 pub(crate) mod session_index;
 mod sqlite_metrics;
 pub mod state_db;
+mod turn_lifecycle;
 
 pub(crate) use codex_protocol::protocol;
 
@@ -76,6 +77,9 @@ pub use session_index::find_thread_names_by_ids;
 pub use session_index::remove_thread_name_entries;
 pub use state_db::StateDbHandle;
 pub use state_db::sqlite_telemetry_recorder;
+pub use turn_lifecycle::CurrentExplicitTurn;
+pub use turn_lifecycle::ExplicitTurnState;
+pub use turn_lifecycle::RolloutTurnLifecycleTracker;
 
 #[cfg(test)]
 mod tests;
