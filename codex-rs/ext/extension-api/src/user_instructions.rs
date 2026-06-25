@@ -5,7 +5,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// User instructions supplied by the host.
 ///
-/// `source` must be an absolute filesystem path because the app-server
+/// `sources` must be absolute filesystem paths because the app-server
 /// `instructionSources` API currently exposes instruction sources as
 /// `AbsolutePathBuf` values.
 // TODO(anp): Replace the absolute path with a more general instruction-source
@@ -14,8 +14,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 pub struct UserInstructions {
     /// Model-visible user instruction text.
     pub text: String,
-    /// Absolute filesystem path reported through `instructionSources`.
-    pub source: AbsolutePathBuf,
+    /// Absolute filesystem paths reported through `instructionSources`.
+    pub sources: Vec<AbsolutePathBuf>,
 }
 
 /// Result of loading host-provided user instructions.

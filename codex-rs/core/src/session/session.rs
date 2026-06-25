@@ -1,9 +1,12 @@
 use super::input_queue::InputQueue;
 use super::*;
+use crate::agents_md::resolve_user_instructions;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::hook_runtime::hook_permission_mode;
+use crate::hook_runtime::record_hook_completed_without_turn_context;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -480,7 +483,7 @@ impl Session {
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
-        user_instructions: Option<codex_extension_api::UserInstructions>,
+        mut user_instructions: Option<codex_extension_api::UserInstructions>,
         installation_id: String,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
@@ -819,6 +822,13 @@ impl Session {
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
             }
+            let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
+                AnalyticsEventsClient::new(
+                    Arc::clone(&auth_manager),
+                    config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                    config.analytics_enabled,
+                )
+            });
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(thread_id.to_string()),
                 app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -899,6 +909,54 @@ impl Session {
             ));
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
+            let hooks = build_hooks_for_config(
+                &config,
+                plugins_manager.as_ref(),
+                resolved_environments.single_local_environment(),
+            )
+            .await;
+            for warning in hooks.startup_warnings() {
+                post_session_configured_events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: warning.clone(),
+                    }),
+                });
+            }
+
+            validate_config_lock_if_configured(&session_configuration).await?;
+            let model = session_configuration.collaboration_mode.model().to_string();
+            let originator = session_configuration.originator.clone();
+            let request = codex_hooks::UserInstructionsRequest {
+                session_id: session_id.into(),
+                cwd: PathUri::from_abs_path(session_configuration.cwd()),
+                command_cwd: resolved_environments
+                    .single_local_environment_cwd()
+                    .unwrap_or_else(|| config.codex_home.clone()),
+                transcript_path: rollout_path.clone(),
+                model: model.clone(),
+                permission_mode: hook_permission_mode(
+                    session_configuration.approval_policy.value(),
+                ),
+            };
+            let resolution = resolve_user_instructions(
+                &hooks,
+                request,
+                user_instructions,
+                |completed| {
+                    record_hook_completed_without_turn_context(
+                        &session_telemetry,
+                        &analytics_events_client,
+                        thread_id,
+                        &model,
+                        &originator,
+                        completed,
+                    );
+                },
+            )
+            .await;
+            user_instructions = resolution.instructions;
+            post_session_configured_events.extend(resolution.events);
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             agents_md_manager
                 .refresh(config.as_ref(), &resolved_environments)
@@ -929,7 +987,6 @@ impl Session {
                     ))
                     .await;
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
@@ -994,28 +1051,6 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks = build_hooks_for_config(
-                &config,
-                plugins_manager.as_ref(),
-                resolved_environments.single_local_environment(),
-            )
-            .await;
-            for warning in hooks.startup_warnings() {
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: warning.clone(),
-                    }),
-                });
-            }
-
-            let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
-                AnalyticsEventsClient::new(
-                    Arc::clone(&auth_manager),
-                    config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                    config.analytics_enabled,
-                )
-            });
             // Keep one stable manager handle for the session so extension resource clients
             // automatically observe the manager installed at startup and on later refreshes.
             let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(

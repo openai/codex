@@ -33,6 +33,9 @@ use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
 
+mod hook_loading;
+pub(crate) use hook_loading::resolve_user_instructions;
+
 /// Default filename scanned for AGENTS.md instructions.
 pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for AGENTS.md instructions.
@@ -255,7 +258,7 @@ impl LoadedAgentsMd {
         Self {
             user_instructions: Some(UserInstructions {
                 text: contents,
-                source: path,
+                sources: vec![path],
             }),
             entries: Vec::new(),
         }
@@ -396,7 +399,8 @@ impl LoadedAgentsMd {
     pub fn sources(&self) -> impl Iterator<Item = PathUri> + '_ {
         self.user_instructions
             .iter()
-            .map(|instructions| PathUri::from_abs_path(&instructions.source))
+            .flat_map(|instructions| instructions.sources.iter())
+            .map(PathUri::from_abs_path)
             .chain(
                 self.entries
                     .iter()

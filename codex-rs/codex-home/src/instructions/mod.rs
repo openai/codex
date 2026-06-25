@@ -54,7 +54,7 @@ impl CodexHomeUserInstructionsProvider {
                 return LoadedUserInstructions {
                     instructions: Some(UserInstructions {
                         text: trimmed.to_string(),
-                        source: path,
+                        sources: vec![path],
                     }),
                     warnings,
                 };

@@ -426,7 +426,7 @@ async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -
 
     let user_instructions = instructions.map(|text| UserInstructions {
         text: text.to_owned(),
-        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        sources: vec![config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME)],
     });
     TestConfig {
         config,
@@ -475,7 +475,7 @@ async fn make_config_with_project_root_markers(
     config.project_doc_max_bytes = limit;
     let user_instructions = instructions.map(|text| UserInstructions {
         text: text.to_owned(),
-        source: config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        sources: vec![config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME)],
     });
     TestConfig {
         config,
@@ -944,7 +944,7 @@ secondary doc"#,
                     .user_instructions
                     .as_ref()
                     .expect("global instructions")
-                    .source,
+                    .sources[0],
             ),
             PathUri::from_abs_path(&primary.path().join("AGENTS.md").abs()),
             PathUri::from_abs_path(&primary_nested.join("AGENTS.md").abs()),
@@ -1278,7 +1278,7 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     let expected = LoadedAgentsMd {
         user_instructions: Some(UserInstructions {
             text: "global doc".to_string(),
-            source: global_agents.clone(),
+            sources: vec![global_agents.clone()],
         }),
         entries: vec![InstructionEntry {
             contents: "project doc".to_string(),

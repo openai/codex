@@ -27,8 +27,10 @@ fn expected(
     LoadedUserInstructions {
         instructions: Some(UserInstructions {
             text: text.to_string(),
-            source: AbsolutePathBuf::try_from(home.path().join(filename))
-                .expect("absolute source path"),
+            sources: vec![
+                AbsolutePathBuf::try_from(home.path().join(filename))
+                    .expect("absolute source path"),
+            ],
         }),
         warnings,
     }
