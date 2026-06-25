@@ -86,6 +86,7 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
+        allow_provider_model_fallback: false,
         user_instructions,
         installation_id: parent_session.installation_id.clone(),
         auth_manager,

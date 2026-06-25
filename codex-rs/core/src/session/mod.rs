@@ -414,6 +414,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) allow_provider_model_fallback: bool,
     pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -503,6 +504,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            allow_provider_model_fallback,
             user_instructions,
             installation_id,
             auth_manager,
@@ -576,8 +578,23 @@ impl Codex {
             let _ = models_manager.list_models(refresh_strategy).await;
         }
         let model = models_manager
-            .get_default_model(&config.model, refresh_strategy)
+            .get_default_model(
+                &config.model,
+                allow_provider_model_fallback,
+                refresh_strategy,
+            )
             .await;
+        if allow_provider_model_fallback
+            && let Some(requested_model) = config.model.as_ref()
+            && model != *requested_model
+        {
+            info!(
+                model_provider = %config.model_provider_id,
+                requested_model,
+                fallback_model = %model,
+                "replaced unavailable requested model with provider default"
+            );
+        }
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
