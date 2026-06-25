@@ -58,28 +58,28 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
         &self,
         previous: PreviousSectionState<'_, Value>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
-        match previous {
-            PreviousSectionState::Absent => {
-                WorldStateSection::render_diff(self, PreviousSectionState::Absent)
-            }
-            PreviousSectionState::Unknown => {
-                WorldStateSection::render_diff(self, PreviousSectionState::Unknown)
-            }
+        let typed_snapshot;
+        let previous = match previous {
             PreviousSectionState::Known(previous) => {
-                let previous = match serde_json::from_value::<S::Snapshot>(previous.clone()) {
-                    Ok(previous) => previous,
+                match serde_json::from_value::<S::Snapshot>(previous.clone()) {
+                    Ok(previous) => {
+                        typed_snapshot = previous;
+                        PreviousSectionState::Known(&typed_snapshot)
+                    }
                     Err(err) => {
                         tracing::warn!(
                             section_id = S::ID,
                             %err,
                             "failed to restore world-state section snapshot"
                         );
-                        return WorldStateSection::render_diff(self, PreviousSectionState::Unknown);
+                        PreviousSectionState::Unknown
                     }
-                };
-                WorldStateSection::render_diff(self, PreviousSectionState::Known(&previous))
+                }
             }
-        }
+            PreviousSectionState::Absent => PreviousSectionState::Absent,
+            PreviousSectionState::Unknown => PreviousSectionState::Unknown,
+        };
+        WorldStateSection::render_diff(self, previous)
     }
 }
 
@@ -193,11 +193,9 @@ impl WorldState {
         &self,
         previous: &WorldStateSnapshot,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
-        self.render_with(|id, _| {
-            previous
-                .sections
-                .get(id)
-                .map_or(PreviousSectionState::Absent, PreviousSectionState::Known)
+        self.render_with(|id, _| match previous.sections.get(id) {
+            Some(previous) => PreviousSectionState::Known(previous),
+            None => PreviousSectionState::Absent,
         })
     }
 

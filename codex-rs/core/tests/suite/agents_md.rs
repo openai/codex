@@ -83,6 +83,7 @@ fn write_global_file(
 
 fn remove_agents_md_world_state_section(rollout_path: &Path) -> Result<()> {
     let rollout = std::fs::read_to_string(rollout_path)?;
+    let mut removed_section = false;
     let retained = rollout
         .lines()
         .map(serde_json::from_str::<RolloutLine>)
@@ -92,12 +93,16 @@ fn remove_agents_md_world_state_section(rollout_path: &Path) -> Result<()> {
             if let RolloutItem::WorldState(world_state) = &mut line.item
                 && let Some(state) = world_state.state.as_object_mut()
             {
-                state.remove("agents_md");
+                removed_section |= state.remove("agents_md").is_some();
             }
             serde_json::to_string(&line)
         })
         .collect::<std::result::Result<Vec<_>, _>>()?
         .join("\n");
+    anyhow::ensure!(
+        removed_section,
+        "rollout did not contain a persisted AGENTS.md WorldState section"
+    );
     std::fs::write(rollout_path, format!("{retained}\n"))?;
     Ok(())
 }
