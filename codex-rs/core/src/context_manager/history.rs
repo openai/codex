@@ -5,6 +5,7 @@ use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::rollout_history::is_user_turn_boundary;
 use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -16,7 +17,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
-use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -745,22 +745,6 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::AgentMessage { .. }
         | ResponseItem::Other => false,
     }
-}
-
-pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
-    if matches!(item, ResponseItem::AgentMessage { .. }) {
-        return true;
-    }
-    let ResponseItem::Message { role, content, .. } = item else {
-        return false;
-    };
-
-    (role == "user" && !is_contextual_user_message_content(content))
-        || (role == "assistant" && is_inter_agent_instruction_content(content))
-}
-
-fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
-    InterAgentCommunication::is_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
