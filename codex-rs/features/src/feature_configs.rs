@@ -147,7 +147,6 @@ pub struct CurrentTimeReminderConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1))]
     pub reminder_interval_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_source: Option<CurrentTimeSource>,

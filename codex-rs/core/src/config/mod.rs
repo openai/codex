@@ -2685,12 +2685,6 @@ fn resolve_current_time_reminder_config(
     let reminder_interval_seconds = base
         .and_then(|config| config.reminder_interval_seconds)
         .unwrap_or(default.reminder_interval_seconds);
-    if reminder_interval_seconds == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.current_time_reminder.reminder_interval_seconds must be positive",
-        ));
-    }
 
     Ok(Some(CurrentTimeReminderConfig {
         reminder_interval_seconds,
