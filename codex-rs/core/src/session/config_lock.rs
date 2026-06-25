@@ -361,6 +361,7 @@ mod tests {
                 enabled: Some(true),
                 reminder_interval_seconds: Some(1),
                 clock_source: Some(codex_features::CurrentTimeSource::System),
+                sleep_tool: Some(false),
             }))
         );
 

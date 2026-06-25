@@ -2,6 +2,7 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::SleepItem;
@@ -390,8 +391,12 @@ async fn any_new_input_interrupts_sleep() {
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::SleepTool)
-                .expect("test config should allow feature update");
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow current-time reminders");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                sleep_tool: true,
+                ..CurrentTimeReminderConfig::default()
+            });
         })
         .build_with_streaming_server(&server)
         .await

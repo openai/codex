@@ -151,6 +151,9 @@ pub struct CurrentTimeReminderConfigToml {
     pub reminder_interval_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clock_source: Option<CurrentTimeSource>,
+    /// Expose the input-interruptible `clock.sleep` tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleep_tool: Option<bool>,
 }
 
 impl FeatureConfig for CurrentTimeReminderConfigToml {

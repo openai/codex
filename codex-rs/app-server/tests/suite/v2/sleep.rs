@@ -167,7 +167,8 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
-[features]
+[features.current_time_reminder]
+enabled = true
 sleep_tool = true
 "#
         ),

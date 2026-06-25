@@ -625,10 +625,12 @@ current_time_reminder = true
 enabled = true
 reminder_interval_seconds = 4
 clock_source = "external"
+sleep_tool = true
 "#,
             CurrentTimeReminderConfig {
                 reminder_interval_seconds: 4,
                 clock_source: CurrentTimeSource::External,
+                sleep_tool: true,
             },
         ),
     ] {
