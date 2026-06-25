@@ -7,6 +7,7 @@
 //! not use this protocol, and non‑unified exec capture uses it only when running
 //! through the elevated runner.
 
+use crate::process::WindowsProcessLaunch;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -26,7 +27,7 @@ use std::path::PathBuf;
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 4;
+pub const IPC_PROTOCOL_VERSION: u8 = 5;
 
 /// Length-prefixed, JSON-encoded frame.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,7 +58,7 @@ pub enum Message {
 /// Spawn parameters sent from parent to runner.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SpawnRequest {
-    pub command: Vec<String>,
+    pub launch: WindowsProcessLaunch,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub permission_profile: PermissionProfile,
@@ -212,11 +213,15 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(PathBuf::from(r"C:\workspace"))
                 .expect("absolute workspace root"),
         ];
+        let launch = WindowsProcessLaunch {
+            application_path: Some(PathBuf::from(r"C:\Windows\System32\cmd.exe")),
+            command: vec!["cmd.exe".to_string(), "/c".to_string(), "ver".to_string()],
+        };
         let msg = FramedMessage {
             version: IPC_PROTOCOL_VERSION,
             message: Message::SpawnRequest {
                 payload: Box::new(SpawnRequest {
-                    command: vec!["cmd.exe".to_string(), "/c".to_string(), "ver".to_string()],
+                    launch: launch.clone(),
                     cwd: PathBuf::from(r"C:\workspace"),
                     env: HashMap::new(),
                     permission_profile: PermissionProfile::read_only(),
@@ -245,6 +250,7 @@ mod tests {
         };
         assert_eq!(PermissionProfile::read_only(), payload.permission_profile);
         assert_eq!(workspace_roots, payload.workspace_roots);
+        assert_eq!(launch, payload.launch);
     }
 
     #[test]

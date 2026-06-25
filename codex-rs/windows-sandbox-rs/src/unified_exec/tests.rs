@@ -1,11 +1,15 @@
 #![cfg(target_os = "windows")]
 
+use super::WindowsSandboxSessionRequest;
+use super::spawn_windows_sandbox_session_for_level;
 use super::spawn_windows_sandbox_session_legacy;
+use crate::WindowsProcessLaunch;
 use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
@@ -185,6 +189,56 @@ fn legacy_non_tty_cmd_emits_output() {
         let stdout = String::from_utf8_lossy(&stdout);
         assert_eq!(exit_code, 0, "stdout={stdout:?}");
         assert!(stdout.contains("LEGACY-NONTTY-CMD"), "stdout={stdout:?}");
+    });
+}
+
+#[test]
+fn legacy_non_tty_uses_explicit_application_path() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("legacy-explicit-application-path");
+        let permission_profile = PermissionProfile::workspace_write();
+        let workspace_roots = workspace_roots_for(cwd.as_path());
+        let spawned = spawn_windows_sandbox_session_for_level(WindowsSandboxSessionRequest {
+            permission_profile: &permission_profile,
+            workspace_roots: workspace_roots.as_slice(),
+            codex_home: codex_home.path(),
+            launch: WindowsProcessLaunch {
+                application_path: Some(PathBuf::from(r"C:\Windows\System32\cmd.exe")),
+                command: vec![
+                    "not-the-real-executable.exe".to_string(),
+                    "/c".to_string(),
+                    "echo EXPLICIT-APPLICATION-PATH".to_string(),
+                ],
+            },
+            cwd: cwd.as_path(),
+            env_map: HashMap::new(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            proxy_enforced: false,
+            proxy_settings_mode: crate::WindowsSandboxProxySettingsMode::Reconcile,
+            timeout_ms: Some(5_000),
+            read_roots_override: None,
+            read_roots_include_platform_defaults: false,
+            write_roots_override: None,
+            deny_read_paths_override: &[],
+            deny_write_paths_override: &[],
+            tty: false,
+            stdin_open: false,
+            use_private_desktop: true,
+        })
+        .await
+        .expect("spawn with explicit application path");
+
+        let (stdout, exit_code) =
+            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(10)).await;
+        let stdout = String::from_utf8_lossy(&stdout);
+        assert_eq!(exit_code, 0, "stdout={stdout:?}");
+        assert!(
+            stdout.contains("EXPLICIT-APPLICATION-PATH"),
+            "stdout={stdout:?}"
+        );
     });
 }
 

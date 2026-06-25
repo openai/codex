@@ -10,6 +10,7 @@ use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
+use crate::process::WindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::RunnerTransport;
 use crate::runner_client::retry_runner_spawn_once;
@@ -63,7 +64,7 @@ fn spawn_runner_transport_with_retry<T>(
 ) -> Result<T> {
     retry_runner_spawn_once(
         sandbox_creds,
-        &request.spawn_request.command,
+        &request.spawn_request.launch.command,
         |sandbox_creds| {
             spawn(
                 &request.codex_home,
@@ -112,7 +113,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    command: Vec<String>,
+    launch: WindowsProcessLaunch,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     proxy_enforced: bool,
@@ -145,7 +146,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         codex_home,
         cwd,
         &mut env_map,
-        &command,
+        &launch.command,
         read_roots_override,
         read_roots_include_platform_defaults,
         write_roots_override,
@@ -163,7 +164,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         env_map: env_map.clone(),
         logs_base_dir: elevated.logs_base_dir,
         spawn_request: SpawnRequest {
-            command,
+            launch,
             cwd: cwd.to_path_buf(),
             env: env_map,
             permission_profile: permission_profile.clone(),

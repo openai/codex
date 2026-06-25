@@ -164,6 +164,8 @@ pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
+pub use conpty::spawn_conpty_process_as_user_with_launch;
+#[cfg(target_os = "windows")]
 pub use deny_read_acl::apply_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::plan_deny_read_acl_paths;
@@ -241,11 +243,16 @@ pub use process::StderrMode;
 #[cfg(target_os = "windows")]
 pub use process::StdinMode;
 #[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use process::WindowsProcessLaunch;
+#[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
 #[cfg(target_os = "windows")]
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use process::spawn_process_with_pipes_with_launch;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
@@ -352,7 +359,9 @@ mod windows_impl {
     use super::WindowsSandboxCancellationToken;
     use super::logging::log_failure;
     use super::logging::log_success;
-    use super::process::create_process_as_user;
+    use super::process::CreateProcessAsUserRequest;
+    use super::process::WindowsProcessLaunch;
+    use super::process::create_process_as_user_with_launch;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
     use super::spawn_prep::SpawnPrepOptions;
@@ -561,15 +570,21 @@ mod windows_impl {
         )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
+        let launch = WindowsProcessLaunch {
+            application_path: None,
+            command: command.clone(),
+        };
         let spawn_res = unsafe {
-            create_process_as_user(
+            create_process_as_user_with_launch(
                 security.h_token,
-                &command,
-                cwd,
-                &env_map,
-                logs_base_dir,
-                Some((in_r, out_w, err_w)),
-                use_private_desktop,
+                CreateProcessAsUserRequest {
+                    launch: &launch,
+                    cwd,
+                    env_map: &env_map,
+                    logs_base_dir,
+                    stdio: Some((in_r, out_w, err_w)),
+                    use_private_desktop,
+                },
             )
         };
         let created = match spawn_res {

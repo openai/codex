@@ -9,6 +9,7 @@
 
 mod backends;
 
+use crate::process::WindowsProcessLaunch;
 use anyhow::Result;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -26,7 +27,7 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
     pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
-    pub command: Vec<String>,
+    pub launch: WindowsProcessLaunch,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -53,7 +54,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.command,
+            request.launch,
             request.cwd,
             request.env_map,
             request.proxy_enforced,
@@ -74,7 +75,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.command,
+            request.launch,
             request.cwd,
             request.env_map,
             request.timeout_ms,
@@ -103,11 +104,15 @@ pub async fn spawn_windows_sandbox_session_legacy(
     stdin_open: bool,
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
+    let launch = WindowsProcessLaunch {
+        application_path: None,
+        command,
+    };
     backends::legacy::spawn_windows_sandbox_session_legacy(
         permission_profile,
         workspace_roots,
         codex_home,
-        command,
+        launch,
         cwd,
         env_map,
         timeout_ms,
@@ -139,11 +144,15 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     stdin_open: bool,
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
+    let launch = WindowsProcessLaunch {
+        application_path: None,
+        command,
+    };
     backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
         permission_profile,
         workspace_roots,
         codex_home,
-        command,
+        launch,
         cwd,
         env_map,
         proxy_enforced,
