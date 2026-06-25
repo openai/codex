@@ -492,21 +492,18 @@ impl InMemoryThreadStore {
     ) -> ThreadStoreResult<StoredThreadHistory> {
         let mut state = self.state.lock().await;
         state.calls.load_history += 1;
-        if !state.histories.contains_key(&params.thread_id) {
-            return Err(ThreadStoreError::ThreadNotFound {
-                thread_id: params.thread_id,
-            });
-        }
+        let items =
+            state
+                .histories
+                .get(&params.thread_id)
+                .ok_or(ThreadStoreError::ThreadNotFound {
+                    thread_id: params.thread_id,
+                })?;
         let history_mode = history_mode_from_state(&state, params.thread_id);
         reject_paginated_history_mode(history_mode)?;
-        let items = state.histories.get(&params.thread_id).cloned().ok_or(
-            ThreadStoreError::ThreadNotFound {
-                thread_id: params.thread_id,
-            },
-        )?;
         Ok(StoredThreadHistory {
             thread_id: params.thread_id,
-            items,
+            items: items.clone(),
         })
     }
 

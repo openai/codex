@@ -4,14 +4,12 @@ use codex_protocol::protocol::ThreadHistoryMode;
 /// Result type returned by thread-store operations.
 pub type ThreadStoreResult<T> = Result<T, ThreadStoreError>;
 
-pub(crate) const PAGINATED_THREADS_UNSUPPORTED_OPERATION: &str = "paginated_threads";
-
 pub(crate) fn reject_paginated_history_mode(
     history_mode: ThreadHistoryMode,
 ) -> ThreadStoreResult<()> {
     if matches!(history_mode, ThreadHistoryMode::Paginated) {
         return Err(ThreadStoreError::Unsupported {
-            operation: PAGINATED_THREADS_UNSUPPORTED_OPERATION,
+            operation: "paginated_threads",
         });
     }
     Ok(())

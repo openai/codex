@@ -333,8 +333,8 @@ mod tests {
     use crate::ThreadPersistenceMetadata;
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
-    use crate::local::test_support::write_paginated_session_file;
     use crate::local::test_support::write_session_file;
+    use crate::local::test_support::write_session_file_with_history_mode;
 
     #[tokio::test]
     async fn live_writer_lifecycle_writes_and_closes() {
@@ -1139,8 +1139,13 @@ mod tests {
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let uuid = uuid::Uuid::from_u128(408);
         let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let rollout_path = write_paginated_session_file(home.path(), "2025-01-04T12-00-00", uuid)
-            .expect("session file");
+        let rollout_path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-04T12-00-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
 
         let thread = store
             .read_thread(ReadThreadParams {

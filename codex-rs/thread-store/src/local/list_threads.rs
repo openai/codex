@@ -243,7 +243,6 @@ mod tests {
             Uuid::from_u128(102),
             "Hello from user",
             /*model_provider*/ None,
-            "legacy",
         )
         .expect("session file");
 

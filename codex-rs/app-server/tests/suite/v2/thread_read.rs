@@ -215,7 +215,7 @@ async fn paginated_stored_thread_allows_metadata_discovery_and_rejects_legacy_hi
     )?;
     set_rollout_history_mode(
         rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id).as_path(),
-        "paginated",
+        ThreadHistoryMode::Paginated,
     )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -1528,12 +1528,12 @@ fn store_history_items() -> Vec<RolloutItem> {
     ))]
 }
 
-fn set_rollout_history_mode(path: &Path, history_mode: &str) -> Result<()> {
+fn set_rollout_history_mode(path: &Path, history_mode: ThreadHistoryMode) -> Result<()> {
     let mut lines = std::fs::read_to_string(path)?
         .lines()
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    lines[0]["payload"]["history_mode"] = json!(history_mode);
+    lines[0]["payload"]["history_mode"] = serde_json::to_value(history_mode)?;
     let contents = lines
         .into_iter()
         .map(|line| line.to_string())

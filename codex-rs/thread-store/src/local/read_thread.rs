@@ -703,7 +703,6 @@ mod tests {
             "Forked user message",
             Some("test-provider"),
             Some(parent_uuid),
-            "legacy",
         )
         .expect("forked session file");
 
