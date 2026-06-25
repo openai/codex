@@ -566,16 +566,18 @@ fn build_network_proxy_spec(
     configured_network_proxy_config: NetworkProxyConfig,
     network_requirements: Option<Sourced<codex_config::NetworkConstraints>>,
     permission_profile: &PermissionProfile,
+    drop_allowed_domains: bool,
 ) -> std::io::Result<Option<NetworkProxySpec>> {
     let (network_requirements, network_requirements_source) = match network_requirements {
         Some(Sourced { value, source }) => (Some(value), Some(source)),
         None => (None, None),
     };
     let has_network_requirements = network_requirements.is_some();
-    let network = NetworkProxySpec::from_config_and_constraints(
+    let network = NetworkProxySpec::from_config_and_constraints_with_allowed_domain_policy(
         configured_network_proxy_config,
         network_requirements,
         permission_profile,
+        drop_allowed_domains,
     )
     .map_err(|err| {
         if let Some(source) = network_requirements_source.as_ref() {
@@ -646,6 +648,10 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Runtime-only policy that makes the managed network proxy ask about every
+    /// outbound domain by clearing all configured allow domains.
+    pub drop_network_proxy_allowed_domains: bool,
 
     /// Whether config explicitly selected named permissions profiles instead
     /// of the legacy `sandbox_mode` syntax.
@@ -2410,6 +2416,9 @@ pub struct ConfigOverrides {
     /// Explicit absolute runtime workspace roots for this session. When set,
     /// this is the full runtime root list rather than an additive override.
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    /// Drop all configured network proxy allow domains so every outbound domain
+    /// must go through the network approval path. Deny domains are retained.
+    pub drop_network_proxy_allowed_domains: bool,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -2979,6 +2988,7 @@ impl Config {
             bypass_hook_trust,
             additional_writable_roots,
             workspace_roots: workspace_roots_override,
+            drop_network_proxy_allowed_domains,
         } = overrides;
         let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
 
@@ -3703,6 +3713,7 @@ impl Config {
             configured_network_proxy_config,
             network_requirements,
             &network_permission_profile,
+            drop_network_proxy_allowed_domains,
         )?;
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
@@ -3772,6 +3783,7 @@ impl Config {
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
             },
+            drop_network_proxy_allowed_domains,
             explicit_permission_profile_mode,
             custom_permission_profiles,
             approvals_reviewer: constrained_approvals_reviewer.value(),
@@ -4102,6 +4114,7 @@ impl Config {
             configured_network_proxy_config,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
+            self.drop_network_proxy_allowed_domains,
         )
     }
 

@@ -24,6 +24,9 @@ use toml::Value as TomlValue;
 use tracing::instrument;
 use tracing::warn;
 
+const AEON_NETWORK_PROXY_REVIEW_ALL_DOMAINS_CONFIG_KEY: &str =
+    "codex_internal_aeon_network_proxy_review_all_domains";
+
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
 pub(crate) struct ConfigManager {
@@ -229,6 +232,17 @@ impl ConfigManager {
                     "`bypass_hook_trust` override must be a boolean",
                 )
             })?);
+        }
+        if let Some(value) =
+            request_overrides.remove(AEON_NETWORK_PROXY_REVIEW_ALL_DOMAINS_CONFIG_KEY)
+        {
+            typesafe_overrides.drop_network_proxy_allowed_domains =
+                value.as_bool().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "`codex_internal_aeon_network_proxy_review_all_domains` override must be a boolean",
+                    )
+                })?;
         }
         let merged_cli_overrides = cli_overrides
             .iter()

@@ -26,6 +26,7 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
         config: NetworkProxyConfig::default(),
         constraints: NetworkProxyConstraints::default(),
         hard_deny_allowlist_misses: false,
+        drop_allowed_domains: false,
     };
     let metadata = NetworkProxyAuditMetadata {
         conversation_id: Some("conversation-1".to_string()),
@@ -38,6 +39,52 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
         .build_state_with_audit_metadata(metadata.clone())
         .expect("state should build");
     assert_eq!(state.audit_metadata(), &metadata);
+}
+
+#[test]
+fn drop_allowed_domains_forces_review_while_preserving_denylist() {
+    let mut config = NetworkProxyConfig::default();
+    config.network.set_allowed_domains(vec![
+        "api.example.com".to_string(),
+        "user.example.com".to_string(),
+    ]);
+    config
+        .network
+        .set_denied_domains(vec!["user-blocked.example.com".to_string()]);
+    let requirements = NetworkConstraints {
+        domains: Some(domain_permissions([
+            ("managed.example.com", NetworkDomainPermissionToml::Allow),
+            (
+                "managed-blocked.example.com",
+                NetworkDomainPermissionToml::Deny,
+            ),
+        ])),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints_with_allowed_domain_policy(
+        config,
+        Some(requirements),
+        &PermissionProfile::workspace_write(),
+        /*drop_allowed_domains*/ true,
+    )
+    .expect("forced-review policy should keep deny domains valid");
+
+    assert_eq!(spec.config.network.allowed_domains(), None);
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        Some(vec![
+            "managed-blocked.example.com".to_string(),
+            "user-blocked.example.com".to_string(),
+        ])
+    );
+    assert_eq!(
+        spec.constraints.denied_domains,
+        Some(vec!["managed-blocked.example.com".to_string()])
+    );
+    assert_eq!(spec.constraints.allowed_domains, None);
+    assert!(!spec.hard_deny_allowlist_misses);
+    assert!(spec.drop_allowed_domains);
 }
 
 #[test]

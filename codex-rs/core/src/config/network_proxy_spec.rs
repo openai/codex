@@ -27,6 +27,7 @@ pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     hard_deny_allowlist_misses: bool,
+    drop_allowed_domains: bool,
 }
 
 pub struct StartedNetworkProxy {
@@ -90,18 +91,38 @@ impl NetworkProxySpec {
         requirements: Option<NetworkConstraints>,
         permission_profile: &PermissionProfile,
     ) -> std::io::Result<Self> {
+        Self::from_config_and_constraints_with_allowed_domain_policy(
+            config,
+            requirements,
+            permission_profile,
+            /*drop_allowed_domains*/ false,
+        )
+    }
+
+    pub(crate) fn from_config_and_constraints_with_allowed_domain_policy(
+        config: NetworkProxyConfig,
+        requirements: Option<NetworkConstraints>,
+        permission_profile: &PermissionProfile,
+        drop_allowed_domains: bool,
+    ) -> std::io::Result<Self> {
         let base_config = config.clone();
-        let hard_deny_allowlist_misses = requirements
-            .as_ref()
-            .is_some_and(Self::managed_allowed_domains_only);
+        let hard_deny_allowlist_misses = !drop_allowed_domains
+            && requirements
+                .as_ref()
+                .is_some_and(Self::managed_allowed_domains_only);
         let (config, constraints) = if let Some(requirements) = requirements.as_ref() {
             Self::apply_requirements(
                 config,
                 requirements,
                 permission_profile,
                 hard_deny_allowlist_misses,
+                drop_allowed_domains,
             )
         } else {
+            let mut config = config;
+            if drop_allowed_domains {
+                config.network.set_allowed_domains(Vec::new());
+            }
             (config, NetworkProxyConstraints::default())
         };
         validate_policy_against_constraints(&config, &constraints).map_err(|err| {
@@ -116,6 +137,7 @@ impl NetworkProxySpec {
             config,
             constraints,
             hard_deny_allowlist_misses,
+            drop_allowed_domains,
         })
     }
 
@@ -154,10 +176,11 @@ impl NetworkProxySpec {
         &self,
         permission_profile: &PermissionProfile,
     ) -> std::io::Result<Self> {
-        Self::from_config_and_constraints(
+        Self::from_config_and_constraints_with_allowed_domain_policy(
             self.base_config.clone(),
             self.requirements.clone(),
             permission_profile,
+            self.drop_allowed_domains,
         )
     }
 
@@ -167,6 +190,9 @@ impl NetworkProxySpec {
     ) -> std::io::Result<Self> {
         let mut spec = self.clone();
         apply_exec_policy_network_rules(&mut spec.config, exec_policy);
+        if spec.drop_allowed_domains {
+            spec.config.network.set_allowed_domains(Vec::new());
+        }
         validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -214,10 +240,11 @@ impl NetworkProxySpec {
         requirements: &NetworkConstraints,
         permission_profile: &PermissionProfile,
         hard_deny_allowlist_misses: bool,
+        drop_allowed_domains: bool,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
-        let allowlist_expansion_enabled =
-            Self::allowlist_expansion_enabled(permission_profile, hard_deny_allowlist_misses);
+        let allowlist_expansion_enabled = !drop_allowed_domains
+            && Self::allowlist_expansion_enabled(permission_profile, hard_deny_allowlist_misses);
         let denylist_expansion_enabled = Self::denylist_expansion_enabled(permission_profile);
 
         if let Some(enabled) = requirements.enabled {
@@ -263,7 +290,9 @@ impl NetworkProxySpec {
                 .as_ref()
                 .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
         };
-        if let Some(managed_allowed_domains) = managed_allowed_domains {
+        if drop_allowed_domains {
+            config.network.set_allowed_domains(Vec::new());
+        } else if let Some(managed_allowed_domains) = managed_allowed_domains {
             // Managed requirements seed the baseline allowlist. User additions
             // can extend that baseline unless managed-only mode pins the
             // effective allowlist to the managed set.
