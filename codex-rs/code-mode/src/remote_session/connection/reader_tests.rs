@@ -57,7 +57,7 @@ async fn delegate_started_after_connection_cancellation_is_cancelled() {
     connection_cancellation.cancel();
     let state = Arc::new(ConnectionState::new(outgoing_tx, connection_cancellation));
     let session_id = SessionId::new("session-1").expect("session ID");
-    let delegate_request_id = DelegateRequestId::new(7);
+    let delegate_request_id = DelegateRequestId::new(/*value*/ 7);
     let (cancellation_tx, cancellation_rx) = oneshot::channel();
     state.delegates.lock().await.insert(
         session_id.clone(),

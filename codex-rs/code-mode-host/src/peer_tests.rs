@@ -11,7 +11,7 @@ async fn registration_queues_cell_closure_before_driver_starts() {
     let peer = Arc::new(HostPeer::new(outgoing_tx));
     let session_id = SessionId::new("session-1").expect("session ID");
     let cell_id = CellId::new("cell-1".to_string());
-    let request_id = RequestId::new(7);
+    let request_id = RequestId::new(/*value*/ 7);
     let registration = peer
         .register_cell(session_id.clone(), cell_id.clone())
         .expect("register cell");
