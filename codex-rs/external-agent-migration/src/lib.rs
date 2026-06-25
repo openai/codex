@@ -18,6 +18,7 @@ const EXTERNAL_AGENT_HOOKS_SUBDIR: &str = "hooks";
 const EXTERNAL_AGENT_MIGRATED_HOOKS_SUBDIR: &str = "hooks";
 const COMMAND_SKILL_PREFIX: &str = "source-command";
 const MAX_SKILL_NAME_LEN: usize = 64;
+const CODEX_ONLY_HOOK_EVENT_NAME: &str = "UserInstructions";
 
 #[derive(Debug)]
 struct ParsedDocument {
@@ -542,7 +543,10 @@ fn append_convertible_hook_groups(
         return;
     };
 
-    for event_name in HOOK_EVENT_NAMES {
+    for &event_name in HOOK_EVENT_NAMES {
+        if event_name == CODEX_ONLY_HOOK_EVENT_NAME {
+            continue;
+        }
         let Some(groups) = hooks_config.get(event_name).and_then(JsonValue::as_array) else {
             continue;
         };
@@ -1906,6 +1910,12 @@ Review carefully."""
                 "SubagentStart": [{
                     "matcher": "worker",
                     "hooks": [{"type": "prompt", "prompt": "check"}]
+                }],
+                "UserInstructions": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": source_hook_command("instructions.py")
+                    }]
                 }]
             }
         });

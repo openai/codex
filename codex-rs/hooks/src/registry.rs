@@ -19,6 +19,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::user_instructions::UserInstructionsOutcome;
+use crate::events::user_instructions::UserInstructionsRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
@@ -120,6 +122,13 @@ impl Hooks {
         self.engine.preview_pre_tool_use(request)
     }
 
+    pub fn preview_user_instructions(
+        &self,
+        request: &UserInstructionsRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_user_instructions(request)
+    }
+
     pub fn preview_permission_request(
         &self,
         request: &PermissionRequestRequest,
@@ -140,6 +149,13 @@ impl Hooks {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         self.engine.run_session_start(request, turn_id).await
+    }
+
+    pub async fn run_user_instructions(
+        &self,
+        request: UserInstructionsRequest,
+    ) -> UserInstructionsOutcome {
+        self.engine.run_user_instructions(request).await
     }
 
     pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

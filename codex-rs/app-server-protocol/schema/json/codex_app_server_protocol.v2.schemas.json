@@ -7149,6 +7149,7 @@
         "preCompact",
         "postCompact",
         "sessionStart",
+        "userInstructions",
         "userPromptSubmit",
         "subagentStart",
         "subagentStop",
