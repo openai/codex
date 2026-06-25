@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use app_test_support::PathBufExt;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
@@ -28,7 +29,7 @@ struct SelectedEnvironmentFixture {
     environment_cwd: PathUri,
     environment_shell: String,
     response_mock: responses::ResponseMock,
-    _codex_home: TempDir,
+    codex_home: TempDir,
     _server: MockServer,
 }
 
@@ -81,7 +82,7 @@ impl SelectedEnvironmentFixture {
             environment_cwd,
             environment_shell,
             response_mock,
-            _codex_home: codex_home,
+            codex_home,
             _server: server,
         })
     }
@@ -110,6 +111,30 @@ fn text_turn_params(thread_id: String, prompt: &str) -> TurnStartParams {
         }],
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
+    let mut fixture = SelectedEnvironmentFixture::new().await?;
+    let response = fixture.start_thread().await?;
+    let host_cwd = fixture.codex_home.path().to_path_buf().abs();
+    assert_eq!(
+        (
+            response.cwd.clone(),
+            response.runtime_workspace_roots.clone(),
+            response.active_permission_profile.clone(),
+        ),
+        (
+            // TODO(anp): Return the selected environment's native cwd from thread/start.
+            host_cwd.clone(),
+            // TODO(anp): Derive runtime workspace roots from the selected remote environment.
+            vec![host_cwd],
+            // TODO(anp): Report the implicit built-in permission profile instead of None.
+            None,
+        )
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -192,6 +217,13 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
             )),
         )
     );
+    let host_workspace_roots = format!(
+        "<workspace_roots><root>{}</root></workspace_roots>",
+        fixture.codex_home.path().display()
+    );
+    // TODO(anp): Derive model-visible workspace roots from the selected remote environment and
+    // render them using its native path convention.
+    assert!(environment_context.contains(&host_workspace_roots));
 
     Ok(())
 }
