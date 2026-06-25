@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::future::Future;
 use std::io;
 
 use codex_exec_server::ExecutorFileSystem;
@@ -71,11 +70,10 @@ impl EnvironmentSkillMetadata {
         path: &PathUri,
         plugin_namespace: Option<&str>,
     ) -> Result<Self, String> {
-        let contents = retry_once_on_broken_pipe(|| {
-            file_system.read_file_text(path, /*sandbox*/ None)
-        })
-        .await
-        .map_err(|err| format!("failed to read file: {err}"))?;
+        let contents = file_system
+            .read_file_text(path, /*sandbox*/ None)
+            .await
+            .map_err(|err| format!("failed to read file: {err}"))?;
         let ParsedSkillFrontmatter {
             name: base_name,
             description,
@@ -281,10 +279,9 @@ async fn load_skill_metadata(
     else {
         return (None, None);
     };
-    match retry_once_on_broken_pipe(|| {
-        file_system.get_metadata(&metadata_path, /*sandbox*/ None)
-    })
-    .await
+    match file_system
+        .get_metadata(&metadata_path, /*sandbox*/ None)
+        .await
     {
         Ok(metadata) if metadata.is_file => {}
         Ok(_) => return (None, None),
@@ -294,10 +291,9 @@ async fn load_skill_metadata(
             return (None, None);
         }
     }
-    let contents = match retry_once_on_broken_pipe(|| {
-        file_system.read_file_text(&metadata_path, /*sandbox*/ None)
-    })
-    .await
+    let contents = match file_system
+        .read_file_text(&metadata_path, /*sandbox*/ None)
+        .await
     {
         Ok(contents) => contents,
         Err(error) => {
@@ -317,17 +313,6 @@ async fn load_skill_metadata(
         resolve_dependencies(parsed.dependencies),
         resolve_policy(parsed.policy),
     )
-}
-
-async fn retry_once_on_broken_pipe<T, F, Fut>(mut operation: F) -> io::Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = io::Result<T>>,
-{
-    match operation().await {
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => operation().await,
-        result => result,
-    }
 }
 
 fn default_skill_name(path: &PathUri) -> String {
