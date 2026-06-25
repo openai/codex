@@ -188,9 +188,10 @@ impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
         let environments = turn.environments.clone();
         Arc::new(Self::new(
-            turn,
+            Arc::clone(&turn),
             environments,
             Vec::new(),
+            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
             /*loaded_agents_md*/ None,
         ))
     }
@@ -379,8 +380,8 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     session
         .services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let response = session
@@ -5363,14 +5364,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
+    let mcp_runtime =
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
-        )),
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
+        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7440,14 +7438,11 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
+    let mcp_runtime =
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
-        )),
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
+        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7603,8 +7598,14 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn refresh_mcp_servers_is_deferred_until_next_turn() {
+async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let old_runtime = session.services.latest_mcp_runtime();
+    let step_context = session
+        .capture_step_context(Arc::clone(&turn_context))
+        .await;
+    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
     let old_token = session.mcp_startup_cancellation_token().await;
     assert!(!old_token.is_cancelled());
 
@@ -7635,7 +7636,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
         .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
-    assert!(old_token.is_cancelled());
+    assert!(!old_token.is_cancelled());
     assert!(
         session
             .pending_mcp_server_refresh_config
@@ -7645,6 +7646,9 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
+    let new_runtime = session.services.latest_mcp_runtime();
+    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
+    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
 }
 
 #[tokio::test]
@@ -10161,8 +10165,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let tools = {
         session
             .services
-            .mcp_connection_manager
-            .load_full()
+            .latest_mcp_runtime()
+            .manager()
             .list_all_tools()
             .await
     };
