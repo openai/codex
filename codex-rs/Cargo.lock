@@ -2597,18 +2597,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-connectors-extension"
-version = "0.0.0"
-dependencies = [
- "codex-connectors",
- "codex-core-plugins",
- "codex-plugin",
- "codex-utils-path-uri",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "codex-context-fragments"
 version = "0.0.0"
 dependencies = [
@@ -3361,14 +3349,10 @@ dependencies = [
  "codex-features",
  "codex-login",
  "codex-mcp",
- "codex-plugin",
  "codex-protocol",
- "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "pretty_assertions",
- "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]

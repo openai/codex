@@ -1,6 +1,7 @@
 use crate::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_plugin::PluginProvider;
 use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginError;
@@ -122,6 +123,20 @@ impl ExecutorPluginProvider {
         let file_system = environment.get_filesystem();
         let plugin = resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await?;
 
+        Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
+            plugin,
+            file_system,
+        }))
+    }
+
+    /// Resolves a plugin through the exact executor captured for one model step.
+    pub async fn resolve_pinned(
+        resolved_root: &ResolvedSelectedCapabilityRoot,
+    ) -> Result<Option<ResolvedExecutorPlugin>, ExecutorPluginProviderError> {
+        let selected_root = resolved_root.selected_root();
+        let plugin_root = selected_plugin_root(selected_root);
+        let file_system = resolved_root.file_system();
+        let plugin = resolve_plugin_root(selected_root, plugin_root, file_system.as_ref()).await?;
         Ok(plugin.map(|plugin| ResolvedExecutorPlugin {
             plugin,
             file_system,

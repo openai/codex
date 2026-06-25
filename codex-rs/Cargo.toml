@@ -48,7 +48,6 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
-    "ext/connectors",
     "ext/extension-api",
     "ext/goal",
     "ext/guardian",
