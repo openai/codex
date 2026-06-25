@@ -1347,6 +1347,10 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 
 - `mcpServer/startupStatus/updated` — `{ threadId, name, status, error }` when app-server observes an MCP server startup transition. `threadId` identifies the owning thread when startup is thread-scoped and is `null` when startup is app-scoped. `status` is one of `starting`, `ready`, `failed`, or `cancelled`. `error` is `null` except for `failed`.
 
+### MCP resource events
+
+- `mcpServer/resource/updated` — `{ threadId, name, uri }` when an MCP server reports that a subscribed resource changed. `name` identifies the MCP server and `uri` identifies the changed resource.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.

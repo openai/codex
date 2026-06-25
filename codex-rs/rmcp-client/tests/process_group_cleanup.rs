@@ -150,6 +150,7 @@ async fn shutdown_kills_initialized_stdio_server_with_in_flight_operation() -> R
                 }
                 .boxed()
             }),
+            Box::new(|_| async {}.boxed()),
         )
         .await?;
 

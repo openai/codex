@@ -37,6 +37,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpServerResourceUpdatedNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
@@ -222,6 +223,18 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::McpServerStatusUpdated(notification))
+                .await;
+        }
+        EventMsg::McpResourceUpdated(update) => {
+            let notification = McpServerResourceUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                name: update.server,
+                uri: update.uri,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::McpServerResourceUpdated(
+                    notification,
+                ))
                 .await;
         }
         EventMsg::Warning(warning_event) => {

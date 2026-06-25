@@ -120,6 +120,7 @@ pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()>
                 }
                 .boxed()
             }),
+            Box::new(|_| async {}.boxed()),
         )
         .await?;
     Ok(())
@@ -158,6 +159,7 @@ pub(crate) async fn create_remote_client(
                 }
                 .boxed()
             }),
+            Box::new(|_| async {}.boxed()),
         )
         .await?;
 

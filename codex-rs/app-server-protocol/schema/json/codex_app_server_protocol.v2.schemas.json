@@ -8498,6 +8498,27 @@
       "title": "McpServerRefreshResponse",
       "type": "object"
     },
+    "McpServerResourceUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "threadId",
+        "uri"
+      ],
+      "title": "McpServerResourceUpdatedNotification",
+      "type": "object"
+    },
     "McpServerStartupState": {
       "enum": [
         "starting",
@@ -13269,6 +13290,26 @@
             "params"
           ],
           "title": "McpServer/startupStatus/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "mcpServer/resource/updated"
+              ],
+              "title": "McpServer/resource/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpServerResourceUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "McpServer/resource/updatedNotification",
           "type": "object"
         },
         {

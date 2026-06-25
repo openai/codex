@@ -28,6 +28,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceContents;
 use rmcp::model::ResourceTemplate;
+use rmcp::model::ResourceUpdatedNotificationParam;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
@@ -517,9 +518,14 @@ impl ServerHandler for TestToolServer {
     async fn read_resource(
         &self,
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if uri == MEMO_URI {
+            context
+                .peer
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri.clone()))
+                .await
+                .map_err(|err| McpError::internal_error(err.to_string(), None))?;
             Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri,

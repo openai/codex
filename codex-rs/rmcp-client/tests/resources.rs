@@ -20,6 +20,8 @@ use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ResourceContents;
 use serde_json::json;
+use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 const RESOURCE_URI: &str = "memo://codex/example-note";
 
@@ -54,6 +56,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
     )
     .await?;
 
+    let (resource_updated_tx, mut resource_updated_rx) = mpsc::unbounded_channel();
     client
         .initialize(
             init_params(),
@@ -65,6 +68,15 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
                         content: Some(json!({})),
                         meta: None,
                     })
+                }
+                .boxed()
+            }),
+            Box::new(move |uri| {
+                let resource_updated_tx = resource_updated_tx.clone();
+                async move {
+                    resource_updated_tx
+                        .send(uri)
+                        .expect("resource update receiver should remain open");
                 }
                 .boxed()
             }),
@@ -132,6 +144,10 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
             text: "This is a sample MCP resource served by the rmcp test server.".to_string(),
             meta: None,
         }
+    );
+    assert_eq!(
+        timeout(Duration::from_secs(5), resource_updated_rx.recv()).await?,
+        Some(RESOURCE_URI.to_string())
     );
 
     Ok(())

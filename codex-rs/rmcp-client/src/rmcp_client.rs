@@ -304,6 +304,9 @@ pub type SendElicitation = Box<
     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
 
+/// Interface for forwarding MCP resource update notifications to the host.
+pub type SendResourceUpdated = Box<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
+
 pub struct ToolWithConnectorId {
     pub tool: Tool,
     pub connector_id: Option<String>,
@@ -426,10 +429,12 @@ impl RmcpClient {
         params: InitializeRequestParams,
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
+        send_resource_updated: SendResourceUpdated,
     ) -> Result<InitializeResult> {
         let client_service = ElicitationClientService::new(
             params.clone(),
             send_elicitation,
+            send_resource_updated,
             self.elicitation_pause_state.clone(),
         );
         let pending_transport = {

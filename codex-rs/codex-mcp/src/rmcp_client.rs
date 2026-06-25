@@ -51,6 +51,8 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpResourceUpdatedEvent;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
@@ -159,6 +161,7 @@ impl AsyncManagedClient {
         runtime_auth_provider: Option<SharedAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
+        submit_id: String,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let tool_filter = server
@@ -217,6 +220,7 @@ impl AsyncManagedClient {
                         codex_apps_tools_cache_context,
                         client_elicitation_capability,
                         supports_openai_form_elicitation,
+                        submit_id,
                     },
                 )
                 .await
@@ -549,16 +553,37 @@ async fn start_server_task(
         codex_apps_tools_cache_context,
         client_elicitation_capability,
         supports_openai_form_elicitation,
+        submit_id,
     } = params;
     let params = mcp_initialize_request_params(
         client_elicitation_capability,
         supports_openai_form_elicitation,
     );
 
-    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event.clone());
+    let resource_server_name = server_name.clone();
+    let send_resource_updated = Box::new(move |uri| {
+        let tx_event = tx_event.clone();
+        let submit_id = submit_id.clone();
+        let server = resource_server_name.clone();
+        async move {
+            let _ = tx_event
+                .send(Event {
+                    id: submit_id,
+                    msg: EventMsg::McpResourceUpdated(McpResourceUpdatedEvent { server, uri }),
+                })
+                .await;
+        }
+        .boxed()
+    });
 
     let initialize_result = client
-        .initialize(params, startup_timeout, send_elicitation)
+        .initialize(
+            params,
+            startup_timeout,
+            send_elicitation,
+            send_resource_updated,
+        )
         .await
         .map_err(StartupOutcomeError::from)?;
 
@@ -661,6 +686,7 @@ struct StartServerTaskParams {
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
     supports_openai_form_elicitation: bool,
+    submit_id: String,
 }
 
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]

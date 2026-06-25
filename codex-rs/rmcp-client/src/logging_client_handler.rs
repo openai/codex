@@ -19,18 +19,25 @@ use tracing::warn;
 
 use crate::rmcp_client::Elicitation;
 use crate::rmcp_client::SendElicitation;
+use crate::rmcp_client::SendResourceUpdated;
 
 #[derive(Clone)]
 pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    send_resource_updated: Arc<SendResourceUpdated>,
 }
 
 impl LoggingClientHandler {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        send_resource_updated: SendResourceUpdated,
+    ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            send_resource_updated: Arc::new(send_resource_updated),
         }
     }
 }
@@ -75,6 +82,7 @@ impl ClientHandler for LoggingClientHandler {
         _context: NotificationContext<RoleClient>,
     ) {
         info!("MCP server resource updated (uri: {})", params.uri);
+        (self.send_resource_updated)(params.uri.to_string()).await;
     }
 
     async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {

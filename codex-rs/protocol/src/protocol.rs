@@ -1316,6 +1316,9 @@ pub enum EventMsg {
     /// Incremental MCP startup progress updates.
     McpStartupUpdate(McpStartupUpdateEvent),
 
+    /// An MCP server reports that a subscribed resource changed.
+    McpResourceUpdated(McpResourceUpdatedEvent),
+
     /// Aggregate MCP startup completion summary.
     McpStartupComplete(McpStartupCompleteEvent),
 
@@ -3602,6 +3605,12 @@ pub struct McpStartupUpdateEvent {
     pub server: String,
     /// Current startup status.
     pub status: McpStartupStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct McpResourceUpdatedEvent {
+    pub server: String,
+    pub uri: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

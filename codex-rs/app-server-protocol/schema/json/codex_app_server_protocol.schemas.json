@@ -4837,6 +4837,26 @@
           "properties": {
             "method": {
               "enum": [
+                "mcpServer/resource/updated"
+              ],
+              "title": "McpServer/resource/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpServerResourceUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "McpServer/resource/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "account/updated"
               ],
               "title": "Account/updatedNotificationMethod",
@@ -12092,6 +12112,27 @@
       "McpServerRefreshResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "McpServerRefreshResponse",
+        "type": "object"
+      },
+      "McpServerResourceUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "threadId",
+          "uri"
+        ],
+        "title": "McpServerResourceUpdatedNotification",
         "type": "object"
       },
       "McpServerStartupState": {
