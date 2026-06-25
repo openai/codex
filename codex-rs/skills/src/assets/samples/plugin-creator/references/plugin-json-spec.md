@@ -118,6 +118,91 @@ Or as an object directly in `plugin.json`:
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.
 
+# Scheduled Task Template JSON sample spec
+
+Plugins can bundle recipes for recurring Codex work under the reserved `scheduled/` root:
+
+```text
+my-plugin/
+├── .codex-plugin/
+│   └── plugin.json
+├── skills/
+└── scheduled/
+    ├── daily-review.json
+    └── weekly-triage.json
+```
+
+Do not add a `scheduled` field to `plugin.json`. Supporting Codex clients discover each
+`scheduled/<template-key>.json` file by convention. The filename stem is the template key and must
+be lowercase kebab case.
+
+Every template contains exactly `name`, `prompt`, and `schedule`:
+
+```json
+{
+  "name": "Morning inbox triage",
+  "prompt": "Review my inbox since the previous workday and surface messages that need attention, with a prioritized next-action list.",
+  "schedule": {
+    "type": "weekdays",
+    "time": "08:30"
+  }
+}
+```
+
+Supported schedule shapes are:
+
+```json
+{
+  "type": "hourly",
+  "intervalHours": 2,
+  "days": ["MO", "TU", "WE", "TH", "FR"]
+}
+```
+
+`days` is optional for hourly schedules; omitting it runs on every day. `intervalHours` must be a
+positive integer.
+
+```json
+{ "type": "daily", "time": "09:00" }
+```
+
+```json
+{ "type": "weekdays", "time": "09:00" }
+```
+
+```json
+{
+  "type": "weekly",
+  "days": ["TU", "TH"],
+  "time": "16:45"
+}
+```
+
+Times use local wall-clock `HH:MM` in 24-hour format from `00:00` through `23:59`. Every `days`
+array must be a nonempty, unique subset of `MO`, `TU`, `WE`, `TH`, `FR`, `SA`, and `SU`.
+
+### Authoring guidance
+
+- Choose a task that genuinely repeats and can be completed with the plugin's capabilities.
+- Confirm its cadence, source scope, expected output, and whether it may make changes.
+- Prefer one plugin's natural workflow. Use a purpose-built plugin when the recurring workflow
+  intentionally coordinates multiple connectors.
+- Keep the default prompt concise but useful before personalization. Include the source and time
+  window, what deserves attention, the expected output, and an explicit read-only boundary when
+  appropriate.
+- Avoid personal account identifiers, team names, destinations, and project-specific assumptions
+  that belong in the user's customized instance.
+- Write real templates rather than placeholders, then run
+  `scripts/validate_plugin.py <plugin-path>`. Strict JSON, valid filenames, and known fields matter
+  because Codex silently omits invalid templates.
+- When adding templates to an existing installed plugin, use the cachebuster and reinstall flow so
+  Codex reads the updated materialized copy.
+
+Installing a plugin does not activate its templates. The user reviews a template and explicitly
+creates an ordinary user-owned Scheduled task from it. Codex does not retain a live relationship to
+the plugin or template, so plugin updates affect future creations only. Describe these as Codex
+Scheduled task templates; do not promise availability as ChatGPT or cloud automations.
+
 # Marketplace JSON sample spec
 
 `marketplace.json` depends on where the plugin should live. New plugin creation defaults to the

@@ -6,11 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
 import yaml
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from validate_scheduled_tasks import validate_scheduled_task_templates  # noqa: E402
 
 
 TODO_MARKER = "[TODO:"
@@ -52,6 +60,7 @@ def validate_plugin(plugin_root: Path) -> list[str]:
 
     reject_todo_markers(manifest, "$", errors)
     validate_manifest_shape(plugin_root, manifest, errors)
+    errors.extend(validate_scheduled_task_templates(plugin_root))
     return errors
 
 
