@@ -643,9 +643,6 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
-            "sleep_tool": {
-              "type": "boolean"
-            },
             "sqlite": {
               "type": "boolean"
             },
@@ -820,6 +817,10 @@
           "format": "uint64",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "sleep_tool": {
+          "description": "Expose the input-interruptible `clock.sleep` tool.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4949,9 +4950,6 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
-          "type": "boolean"
-        },
-        "sleep_tool": {
           "type": "boolean"
         },
         "sqlite": {

@@ -86,6 +86,7 @@ fn enable_current_time_reminder(
     config.current_time_reminder = Some(CurrentTimeReminderConfig {
         reminder_interval_seconds: interval,
         clock_source,
+        ..CurrentTimeReminderConfig::default()
     });
 }
 
