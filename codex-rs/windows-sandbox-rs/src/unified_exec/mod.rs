@@ -71,7 +71,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
         )
         .await
     } else {
-        spawn_windows_sandbox_session_legacy(
+        backends::legacy::spawn_windows_sandbox_session_legacy(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
