@@ -376,6 +376,18 @@ impl PathUri {
     /// URIs created by [`Self::from_abs_path`]. Foreign conventions are rejected rather than being
     /// projected onto a syntactically valid but unrelated host path.
     pub fn to_abs_path(&self) -> io::Result<AbsolutePathBuf> {
+        #[cfg(windows)]
+        if let Some(path) = wsl_mount_path_on_windows(&self.0) {
+            return AbsolutePathBuf::from_absolute_path_checked(path).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    PathUriParseError::InvalidFileUriPath {
+                        path: self.to_string(),
+                    },
+                )
+            });
+        }
+
         if self.infer_path_convention() != Some(PathConvention::native()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -551,6 +563,37 @@ fn decode_bad_path_uri(url: &Url) -> Option<Vec<u8>> {
 
 fn is_windows_drive_uri_segment(segment: &str) -> bool {
     matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
+}
+
+#[cfg(windows)]
+fn wsl_mount_path_on_windows(url: &Url) -> Option<PathBuf> {
+    if url.host_str().is_some() {
+        return None;
+    }
+
+    let mut segments = url.path_segments()?.filter(|segment| !segment.is_empty());
+    let mount_root = segments.next()?;
+    if !mount_root.eq_ignore_ascii_case("mnt") {
+        return None;
+    }
+
+    let drive = segments.next()?;
+    let [drive] = drive.as_bytes() else {
+        return None;
+    };
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut path = PathBuf::from(format!("{}:\\", char::from(*drive).to_ascii_uppercase()));
+    for segment in segments {
+        let decoded = decode_uri_path(segment);
+        if decoded.contains(['/', '\\', '\0']) {
+            return None;
+        }
+        path.push(decoded);
+    }
+    Some(path)
 }
 
 fn containment_path_segments(url: &Url, convention: PathConvention) -> Option<Vec<&str>> {

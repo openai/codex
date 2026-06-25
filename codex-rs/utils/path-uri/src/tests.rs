@@ -205,6 +205,33 @@ fn file_uri_fallback_round_trips_non_unicode_windows_paths() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_accepts_wsl_mount_file_uris_as_local_paths() {
+    let uri = PathUri::parse("file:///mnt/c/Users/Alice%20Smith/src/main.rs")
+        .expect("WSL file URI should parse");
+
+    assert_eq!(
+        uri.to_abs_path()
+            .expect("WSL file URI should map to Windows"),
+        AbsolutePathBuf::from_absolute_path_checked(r"C:\Users\Alice Smith\src\main.rs")
+            .expect("expected Windows path should be absolute")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_accepts_wsl_mount_drive_roots() {
+    let uri = PathUri::parse("file:///mnt/d").expect("WSL drive root URI should parse");
+
+    assert_eq!(
+        uri.to_abs_path()
+            .expect("WSL drive root should map to Windows"),
+        AbsolutePathBuf::from_absolute_path_checked(r"D:\")
+            .expect("expected Windows drive root should be absolute")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn file_uri_falls_back_for_posix_paths_with_null_bytes() {
