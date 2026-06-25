@@ -29,6 +29,7 @@ pub(crate) use violation::Location;
 pub use violation::SchemaBreakage;
 pub(crate) use violation::SchemaPath;
 pub(crate) use violation::SchemaSnapshot;
+pub(crate) use violation::VariantLabel;
 pub(crate) use violation::Violation;
 pub use violation::ViolationKind;
 
