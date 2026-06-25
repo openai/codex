@@ -101,6 +101,33 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
     }
 }
 
+fn local_stdio_server(command: &str) -> EffectiveMcpServer {
+    EffectiveMcpServer::configured(McpServerConfig {
+        auth: Default::default(),
+        transport: McpServerTransportConfig::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    })
+}
+
 fn model_tool_names(tools: &[ToolInfo]) -> HashSet<ToolName> {
     tools
         .iter()
@@ -1269,33 +1296,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     drop(rx_event);
     let codex_home = tempdir().expect("tempdir");
     let mcp_servers = HashMap::from([
-        (
-            "stdio".to_string(),
-            EffectiveMcpServer::configured(McpServerConfig {
-                auth: Default::default(),
-                transport: McpServerTransportConfig::Stdio {
-                    command: "echo".to_string(),
-                    args: Vec::new(),
-                    env: None,
-                    env_vars: Vec::new(),
-                    cwd: None,
-                },
-                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            }),
-        ),
+        ("stdio".to_string(), local_stdio_server("echo")),
         (
             "http".to_string(),
             EffectiveMcpServer::configured(McpServerConfig {
@@ -1376,6 +1377,131 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         "local stdio MCP server `stdio` requires a local environment"
     );
     cancel_token.cancel();
+}
+
+#[tokio::test]
+async fn server_replacement_preserves_and_does_not_cancel_unrelated_clients() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let (tx_event, rx_event) = async_channel::unbounded();
+    drop(rx_event);
+    let codex_home = tempdir().expect("tempdir");
+    let cancel_token = CancellationToken::new();
+    let manager = Arc::new(
+        McpConnectionManager::new(
+            &HashMap::from([
+                ("alpha".to_string(), local_stdio_server("alpha")),
+                ("beta".to_string(), local_stdio_server("beta")),
+            ]),
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            HashMap::new(),
+            &approval_policy,
+            "initial".to_string(),
+            tx_event,
+            cancel_token.clone(),
+            PermissionProfile::default(),
+            McpRuntimeContext::new(
+                Arc::new(EnvironmentManager::without_environments()),
+                PathBuf::from("/tmp"),
+            ),
+            codex_home.path().to_path_buf(),
+            CodexAppsToolsCacheKey {
+                account_id: None,
+                chatgpt_user_id: None,
+                is_workspace_account: false,
+            },
+            /*prefix_mcp_tool_names*/ true,
+            ElicitationCapability::default(),
+            /*supports_openai_form_elicitation*/ false,
+            ToolPluginProvenance::default(),
+            /*auth*/ None,
+            /*elicitation_reviewer*/ None,
+        )
+        .await,
+    );
+    let alpha_startup = Arc::clone(&manager.clients["alpha"].startup_complete);
+    let old_beta_startup = Arc::clone(&manager.clients["beta"].startup_complete);
+    let alpha_cancel = manager.clients["alpha"].cancel_token.clone();
+    let old_beta_cancel = manager.clients["beta"].cancel_token.clone();
+
+    let discarded_replacement = manager
+        .prepare_server_replacement(
+            "beta".to_string(),
+            local_stdio_server("discarded"),
+            /*auth_entry*/ None,
+            "discarded-refresh".to_string(),
+        )
+        .await
+        .expect("replacement manager should build");
+    let discarded_cancel = discarded_replacement.clients["beta"].cancel_token.clone();
+    assert!(manager.cancel_on_drop.load(Ordering::Acquire));
+    assert!(!discarded_replacement.cancel_on_drop.load(Ordering::Acquire));
+    drop(discarded_replacement);
+    assert!(discarded_cancel.is_cancelled());
+    assert!(!old_beta_cancel.is_cancelled());
+    assert!(!cancel_token.is_cancelled());
+
+    let replacement = Arc::new(
+        manager
+            .prepare_server_replacement(
+                "beta".to_string(),
+                local_stdio_server("replacement"),
+                /*auth_entry*/ None,
+                "refresh".to_string(),
+            )
+            .await
+            .expect("replacement manager should build"),
+    );
+    assert!(Arc::ptr_eq(
+        &alpha_startup,
+        &replacement.clients["alpha"].startup_complete
+    ));
+    assert!(!Arc::ptr_eq(
+        &old_beta_startup,
+        &replacement.clients["beta"].startup_complete
+    ));
+    replacement.take_cancellation_ownership_from(&manager);
+    assert!(!manager.cancel_on_drop.load(Ordering::Acquire));
+    assert!(replacement.cancel_on_drop.load(Ordering::Acquire));
+
+    let retire_task = tokio::spawn(
+        Arc::clone(&manager).shutdown_server_after_readers_release("beta".to_string()),
+    );
+    tokio::task::yield_now().await;
+    assert!(!retire_task.is_finished());
+    assert!(!old_beta_cancel.is_cancelled());
+    drop(manager);
+    retire_task.await.expect("retirement task should finish");
+    assert!(old_beta_cancel.is_cancelled());
+    assert!(!alpha_cancel.is_cancelled());
+    assert!(!replacement.clients["beta"].cancel_token.is_cancelled());
+    assert!(!cancel_token.is_cancelled());
+
+    let replacement_beta_cancel = replacement.clients["beta"].cancel_token.clone();
+    let next_replacement = Arc::new(
+        replacement
+            .prepare_server_replacement(
+                "alpha".to_string(),
+                local_stdio_server("second-replacement"),
+                /*auth_entry*/ None,
+                "second-refresh".to_string(),
+            )
+            .await
+            .expect("second replacement manager should build"),
+    );
+    let next_alpha_cancel = next_replacement.clients["alpha"].cancel_token.clone();
+    next_replacement.take_cancellation_ownership_from(&replacement);
+
+    let retire_task = tokio::spawn(
+        Arc::clone(&replacement).shutdown_server_after_readers_release("alpha".to_string()),
+    );
+    drop(replacement);
+    retire_task.await.expect("retirement task should finish");
+    assert!(alpha_cancel.is_cancelled());
+    assert!(!replacement_beta_cancel.is_cancelled());
+    assert!(!next_alpha_cancel.is_cancelled());
+    assert!(!cancel_token.is_cancelled());
+    next_replacement.shutdown().await;
 }
 
 #[test]

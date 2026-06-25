@@ -33,6 +33,9 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::McpServerRefreshConfig;
+use codex_protocol::protocol::McpServerUpdateConfig;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoicesList;
@@ -437,6 +440,28 @@ pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerR
     *guard = Some(refresh_config);
 }
 
+pub async fn refresh_mcp_server(
+    sess: &Arc<Session>,
+    update: McpServerUpdateConfig,
+    submit_id: String,
+) {
+    let server_name = update.server_name.clone();
+    if let Err(error) = sess.refresh_mcp_server_now(update, submit_id.clone()).await {
+        warn!(error = %error, "failed to refresh MCP server");
+        sess.send_event_raw(Event {
+            id: submit_id,
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+                failed: vec![McpStartupFailure {
+                    server: server_name,
+                    error: error.to_string(),
+                }],
+                ..Default::default()
+            }),
+        })
+        .await;
+    }
+}
+
 pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
@@ -793,6 +818,10 @@ pub(super) async fn submission_loop(
                 }
                 Op::RefreshMcpServers { config } => {
                     refresh_mcp_servers(&sess, config).await;
+                    false
+                }
+                Op::RefreshMcpServer { config } => {
+                    refresh_mcp_server(&sess, config, sub.id.clone()).await;
                     false
                 }
                 Op::ReloadUserConfig => {

@@ -180,13 +180,45 @@ pub struct W3cTraceContext {
 }
 
 /// Config payload for refreshing MCP servers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct McpServerRefreshConfig {
     /// Complete runtime server map after source and thread-scoped resolution.
     pub mcp_servers: Value,
     /// OAuth credential store mode to use with this server snapshot.
     pub mcp_oauth_credentials_store_mode: Value,
     pub auth_keyring_backend_kind: Value,
+}
+
+impl fmt::Debug for McpServerRefreshConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Server configuration can contain headers and environment credentials.
+        formatter
+            .debug_struct("McpServerRefreshConfig")
+            .field("mcp_servers", &"<redacted>")
+            .field("mcp_oauth_credentials_store_mode", &"<redacted>")
+            .field("auth_keyring_backend_kind", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Config payload for replacing one MCP server in a running session.
+#[derive(Clone, PartialEq)]
+pub struct McpServerUpdateConfig {
+    /// Name of the server to replace.
+    pub server_name: String,
+    /// Serialized `McpServerConfig` for the replacement.
+    pub server: Value,
+}
+
+impl fmt::Debug for McpServerUpdateConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep the server name diagnosable without exposing its credential-bearing config.
+        formatter
+            .debug_struct("McpServerUpdateConfig")
+            .field("server_name", &self.server_name)
+            .field("server", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -628,6 +660,9 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
 
+    /// Replace one MCP server without reconnecting unrelated servers.
+    RefreshMcpServer { config: McpServerUpdateConfig },
+
     /// Reload user config layer overrides for the active session.
     ///
     /// This updates runtime config-derived behavior (for example app
@@ -838,6 +873,7 @@ impl Op {
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
+            Self::RefreshMcpServer { .. } => "refresh_mcp_server",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
@@ -4324,6 +4360,23 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
+
+    #[test]
+    fn mcp_refresh_debug_output_redacts_server_credentials() {
+        let secret = "sentinel-bearer-token";
+        let refresh = McpServerRefreshConfig {
+            mcp_servers: json!({"server": {"bearer_token": secret}}),
+            mcp_oauth_credentials_store_mode: json!("file"),
+            auth_keyring_backend_kind: json!("default"),
+        };
+        let update = McpServerUpdateConfig {
+            server_name: "server".to_string(),
+            server: json!({"bearer_token": secret}),
+        };
+
+        assert!(!format!("{refresh:?}").contains(secret));
+        assert!(!format!("{update:?}").contains(secret));
+    }
 
     #[test]
     fn feature_thread_source_serializes_as_its_app_owned_label() -> Result<()> {
