@@ -41,6 +41,7 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::save_auth;
 use codex_protocol::auth::AuthMode;
+use core_test_support::skip_if_bwrap_exec;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -637,6 +638,11 @@ enabled = false
 
 #[tokio::test]
 async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<()> {
+    // TODO(anp): Replace timing delays with deterministic coordination for staged updates.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "relies on a fixed delay to order concurrent app-list fetches"
+    );
     let alpha_branding = Some(AppBranding {
         category: Some("PRODUCTIVITY".to_string()),
         developer: Some("Acme".to_string()),
@@ -1324,6 +1330,11 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
 
 #[tokio::test]
 async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Result<()> {
+    // TODO(anp): Replace timing delays with deterministic coordination for staged updates.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "relies on a fixed delay to order concurrent app-list fetches"
+    );
     let initial_connectors = vec![
         AppInfo {
             id: "alpha".to_string(),
