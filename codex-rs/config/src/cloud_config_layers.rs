@@ -23,7 +23,7 @@ use thiserror::Error;
 ///
 /// The bundle orders fragments from highest precedence to lowest precedence.
 /// This module returns config layers in stack order, so callers can append the
-/// result between system and user config without re-sorting.
+/// result at the bucket's stack position without re-sorting.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigFragment {
     pub id: String,
@@ -64,30 +64,6 @@ pub enum CloudConfigLayerError {
         fragment: CloudConfigFragmentSource,
         message: String,
     },
-}
-
-pub fn cloud_config_layers_from_fragments(
-    fragments: impl IntoIterator<Item = CloudConfigFragment>,
-    base_dir: &AbsolutePathBuf,
-) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(
-        fragments,
-        base_dir,
-        |id, name| ConfigLayerSource::EnterpriseManaged { id, name },
-        /*strict_config*/ false,
-    )
-}
-
-pub(crate) fn cloud_config_layers_from_fragments_strict(
-    fragments: impl IntoIterator<Item = CloudConfigFragment>,
-    base_dir: &AbsolutePathBuf,
-) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(
-        fragments,
-        base_dir,
-        |id, name| ConfigLayerSource::EnterpriseManaged { id, name },
-        /*strict_config*/ true,
-    )
 }
 
 pub(crate) fn cloud_managed_config_layers_from_fragments(

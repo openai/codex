@@ -36,12 +36,6 @@ pub enum RequirementSource {
     Composite {
         sources: Vec<RequirementSource>,
     },
-    /// A backend-delivered enterprise-managed layer. `id` is the stable backend
-    /// identifier; `name` is the admin-facing display name.
-    EnterpriseManaged {
-        id: String,
-        name: String,
-    },
     /// A fragment delivered through the generic cloud-managed layer contract.
     CloudManaged {
         layer: CloudManagedLayer,
@@ -103,9 +97,6 @@ impl fmt::Display for RequirementSource {
                     write!(f, "{source}")?;
                 }
                 Ok(())
-            }
-            RequirementSource::EnterpriseManaged { id, name } => {
-                write!(f, "enterprise-managed requirements {name} ({id})")
             }
             RequirementSource::CloudManaged { layer, id, name } => {
                 write!(f, "cloud-managed {layer} requirements {name} ({id})")

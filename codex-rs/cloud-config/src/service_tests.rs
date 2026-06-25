@@ -536,7 +536,10 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 
 #[tokio::test]
 async fn get_bundle_rejects_invalid_remote_buckets_before_cache_write() {
-    for bundle in [invalid_config_bundle(), conflicting_managed_requirements_bundle()] {
+    for bundle in [
+        invalid_config_bundle(),
+        conflicting_managed_requirements_bundle(),
+    ] {
         let codex_home = tempdir().expect("tempdir");
         let fetcher = Arc::new(StaticBundleClient::new(bundle));
         let service = CloudConfigBundleService::new(

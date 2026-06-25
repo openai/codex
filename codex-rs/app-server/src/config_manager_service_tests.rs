@@ -4,13 +4,32 @@ use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CloudManagedLayer as ApiCloudManagedLayer;
 use codex_app_server_protocol::ConfigLayerSource as ApiConfigLayerSource;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::CloudManagedLayer;
+use codex_config::ConfigLayerSource;
 use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+
+#[test]
+fn cloud_managed_source_maps_to_app_server_api() {
+    assert_eq!(
+        crate::config_layer::config_layer_source_to_api(ConfigLayerSource::CloudManaged {
+            layer: CloudManagedLayer::Baseline,
+            id: "policy-1".to_string(),
+            name: "Baseline policy".to_string(),
+        }),
+        ApiConfigLayerSource::CloudManaged {
+            layer: ApiCloudManagedLayer::Baseline,
+            id: "policy-1".to_string(),
+            name: "Baseline policy".to_string(),
+        }
+    );
+}
 
 #[test]
 fn toml_value_to_item_handles_nested_config_tables() {
@@ -708,7 +727,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
         tmp.path().to_path_buf(),
         vec![],
         LoaderOverrides::without_managed_config_for_tests(),
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(
             r#"
 [features]
 personality = true

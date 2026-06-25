@@ -405,7 +405,7 @@ approvals_reviewer = "user"
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["auto_review"]"#,
             ),
         )
@@ -435,7 +435,7 @@ approvals_reviewer = "user"
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["auto_review"]"#,
             ),
         )

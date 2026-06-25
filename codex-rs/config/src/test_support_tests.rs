@@ -2,9 +2,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn adds_enterprise_requirements_in_order() {
-    let bundle = CloudConfigBundleFixture::enterprise_requirement("first")
-        .add_enterprise_requirement("second")
+fn adds_system_overlay_requirements_in_order() {
+    let bundle = CloudConfigBundleFixture::system_overlay_requirement("first")
+        .add_system_overlay_requirement("second")
         .into_bundle();
 
     assert_eq!(

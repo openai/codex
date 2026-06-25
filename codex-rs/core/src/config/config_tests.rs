@@ -3,6 +3,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::CloudManagedLayer;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -1672,7 +1673,7 @@ async fn experimental_network_requirements_enable_proxy_without_feature() -> std
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [experimental_network]
 enabled = true
@@ -4774,7 +4775,7 @@ enabled = true
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [plugins."sample@test".mcp_servers.sample.identity]
 url = "https://sample.example/mcp"
@@ -4800,7 +4801,8 @@ url = "https://sample.example/mcp"
         Some((
             false,
             Some(McpServerDisabledReason::Requirements {
-                source: RequirementSource::EnterpriseManaged {
+                source: RequirementSource::CloudManaged {
+                    layer: CloudManagedLayer::SystemOverlay,
                     id: "req_1".to_string(),
                     name: "Base requirements".to_string(),
                 },
@@ -4877,7 +4879,7 @@ enabled = true
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [mcp_servers]
 "#,
@@ -4896,7 +4898,8 @@ enabled = true
         Some((
             false,
             Some(McpServerDisabledReason::Requirements {
-                source: RequirementSource::EnterpriseManaged {
+                source: RequirementSource::CloudManaged {
+                    layer: CloudManagedLayer::SystemOverlay,
                     id: "req_1".to_string(),
                     name: "Base requirements".to_string(),
                 },
@@ -9340,7 +9343,7 @@ async fn requirements_disallowing_default_sandbox_falls_back_to_required_default
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9366,7 +9369,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9393,7 +9396,7 @@ sandbox = "unelevated"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"[windows]
 allowed_sandbox_implementations = ["elevated"]
 "#,
@@ -9430,7 +9433,7 @@ sandbox_mode = "danger-full-access"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9464,7 +9467,7 @@ default_permissions = "dev"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9492,7 +9495,7 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
             ..Default::default()
         })
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9519,7 +9522,7 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
             ..Default::default()
         })
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_sandbox_modes = ["read-only"]"#,
             ),
         )
@@ -9633,7 +9636,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_web_search_modes = ["cached"]"#,
             ),
         )
@@ -9671,7 +9674,7 @@ trust_level = "untrusted"
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(workspace.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approval_policies = ["on-request"]"#,
             ),
         )
@@ -9699,7 +9702,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approval_policies = ["on-request"]"#,
             ),
         )
@@ -9719,7 +9722,7 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 personality = true
@@ -9751,7 +9754,7 @@ async fn feature_requirements_auto_review_disables_guardian_approval() -> std::i
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 auto_review = false
@@ -9773,7 +9776,7 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 in_app_browser = false
@@ -9879,7 +9882,7 @@ shell_tool = true
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 personality = true
@@ -9997,7 +10000,7 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
             ),
         )
@@ -10022,7 +10025,7 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
             ),
         )
@@ -10061,7 +10064,7 @@ async fn profile_approvals_reviewer_falls_back_when_disallowed_by_requirements()
             ..LoaderOverrides::without_managed_config_for_tests()
         })
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
             ),
         )
@@ -10086,7 +10089,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approvals_reviewers = ["user", "guardian_subagent"]"#,
             ),
         )
@@ -10602,7 +10605,7 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 personality = true
@@ -10636,7 +10639,7 @@ async fn feature_requirements_warn_on_collab_legacy_alias() -> std::io::Result<(
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 collab = true
@@ -10666,7 +10669,7 @@ async fn feature_requirements_warn_and_ignore_unknown_feature() -> std::io::Resu
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [features]
 made_up_feature = true

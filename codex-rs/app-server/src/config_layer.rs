@@ -1,7 +1,7 @@
+use codex_app_server_protocol::CloudManagedLayer as ApiCloudManagedLayer;
 use codex_app_server_protocol::ConfigLayer as ApiConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata as ApiConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource as ApiConfigLayerSource;
-use codex_app_server_protocol::CloudManagedLayer as ApiCloudManagedLayer;
 use codex_config::CloudManagedLayer;
 use codex_config::ConfigLayer;
 use codex_config::ConfigLayerMetadata;

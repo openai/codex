@@ -61,7 +61,8 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// Enterprise-managed config layer delivered by the cloud config bundle.
+    /// Legacy cloud config source retained for v2 wire compatibility. New
+    /// config stacks emit [`Self::CloudManaged`] instead.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     EnterpriseManaged {

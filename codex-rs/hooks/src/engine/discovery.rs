@@ -284,13 +284,6 @@ fn fallback_managed_hooks_source_path(
         Some(RequirementSource::Composite { .. }) => {
             synthetic_layer_path("<requirements-composition>/requirements.toml")
         }
-        Some(RequirementSource::EnterpriseManaged { id, name }) => {
-            let name = escape_xml_text(name);
-            let id = escape_xml_text(id);
-            synthetic_layer_path(&format!(
-                "<enterprise-managed:{name}:{id}>/requirements.toml"
-            ))
-        }
         Some(RequirementSource::CloudManaged { layer, id, name }) => {
             let name = escape_xml_text(name);
             let id = escape_xml_text(id);
@@ -657,7 +650,6 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
             // available coarse attribution.
             hook_source_for_requirement_source(sources.first())
         }
-        Some(RequirementSource::EnterpriseManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::CloudManaged { .. }) => HookSource::CloudRequirements,
         Some(RequirementSource::Unknown) | None => HookSource::Unknown,
     }
@@ -665,6 +657,7 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
 
 #[cfg(test)]
 mod tests {
+    use codex_config::CloudManagedLayer;
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
     use codex_config::HookEventsToml;
@@ -732,7 +725,8 @@ mod tests {
                 RequirementSource::SystemRequirementsToml {
                     file: test_path_buf("/etc/codex/requirements.toml").abs(),
                 },
-                RequirementSource::EnterpriseManaged {
+                RequirementSource::CloudManaged {
+                    layer: CloudManagedLayer::SystemOverlay,
                     id: "layer-1".to_string(),
                     name: "Engineering".to_string(),
                 },
@@ -746,8 +740,9 @@ mod tests {
     }
 
     #[test]
-    fn enterprise_managed_synthetic_path_escapes_display_fields() {
-        let source = RequirementSource::EnterpriseManaged {
+    fn cloud_managed_synthetic_path_escapes_display_fields() {
+        let source = RequirementSource::CloudManaged {
+            layer: CloudManagedLayer::SystemOverlay,
             id: "id<&>".to_string(),
             name: "Name <Admin> & \"Ops\"".to_string(),
         };

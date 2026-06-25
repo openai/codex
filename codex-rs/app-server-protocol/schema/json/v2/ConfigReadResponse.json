@@ -535,7 +535,7 @@
           "type": "object"
         },
         {
-          "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+          "description": "Legacy cloud config source retained for v2 wire compatibility. New config stacks emit [`Self::CloudManaged`] instead.",
           "properties": {
             "id": {
               "description": "Stable identifier for the delivered layer.",

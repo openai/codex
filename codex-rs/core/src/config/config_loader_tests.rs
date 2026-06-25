@@ -54,7 +54,8 @@ fn config_error_from_io(err: &std::io::Error) -> &ConfigError {
 }
 
 fn cloud_config_bundle_requirement_source() -> RequirementSource {
-    RequirementSource::EnterpriseManaged {
+    RequirementSource::CloudManaged {
+        layer: CloudManagedLayer::SystemOverlay,
         id: "req_1".to_string(),
         name: "Base requirements".to_string(),
     }
@@ -1091,7 +1092,7 @@ allowed_approval_policies = ["on-request"]
         &[] as &[(String, TomlValue)],
         ConfigLoadOptions {
             loader_overrides,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"allowed_approval_policies = ["never"]"#,
             ),
             ..Default::default()
@@ -1321,7 +1322,7 @@ async fn load_config_layers_includes_cloud_config_bundle() -> anyhow::Result<()>
     let requirements = r#"allowed_approval_policies = ["never"]"#;
     let expected: ConfigRequirementsToml = toml::from_str(requirements)?;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -1902,7 +1903,7 @@ extends = ":workspace"
 }
 
 #[tokio::test]
-async fn load_config_layers_inserts_cloud_config_between_system_and_user() -> anyhow::Result<()> {
+async fn load_config_layers_inserts_system_overlay_between_system_and_user() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1934,7 +1935,7 @@ review_model = "system-review"
         &[] as &[(String, TomlValue)],
         ConfigLoadOptions {
             loader_overrides: overrides,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_config(
                 r#"model = "cloud"
 model_provider = "cloud-provider"
 "#,
@@ -1969,7 +1970,8 @@ model_provider = "cloud-provider"
             ConfigLayerSource::System {
                 file: AbsolutePathBuf::from_absolute_path(&system_config_path)?,
             },
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "cfg_1".to_string(),
                 name: "Base config".to_string(),
             },
@@ -1984,7 +1986,7 @@ model_provider = "cloud-provider"
 }
 
 #[tokio::test]
-async fn load_config_layers_applies_managed_buckets_at_generic_precedence() -> anyhow::Result<()> {
+async fn load_config_layers_applies_managed_bucket_precedence() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -2014,32 +2016,31 @@ allowed_sandbox_modes = ["read-only"]
         LoaderOverrides::with_managed_config_path_for_tests(managed_config_path.clone());
     overrides.system_config_path = Some(system_config_path.clone());
     overrides.system_requirements_path = Some(system_requirements_path.clone());
-    let cloud_config_bundle =
-        CloudConfigBundleFixture::enterprise_config("model_provider = \"legacy-provider\"")
-            .add_managed_config(
-                CloudManagedLayer::Baseline,
-                r#"model = "baseline"
+    let cloud_config_bundle = CloudConfigBundleFixture::default()
+        .add_managed_config(
+            CloudManagedLayer::Baseline,
+            r#"model = "baseline"
 model_provider = "baseline-provider"
 review_model = "baseline-review"
 "#,
-            )
-            .add_managed_config(
-                CloudManagedLayer::SystemOverlay,
-                "model_provider = \"overlay-provider\"",
-            )
-            .add_managed_requirement(
-                CloudManagedLayer::Baseline,
-                r#"allowed_web_search_modes = ["live"]
+        )
+        .add_managed_config(
+            CloudManagedLayer::SystemOverlay,
+            "model_provider = \"overlay-provider\"",
+        )
+        .add_managed_requirement(
+            CloudManagedLayer::Baseline,
+            r#"allowed_web_search_modes = ["live"]
 allow_remote_control = true
 "#,
-            )
-            .add_managed_requirement(
-                CloudManagedLayer::SystemOverlay,
-                r#"allowed_sandbox_modes = ["read-only", "workspace-write"]
+        )
+        .add_managed_requirement(
+            CloudManagedLayer::SystemOverlay,
+            r#"allowed_sandbox_modes = ["read-only", "workspace-write"]
 allowed_approval_policies = ["on-request"]
 "#,
-            )
-            .into_loader();
+        )
+        .into_loader();
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -2138,75 +2139,6 @@ allowed_approval_policies = ["on-request"]
 }
 
 #[tokio::test]
-async fn explicit_empty_system_overlay_suppresses_legacy_cloud_fallback() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    let system_config_path = tmp.path().join("system_config.toml");
-    tokio::fs::write(
-        &system_config_path,
-        "model_provider = \"system-provider\"\n",
-    )
-    .await?;
-    let system_requirements_path = tmp.path().join("requirements.toml");
-    tokio::fs::write(
-        &system_requirements_path,
-        r#"allowed_approval_policies = ["on-request"]"#,
-    )
-    .await?;
-
-    let mut bundle =
-        CloudConfigBundleFixture::enterprise_config("model_provider = \"legacy-provider\"")
-            .add_enterprise_requirement(r#"allowed_approval_policies = ["never"]"#)
-            .into_bundle();
-    bundle.config_toml.managed_layers.system_overlay = Some(Vec::new());
-    bundle.requirements_toml.managed_layers.system_overlay = Some(Vec::new());
-    let cloud_config_bundle = CloudConfigBundleLoader::new(async move { Ok(Some(bundle)) });
-    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
-    overrides.system_config_path = Some(system_config_path);
-    overrides.system_requirements_path = Some(system_requirements_path.clone());
-
-    let layers = load_config_layers_state(
-        LOCAL_FS.as_ref(),
-        &codex_home,
-        Some(AbsolutePathBuf::from_absolute_path(tmp.path())?),
-        &[] as &[(String, TomlValue)],
-        ConfigLoadOptions {
-            loader_overrides: overrides,
-            cloud_config_bundle,
-            ..Default::default()
-        },
-        &codex_config::NoopThreadConfigLoader,
-    )
-    .await?;
-
-    assert_eq!(
-        layers
-            .effective_config()
-            .get("model_provider")
-            .and_then(TomlValue::as_str),
-        Some("system-provider")
-    );
-    assert!(
-        !layers
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ false,
-            )
-            .iter()
-            .any(|layer| matches!(layer.name, ConfigLayerSource::EnterpriseManaged { .. }))
-    );
-    assert_eq!(
-        layers.requirements().approval_policy.source,
-        Some(RequirementSource::SystemRequirementsToml {
-            file: AbsolutePathBuf::from_absolute_path(system_requirements_path)?,
-        })
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
@@ -2232,7 +2164,7 @@ async fn load_config_layers_can_ignore_managed_requirements() -> anyhow::Result<
     overrides.system_requirements_path = Some(system_requirements_path);
     overrides.ignore_managed_requirements = true;
 
-    let cloud_config_bundle = CloudConfigBundleFixture::loader_with_enterprise_requirement(
+    let cloud_config_bundle = CloudConfigBundleFixture::loader_with_system_overlay_requirement(
         r#"allowed_approval_policies = ["never"]"#,
     );
 
@@ -2289,7 +2221,7 @@ statusMessage = "checking"
     );
     let expected: ConfigRequirementsToml = toml::from_str(&requirements)?;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -2330,7 +2262,7 @@ async fn load_config_layers_resolves_relative_bundle_requirements_paths_against_
 deny_read = ["secrets/**"]
 "#;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
 
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
@@ -2383,7 +2315,7 @@ async fn strict_config_rejects_unknown_cloud_config_key() {
         ConfigLoadOptions {
             loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
             strict_config: true,
-            cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
+            cloud_config_bundle: CloudConfigBundleFixture::loader_with_system_overlay_config(
                 "unknown_key = true",
             ),
         },
@@ -2414,7 +2346,7 @@ async fn load_config_layers_applies_matching_remote_sandbox_config() -> anyhow::
             allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#;
     let cloud_config_bundle =
-        CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements);
+        CloudConfigBundleFixture::loader_with_system_overlay_requirement(requirements);
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
         &codex_home,

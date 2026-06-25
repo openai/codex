@@ -255,7 +255,7 @@ Cloud-managed sources returned by `config/read` in `origins`, `layers`, or overr
 }
 ```
 
-`layer` is either `baseline` or `systemOverlay`. Legacy cloud fallback continues to use the `enterpriseManaged` source type.
+`layer` is either `baseline` or `systemOverlay`. The `enterpriseManaged` source type remains in the v2 schema for compatibility but is not emitted for new cloud config stacks.
 
 ### Example: Start or resume a thread
 
