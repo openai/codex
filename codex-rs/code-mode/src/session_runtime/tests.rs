@@ -15,6 +15,8 @@ use crate::cell_actor::CompletionCommit;
 
 struct RecordingDelegate;
 
+struct PanickingClosedDelegate;
+
 impl SessionRuntimeDelegate for RecordingDelegate {
     async fn invoke_tool(
         &self,
@@ -35,6 +37,62 @@ impl SessionRuntimeDelegate for RecordingDelegate {
     }
 
     fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+impl SessionRuntimeDelegate for PanickingClosedDelegate {
+    async fn invoke_tool(
+        &self,
+        _invocation: NestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> Result<JsonValue, String> {
+        Ok(JsonValue::Null)
+    }
+
+    async fn notify(
+        &self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {
+        panic!("cell close panic probe");
+    }
+}
+
+#[tokio::test]
+async fn reports_cell_actor_panics_to_the_owner() {
+    let (failure_tx, mut failure_rx) = tokio::sync::mpsc::unbounded_channel();
+    let runtime = SessionRuntime::new_with_task_failure_handler(
+        Arc::new(PanickingClosedDelegate),
+        Some(Arc::new(move |reason| {
+            let _ = failure_tx.send(reason);
+        })),
+    );
+    let started = runtime
+        .execute(
+            execute_request(r#"text("done");"#),
+            ObserveMode::YieldAfter(Duration::from_secs(1)),
+        )
+        .await
+        .expect("start cell");
+    assert_eq!(
+        started.initial_event().await,
+        Ok(CellEvent::Completed {
+            content_items: vec![OutputItem::Text {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+    runtime.shutdown().await.expect("shutdown runtime");
+    let failure = failure_rx
+        .try_recv()
+        .expect("shutdown should wait for the cell failure watcher");
+    assert!(failure.contains("code-mode cell 1 task failed"));
 }
 
 #[tokio::test]
@@ -116,6 +174,26 @@ fn execute_request(source: &str) -> CreateCellRequest {
         enabled_tools: Vec::new(),
         source: source.to_string(),
     }
+}
+
+#[tokio::test]
+async fn cell_id_allocation_fails_before_wrapping() {
+    let runtime = SessionRuntime::new(Arc::new(RecordingDelegate));
+    runtime
+        .inner
+        .next_cell_id
+        .store(u64::MAX, Ordering::Relaxed);
+
+    assert_eq!(
+        runtime
+            .execute(
+                execute_request(r#"text("unreachable");"#),
+                ObserveMode::YieldAfter(Duration::from_secs(1)),
+            )
+            .await
+            .err(),
+        Some(Error::CellIdSpaceExhausted)
+    );
 }
 
 #[tokio::test]

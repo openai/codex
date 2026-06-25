@@ -87,6 +87,18 @@ impl InProcessCodeModeSession {
         }
     }
 
+    pub fn with_delegate_and_task_failure_handler(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        task_failure_handler: Arc<dyn Fn(String) + Send + Sync>,
+    ) -> Self {
+        Self {
+            runtime: SessionRuntime::new_with_task_failure_handler(
+                Arc::new(ProtocolDelegate { delegate }),
+                Some(task_failure_handler),
+            ),
+        }
+    }
+
     pub async fn execute(&self, request: ExecuteRequest) -> Result<StartedCell, String> {
         let yield_time_ms = request.yield_time_ms.unwrap_or(DEFAULT_EXEC_YIELD_TIME_MS);
         let started = self

@@ -24,6 +24,7 @@ pub(crate) use self::types::SessionRuntimeDelegate;
 pub(crate) use self::types::ToolDefinition;
 pub(crate) use self::types::ToolKind;
 pub(crate) use self::types::ToolName;
+use crate::TaskFailureHandler;
 use crate::cell_actor::CellActor;
 use crate::cell_actor::CellError;
 use crate::cell_actor::CellEventFuture;
@@ -46,11 +47,19 @@ struct Inner<D: SessionRuntimeDelegate> {
     cell_tasks: TaskTracker,
     shutdown_token: CancellationToken,
     delegate: Arc<D>,
+    task_failure_handler: Option<TaskFailureHandler>,
     next_cell_id: AtomicU64,
 }
 
 impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
     pub(crate) fn new(delegate: Arc<D>) -> Self {
+        Self::new_with_task_failure_handler(delegate, /*task_failure_handler*/ None)
+    }
+
+    pub(crate) fn new_with_task_failure_handler(
+        delegate: Arc<D>,
+        task_failure_handler: Option<TaskFailureHandler>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
@@ -58,6 +67,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
                 cell_tasks: TaskTracker::new(),
                 shutdown_token: CancellationToken::new(),
                 delegate,
+                task_failure_handler,
                 next_cell_id: AtomicU64::new(1),
             }),
         }
@@ -71,7 +81,7 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         if self.inner.shutdown_token.is_cancelled() {
             return Err(Error::ShuttingDown);
         }
-        let cell_id = self.allocate_cell_id();
+        let cell_id = self.allocate_cell_id()?;
         let initial_event = self
             .start_cell(cell_id.clone(), request, initial_observe_mode)
             .await?;
@@ -133,13 +143,14 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
         Ok(())
     }
 
-    fn allocate_cell_id(&self) -> CellId {
-        CellId::new(
-            self.inner
-                .next_cell_id
-                .fetch_add(1, Ordering::Relaxed)
-                .to_string(),
-        )
+    fn allocate_cell_id(&self) -> Result<CellId, Error> {
+        self.inner
+            .next_cell_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next_cell_id| {
+                next_cell_id.checked_add(1)
+            })
+            .map(|cell_id| CellId::new(cell_id.to_string()))
+            .map_err(|_| Error::CellIdSpaceExhausted)
     }
 
     async fn start_cell(
@@ -167,10 +178,21 @@ impl<D: SessionRuntimeDelegate> SessionRuntime<D> {
             host,
             initial_observe_mode,
             cell_state,
+            self.inner.task_failure_handler.clone(),
         )
         .map_err(Error::Runtime)?;
         cells.insert(cell_id.clone(), handle);
-        self.inner.cell_tasks.spawn(task);
+        let task = self.inner.cell_tasks.spawn(task);
+        if let Some(task_failure_handler) = self.inner.task_failure_handler.clone() {
+            let failed_cell_id = cell_id.clone();
+            let _failure_watcher = self.inner.cell_tasks.spawn(async move {
+                if let Err(err) = task.await {
+                    task_failure_handler(format!(
+                        "code-mode cell {failed_cell_id} task failed: {err}"
+                    ));
+                }
+            });
+        }
         drop(cells);
         Ok(map_actor_event(cell_id, initial_event))
     }

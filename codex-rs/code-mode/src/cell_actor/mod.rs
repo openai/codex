@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use self::callbacks::CallbackCompletion;
 use self::callbacks::finish_callbacks;
-use self::callbacks::log_task_result;
+use self::callbacks::report_task_result;
 use self::callbacks::spawn_notification;
 use self::callbacks::spawn_tool;
 use self::conversions::cell_tool_kind;
@@ -30,6 +30,7 @@ pub(crate) use self::types::CellToolCall;
 pub(crate) use self::types::CompletionCommit;
 use self::types::CompletionDelivery;
 use self::types::ObservationDelivery;
+use crate::TaskFailureHandler;
 use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
@@ -50,6 +51,7 @@ impl CellActor {
         host: Arc<H>,
         initial_observe_mode: ObserveMode,
         cell_state: Arc<CellState>,
+        task_failure_handler: Option<TaskFailureHandler>,
     ) -> Result<
         (
             CellHandle,
@@ -66,6 +68,7 @@ impl CellActor {
             runtime_request(request),
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
+            task_failure_handler.clone(),
         )?;
         let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
         let task = run_cell(
@@ -82,6 +85,7 @@ impl CellActor {
                 mode: initial_observe_mode,
                 response_tx: initial_response_tx,
             },
+            task_failure_handler,
         );
         let initial_response =
             Box::pin(async move { initial_response_rx.await.unwrap_or(Err(CellError::Closed)) });
@@ -107,6 +111,7 @@ async fn run_cell<H: CellHost>(
     mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
     command_rx: mpsc::UnboundedReceiver<CellCommand>,
     initial_observer: Observer,
+    task_failure_handler: Option<TaskFailureHandler>,
 ) {
     let CellContext {
         runtime_tx,
@@ -123,6 +128,7 @@ async fn run_cell<H: CellHost>(
     let mut termination = false;
     let mut runtime_closed = false;
     let mut runtime_paused = false;
+    let mut runtime_failure_reported = false;
     let mut yield_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
     let mut notification_tasks = JoinSet::new();
     let mut tool_tasks = JoinSet::new();
@@ -149,6 +155,7 @@ async fn run_cell<H: CellHost>(
                         &mut notification_tasks,
                         &mut tool_tasks,
                         CallbackCompletion::Cancel,
+                        task_failure_handler.as_ref(),
                     ).await;
                     finish_termination(
                         &cell_state,
@@ -259,6 +266,7 @@ async fn run_cell<H: CellHost>(
                             &mut notification_tasks,
                             &mut tool_tasks,
                             CallbackCompletion::Cancel,
+                            task_failure_handler.as_ref(),
                         ).await;
                         finish_termination(
                             &cell_state,
@@ -269,11 +277,20 @@ async fn run_cell<H: CellHost>(
                         );
                         break;
                     }
+                    if !runtime_failure_reported
+                        && let Some(task_failure_handler) = &task_failure_handler
+                    {
+                        runtime_failure_reported = true;
+                        task_failure_handler(
+                            "code-mode V8 runtime thread ended unexpectedly".to_string(),
+                        );
+                    }
                     finish_callbacks(
                         &callback_cancellation_token,
                         &mut notification_tasks,
                         &mut tool_tasks,
                         CallbackCompletion::DrainNotifications,
+                        task_failure_handler.as_ref(),
                     )
                     .await;
                     let event = CellEvent::Completed {
@@ -376,6 +393,7 @@ async fn run_cell<H: CellHost>(
                             call_id,
                             text,
                             callback_cancellation_token.child_token(),
+                            task_failure_handler.clone(),
                         );
                     }
                     RuntimeEvent::ToolCall { id, name, kind, input } => {
@@ -394,6 +412,7 @@ async fn run_cell<H: CellHost>(
                             },
                             runtime_tx.clone(),
                             callback_cancellation_token.child_token(),
+                            task_failure_handler.clone(),
                         );
                     }
                     RuntimeEvent::Result { stored_value_writes, error_text } => {
@@ -405,6 +424,7 @@ async fn run_cell<H: CellHost>(
                                 &mut notification_tasks,
                                 &mut tool_tasks,
                                 CallbackCompletion::Cancel,
+                                task_failure_handler.as_ref(),
                             ).await;
                             finish_termination(
                                 &cell_state,
@@ -420,6 +440,7 @@ async fn run_cell<H: CellHost>(
                             &mut notification_tasks,
                             &mut tool_tasks,
                             CallbackCompletion::DrainNotifications,
+                            task_failure_handler.as_ref(),
                         )
                         .await;
                         let event = CellEvent::Completed {
@@ -455,13 +476,20 @@ async fn run_cell<H: CellHost>(
                             }
                         }
                     }
+                    RuntimeEvent::ThreadPanicked => {
+                        runtime_failure_reported = true;
+                    }
                 }
             }
             task_result = notification_tasks.join_next(), if !notification_tasks.is_empty() => {
-                log_task_result(task_result, "notification");
+                report_task_result(
+                    task_result,
+                    "notification",
+                    task_failure_handler.as_ref(),
+                );
             }
             task_result = tool_tasks.join_next(), if !tool_tasks.is_empty() => {
-                log_task_result(task_result, "tool");
+                report_task_result(task_result, "tool", task_failure_handler.as_ref());
             }
         }
     }
@@ -479,6 +507,7 @@ async fn run_cell<H: CellHost>(
         &mut notification_tasks,
         &mut tool_tasks,
         CallbackCompletion::Cancel,
+        task_failure_handler.as_ref(),
     )
     .await;
     host.closed().await;
