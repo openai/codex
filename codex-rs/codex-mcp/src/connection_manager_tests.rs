@@ -1428,7 +1428,7 @@ async fn server_replacement_preserves_and_does_not_cancel_unrelated_clients() {
         .prepare_server_replacement(
             "beta".to_string(),
             local_stdio_server("discarded"),
-            None,
+            /*auth_entry*/ None,
             "discarded-refresh".to_string(),
         )
         .await
@@ -1446,7 +1446,7 @@ async fn server_replacement_preserves_and_does_not_cancel_unrelated_clients() {
             .prepare_server_replacement(
                 "beta".to_string(),
                 local_stdio_server("replacement"),
-                None,
+                /*auth_entry*/ None,
                 "refresh".to_string(),
             )
             .await
@@ -1483,7 +1483,7 @@ async fn server_replacement_preserves_and_does_not_cancel_unrelated_clients() {
             .prepare_server_replacement(
                 "alpha".to_string(),
                 local_stdio_server("second-replacement"),
-                None,
+                /*auth_entry*/ None,
                 "second-refresh".to_string(),
             )
             .await
