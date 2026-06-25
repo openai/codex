@@ -61,7 +61,7 @@ fn local_exec_server_ignores_invalid_config_without_strict_config() -> Result<()
 }
 
 #[tokio::test]
-async fn local_exec_server_exports_real_otel_metrics() -> Result<()> {
+async fn local_exec_server_flushes_telemetry_on_stdio_disconnect() -> Result<()> {
     let collector = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/metrics"))
@@ -87,9 +87,9 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
     let cwd = url::Url::from_directory_path(std::env::current_dir()?)
         .map_err(|()| anyhow::anyhow!("could not convert cwd to file URL"))?;
     #[cfg(windows)]
-    let argv = vec!["cmd.exe", "/C", "exit", "0"];
+    let argv = vec!["ping.exe", "-n", "61", "127.0.0.1"];
     #[cfg(not(windows))]
-    let argv = vec!["/usr/bin/true"];
+    let argv = vec!["/bin/sleep", "60"];
     let codex_bin = codex_utils_cargo_bin::cargo_bin("codex")?;
     let codex_home = codex_home.path().to_path_buf();
     let subprocess = async move {
@@ -98,9 +98,11 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
             .env("CODEX_HOME", codex_home)
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")
+            .env("RUST_LOG", "info")
             .args(["exec-server", "--listen", "stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = command.spawn()?;
         let mut stdin = child
@@ -112,6 +114,11 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
             .take()
             .ok_or_else(|| anyhow::anyhow!("exec-server stdout was not piped"))?;
         let mut stdout = BufReader::new(stdout);
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("exec-server stderr was not piped"))?;
+        let mut stderr = BufReader::new(stderr);
 
         send_json_line(
             &mut stdin,
@@ -146,35 +153,25 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         )
         .await?;
         wait_for_response(&mut stdout, /*expected_id*/ 2).await?;
-        send_json_line(
-            &mut stdin,
-            &serde_json::json!({
-                "id": 3,
-                "method": "process/read",
-                "params": {
-                    "processId": "otel-process",
-                    "afterSeq": null,
-                    "maxBytes": null,
-                    "waitMs": 5_000
-                }
-            }),
-        )
-        .await?;
-        wait_for_response(&mut stdout, /*expected_id*/ 3).await?;
         drop(stdin);
         let mut remaining_stdout = String::new();
-        stdout.read_to_string(&mut remaining_stdout).await?;
+        let mut captured_stderr = String::new();
+        tokio::try_join!(
+            stdout.read_to_string(&mut remaining_stdout),
+            stderr.read_to_string(&mut captured_stderr),
+        )?;
         let status = child.wait().await?;
         anyhow::ensure!(
             status.success(),
-            "exec-server exited with {status}; remaining stdout: {remaining_stdout}"
+            "exec-server exited with {status}; remaining stdout: {remaining_stdout}; stderr: \
+             {captured_stderr}"
         );
-        Ok::<(), anyhow::Error>(())
+        Ok::<String, anyhow::Error>(captured_stderr)
     };
     let subprocess_result = tokio::time::timeout(Duration::from_secs(30), subprocess)
         .await
         .map_err(|_| anyhow::anyhow!("exec-server subprocess timed out"))?;
-    subprocess_result?;
+    let stderr = subprocess_result?;
 
     let requests = collector
         .received_requests()
@@ -207,7 +204,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
     assert_metric_point(
         &metrics,
         "exec_server_processes_finished_total",
-        &[("result", "success")],
+        &[("result", "terminated")],
         Some(1),
     );
     assert_metric_point(
@@ -219,8 +216,12 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
     assert_metric_point(
         &metrics,
         "exec_server_process_duration_seconds",
-        &[("result", "success")],
+        &[("result", "terminated")],
         /*value*/ None,
+    );
+    assert!(
+        stderr.contains("codex.exec_server{otel.kind=\"internal\"}"),
+        "top-level codex.exec_server span missing from stderr: {stderr}"
     );
     Ok(())
 }

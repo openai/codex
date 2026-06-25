@@ -14,11 +14,6 @@ pub use transport::ExecServerListenUrlParseError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecServerTelemetry;
 
-#[tracing::instrument(
-    name = "codex.exec_server",
-    skip_all,
-    fields(otel.kind = "internal")
-)]
 pub async fn run_main(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,
@@ -26,6 +21,11 @@ pub async fn run_main(
     run_main_with_telemetry(listen_url, runtime_paths, ExecServerTelemetry::default()).await
 }
 
+#[tracing::instrument(
+    name = "codex.exec_server",
+    skip_all,
+    fields(otel.kind = "internal")
+)]
 pub async fn run_main_with_telemetry(
     listen_url: &str,
     runtime_paths: ExecServerRuntimePaths,

@@ -117,6 +117,8 @@ where
             ConnectionTransport::Stdio,
         )
         .await;
+    // Stdio serves exactly one connection, so detached sessions cannot be resumed.
+    processor.shutdown().await;
     Ok(())
 }
 

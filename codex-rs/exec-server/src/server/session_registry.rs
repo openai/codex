@@ -122,6 +122,17 @@ impl SessionRegistry {
         })
     }
 
+    pub(crate) async fn shutdown(&self) {
+        let entries = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.drain().map(|(_, entry)| entry).collect::<Vec<_>>()
+        };
+
+        for entry in entries {
+            entry.process.shutdown().await;
+        }
+    }
+
     async fn expire_if_detached(&self, session_id: String, connection_id: ConnectionId) {
         tokio::time::sleep(DETACHED_SESSION_TTL).await;
 

@@ -59,6 +59,10 @@ impl ConnectionProcessor {
         )
         .await;
     }
+
+    pub(crate) async fn shutdown(&self) {
+        self.session_registry.shutdown().await;
+    }
 }
 
 async fn run_connection(
