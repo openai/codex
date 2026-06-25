@@ -85,6 +85,46 @@ index {ZERO_OID}..{right_oid}
 }
 
 #[tokio::test]
+async fn updating_display_roots_rerenders_existing_diff() {
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    fs::create_dir(&workspace).expect("workspace directory");
+    let add = apply_verified_patch(
+        &workspace,
+        "*** Begin Patch\n*** Add File: a.txt\n+foo\n*** End Patch",
+    )
+    .await;
+    let mut tracker = tracker_with_root(dir.path());
+    tracker.track_delta("", &add);
+    let right_oid = git_blob_sha1_hex("foo\n");
+    let before = format!(
+        r#"diff --git a/workspace/a.txt b/workspace/a.txt
+new file mode {REGULAR_FILE_MODE}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/workspace/a.txt
+@@ -0,0 +1 @@
++foo
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(before));
+
+    tracker.set_environment_display_roots([("".to_string(), workspace)]);
+
+    let after = format!(
+        r#"diff --git a/a.txt b/a.txt
+new file mode {REGULAR_FILE_MODE}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/a.txt
+@@ -0,0 +1 @@
++foo
+"#,
+    );
+    assert_eq!(tracker.get_unified_diff(), Some(after));
+}
+
+#[tokio::test]
 async fn invalidated_tracker_suppresses_existing_diff() {
     let dir = tempdir().expect("tempdir");
     let mut tracker = tracker_with_root(dir.path());

@@ -204,7 +204,8 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
+    let mut diff_environment_selections = first_step_context.environments.to_selections();
+    let display_roots = turn_diff_display_roots(first_step_context.as_ref()).await;
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
         TurnDiffTracker::with_environment_display_roots(display_roots),
     ));
@@ -244,6 +245,16 @@ pub(crate) async fn run_turn(
             Some(step_context) => step_context,
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
+        let current_environment_selections = step_context.environments.to_selections();
+        if current_environment_selections != diff_environment_selections {
+            // Refresh turn-owned derived state before tools use this request's environments.
+            let display_roots = turn_diff_display_roots(step_context.as_ref()).await;
+            turn_diff_tracker
+                .lock()
+                .await
+                .set_environment_display_roots(display_roots);
+            diff_environment_selections = current_environment_selections;
+        }
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
@@ -454,9 +465,9 @@ pub(crate) async fn run_turn(
 }
 
 #[instrument(level = "trace", skip_all)]
-async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
+async fn turn_diff_display_roots(step_context: &StepContext) -> Vec<(String, PathBuf)> {
     let mut display_roots = Vec::new();
-    for turn_environment in &turn_context.environments.turn_environments {
+    for turn_environment in &step_context.environments.turn_environments {
         // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
         // environment roots can participate without host-native conversion.
         let Ok(cwd) = turn_environment.cwd().to_abs_path() else {

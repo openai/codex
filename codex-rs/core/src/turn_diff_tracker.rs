@@ -90,6 +90,18 @@ impl TurnDiffTracker {
         tracker
     }
 
+    pub(crate) fn set_environment_display_roots(
+        &mut self,
+        display_roots: impl IntoIterator<Item = (String, PathBuf)>,
+    ) {
+        self.display_roots_by_environment = display_roots.into_iter().collect();
+        if self.valid {
+            // Rendered diffs include display paths, so rebuild them for the new roots.
+            self.rendered_diffs.clear();
+            self.refresh_unified_diff();
+        }
+    }
+
     pub fn track_delta(&mut self, environment_id: &str, delta: &AppliedPatchDelta) {
         if !self.valid {
             return;
