@@ -171,13 +171,13 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
 
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(vec![SelectedCapabilityRoot {
+    let selected_roots = vec![SelectedCapabilityRoot {
         id: "lint-fix".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
             path: PathUri::parse("file:///skills/lint-fix").expect("skill root URI"),
         },
-    }]);
+    }];
     let session_source = SessionSource::Cli;
     let config = default_config();
     registry.thread_lifecycle_contributors()[0]
@@ -197,15 +197,16 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     assert!(prompt_fragments.is_empty());
 
     let turn_store = ExtensionData::new("turn-1");
-    let ready_environment = TurnEnvironmentSelection {
-        environment_id: "env-1".to_string(),
+    let turn_environment = TurnEnvironmentSelection {
+        environment_id: "turn-env".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
-            environments: std::slice::from_ref(&ready_environment),
+            environments: std::slice::from_ref(&turn_environment),
+            ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
@@ -257,6 +258,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-2",
             environments: &[],
+            ready_selected_capability_roots: &[],
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &unavailable_turn_store,
@@ -277,7 +279,8 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         .contribute_world_state(WorldStateContributionInput {
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-3",
-            environments: &[ready_environment],
+            environments: &[turn_environment],
+            ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &restored_turn_store,
@@ -519,18 +522,16 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(
-        [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
-            .into_iter()
-            .map(|(id, path)| SelectedCapabilityRoot {
-                id: id.to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "env-1".to_string(),
-                    path: PathUri::parse(&format!("file://{path}")).expect("skill root URI"),
-                },
-            })
-            .collect::<Vec<_>>(),
-    );
+    let selected_roots = [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
+        .into_iter()
+        .map(|(id, path)| SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "env-1".to_string(),
+                path: PathUri::parse(&format!("file://{path}")).expect("skill root URI"),
+            },
+        })
+        .collect::<Vec<_>>();
     let session_source = SessionSource::Cli;
     let config = default_config();
     registry.thread_lifecycle_contributors()[0]
@@ -553,6 +554,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
             }],
+            ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,

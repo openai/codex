@@ -36,12 +36,18 @@ impl Session {
             );
         }
         let environments = step_context.environments.to_selections();
+        let ready_selected_capability_roots = step_context
+            .selected_capability_roots
+            .iter()
+            .map(|root| root.selected_root().clone())
+            .collect::<Vec<_>>();
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {
                     thread_id: self.thread_id(),
                     turn_id: turn_context.sub_id.as_str(),
                     environments: &environments,
+                    ready_selected_capability_roots: &ready_selected_capability_roots,
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),

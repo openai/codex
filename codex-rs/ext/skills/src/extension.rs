@@ -21,8 +21,6 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
-use codex_protocol::capabilities::CapabilityRootLocation;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -61,18 +59,12 @@ where
 {
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let selected_roots = input
-                .thread_store
-                .get::<Vec<SelectedCapabilityRoot>>()
-                .map(|selected_roots| selected_roots.as_ref().clone())
-                .unwrap_or_default();
             let orchestrator_skills_available = !input
                 .environments
                 .iter()
                 .any(|environment| environment.environment_id == LOCAL_ENVIRONMENT_ID);
             input.thread_store.insert(SkillsThreadState::new(
                 (self.config_from_host)(input.config),
-                selected_roots,
                 orchestrator_skills_available,
             ));
         })
@@ -97,7 +89,6 @@ where
             let orchestrator_skills_available = true;
             thread_store.insert(SkillsThreadState::new(
                 next_config,
-                Vec::new(),
                 orchestrator_skills_available,
             ));
         }
@@ -154,24 +145,12 @@ where
                 return Vec::new();
             };
             let config = thread_state.config();
-            let ready_roots = thread_state
-                .selected_roots()
-                .iter()
-                .filter(|root| {
-                    let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
-                    input
-                        .environments
-                        .iter()
-                        .any(|environment| environment.environment_id == *environment_id)
-                })
-                .cloned()
-                .collect();
             let catalog = thread_state
                 .executor_catalog_snapshot(
                     &self.providers,
                     SkillListQuery {
                         turn_id: input.turn_id.to_string(),
-                        executor_roots: ready_roots,
+                        executor_roots: input.ready_selected_capability_roots.to_vec(),
                         host_snapshot: None,
                         include_host_skills: false,
                         include_bundled_skills: config.bundled_skills_enabled,

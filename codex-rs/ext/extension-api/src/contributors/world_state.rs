@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use serde_json::Value;
 
@@ -11,6 +12,8 @@ pub struct WorldStateContributionInput<'a> {
     pub thread_id: ThreadId,
     pub turn_id: &'a str,
     pub environments: &'a [TurnEnvironmentSelection],
+    /// Selected roots whose stable environments are ready in this sampling step.
+    pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,
