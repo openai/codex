@@ -4,6 +4,7 @@ use crate::context::ContextualUserFragment;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -30,6 +31,13 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
             }
         };
         remove_null_object_fields(&mut snapshot);
+        if snapshot.is_null() {
+            tracing::error!(
+                section_id = S::ID,
+                "world-state section snapshot cannot be null"
+            );
+            return None;
+        }
         Some(snapshot)
     }
 
@@ -54,7 +62,8 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
 /// Implementations own how their current state is rendered relative to an
 /// earlier snapshot of the same section. `ID` is persisted in rollouts and
 /// must remain stable. `Snapshot` should contain only the comparison data
-/// needed to decide what the model must be told next.
+/// needed to decide what the model must be told next, and must not serialize
+/// to null because merge-patch nulls represent deletion.
 pub(crate) trait WorldStateSection: Send + Sync + 'static {
     const ID: &'static str;
     type Snapshot: DeserializeOwned + Serialize;
@@ -78,6 +87,19 @@ pub(crate) struct WorldState {
 #[serde(transparent)]
 pub(crate) struct WorldStateSnapshot {
     sections: BTreeMap<String, Value>,
+}
+
+impl WorldStateSnapshot {
+    pub(crate) fn into_value(self) -> Value {
+        Value::Object(self.sections.into_iter().collect())
+    }
+
+    /// Returns the RFC 7386 merge patch that advances `previous` to `self`.
+    pub(crate) fn merge_patch_from(&self, previous: &Self) -> Option<Value> {
+        let previous = Value::Object(previous.sections.clone().into_iter().collect());
+        let current = Value::Object(self.sections.clone().into_iter().collect());
+        create_merge_patch(&previous, &current)
+    }
 }
 
 impl fmt::Debug for WorldState {
@@ -137,6 +159,38 @@ fn remove_null_object_fields(value: &mut Value) {
         Value::Array(_) => {}
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
+}
+
+fn create_merge_patch(previous: &Value, current: &Value) -> Option<Value> {
+    if previous == current {
+        return None;
+    }
+
+    let Value::Object(current) = current else {
+        return Some(current.clone());
+    };
+    let previous = previous.as_object();
+    let mut patch = Map::new();
+
+    if let Some(previous) = previous {
+        for key in previous.keys() {
+            if !current.contains_key(key) {
+                patch.insert(key.clone(), Value::Null);
+            }
+        }
+    }
+
+    for (key, current_value) in current {
+        let Some(previous_value) = previous.and_then(|previous| previous.get(key)) else {
+            patch.insert(key.clone(), current_value.clone());
+            continue;
+        };
+        if let Some(value_patch) = create_merge_patch(previous_value, current_value) {
+            patch.insert(key.clone(), value_patch);
+        }
+    }
+
+    Some(Value::Object(patch))
 }
 
 #[cfg(test)]

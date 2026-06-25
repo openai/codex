@@ -415,6 +415,7 @@ mod job {
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
+                | RolloutItem::WorldState(_)
                 | RolloutItem::EventMsg(_) => None,
             })
             .collect::<Vec<_>>();
