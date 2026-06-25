@@ -27,7 +27,7 @@ fn mcp_call_metric_tags_include_server_name() {
             ("status", "error".to_string()),
             ("server", "docs_server".to_string()),
             ("tool", "search_docs".to_string()),
-            ("connector_id", "connector_docs".to_string()),
+            ("connector_id", "connector/docs".to_string()),
             ("connector_name", "Docs_connector".to_string()),
         ],
     );
