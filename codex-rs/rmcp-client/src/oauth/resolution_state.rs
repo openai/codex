@@ -249,3 +249,7 @@ fn read_resolution_state(path: &Path) -> Result<ResolutionState> {
         )
     })
 }
+
+#[cfg(test)]
+#[path = "resolution_state_tests.rs"]
+mod tests;

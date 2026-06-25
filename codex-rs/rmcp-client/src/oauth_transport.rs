@@ -215,3 +215,7 @@ fn oauth_transport_error(
 ) -> StreamableHttpError<StreamableHttpClientAdapterError> {
     StreamableHttpError::Client(StreamableHttpClientAdapterError::OAuth(error))
 }
+
+#[cfg(test)]
+#[path = "oauth_transport_tests.rs"]
+mod tests;
