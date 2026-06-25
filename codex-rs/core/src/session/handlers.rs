@@ -598,8 +598,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
         warn!("failed to shutdown code mode session: {err}");
     }
     sess.services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager_arc()
         .shutdown()
         .await;
     sess.guardian_review_session.shutdown().await;

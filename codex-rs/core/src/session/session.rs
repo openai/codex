@@ -654,10 +654,11 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
-        let mcp_runtime_context_for_auth = McpRuntimeContext::new(
+        let mcp_runtime_context = McpRuntimeContext::new(
             Arc::clone(&environment_manager),
             session_configuration.cwd().to_path_buf(),
         );
+        let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_config = mcp_manager_for_mcp
@@ -673,7 +674,13 @@ impl Session {
                 &mcp_runtime_context_for_auth,
             )
             .await;
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance)
+            (
+                auth,
+                mcp_config,
+                mcp_servers,
+                auth_statuses,
+                tool_plugin_provenance,
+            )
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -684,7 +691,7 @@ impl Session {
         let (
             thread_persistence_result,
             state_db_ctx,
-            (auth, mcp_servers, auth_statuses, tool_plugin_provenance),
+            (auth, mcp_config, mcp_servers, auth_statuses, tool_plugin_provenance),
         ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
         let mut live_thread_init =
@@ -1020,6 +1027,7 @@ impl Session {
                 // changing this to use Option or OnceCell, though the current
                 // setup is straightforward enough and performs well.
                 mcp_connection_manager,
+                mcp_runtime: arc_swap::ArcSwapOption::empty(),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1153,34 +1161,12 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
-                ElicitationCapability {
-                    form: Some(FormElicitationCapability::default()),
-                    url: Some(UrlElicitationCapability::default()),
-                }
-            } else {
-                ElicitationCapability::default()
-            };
             let mcp_startup_cancellation_token = {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 cancel_guard.cancel();
                 let cancel_token = CancellationToken::new();
                 *cancel_guard = cancel_token.clone();
                 cancel_token
-            };
-            let mcp_runtime_context = {
-                let turn_environments = sess.services.turn_environments.snapshot().await;
-                // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment
-                // cwd values can be used without falling back to the session host cwd.
-                let cwd = turn_environments
-                    .primary()
-                    .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
-                    .map(|cwd| cwd.to_path_buf())
-                    .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
-                McpRuntimeContext::new(
-                    sess.services.turn_environments.environment_manager(),
-                    cwd,
-                )
             };
             let mcp_connection_manager = McpConnectionManager::new(
                 &mcp_servers,
@@ -1192,11 +1178,11 @@ impl Session {
                 tx_event.clone(),
                 mcp_startup_cancellation_token,
                 session_configuration.permission_profile(),
-                mcp_runtime_context,
+                mcp_runtime_context.clone(),
                 config.codex_home.to_path_buf(),
                 codex_apps_tools_cache_key(auth),
                 config.prefix_mcp_tool_names(),
-                client_elicitation_capability,
+                mcp_config.client_elicitation_capability.clone(),
                 sess.services
                     .supports_openai_form_elicitation
                     .load(std::sync::atomic::Ordering::Relaxed),
@@ -1210,7 +1196,11 @@ impl Session {
             ))
             .await;
             sess.services
-                .install_mcp_connection_manager(mcp_connection_manager)
+                .install_mcp_connection_manager(
+                    Arc::new(mcp_config),
+                    mcp_runtime_context,
+                    mcp_connection_manager,
+                )
                 .await?;
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
