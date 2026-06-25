@@ -1,15 +1,56 @@
 name: rust-release-zsh
 
 on:
-  workflow_call:
+  push:
+    tags:
+      - "codex-zsh-v*.*.*"
 
 env:
   ZSH_COMMIT: 77045ef899e53b9598bebc5a41db93a548a40ca6
   ZSH_PATCH: codex-rs/shell-escalation/patches/zsh-exec-wrapper.patch
 
+concurrency:
+  group: ${{ github.workflow }}::${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.release_tag.outputs.release_tag }}
+
+    steps:
+      - name: Validate release tag
+        id: release_tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${RELEASE_TAG}" =~ ^codex-zsh-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag ${RELEASE_TAG} does not match codex-zsh-vX.Y.Z." >&2
+            exit 1
+          fi
+
+          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure release does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; publish changed artifacts under a new tag." >&2
+            exit 1
+          fi
+
   linux:
     name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     container:
@@ -62,6 +103,7 @@ jobs:
 
   darwin:
     name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
@@ -101,3 +143,40 @@ jobs:
         with:
           name: codex-zsh-${{ matrix.target }}
           path: dist/zsh/${{ matrix.target }}/*
+
+  publish-release:
+    needs:
+      - metadata
+      - linux
+      - darwin
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_tag }}
+          files: dist/**
+          # Keep zsh artifact releases out of Codex's normal "latest release" channel.
+          prerelease: true
+
+      - name: Publish DotSlash manifest
+        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ needs.metadata.outputs.release_tag }}
+          config: .github/dotslash-zsh-config.json
