@@ -573,7 +573,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             .map(|(name, cfg)| {
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
                     McpServerTransportConfig::Stdio {
@@ -657,7 +657,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
                 stdio_rows.push([
@@ -678,7 +678,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
                 let bearer_token_display =

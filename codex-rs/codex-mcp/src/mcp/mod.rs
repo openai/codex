@@ -567,7 +567,7 @@ fn auth_statuses_from_entries(
 ) -> HashMap<String, McpAuthStatus> {
     auth_status_entries
         .iter()
-        .map(|(name, entry)| (name.clone(), entry.auth_status))
+        .map(|(name, entry)| (name.clone(), McpAuthStatus::from(entry.auth_state)))
         .collect::<HashMap<_, _>>()
 }
 

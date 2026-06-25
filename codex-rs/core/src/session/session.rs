@@ -490,7 +490,7 @@ impl Session {
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
-        thread_extension_init: ExtensionDataInit,
+        mut thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
@@ -556,10 +556,17 @@ impl Session {
             config.current_time_reminder.as_ref(),
             external_time_provider,
         )?;
-        let selected_capability_roots = thread_extension_init
-            .get::<Vec<SelectedCapabilityRoot>>()
-            .map(|roots| roots.as_ref().clone())
-            .unwrap_or_else(|| initial_history.get_selected_capability_roots());
+        let selected_capability_roots =
+            match thread_extension_init.get::<Vec<SelectedCapabilityRoot>>() {
+                Some(roots) => roots.as_ref().clone(),
+                None => {
+                    let roots = initial_history.get_selected_capability_roots();
+                    if !roots.is_empty() {
+                        thread_extension_init.insert(roots.clone());
+                    }
+                    roots
+                }
+            };
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
