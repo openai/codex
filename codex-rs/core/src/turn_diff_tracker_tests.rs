@@ -47,7 +47,9 @@ async fn apply_verified_patch(root: &Path, patch: &str) -> AppliedPatchDelta {
 }
 
 fn tracker_with_root(root: &Path) -> TurnDiffTracker {
-    TurnDiffTracker::with_environment_display_roots([("".to_string(), root.to_path_buf())])
+    let mut tracker = TurnDiffTracker::new();
+    tracker.set_environment_display_roots([("".to_string(), root.to_path_buf())]);
+    tracker
 }
 
 #[tokio::test]
@@ -150,7 +152,8 @@ async fn tracks_same_absolute_path_across_multiple_environments() {
     )
     .await;
 
-    let mut tracker = TurnDiffTracker::with_environment_display_roots([
+    let mut tracker = TurnDiffTracker::new();
+    tracker.set_environment_display_roots([
         ("local".to_string(), dir.path().to_path_buf()),
         ("remote".to_string(), dir.path().to_path_buf()),
     ]);

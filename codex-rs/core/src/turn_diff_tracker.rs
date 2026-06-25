@@ -4,7 +4,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::environment_selection::TurnEnvironmentSnapshot;
+use codex_git_utils::get_git_repo_root_with_fs;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use sha1::digest::Output;
+use tokio::sync::Mutex;
+use tracing::instrument;
 
 use codex_apply_patch::AppliedPatchChange;
 use codex_apply_patch::AppliedPatchDelta;
@@ -49,6 +54,7 @@ struct DiffCacheKey {
 /// mutations, without rereading the workspace filesystem.
 pub struct TurnDiffTracker {
     valid: bool,
+    display_root_selections: Option<Vec<TurnEnvironmentSelection>>,
     display_roots_by_environment: HashMap<String, PathBuf>,
     baseline_by_path: HashMap<TrackedPath, TrackedContent>,
     current_by_path: HashMap<TrackedPath, TrackedContent>,
@@ -64,6 +70,7 @@ impl Default for TurnDiffTracker {
     fn default() -> Self {
         Self {
             valid: true,
+            display_root_selections: None,
             display_roots_by_environment: HashMap::new(),
             baseline_by_path: HashMap::new(),
             current_by_path: HashMap::new(),
@@ -82,15 +89,7 @@ impl TurnDiffTracker {
         Self::default()
     }
 
-    pub fn with_environment_display_roots(
-        display_roots: impl IntoIterator<Item = (String, PathBuf)>,
-    ) -> Self {
-        let mut tracker = Self::new();
-        tracker.display_roots_by_environment = display_roots.into_iter().collect();
-        tracker
-    }
-
-    pub(crate) fn set_environment_display_roots(
+    fn set_environment_display_roots(
         &mut self,
         display_roots: impl IntoIterator<Item = (String, PathBuf)>,
     ) {
@@ -395,6 +394,37 @@ impl TurnDiffTracker {
             display
         }
     }
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) async fn refresh_environment_display_roots(
+    tracker: &Mutex<TurnDiffTracker>,
+    environments: &TurnEnvironmentSnapshot,
+) {
+    let selections = environments.to_selections();
+    if tracker.lock().await.display_root_selections.as_ref() == Some(&selections) {
+        return;
+    }
+
+    // Filesystem probes can be remote, so do not hold the tracker lock while they run.
+    let mut display_roots = Vec::new();
+    for turn_environment in &environments.turn_environments {
+        // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
+        // environment roots can participate without host-native conversion.
+        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
+            continue;
+        };
+        let root =
+            get_git_repo_root_with_fs(turn_environment.environment.get_filesystem().as_ref(), &cwd)
+                .await
+                .unwrap_or(cwd)
+                .into_path_buf();
+        display_roots.push((turn_environment.environment_id.clone(), root));
+    }
+
+    let mut tracker = tracker.lock().await;
+    tracker.display_root_selections = Some(selections);
+    tracker.set_environment_display_roots(display_roots);
 }
 
 fn git_blob_oid(data: &[u8]) -> String {
