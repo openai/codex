@@ -122,7 +122,12 @@ async fn thread_start_reports_selected_environment_metadata() -> Result<()> {
         active_permission_profile,
         ..
     } = fixture.start_thread().await?;
-    let host_cwd = fixture.codex_home.path().to_path_buf().abs();
+    let host_cwd = fixture
+        .codex_home
+        .path()
+        .to_path_buf()
+        .abs()
+        .canonicalize()?;
     assert_eq!(
         (cwd, runtime_workspace_roots, active_permission_profile),
         (
@@ -218,9 +223,15 @@ async fn turn_model_context_uses_selected_environment() -> Result<()> {
             )),
         )
     );
+    let host_cwd = fixture
+        .codex_home
+        .path()
+        .to_path_buf()
+        .abs()
+        .canonicalize()?;
     let host_workspace_roots = format!(
         "<workspace_roots><root>{}</root></workspace_roots>",
-        fixture.codex_home.path().display()
+        host_cwd.as_path().display()
     );
     // TODO(anp): Derive model-visible workspace roots from the selected remote environment and
     // render them using its native path convention.
