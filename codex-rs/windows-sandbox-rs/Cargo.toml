@@ -93,4 +93,5 @@ features = [
 version = "0.52"
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }

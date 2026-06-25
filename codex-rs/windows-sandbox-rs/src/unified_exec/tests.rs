@@ -36,6 +36,9 @@ static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[path = "job_test_support.rs"]
 mod job_test_support;
 
+#[path = "elevated_job_tests.rs"]
+mod elevated_job_tests;
+
 #[path = "restricted_job_tests.rs"]
 mod restricted_job_tests;
 
