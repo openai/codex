@@ -184,7 +184,11 @@ impl ExternalAgentSessionImporter {
             .map_err(|err| format!("failed to load imported session config: {err}"))?;
         let models_manager = self.thread_manager.get_models_manager();
         let model = models_manager
-            .get_default_model(&config.model, RefreshStrategy::Offline)
+            .get_default_model(
+                &config.model,
+                /*allow_provider_model_fallback*/ false,
+                RefreshStrategy::Offline,
+            )
             .await;
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
