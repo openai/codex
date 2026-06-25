@@ -162,7 +162,7 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::NoOverride,
+        SandboxOverride::PreserveDenyRead,
         "explicit escalation would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
     assert!(!unsandboxed_execution_allowed(&file_system_policy));
@@ -196,8 +196,35 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::NoOverride,
+        SandboxOverride::PreserveDenyRead,
         "exec-policy allow rules would drop deny-read filesystem policy, so keep the first attempt sandboxed",
+    );
+
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let escalated = windows_escalation_profile_preserving_deny_read(
+        /*is_windows*/ true,
+        SandboxOverride::PreserveDenyRead,
+        /*managed_network_active*/ false,
+        &permission_profile,
+    )
+    .expect("Windows escalation profile");
+    assert_eq!(escalated.file_system_sandbox_policy(), file_system_policy);
+    assert_eq!(
+        escalated.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    assert_eq!(
+        windows_escalation_profile_preserving_deny_read(
+            /*is_windows*/ true,
+            SandboxOverride::PreserveDenyRead,
+            /*managed_network_active*/ true,
+            &permission_profile,
+        ),
+        None,
+        "managed network requirements remain authoritative",
     );
 }
 

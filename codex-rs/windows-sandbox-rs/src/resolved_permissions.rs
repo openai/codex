@@ -106,6 +106,13 @@ impl ResolvedWindowsSandboxPermissions {
         self.file_system.has_full_disk_read_access()
     }
 
+    pub(crate) fn has_root_read_access_for_cwd(&self, cwd: &Path) -> bool {
+        let Some(root) = cwd.ancestors().last() else {
+            return false;
+        };
+        self.file_system.can_read_path_with_cwd(root, cwd)
+    }
+
     pub(crate) fn include_platform_defaults(&self) -> bool {
         self.file_system.include_platform_defaults()
     }

@@ -16,8 +16,10 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
@@ -243,6 +245,7 @@ pub(crate) fn default_exec_approval_requirement(
 pub(crate) enum SandboxOverride {
     NoOverride,
     BypassSandboxFirstAttempt,
+    PreserveDenyRead,
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
@@ -250,30 +253,55 @@ pub(crate) fn sandbox_override_for_first_attempt(
     exec_approval_requirement: &ExecApprovalRequirement,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> SandboxOverride {
-    // Deny-read restrictions are part of the active permission policy. Running
-    // without a filesystem sandbox would discard them, even if the command was
-    // otherwise approved by rules or explicit escalation.
-    if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
-        return SandboxOverride::NoOverride;
-    }
-
-    // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
-    // which supersedes `with_additional_permissions` sandboxed execution hints.
-    if matches!(
+    let bypass_sandbox = matches!(
         exec_approval_requirement,
         ExecApprovalRequirement::Skip {
             bypass_sandbox: true,
             ..
         }
-    ) {
+    ) || sandbox_permissions.requires_escalated_permissions();
+
+    // Deny-read restrictions are part of the active permission policy. Running
+    // without a filesystem sandbox would discard them, even if the command was
+    // otherwise approved by rules or explicit escalation.
+    if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
+        return if bypass_sandbox {
+            SandboxOverride::PreserveDenyRead
+        } else {
+            SandboxOverride::NoOverride
+        };
+    }
+
+    // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
+    // which supersedes `with_additional_permissions` sandboxed execution hints.
+    if bypass_sandbox {
         return SandboxOverride::BypassSandboxFirstAttempt;
     }
 
-    if sandbox_permissions.requires_escalated_permissions() {
-        SandboxOverride::BypassSandboxFirstAttempt
-    } else {
-        SandboxOverride::NoOverride
+    SandboxOverride::NoOverride
+}
+
+pub(crate) fn windows_escalation_profile_preserving_deny_read(
+    is_windows: bool,
+    sandbox_override: SandboxOverride,
+    managed_network_active: bool,
+    permission_profile: &PermissionProfile,
+) -> Option<PermissionProfile> {
+    if !is_windows
+        || !matches!(sandbox_override, SandboxOverride::PreserveDenyRead)
+        || managed_network_active
+    {
+        return None;
     }
+
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    Some(
+        PermissionProfile::from_runtime_permissions_with_enforcement(
+            permission_profile.enforcement(),
+            &file_system_policy,
+            NetworkSandboxPolicy::Enabled,
+        ),
+    )
 }
 
 /// Returns true when the active filesystem policy can be represented by
