@@ -341,9 +341,10 @@ fn unexpected_resume_count_terminates_suspended_process() -> anyhow::Result<()> 
     let Err(err) = result else {
         panic!("unexpected resume count should fail");
     };
-    assert!(
-        err.to_string()
-            .contains("expected suspended process thread count 1")
+    assert_eq!(err.to_string(), "failed to resume suspended process");
+    assert_eq!(
+        err.root_cause().to_string(),
+        "expected suspended process thread count 1, got 0"
     );
     assert_process_exited(&observer);
     assert!(!marker.exists());
