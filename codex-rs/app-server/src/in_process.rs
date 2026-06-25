@@ -55,12 +55,14 @@ use crate::config_manager::ConfigManager;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::in_process_event_delivery::drain_writer;
+use crate::in_process_event_delivery::drain_writer_until_task_finishes;
+use crate::in_process_event_delivery::route_queued_message;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
-use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
@@ -100,16 +102,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
-type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
-
-fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    matches!(
-        notification,
-        ServerNotification::TurnCompleted(_)
-            | ServerNotification::ThreadSettingsUpdated(_)
-            | ServerNotification::ExternalAgentConfigImportCompleted(_)
-    )
-}
+pub(crate) type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 /// Input needed to start an in-process app-server runtime.
 ///
@@ -158,6 +151,7 @@ pub struct InProcessStartArgs {
 #[derive(Default)]
 pub struct InProcessStartOptions {
     thread_store: Option<Arc<dyn ThreadStore>>,
+    event_delivery: InProcessEventDelivery,
 }
 
 impl InProcessStartOptions {
@@ -166,6 +160,24 @@ impl InProcessStartOptions {
         self.thread_store = Some(thread_store);
         self
     }
+
+    /// Selects how the runtime handles event-stream backpressure.
+    pub fn with_event_delivery(mut self, event_delivery: InProcessEventDelivery) -> Self {
+        self.event_delivery = event_delivery;
+        self
+    }
+}
+
+/// Backpressure behavior for events emitted by an in-process runtime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InProcessEventDelivery {
+    /// Preserves the standard runtime behavior, which may drop non-terminal
+    /// notifications when the event queue is full.
+    #[default]
+    BestEffort,
+    /// Waits for queue capacity so every server request and notification is
+    /// delivered in order.
+    Lossless,
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -202,9 +214,6 @@ enum InProcessClientMessage {
     ServerRequestError {
         request_id: RequestId,
         error: JSONRPCErrorError,
-    },
-    Shutdown {
-        done_tx: oneshot::Sender<()>,
     },
 }
 
@@ -277,10 +286,19 @@ impl InProcessClientSender {
 /// request/response helpers, and surface-specific startup policy.
 pub struct InProcessClientHandle {
     client: InProcessClientSender,
+    shutdown_tx: mpsc::UnboundedSender<oneshot::Sender<()>>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     runtime_handle: tokio::task::JoinHandle<()>,
     #[cfg(test)]
     _test_codex_home: Option<tempfile::TempDir>,
+}
+
+/// A shutdown request accepted by an in-process runtime.
+///
+/// Its fields are intentionally private; pass the value to
+/// [`InProcessClientHandle::finish_shutdown`] after draining the event stream.
+pub struct InProcessShutdown {
+    done_rx: oneshot::Receiver<()>,
 }
 
 impl InProcessClientHandle {
@@ -332,29 +350,47 @@ impl InProcessClientHandle {
         self.event_rx.recv().await
     }
 
-    /// Requests runtime shutdown and waits for worker termination.
+    /// Begins runtime shutdown while leaving the event receiver available.
     ///
-    /// Shutdown is bounded by internal timeouts and may abort background tasks
-    /// if graceful drain does not complete in time.
-    pub async fn shutdown(self) -> IoResult<()> {
-        let mut runtime_handle = self.runtime_handle;
+    /// Lossless consumers should keep calling [`next_event`](Self::next_event)
+    /// until it returns `None`, then pass the returned token to
+    /// [`finish_shutdown`](Self::finish_shutdown).
+    pub async fn begin_shutdown(&self) -> IoResult<InProcessShutdown> {
         let (done_tx, done_rx) = oneshot::channel();
+        self.shutdown_tx.send(done_tx).map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server runtime is closed",
+            )
+        })?;
+        Ok(InProcessShutdown { done_rx })
+    }
 
-        if self
-            .client
-            .client_tx
-            .send(InProcessClientMessage::Shutdown { done_tx })
-            .await
-            .is_ok()
-        {
-            let _ = timeout(SHUTDOWN_TIMEOUT, done_rx).await;
-        }
-
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut runtime_handle).await {
+    /// Waits for a previously requested shutdown and joins the runtime task.
+    pub async fn finish_shutdown(self, shutdown: InProcessShutdown) -> IoResult<()> {
+        let mut runtime_handle = self.runtime_handle;
+        let graceful_shutdown = async {
+            let _ = shutdown.done_rx.await;
+            let _ = (&mut runtime_handle).await;
+        };
+        if timeout(SHUTDOWN_TIMEOUT, graceful_shutdown).await.is_err() {
             runtime_handle.abort();
             let _ = runtime_handle.await;
         }
         Ok(())
+    }
+
+    /// Requests runtime shutdown, drains final events, and waits for worker termination.
+    ///
+    /// Shutdown is bounded by internal timeouts and may abort background tasks
+    /// if graceful drain does not complete in time.
+    pub async fn shutdown(mut self) -> IoResult<()> {
+        let shutdown = self.begin_shutdown().await?;
+        let _ = timeout(SHUTDOWN_TIMEOUT, async {
+            while self.next_event().await.is_some() {}
+        })
+        .await;
+        self.finish_shutdown(shutdown).await
     }
 
     pub fn sender(&self) -> InProcessClientSender {
@@ -403,7 +439,12 @@ async fn start_uninitialized(
 ) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
+    let InProcessStartOptions {
+        thread_store,
+        event_delivery,
+    } = options;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
+    let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<oneshot::Sender<()>>();
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
     let runtime_handle = tokio::spawn(async move {
@@ -469,7 +510,7 @@ async fn start_uninitialized(
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
-                thread_store: options.thread_store,
+                thread_store,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());
@@ -553,9 +594,29 @@ async fn start_uninitialized(
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
+        let mut shutdown_requested = false;
 
         loop {
+            if !shutdown_requested {
+                match shutdown_rx.try_recv() {
+                    Ok(done_tx) => {
+                        shutdown_requested = true;
+                        shutdown_ack = Some(done_tx);
+                        client_rx.close();
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        shutdown_requested = true;
+                        client_rx.close();
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
             tokio::select! {
+                shutdown = shutdown_rx.recv(), if !shutdown_requested => {
+                    shutdown_requested = true;
+                    shutdown_ack = shutdown;
+                    client_rx.close();
+                }
                 message = client_rx.recv() => {
                     match message {
                         Some(InProcessClientMessage::Request { request, response_tx }) => {
@@ -620,10 +681,6 @@ async fn start_uninitialized(
                                 .notify_client_error(request_id, error)
                                 .await;
                         }
-                        Some(InProcessClientMessage::Shutdown { done_tx }) => {
-                            shutdown_ack = Some(done_tx);
-                            break;
-                        }
                         None => {
                             break;
                         }
@@ -633,113 +690,102 @@ async fn start_uninitialized(
                     let Some(queued_message) = queued_message else {
                         break;
                     };
-                    let outgoing_message = queued_message.message;
-                    match outgoing_message {
-                        OutgoingMessage::Response(response) => {
-                            if let Some(response_tx) = pending_request_responses.remove(&response.id) {
-                                let _ = response_tx.send(Ok(response.result));
-                            } else {
-                                warn!(
-                                    request_id = ?response.id,
-                                    "dropping unmatched in-process response"
-                                );
-                            }
-                        }
-                        OutgoingMessage::Error(error) => {
-                            if let Some(response_tx) = pending_request_responses.remove(&error.id) {
-                                let _ = response_tx.send(Err(error.error));
-                            } else {
-                                warn!(
-                                    request_id = ?error.id,
-                                    "dropping unmatched in-process error response"
-                                );
-                            }
-                        }
-                        OutgoingMessage::Request(request) => {
-                            // Send directly to avoid cloning; on failure the
-                            // original value is returned inside the error.
-                            if let Err(send_error) = event_tx
-                                .try_send(InProcessServerEvent::ServerRequest(request))
-                            {
-                                let (error, inner) = match send_error {
-                                    mpsc::error::TrySendError::Full(inner) => (
-                                        JSONRPCErrorError {
-                                            code: OVERLOADED_ERROR_CODE,
-                                            message:
-                                                "in-process server request queue is full".to_string(),
-                                            data: None,
-                                        },
-                                        inner,
-                                    ),
-                                    mpsc::error::TrySendError::Closed(inner) => (
-                                        internal_error(
-                                            "in-process server request consumer is closed",
-                                        ),
-                                        inner,
-                                    ),
-                                };
-                                let request_id = match inner {
-                                    InProcessServerEvent::ServerRequest(req) => req.id().clone(),
-                                    _ => unreachable!("we just sent a ServerRequest variant"),
-                                };
-                                outgoing_message_sender
-                                    .notify_client_error(request_id, error)
-                                    .await;
-                            }
-                        }
-                        OutgoingMessage::AppServerNotification(notification) => {
-                            if server_notification_requires_delivery(&notification) {
-                                if event_tx
-                                    .send(InProcessServerEvent::ServerNotification(notification))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            } else if let Err(send_error) =
-                                event_tx.try_send(InProcessServerEvent::ServerNotification(notification))
-                            {
-                                match send_error {
-                                    mpsc::error::TrySendError::Full(_) => {
-                                        warn!("dropping in-process server notification (queue full)");
-                                    }
-                                    mpsc::error::TrySendError::Closed(_) => {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(write_complete_tx) = queued_message.write_complete_tx {
-                        let _ = write_complete_tx.send(());
+                    if !route_queued_message(
+                        queued_message,
+                        &mut pending_request_responses,
+                        &event_tx,
+                        Some(outgoing_message_sender.as_ref()),
+                        event_delivery,
+                    )
+                    .await
+                    {
+                        break;
                     }
                 }
             }
         }
 
-        drop(writer_rx);
+        client_rx.close();
         drop(processor_tx);
         outgoing_message_sender
             .cancel_all_requests(Some(internal_error(
                 "in-process app-server runtime is shutting down",
             )))
             .await;
-        // Drop the runtime's last sender before awaiting the router task so
-        // `outgoing_rx.recv()` can observe channel closure and exit cleanly.
+
+        let mut event_consumer_open = true;
+        match timeout(
+            SHUTDOWN_TIMEOUT,
+            drain_writer_until_task_finishes(
+                &mut processor_handle,
+                &mut writer_rx,
+                &mut pending_request_responses,
+                &event_tx,
+                Some(outgoing_message_sender.as_ref()),
+                event_delivery,
+            ),
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                event_consumer_open = false;
+                processor_handle.abort();
+                let _ = processor_handle.await;
+            }
+            Err(_) => {
+                processor_handle.abort();
+                let _ = processor_handle.await;
+            }
+        }
+
+        // Drop the runtime's last sender after processor cleanup so the
+        // outbound router can forward everything already queued and exit.
         drop(outgoing_message_sender);
+        if event_consumer_open {
+            match timeout(
+                SHUTDOWN_TIMEOUT,
+                drain_writer_until_task_finishes(
+                    &mut outbound_handle,
+                    &mut writer_rx,
+                    &mut pending_request_responses,
+                    &event_tx,
+                    /*outgoing*/ None,
+                    event_delivery,
+                ),
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    event_consumer_open = false;
+                    outbound_handle.abort();
+                    let _ = outbound_handle.await;
+                }
+                Err(_) => {
+                    outbound_handle.abort();
+                    let _ = outbound_handle.await;
+                }
+            }
+        } else {
+            outbound_handle.abort();
+            let _ = outbound_handle.await;
+        }
+
+        if event_consumer_open {
+            let _ = drain_writer(
+                &mut writer_rx,
+                &mut pending_request_responses,
+                &event_tx,
+                /*outgoing*/ None,
+                event_delivery,
+            )
+            .await;
+        }
         for (_, response_tx) in pending_request_responses {
             let _ = response_tx.send(Err(internal_error(
                 "in-process app-server runtime is shutting down",
             )));
-        }
-
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut processor_handle).await {
-            processor_handle.abort();
-            let _ = processor_handle.await;
-        }
-        if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut outbound_handle).await {
-            outbound_handle.abort();
-            let _ = outbound_handle.await;
         }
 
         if let Some(done_tx) = shutdown_ack {
@@ -749,6 +795,7 @@ async fn start_uninitialized(
 
     Ok(InProcessClientHandle {
         client: InProcessClientSender { client_tx },
+        shutdown_tx,
         event_rx,
         runtime_handle,
         #[cfg(test)]
@@ -941,6 +988,134 @@ mod tests {
             .expect("in-process runtime should shutdown cleanly");
     }
 
+    async fn saturated_warning_shutdown(event_delivery: InProcessEventDelivery) -> Vec<String> {
+        let (codex_home, mut args) =
+            build_test_start_args(SessionSource::Cli, /*channel_capacity*/ 1).await;
+        args.config_warnings = ["first warning", "second warning"]
+            .into_iter()
+            .map(|summary| ConfigWarningNotification {
+                summary: summary.to_string(),
+                details: None,
+                path: None,
+                range: None,
+            })
+            .collect();
+        let options = InProcessStartOptions::default().with_event_delivery(event_delivery);
+        let mut client = start_with_options(args, options)
+            .await
+            .expect("in-process runtime should start");
+        client._test_codex_home = Some(codex_home);
+
+        let shutdown = timeout(Duration::from_secs(1), client.begin_shutdown())
+            .await
+            .expect("begin_shutdown should not wait for event queue capacity")
+            .expect("runtime should accept shutdown");
+        let mut warnings = Vec::new();
+        loop {
+            let event = timeout(SHUTDOWN_TIMEOUT, client.next_event())
+                .await
+                .expect("event stream should close during shutdown");
+            let Some(event) = event else {
+                break;
+            };
+            if let InProcessServerEvent::ServerNotification(ServerNotification::ConfigWarning(
+                warning,
+            )) = event
+            {
+                warnings.push(warning.summary);
+            }
+        }
+        client
+            .finish_shutdown(shutdown)
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+        warnings
+    }
+
+    #[tokio::test]
+    async fn best_effort_delivery_drops_notifications_when_event_queue_is_full() {
+        assert_eq!(
+            saturated_warning_shutdown(InProcessEventDelivery::BestEffort).await,
+            vec!["first warning"]
+        );
+    }
+
+    #[tokio::test]
+    async fn lossless_delivery_preserves_order_during_two_phase_shutdown() {
+        assert_eq!(
+            saturated_warning_shutdown(InProcessEventDelivery::Lossless).await,
+            vec!["first warning", "second warning"]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_client_messages_accepted_before_close() {
+        let (codex_home, mut args) =
+            build_test_start_args(SessionSource::Cli, /*channel_capacity*/ 1).await;
+        args.config_warnings = ["first warning", "second warning"]
+            .into_iter()
+            .map(|summary| ConfigWarningNotification {
+                summary: summary.to_string(),
+                details: None,
+                path: None,
+                range: None,
+            })
+            .collect();
+        let initialize = args.initialize.clone();
+        let options =
+            InProcessStartOptions::default().with_event_delivery(InProcessEventDelivery::Lossless);
+        let mut client = start_uninitialized(args, options)
+            .await
+            .expect("in-process runtime should start");
+        client._test_codex_home = Some(codex_home);
+        client
+            .request(ClientRequest::Initialize {
+                request_id: RequestId::Integer(5),
+                params: initialize,
+            })
+            .await
+            .expect("initialize transport should work")
+            .expect("initialize should succeed");
+
+        timeout(Duration::from_secs(1), async {
+            while client.event_rx.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("event queue should saturate");
+
+        let (response_tx, response_rx) = oneshot::channel();
+        client
+            .client
+            .try_send_client_message(InProcessClientMessage::Request {
+                request: Box::new(ClientRequest::ConfigRequirementsRead {
+                    request_id: RequestId::Integer(6),
+                    params: None,
+                }),
+                response_tx,
+            })
+            .expect("request should enter the client queue");
+        let shutdown = client
+            .begin_shutdown()
+            .await
+            .expect("runtime should accept shutdown");
+
+        while timeout(SHUTDOWN_TIMEOUT, client.next_event())
+            .await
+            .expect("event stream should close during shutdown")
+            .is_some()
+        {}
+        client
+            .finish_shutdown(shutdown)
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+
+        let _response = response_rx
+            .await
+            .expect("accepted request should receive a response");
+    }
+
     #[tokio::test]
     async fn in_process_start_clamps_zero_channel_capacity() {
         let client =
@@ -970,28 +1145,32 @@ mod tests {
 
     #[test]
     fn guaranteed_delivery_helpers_cover_terminal_server_notifications() {
-        assert!(server_notification_requires_delivery(
-            &ServerNotification::TurnCompleted(TurnCompletedNotification {
-                thread_id: "thread-1".to_string(),
-                turn: Turn {
-                    id: "turn-1".to_string(),
-                    items: Vec::new(),
-                    items_view: TurnItemsView::NotLoaded,
-                    status: TurnStatus::Completed,
-                    error: None,
-                    started_at: None,
-                    completed_at: Some(0),
-                    duration_ms: None,
-                },
-            })
-        ));
-        assert!(server_notification_requires_delivery(
-            &ServerNotification::ExternalAgentConfigImportCompleted(
-                ExternalAgentConfigImportCompletedNotification {
-                    import_id: "import".to_string(),
-                    item_type_results: Vec::new(),
-                },
+        assert!(
+            crate::in_process_event_delivery::server_notification_requires_delivery(
+                &ServerNotification::TurnCompleted(TurnCompletedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn: Turn {
+                        id: "turn-1".to_string(),
+                        items: Vec::new(),
+                        items_view: TurnItemsView::NotLoaded,
+                        status: TurnStatus::Completed,
+                        error: None,
+                        started_at: None,
+                        completed_at: Some(0),
+                        duration_ms: None,
+                    },
+                })
             )
-        ));
+        );
+        assert!(
+            crate::in_process_event_delivery::server_notification_requires_delivery(
+                &ServerNotification::ExternalAgentConfigImportCompleted(
+                    ExternalAgentConfigImportCompletedNotification {
+                        import_id: "import".to_string(),
+                        item_type_results: Vec::new(),
+                    },
+                )
+            )
+        );
     }
 }
