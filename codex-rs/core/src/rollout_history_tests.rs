@@ -5,13 +5,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 
 fn message(role: &str, content: ContentItem) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: role.to_string(),
-        content: vec![content],
-        phase: None,
-        metadata: None,
-    }
+    serde_json::from_value(serde_json::json!({
+        "type": "message",
+        "role": role,
+        "content": [content],
+    }))
+    .expect("message response item should deserialize")
 }
 
 #[test]
@@ -22,13 +21,13 @@ fn classifies_user_directed_turn_boundaries() {
             text: "hello".to_string(),
         },
     );
-    let agent_message = ResponseItem::AgentMessage {
-        id: None,
-        author: "/root".to_string(),
-        recipient: "/root/worker".to_string(),
-        content: Vec::new(),
-        metadata: None,
-    };
+    let agent_message = serde_json::from_value(serde_json::json!({
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [],
+    }))
+    .expect("agent message response item should deserialize");
     let instruction = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root().join("worker").expect("valid agent path"),
