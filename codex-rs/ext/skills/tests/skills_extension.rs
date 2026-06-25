@@ -320,6 +320,18 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n",
         listing_disabled_fragment.body()
     );
+    let mut normalized_listing_disabled_snapshot = listing_disabled_sections[0].snapshot().clone();
+    normalized_listing_disabled_snapshot
+        .as_object_mut()
+        .ok_or("skills snapshot should be an object")?
+        .remove("body");
+    assert!(
+        listing_disabled_sections[0]
+            .render_diff(PreviousWorldStateSection::Known(
+                &normalized_listing_disabled_snapshot
+            ))
+            .is_none()
+    );
 
     Ok(())
 }

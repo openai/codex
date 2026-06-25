@@ -27,15 +27,19 @@ pub(crate) fn executor_skills_world_state_section(
         "body": body,
         "includeInstructions": include_instructions,
     });
-    let current_snapshot = snapshot.clone();
 
     WorldStateSectionContribution::new(SKILLS_WORLD_STATE_ID, snapshot, move |previous| {
         let previous_is_absent = matches!(&previous, PreviousWorldStateSection::Absent);
-        if matches!(
-            &previous,
-            PreviousWorldStateSection::Known(previous) if *previous == &current_snapshot
-        ) {
-            return None;
+        if let PreviousWorldStateSection::Known(previous) = &previous {
+            let previous_body = previous.get("body").and_then(serde_json::Value::as_str);
+            let previous_include_instructions = previous
+                .get("includeInstructions")
+                .and_then(serde_json::Value::as_bool);
+            if previous_body == body.as_deref()
+                && previous_include_instructions == Some(include_instructions)
+            {
+                return None;
+            }
         }
 
         let body = match body.as_deref() {
