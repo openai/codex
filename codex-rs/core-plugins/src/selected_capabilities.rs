@@ -114,6 +114,62 @@ impl SelectedCapabilitySnapshot {
     }
 }
 
+/// One coherent selected-capability generation published for runtime use.
+#[derive(Clone)]
+pub struct SelectedCapabilityActivationSnapshot {
+    selected_capabilities: SelectedCapabilitySnapshot,
+}
+
+impl SelectedCapabilityActivationSnapshot {
+    /// Returns the selected-capability generation represented by this activation.
+    pub fn generation(&self) -> u64 {
+        self.selected_capabilities.generation()
+    }
+
+    /// Returns the exact selected-root snapshot used to build this activation.
+    pub fn selected_capabilities(&self) -> &SelectedCapabilitySnapshot {
+        &self.selected_capabilities
+    }
+}
+
+/// Thread-owned selected-capability generation visible to runtime consumers.
+pub struct SelectedCapabilityActivation {
+    state: Mutex<SelectedCapabilityActivationSnapshot>,
+}
+
+impl SelectedCapabilityActivation {
+    /// Creates an activation from one selected-root snapshot.
+    pub fn new(selected_capabilities: SelectedCapabilitySnapshot) -> Self {
+        Self {
+            state: Mutex::new(SelectedCapabilityActivationSnapshot {
+                selected_capabilities,
+            }),
+        }
+    }
+
+    /// Returns the currently published runtime generation.
+    pub fn snapshot(&self) -> SelectedCapabilityActivationSnapshot {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Publishes `selected_capabilities` atomically.
+    ///
+    /// Returns whether the published generation advanced.
+    pub fn publish(&self, selected_capabilities: SelectedCapabilitySnapshot) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if selected_capabilities.generation() <= state.generation() {
+            return false;
+        }
+        *state = SelectedCapabilityActivationSnapshot {
+            selected_capabilities,
+        };
+        true
+    }
+}
+
 /// Thread-owned, nonblocking selected-capability resolution state.
 ///
 /// Each selected root resolves once against its original environment. Callers
@@ -244,6 +300,23 @@ impl SelectedCapabilityBindings {
         }
 
         Self { inner }
+    }
+
+    /// Returns the all-pending generation captured before background work runs.
+    pub fn initial_snapshot(&self) -> SelectedCapabilitySnapshot {
+        SelectedCapabilitySnapshot {
+            generation: 0,
+            entries: self
+                .inner
+                .roots
+                .iter()
+                .cloned()
+                .map(|selected_root| SelectedCapabilityBindingSnapshot {
+                    selected_root,
+                    status: SelectedCapabilityBindingStatus::Pending,
+                })
+                .collect(),
+        }
     }
 
     /// Captures current states without waiting for pending executors.

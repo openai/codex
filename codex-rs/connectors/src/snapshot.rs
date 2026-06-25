@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
 use codex_plugin::AppConnectorId;
 use codex_plugin::AppDeclaration;
@@ -75,6 +77,34 @@ pub struct ConnectorSnapshot {
     sources: Vec<PluginConnectorSource>,
     connector_ids: Vec<AppConnectorId>,
     plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
+}
+
+/// Mutable holder for the connector snapshot published at a runtime boundary.
+#[derive(Debug, Default)]
+pub struct ConnectorSnapshotState {
+    snapshot: Mutex<ConnectorSnapshot>,
+}
+
+impl ConnectorSnapshotState {
+    /// Creates a holder with the supplied active snapshot.
+    pub fn new(snapshot: ConnectorSnapshot) -> Self {
+        Self {
+            snapshot: Mutex::new(snapshot),
+        }
+    }
+
+    /// Returns the currently published connector snapshot.
+    pub fn snapshot(&self) -> ConnectorSnapshot {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the active connector snapshot.
+    pub fn publish(&self, snapshot: ConnectorSnapshot) {
+        *self.snapshot.lock().unwrap_or_else(PoisonError::into_inner) = snapshot;
+    }
 }
 
 impl ConnectorSnapshot {

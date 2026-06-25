@@ -54,6 +54,19 @@ pub trait ThreadExtensionInitContributor: Send + Sync {
     fn initialize<'a>(&'a self, thread_init: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()>;
 }
 
+/// Extension contribution that prepares dynamic thread state before a host
+/// captures a runtime snapshot.
+///
+/// Implementations derive coherent immutable views inside a host-owned
+/// candidate. The host decides whether and when to publish that candidate.
+pub trait RuntimeSnapshotContributor: Send + Sync {
+    /// Projects extension-owned state without waiting for unrelated pending work.
+    fn prepare<'a>(&'a self, candidate: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()>;
+
+    /// Publishes prepared state synchronously after the host accepts the candidate.
+    fn commit(&self, candidate: &ExtensionDataInit, active: &ExtensionDataInit);
+}
+
 /// Extension contribution that resolves runtime MCP servers from host config.
 ///
 /// Contributors run in registration order. Later contributions for the same

@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_core_plugins::SelectedCapabilityActivation;
 use codex_core_plugins::SelectedCapabilityBindings;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionFuture;
@@ -7,6 +8,9 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_extension_api::ThreadExtensionInitContributor;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use tokio::sync::OnceCell;
 
 use self::provider::ExecutorPluginMcpProvider;
@@ -27,7 +31,19 @@ struct SelectedPluginMcpServers {
 
 #[derive(Default)]
 pub(crate) struct SelectedExecutorPluginMcpState {
-    snapshot: OnceCell<Vec<SelectedPluginMcpServers>>,
+    plugins: Mutex<HashMap<usize, Arc<OnceCell<Option<SelectedPluginMcpServers>>>>>,
+}
+
+impl SelectedExecutorPluginMcpState {
+    fn plugin(&self, selection_order: usize) -> Arc<OnceCell<Option<SelectedPluginMcpServers>>> {
+        Arc::clone(
+            self.plugins
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(selection_order)
+                .or_default(),
+        )
+    }
 }
 
 pub(crate) fn seed_thread_state(thread_init: &mut ExtensionDataInit) {
@@ -39,7 +55,8 @@ pub(crate) struct SelectedExecutorPluginMcpInitializer;
 impl ThreadExtensionInitContributor for SelectedExecutorPluginMcpInitializer {
     fn initialize<'a>(&'a self, thread_init: &'a mut ExtensionDataInit) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if thread_init.get::<SelectedCapabilityBindings>().is_some()
+            if (thread_init.get::<SelectedCapabilityActivation>().is_some()
+                || thread_init.get::<SelectedCapabilityBindings>().is_some())
                 && thread_init
                     .get::<SelectedExecutorPluginMcpState>()
                     .is_none()
@@ -61,35 +78,47 @@ impl SelectedExecutorPluginMcpContributor {
         }
     }
 
-    async fn resolve_snapshot(
+    async fn resolve_selected_root(
         &self,
-        bindings: &SelectedCapabilityBindings,
-    ) -> Vec<SelectedPluginMcpServers> {
-        let mut snapshot = Vec::new();
-        let bindings = bindings.resolve_all().await;
-
-        for selected_root in bindings.ready() {
-            let Some(plugin) = selected_root.plugin() else {
-                continue;
-            };
-            match self.mcp_provider.load(selected_root).await {
-                Ok(servers) => snapshot.push(SelectedPluginMcpServers {
-                    plugin_id: plugin.selected_root_id().to_string(),
-                    plugin_display_name: plugin.manifest().display_name().to_string(),
-                    selection_order: selected_root.selection_order(),
-                    servers,
-                }),
-                Err(err) => {
-                    tracing::warn!(
-                        selected_root = selected_root.selected_root().id,
-                        error = %err,
-                        "failed to load selected executor plugin MCP servers"
-                    );
-                }
+        selected_root: &codex_core_plugins::ResolvedSelectedCapabilityRoot,
+    ) -> Option<SelectedPluginMcpServers> {
+        let plugin = selected_root.plugin()?;
+        match self.mcp_provider.load(selected_root).await {
+            Ok(servers) => Some(SelectedPluginMcpServers {
+                plugin_id: plugin.selected_root_id().to_string(),
+                plugin_display_name: plugin.manifest().display_name().to_string(),
+                selection_order: selected_root.selection_order(),
+                servers,
+            }),
+            Err(err) => {
+                tracing::warn!(
+                    selected_root = selected_root.selected_root().id,
+                    error = %err,
+                    "failed to load selected executor plugin MCP servers"
+                );
+                None
             }
         }
+    }
 
-        snapshot
+    async fn snapshot_for_selected_capabilities(
+        &self,
+        selected_capabilities: &codex_core_plugins::SelectedCapabilitySnapshot,
+        state: &SelectedExecutorPluginMcpState,
+    ) -> Vec<SelectedPluginMcpServers> {
+        let mut plugins = Vec::new();
+        for selected_root in selected_capabilities.ready() {
+            let selection_order = selected_root.selection_order();
+            let plugin = state
+                .plugin(selection_order)
+                .get_or_init(|| self.resolve_selected_root(selected_root))
+                .await
+                .clone();
+            if let Some(plugin) = plugin {
+                plugins.push(plugin);
+            }
+        }
+        plugins
     }
 }
 
@@ -106,20 +135,25 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
             let Some(thread_init) = context.thread_init() else {
                 return Vec::new();
             };
-            let Some(bindings) = thread_init.get::<SelectedCapabilityBindings>() else {
-                return Vec::new();
-            };
             let Some(state) = thread_init.get::<SelectedExecutorPluginMcpState>() else {
                 tracing::warn!("selected executor plugin MCP state was not initialized");
                 return Vec::new();
             };
-            let snapshot = state
-                .snapshot
-                .get_or_init(|| self.resolve_snapshot(bindings.as_ref()))
+            let selected_capabilities = match thread_init.get::<SelectedCapabilityActivation>() {
+                Some(activation) => activation.snapshot().selected_capabilities().clone(),
+                None => {
+                    let Some(bindings) = thread_init.get::<SelectedCapabilityBindings>() else {
+                        return Vec::new();
+                    };
+                    bindings.resolve_all().await
+                }
+            };
+            let snapshot = self
+                .snapshot_for_selected_capabilities(&selected_capabilities, state.as_ref())
                 .await;
             let mut contributions = Vec::new();
 
-            for plugin in snapshot {
+            for plugin in &snapshot {
                 let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
                 context
                     .config()

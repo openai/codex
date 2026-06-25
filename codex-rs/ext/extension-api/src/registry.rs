@@ -9,6 +9,7 @@ use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
+use crate::RuntimeSnapshotContributor;
 use crate::ThreadExtensionInitContributor;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
@@ -23,6 +24,7 @@ pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     thread_init_contributors: Vec<Arc<dyn ThreadExtensionInitContributor>>,
+    runtime_snapshot_contributors: Vec<Arc<dyn RuntimeSnapshotContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -41,6 +43,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             event_sink: Arc::new(NoopExtensionEventSink),
             thread_lifecycle_contributors: Vec::new(),
             thread_init_contributors: Vec::new(),
+            runtime_snapshot_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
             token_usage_contributors: Vec::new(),
@@ -95,6 +98,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.thread_init_contributors.push(contributor);
     }
 
+    /// Registers one dynamic runtime-snapshot contributor.
+    pub fn runtime_snapshot_contributor(
+        &mut self,
+        contributor: Arc<dyn RuntimeSnapshotContributor>,
+    ) {
+        self.runtime_snapshot_contributors.push(contributor);
+    }
+
     /// Registers one turn-lifecycle contributor.
     pub fn turn_lifecycle_contributor(&mut self, contributor: Arc<dyn TurnLifecycleContributor>) {
         self.turn_lifecycle_contributors.push(contributor);
@@ -146,6 +157,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             event_sink: self.event_sink,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             thread_init_contributors: self.thread_init_contributors,
+            runtime_snapshot_contributors: self.runtime_snapshot_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
             token_usage_contributors: self.token_usage_contributors,
@@ -165,6 +177,7 @@ pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     thread_init_contributors: Vec<Arc<dyn ThreadExtensionInitContributor>>,
+    runtime_snapshot_contributors: Vec<Arc<dyn RuntimeSnapshotContributor>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
@@ -192,6 +205,24 @@ impl<C: Sync> ExtensionRegistry<C> {
     pub async fn initialize_thread_data(&self, thread_init: &mut crate::ExtensionDataInit) {
         for contributor in &self.thread_init_contributors {
             contributor.initialize(thread_init).await;
+        }
+    }
+
+    /// Prepares dynamic extension state for one coherent runtime snapshot.
+    pub async fn prepare_runtime_snapshot(&self, candidate: &mut crate::ExtensionDataInit) {
+        for contributor in &self.runtime_snapshot_contributors {
+            contributor.prepare(candidate).await;
+        }
+    }
+
+    /// Publishes prepared extension state after the host accepts a runtime snapshot.
+    pub fn commit_runtime_snapshot(
+        &self,
+        candidate: &crate::ExtensionDataInit,
+        active: &crate::ExtensionDataInit,
+    ) {
+        for contributor in &self.runtime_snapshot_contributors {
+            contributor.commit(candidate, active);
         }
     }
 

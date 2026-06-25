@@ -11,7 +11,7 @@ pub use selected::SelectedExecutorConnectorProvider;
 pub fn install_selected_executor_connectors<C: Sync>(
     builder: &mut codex_extension_api::ExtensionRegistryBuilder<C>,
 ) {
-    builder.thread_extension_init_contributor(std::sync::Arc::new(
-        SelectedExecutorConnectorProvider::new(),
-    ));
+    let provider = std::sync::Arc::new(SelectedExecutorConnectorProvider::new());
+    builder.thread_extension_init_contributor(provider.clone());
+    builder.runtime_snapshot_contributor(provider);
 }

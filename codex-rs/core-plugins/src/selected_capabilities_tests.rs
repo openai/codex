@@ -42,6 +42,7 @@ async fn snapshots_preserve_root_order_and_advance_on_terminal_transitions() {
     );
 
     let initial = bindings.snapshot();
+    let activation = SelectedCapabilityActivation::new(initial.clone());
     assert_eq!(initial.generation(), 0);
     assert_eq!(
         initial
@@ -88,6 +89,9 @@ async fn snapshots_preserve_root_order_and_advance_on_terminal_transitions() {
         &second.file_system(),
         &environment.get_filesystem()
     ));
+    assert!(activation.publish(after_second.clone()));
+    assert_eq!(activation.snapshot().generation(), 1);
+    assert!(!activation.publish(initial));
 
     assert!(
         first_tx

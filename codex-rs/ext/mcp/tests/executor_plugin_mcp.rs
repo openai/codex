@@ -4,6 +4,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core_plugins::SelectedCapabilityBindings;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
@@ -13,6 +14,9 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::time::timeout;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -92,6 +96,44 @@ command = "expected-command"
     Ok(())
 }
 
+#[tokio::test]
+async fn bindings_only_initialization_does_not_wait_for_pending_executor() -> TestResult {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let environment_manager = Arc::new(
+        EnvironmentManager::create_for_tests(
+            Some(format!("ws://{}", listener.local_addr()?)),
+            /*local_runtime_paths*/ None,
+        )
+        .await,
+    );
+    let bindings = SelectedCapabilityBindings::new(
+        vec![SelectedCapabilityRoot {
+            id: "pending-root".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                path: PathUri::parse("file:///plugins/pending")?,
+            },
+        }],
+        environment_manager,
+    );
+    assert!(!bindings.snapshot().is_terminal());
+
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_executor_plugins(&mut builder);
+    let registry = builder.build();
+    let mut thread_init = ExtensionDataInit::new();
+    thread_init.insert(bindings);
+
+    timeout(
+        Duration::from_millis(100),
+        registry.initialize_thread_data(&mut thread_init),
+    )
+    .await
+    .expect("bindings-only initialization should remain lazy");
+
+    Ok(())
+}
+
 async fn selected_plugin_contributions(
     config: &Config,
     plugin_root: &std::path::Path,
@@ -107,10 +149,11 @@ async fn selected_plugin_contributions(
             path: PathUri::from_host_native_path(plugin_root)?,
         },
     }];
-    thread_init.insert(SelectedCapabilityBindings::new(
+    let bindings = SelectedCapabilityBindings::new(
         selected_roots.clone(),
         Arc::new(EnvironmentManager::default_for_tests()),
-    ));
+    );
+    thread_init.insert(bindings);
     thread_init.insert(selected_roots);
     registry.initialize_thread_data(&mut thread_init).await;
 

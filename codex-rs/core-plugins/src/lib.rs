@@ -63,6 +63,8 @@ pub use provider::ResolvedExecutorPlugin;
 pub use provider::ResolvedSelectedCapabilityRoot;
 pub use remote::RecommendedPlugin;
 pub use remote::RecommendedPluginsMode;
+pub use selected_capabilities::SelectedCapabilityActivation;
+pub use selected_capabilities::SelectedCapabilityActivationSnapshot;
 pub use selected_capabilities::SelectedCapabilityBindingSnapshot;
 pub use selected_capabilities::SelectedCapabilityBindingStatus;
 pub use selected_capabilities::SelectedCapabilityBindings;
