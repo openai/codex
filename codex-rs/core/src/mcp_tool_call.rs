@@ -92,9 +92,7 @@ use url::Url;
 
 mod telemetry;
 
-use telemetry::MCP_CALL_COUNT_METRIC;
 use telemetry::McpCallMetricOutcome;
-use telemetry::McpErrorCodeSource;
 use telemetry::emit_mcp_call_metrics;
 use telemetry::mcp_call_metric_outcome;
 use telemetry::record_mcp_call_outcome_span_telemetry;
@@ -182,6 +180,13 @@ pub(crate) async fn handle_mcp_tool_call(
             .await
     };
 
+    let connector_id = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.connector_id.clone());
+    let connector_name = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.connector_name.clone());
+
     if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
             sess.as_ref(),
@@ -194,10 +199,15 @@ pub(crate) async fn handle_mcp_tool_call(
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context.session_telemetry.counter(
-            MCP_CALL_COUNT_METRIC,
-            /*inc*/ 1,
-            &[("status", status)],
+        let outcome = McpCallMetricOutcome::from_status(status);
+        emit_mcp_call_metrics(
+            turn_context.as_ref(),
+            &outcome,
+            &server,
+            &tool_name,
+            connector_id.as_deref(),
+            connector_name.as_deref(),
+            /*duration*/ None,
         );
         return HandledMcpToolCall {
             result: CallToolResult::from_result(result),
@@ -205,13 +215,6 @@ pub(crate) async fn handle_mcp_tool_call(
                 .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
         };
     }
-    let connector_id = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.connector_id.clone());
-    let connector_name = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.connector_name.clone());
-
     notify_mcp_tool_call_started(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -279,6 +282,7 @@ pub(crate) async fn handle_mcp_tool_call(
         emit_mcp_call_metrics(
             turn_context.as_ref(),
             &outcome,
+            &server,
             &tool_name,
             connector_id.as_deref(),
             connector_name.as_deref(),
@@ -348,17 +352,11 @@ async fn handle_approved_mcp_tool_call(
     let arguments_value = invocation.arguments.clone();
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
     let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
-    let (server_origin, error_code_source) = {
+    let server_origin = {
         let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
-        let server_origin = mcp_connection_manager
+        mcp_connection_manager
             .server_origin(&server)
-            .map(str::to_string);
-        let error_code_source = if mcp_connection_manager.is_host_owned_codex_apps_server(&server) {
-            McpErrorCodeSource::HostedPluginService
-        } else {
-            McpErrorCodeSource::Untrusted
-        };
-        (server_origin, error_code_source)
+            .map(str::to_string)
     };
 
     let start = Instant::now();
@@ -392,7 +390,7 @@ async fn handle_approved_mcp_tool_call(
             .await
         }
         .await;
-        record_mcp_result_span_telemetry(&Span::current(), &result, error_code_source);
+        record_mcp_result_span_telemetry(&Span::current(), &result);
         result
     }
     .instrument(mcp_tool_call_span(
@@ -424,10 +422,11 @@ async fn handle_approved_mcp_tool_call(
     .await;
     maybe_track_codex_app_used(sess, turn_context, &server, &tool_name).await;
 
-    let outcome = mcp_call_metric_outcome(&result, error_code_source);
+    let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
         turn_context,
         &outcome,
+        &server,
         &tool_name,
         connector_id,
         connector_name,
@@ -501,12 +500,8 @@ fn record_server_fields(span: &Span, url: Option<&str>) {
     }
 }
 
-fn record_mcp_result_span_telemetry(
-    span: &Span,
-    result: &Result<CallToolResult, String>,
-    error_code_source: McpErrorCodeSource,
-) {
-    record_mcp_call_outcome_span_telemetry(span, result, error_code_source);
+fn record_mcp_result_span_telemetry(span: &Span, result: &Result<CallToolResult, String>) {
+    record_mcp_call_outcome_span_telemetry(span, result);
 
     let Some(span_telemetry) = result
         .as_ref()
