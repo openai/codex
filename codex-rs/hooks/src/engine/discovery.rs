@@ -27,6 +27,7 @@ use super::HookListEntry;
 use crate::config_rules::hook_states_from_stack;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
@@ -54,6 +55,11 @@ struct HookDiscoveryPolicy {
     bypass_hook_trust: bool,
 }
 
+struct ManagedUserInstructionsHook {
+    source_path: AbsolutePathBuf,
+    handler_display_order: Option<i64>,
+}
+
 impl HookDiscoveryPolicy {
     fn allows(self, source: &HookHandlerSource<'_>) -> bool {
         !self.allow_managed_hooks_only || source.is_managed
@@ -70,6 +76,7 @@ pub(crate) fn discover_handlers(
     let mut hook_entries = Vec::new();
     let mut warnings = plugin_hook_load_warnings;
     let mut display_order = 0_i64;
+    let mut managed_user_instructions_hook = None;
     let mut visited_json_hook_folders = HashSet::new();
     let hook_states = hook_states_from_stack(config_layer_stack);
     let policy = HookDiscoveryPolicy {
@@ -82,9 +89,8 @@ pub(crate) fn discover_handlers(
         }),
         bypass_hook_trust,
     };
-
     if let Some(config_layer_stack) = config_layer_stack {
-        append_managed_requirement_handlers(
+        managed_user_instructions_hook = append_managed_requirement_handlers(
             &mut handlers,
             &mut hook_entries,
             &mut warnings,
@@ -165,12 +171,126 @@ pub(crate) fn discover_handlers(
         &hook_states,
         policy,
     );
+    enforce_single_user_instructions_handler(
+        &mut handlers,
+        &hook_entries,
+        managed_user_instructions_hook,
+        &mut warnings,
+    );
 
     DiscoveryResult {
         handlers,
         hook_entries,
         warnings,
     }
+}
+
+// Requirements-layer merging enforces the singleton within managed config,
+// but hooks.json, ordinary config layers, and plugins are discovered
+// independently. Managed requirements take priority, followed by other managed
+// hooks, ordinary config hooks, and plugins. Config layers are appended from
+// lowest to highest precedence, while plugin declaration order is preserved.
+fn enforce_single_user_instructions_handler(
+    handlers: &mut Vec<ConfiguredHandler>,
+    hook_entries: &[HookListEntry],
+    managed_hook: Option<ManagedUserInstructionsHook>,
+    warnings: &mut Vec<String>,
+) {
+    let user_instructions_handlers = handlers
+        .iter()
+        .filter(|handler| handler.event_name == HookEventName::UserInstructions)
+        .collect::<Vec<_>>();
+    let managed_handler_display_order = managed_hook
+        .as_ref()
+        .and_then(|hook| hook.handler_display_order);
+
+    if let Some(managed_hook) = managed_hook.as_ref() {
+        let ignored_handlers = user_instructions_handlers
+            .iter()
+            .filter(|handler| Some(handler.display_order) != managed_hook.handler_display_order)
+            .copied()
+            .collect::<Vec<_>>();
+        if managed_hook.handler_display_order.is_none() {
+            let ignored_sources = ignored_handlers
+                .iter()
+                .map(|handler| format!("`{}`", handler.source_path.display()))
+                .collect::<Vec<_>>();
+            let ignored_suffix = if ignored_sources.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; ignoring {} lower-priority active UserInstructions {} from {}",
+                    ignored_sources.len(),
+                    if ignored_sources.len() == 1 {
+                        "hook"
+                    } else {
+                        "hooks"
+                    },
+                    ignored_sources.join(", ")
+                )
+            };
+            warnings.push(format!(
+                "managed requirements UserInstructions hook from `{}` is unavailable{ignored_suffix}; refusing to fall back to lower-priority instructions",
+                managed_hook.source_path.display()
+            ));
+            handlers.retain(|handler| handler.event_name != HookEventName::UserInstructions);
+            return;
+        }
+        if ignored_handlers.is_empty() {
+            return;
+        }
+    }
+
+    if user_instructions_handlers.len() <= 1 {
+        return;
+    }
+
+    let is_managed = |handler: &ConfiguredHandler| {
+        hook_entries
+            .iter()
+            .any(|entry| entry.display_order == handler.display_order && entry.is_managed)
+    };
+    let selected_handler = user_instructions_handlers
+        .iter()
+        .copied()
+        .find(|handler| Some(handler.display_order) == managed_handler_display_order)
+        .or_else(|| {
+            user_instructions_handlers
+                .iter()
+                .rev()
+                .copied()
+                .find(|handler| is_managed(handler))
+        })
+        .or_else(|| {
+            user_instructions_handlers
+                .iter()
+                .rev()
+                .copied()
+                .find(|handler| handler.source != HookSource::Plugin)
+        })
+        .unwrap_or(user_instructions_handlers[0]);
+    let selected_display_order = selected_handler.display_order;
+    let selected_source_path = selected_handler.source_path.clone();
+    let ignored_sources = user_instructions_handlers
+        .iter()
+        .filter(|handler| handler.display_order != selected_display_order)
+        .map(|handler| format!("`{}`", handler.source_path.display()))
+        .collect::<Vec<_>>();
+    let hook_label = if ignored_sources.len() == 1 {
+        "hook"
+    } else {
+        "hooks"
+    };
+    warnings.push(format!(
+        "UserInstructions hook from `{}` takes precedence; ignoring {} other active UserInstructions {hook_label} from {}",
+        selected_source_path.display(),
+        ignored_sources.len(),
+        ignored_sources.join(", ")
+    ));
+    handlers.retain(|handler| {
+        handler.event_name != HookEventName::UserInstructions
+            || handler.display_order == selected_display_order
+    });
 }
 
 fn append_managed_requirement_handlers(
@@ -181,11 +301,11 @@ fn append_managed_requirement_handlers(
     config_layer_stack: &ConfigLayerStack,
     hook_states: &HashMap<String, HookStateToml>,
     policy: HookDiscoveryPolicy,
-) {
-    let Some(managed_hooks) = config_layer_stack.requirements().managed_hooks.as_ref() else {
-        return;
-    };
+) -> Option<ManagedUserInstructionsHook> {
+    let managed_hooks = config_layer_stack.requirements().managed_hooks.as_ref()?;
     let source_path = managed_hooks_source_path(managed_hooks.get(), managed_hooks.source.as_ref());
+    let has_user_instructions = managed_hooks.get().hooks.user_instructions.is_some();
+    let first_new_handler = handlers.len();
     append_hook_events(
         handlers,
         hook_entries,
@@ -204,6 +324,13 @@ fn append_managed_requirement_handlers(
         managed_hooks.get().hooks.clone(),
         policy,
     );
+    has_user_instructions.then(|| ManagedUserInstructionsHook {
+        source_path,
+        handler_display_order: handlers[first_new_handler..]
+            .iter()
+            .find(|handler| handler.event_name == HookEventName::UserInstructions)
+            .map(|handler| handler.display_order),
+    })
 }
 
 fn append_plugin_hook_sources(
@@ -655,8 +782,16 @@ fn hook_source_for_requirement_source(source: Option<&RequirementSource>) -> Hoo
 mod tests {
     use codex_config::ConfigLayerEntry;
     use codex_config::ConfigLayerSource;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::Constrained;
+    use codex_config::ConstrainedWithSource;
     use codex_config::HookEventsToml;
+    use codex_config::ManagedHooksRequirementsToml;
     use codex_config::RequirementSource;
+    use codex_plugin::PluginHookSource;
+    use codex_plugin::PluginId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -759,6 +894,225 @@ mod tests {
                 status_message: None,
             }],
         }
+    }
+
+    fn user_instructions_events(command: &str) -> HookEventsToml {
+        HookEventsToml {
+            user_instructions: Some(HookHandlerConfig::Command {
+                command: command.to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn config_with_user_instructions(command: &str) -> TomlValue {
+        serde_json::from_value(serde_json::json!({
+            "hooks": {
+                "UserInstructions": {
+                    "type": "command",
+                    "command": command,
+                },
+            },
+        }))
+        .expect("config TOML should deserialize")
+    }
+
+    #[test]
+    fn highest_precedence_config_user_instructions_hook_takes_precedence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let user_config_path = AbsolutePathBuf::try_from(temp.path().join("user/config.toml"))
+            .expect("absolute user config path");
+        let project_config_dir = AbsolutePathBuf::try_from(temp.path().join("project/.codex"))
+            .expect("absolute project config dir");
+        let project_config_path = project_config_dir.join("config.toml");
+        let stack = ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: user_config_path.clone(),
+                        profile: None,
+                    },
+                    config_with_user_instructions("user"),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: project_config_dir,
+                    },
+                    config_with_user_instructions("project"),
+                ),
+            ],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("config layer stack");
+        let plugin_root =
+            AbsolutePathBuf::try_from(temp.path().join("plugin")).expect("absolute plugin root");
+        let plugin_path = plugin_root.join("hooks/hooks.json");
+        let plugin = PluginHookSource {
+            plugin_id: PluginId::parse("demo@test").expect("plugin id"),
+            plugin_root,
+            plugin_data_root: AbsolutePathBuf::try_from(temp.path().join("plugin-data"))
+                .expect("absolute plugin data root"),
+            source_path: plugin_path.clone(),
+            source_relative_path: "hooks/hooks.json".to_string(),
+            hooks: user_instructions_events("plugin"),
+        };
+
+        let discovered = super::discover_handlers(
+            Some(&stack),
+            vec![plugin],
+            Vec::new(),
+            /*bypass_hook_trust*/ true,
+        );
+
+        assert_eq!(discovered.handlers.len(), 1);
+        assert_eq!(discovered.handlers[0].source_path, project_config_path);
+        assert_eq!(discovered.hook_entries.len(), 3);
+        assert!(discovered.hook_entries.iter().all(|entry| entry.enabled));
+        assert_eq!(
+            discovered.warnings,
+            vec![format!(
+                "UserInstructions hook from `{}` takes precedence; ignoring 2 other active UserInstructions hooks from `{}`, `{}`",
+                project_config_path.display(),
+                user_config_path.display(),
+                plugin_path.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn managed_user_instructions_hook_is_first_and_takes_precedence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let managed_dir =
+            AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("managed hook dir");
+        let managed_hooks = ManagedHooksRequirementsToml {
+            managed_dir: if cfg!(windows) {
+                None
+            } else {
+                Some(managed_dir.to_path_buf())
+            },
+            windows_managed_dir: if cfg!(windows) {
+                Some(managed_dir.to_path_buf())
+            } else {
+                None
+            },
+            hooks: user_instructions_events("managed"),
+        };
+        let user_config_path = AbsolutePathBuf::try_from(temp.path().join("user/config.toml"))
+            .expect("absolute user config path");
+        let stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_config_path.clone(),
+                    profile: None,
+                },
+                config_with_user_instructions("user"),
+            )],
+            ConfigRequirements {
+                managed_hooks: Some(ConstrainedWithSource::new(
+                    Constrained::allow_any(managed_hooks.clone()),
+                    Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
+                )),
+                ..ConfigRequirements::default()
+            },
+            ConfigRequirementsToml {
+                hooks: Some(managed_hooks),
+                ..ConfigRequirementsToml::default()
+            },
+        )
+        .expect("config layer stack");
+
+        let discovered = super::discover_handlers(
+            Some(&stack),
+            Vec::new(),
+            Vec::new(),
+            /*bypass_hook_trust*/ true,
+        );
+
+        assert_eq!(discovered.handlers.len(), 1);
+        assert_eq!(discovered.handlers[0].source_path, managed_dir);
+        assert_eq!(discovered.hook_entries.len(), 2);
+        assert!(discovered.hook_entries[0].is_managed);
+        assert!(discovered.hook_entries[0].enabled);
+        assert!(discovered.hook_entries[1].enabled);
+        assert_eq!(
+            discovered.warnings,
+            vec![format!(
+                "UserInstructions hook from `{}` takes precedence; ignoring 1 other active UserInstructions hook from `{}`",
+                managed_dir.display(),
+                user_config_path.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn unavailable_managed_user_instructions_hook_does_not_fall_back() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let managed_dir =
+            AbsolutePathBuf::try_from(temp.path().join("managed-hooks")).expect("managed hook dir");
+        let managed_hooks = ManagedHooksRequirementsToml {
+            managed_dir: if cfg!(windows) {
+                None
+            } else {
+                Some(managed_dir.to_path_buf())
+            },
+            windows_managed_dir: if cfg!(windows) {
+                Some(managed_dir.to_path_buf())
+            } else {
+                None
+            },
+            hooks: user_instructions_events(""),
+        };
+        let user_config_path = AbsolutePathBuf::try_from(temp.path().join("user/config.toml"))
+            .expect("absolute user config path");
+        let stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_config_path.clone(),
+                    profile: None,
+                },
+                config_with_user_instructions("user"),
+            )],
+            ConfigRequirements {
+                managed_hooks: Some(ConstrainedWithSource::new(
+                    Constrained::allow_any(managed_hooks.clone()),
+                    Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
+                )),
+                ..ConfigRequirements::default()
+            },
+            ConfigRequirementsToml {
+                hooks: Some(managed_hooks),
+                ..ConfigRequirementsToml::default()
+            },
+        )
+        .expect("config layer stack");
+
+        let discovered = super::discover_handlers(
+            Some(&stack),
+            Vec::new(),
+            Vec::new(),
+            /*bypass_hook_trust*/ true,
+        );
+
+        assert!(discovered.handlers.is_empty());
+        assert_eq!(discovered.hook_entries.len(), 1);
+        assert_eq!(discovered.hook_entries[0].source_path, user_config_path);
+        assert!(discovered.hook_entries[0].enabled);
+        assert_eq!(
+            discovered.warnings,
+            vec![
+                format!("skipping empty hook command in {}", managed_dir.display()),
+                format!(
+                    "managed requirements UserInstructions hook from `{}` is unavailable; ignoring 1 lower-priority active UserInstructions hook from `{}`; refusing to fall back to lower-priority instructions",
+                    managed_dir.display(),
+                    user_config_path.display()
+                ),
+            ]
+        );
     }
 
     #[test]
