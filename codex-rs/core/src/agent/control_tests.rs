@@ -18,7 +18,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
@@ -890,42 +889,6 @@ async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
 }
 
 #[tokio::test]
-async fn spawn_thread_subagent_uses_supplied_initial_multi_agent_mode_without_history() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-
-    let child_thread_id = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            })),
-            SpawnAgentOptions {
-                initial_multi_agent_mode: Some(MultiAgentMode::Proactive),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("spawn child without parent history")
-        .thread_id;
-    let child_snapshot = harness
-        .manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should be registered")
-        .config_snapshot()
-        .await;
-
-    assert_eq!(child_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
-}
-
-#[tokio::test]
 async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
@@ -947,15 +910,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
-    parent_thread
-        .codex
-        .session
-        .update_settings(crate::session::SessionSettingsUpdate {
-            multi_agent_mode: Some(MultiAgentMode::Proactive),
-            ..Default::default()
-        })
-        .await
-        .expect("update parent multi-agent mode");
     parent_thread
         .inject_user_message_without_turn("parent seed context".to_string())
         .await;
@@ -1050,7 +1004,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
-                initial_multi_agent_mode: Some(MultiAgentMode::Proactive),
                 ..Default::default()
             },
         )
@@ -1063,10 +1016,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
-    assert_eq!(
-        child_thread.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::Proactive
-    );
     assert_ne!(child_thread_id, parent_thread_id);
     let history = child_thread.codex.session.clone_history().await;
     let mut expected_final_answer =
@@ -1359,15 +1308,6 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
 async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    parent_thread
-        .codex
-        .session
-        .update_settings(crate::session::SessionSettingsUpdate {
-            multi_agent_mode: Some(MultiAgentMode::Proactive),
-            ..Default::default()
-        })
-        .await
-        .expect("update parent multi-agent mode");
 
     parent_thread
         .inject_user_message_without_turn("old parent context".to_string())
@@ -1452,7 +1392,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
-                initial_multi_agent_mode: Some(MultiAgentMode::Proactive),
                 ..Default::default()
             },
         )
@@ -1465,10 +1404,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
-    assert_eq!(
-        child_thread.config_snapshot().await.multi_agent_mode,
-        MultiAgentMode::Proactive
-    );
     let history = child_thread.codex.session.clone_history().await;
 
     assert!(
@@ -2283,7 +2218,6 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
             thread_source: None,
             dynamic_tools: Vec::new(),
             metrics_service_name: Some("codex_work_desktop".to_string()),
-            multi_agent_mode: None,
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: ExtensionDataInit::default(),
@@ -2393,7 +2327,7 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 }
 
 #[tokio::test]
-async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_agent_mode() {
+async fn resume_thread_subagent_restores_stored_metadata() {
     let (home, config) = test_config().await;
     let thread_store = Arc::new(InMemoryThreadStore::default());
     let manager = ThreadManager::new(
@@ -2418,7 +2352,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         manager,
         control,
     };
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let agent_path = AgentPath::from_string("/root/explorer".to_string())
         .expect("test agent path should be valid");
 
@@ -2443,18 +2377,6 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    let mut child_turn_context = child_thread
-        .codex
-        .session
-        .new_default_turn()
-        .await
-        .to_turn_context_item();
-    child_turn_context.multi_agent_mode = Some(MultiAgentMode::Proactive);
-    child_thread
-        .codex
-        .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(child_turn_context)])
-        .await;
     child_thread
         .codex
         .session
@@ -2465,16 +2387,7 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
         .session
         .flush_rollout()
         .await
-        .expect("flush child effective multi-agent mode");
-    parent_thread
-        .codex
-        .session
-        .update_settings(crate::session::SessionSettingsUpdate {
-            multi_agent_mode: Some(MultiAgentMode::ExplicitRequestOnly),
-            ..Default::default()
-        })
-        .await
-        .expect("change parent multi-agent mode before child resume");
+        .expect("flush child rollout");
     let mut status_rx = harness
         .control
         .subscribe_status(child_thread_id)
@@ -2567,7 +2480,6 @@ async fn resume_thread_subagent_restores_stored_metadata_and_effective_multi_age
     assert_eq!(resumed_agent_path, Some(agent_path));
     assert_eq!(resumed_nickname, Some(original_nickname));
     assert_eq!(resumed_role, Some("explorer".to_string()));
-    assert_eq!(resumed_snapshot.multi_agent_mode, MultiAgentMode::Proactive);
 
     let _ = harness
         .control

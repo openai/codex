@@ -78,11 +78,7 @@ fn build_multi_agent_mode_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
 ) -> Option<String> {
-    let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(
-        next.multi_agent_version,
-        &next.session_source,
-        next.multi_agent_mode,
-    );
+    let effective_multi_agent_mode = crate::session::multi_agents::effective_multi_agent_mode(next);
     let previous = previous?;
     if previous.multi_agent_mode == effective_multi_agent_mode {
         return None;

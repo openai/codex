@@ -1754,7 +1754,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
+async fn turn_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1817,18 +1817,19 @@ async fn turn_start_accepts_multi_agent_mode_v2() -> Result<()> {
         .single_request()
         .message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
-        text.contains("<multi_agent_mode>")
-            && text.contains("Proactive multi-agent delegation is active.")
-    }));
-    assert!(!developer_texts.iter().any(|text| {
         text.contains("Do not spawn sub-agents unless the user explicitly asks for sub-agents")
     }));
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("Proactive multi-agent delegation is active."))
+    );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
+async fn thread_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1867,7 +1868,7 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
         multi_agent_mode,
         ..
     } = to_response::<ThreadStartResponse>(thread_resp)?;
-    assert_eq!(multi_agent_mode, MultiAgentMode::Proactive);
+    assert_eq!(multi_agent_mode, MultiAgentMode::ExplicitRequestOnly);
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
@@ -1895,67 +1896,16 @@ async fn thread_start_multi_agent_mode_initializes_first_turn() -> Result<()> {
     let developer_texts = response_mock
         .single_request()
         .message_input_texts("developer");
+    assert!(developer_texts.iter().any(|text| {
+        text.contains(MULTI_AGENT_MODE_OPEN_TAG)
+            && text
+                .contains("Do not spawn sub-agents unless the user explicitly asks for sub-agents")
+    }));
     assert!(
-        developer_texts.iter().any(|text| {
-            text.contains(MULTI_AGENT_MODE_OPEN_TAG)
-                && text.contains("Proactive multi-agent delegation is active.")
-        }),
-        "expected proactive multi-agent mode instructions in developer input, got {developer_texts:?}"
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("Proactive multi-agent delegation is active."))
     );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_start_reports_multi_agent_mode() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let cases = [
-        (
-            BTreeMap::from([(Feature::MultiAgentV2, true)]),
-            Some(MultiAgentMode::Proactive),
-            MultiAgentMode::Proactive,
-        ),
-        (
-            BTreeMap::from([(Feature::MultiAgentV2, true)]),
-            Some(MultiAgentMode::None),
-            MultiAgentMode::None,
-        ),
-        (
-            BTreeMap::new(),
-            Some(MultiAgentMode::Proactive),
-            MultiAgentMode::Proactive,
-        ),
-        (
-            BTreeMap::from([(Feature::MultiAgentV2, true)]),
-            None,
-            MultiAgentMode::ExplicitRequestOnly,
-        ),
-    ];
-
-    for (features, requested_multi_agent_mode, expected_multi_agent_mode) in cases {
-        let server = responses::start_mock_server().await;
-        let codex_home = TempDir::new()?;
-        create_config_toml(codex_home.path(), &server.uri(), "never", &features)?;
-
-        let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-        timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-        let thread_req = mcp
-            .send_thread_start_request_with_auto_env(ThreadStartParams {
-                model: Some("mock-model".to_string()),
-                multi_agent_mode: requested_multi_agent_mode,
-                ..Default::default()
-            })
-            .await?;
-        let thread_resp: JSONRPCResponse = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-        )
-        .await??;
-        let response = to_response::<ThreadStartResponse>(thread_resp)?;
-
-        assert_eq!(response.multi_agent_mode, expected_multi_agent_mode);
-    }
 
     Ok(())
 }
