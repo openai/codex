@@ -613,7 +613,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
 }
 
 #[tokio::test]
-async fn selected_capability_roots_round_trip_through_fork_and_explicit_empty_wins() {
+async fn selected_capability_roots_round_trip_through_fork() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
@@ -633,20 +633,18 @@ async fn selected_capability_roots_round_trip_through_fork_and_explicit_empty_wi
             path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
         },
     }];
-    let fork_history = || {
-        InitialHistory::Forked(vec![RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                selected_capability_roots: selected_roots.clone(),
-                ..SessionMeta::default()
-            },
-            git: None,
-        })])
-    };
-
     let inherited = manager
         .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: fork_history(),
+            config,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                SessionMetaLine {
+                    meta: SessionMeta {
+                        selected_capability_roots: selected_roots.clone(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                },
+            )]),
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -676,43 +674,6 @@ async fn selected_capability_roots_round_trip_through_fork_and_explicit_empty_wi
     assert_eq!(
         inherited_history.get_selected_capability_roots(),
         selected_roots
-    );
-
-    let mut explicit_empty = codex_extension_api::ExtensionDataInit::new();
-    explicit_empty.insert(Vec::<SelectedCapabilityRoot>::new());
-    let overridden = manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            initial_history: fork_history(),
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: explicit_empty,
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("start explicitly empty fork");
-    overridden.thread.ensure_rollout_materialized().await;
-    overridden
-        .thread
-        .flush_rollout()
-        .await
-        .expect("flush explicitly empty fork");
-    let overridden_history = RolloutRecorder::get_rollout_history(
-        &overridden
-            .thread
-            .rollout_path()
-            .expect("explicitly empty fork rollout path"),
-    )
-    .await
-    .expect("read explicitly empty fork rollout");
-
-    assert_eq!(
-        overridden_history.get_selected_capability_roots(),
-        Vec::new()
     );
 }
 

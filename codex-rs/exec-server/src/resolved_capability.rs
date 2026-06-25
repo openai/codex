@@ -21,13 +21,6 @@ pub struct ResolvedSelectedCapabilityRoot {
 }
 
 impl ResolvedSelectedCapabilityRoot {
-    fn new(selected_root: SelectedCapabilityRoot, environment: Arc<Environment>) -> Self {
-        Self {
-            selected_root,
-            environment,
-        }
-    }
-
     pub fn selected_root(&self) -> &SelectedCapabilityRoot {
         &self.selected_root
     }
@@ -70,7 +63,10 @@ impl EnvironmentManager {
                             None => (Arc::clone(environments.get(environment_id)?), false),
                         };
                     Some((
-                        ResolvedSelectedCapabilityRoot::new(selected_root.clone(), environment),
+                        ResolvedSelectedCapabilityRoot {
+                            selected_root: selected_root.clone(),
+                            environment,
+                        },
                         already_ready,
                     ))
                 })
