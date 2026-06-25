@@ -11,9 +11,11 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
+use std::process::ExitStatus;
 use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
@@ -59,6 +61,12 @@ struct BwrapProcesses {
 
 struct BwrapRuntimePaths {
     bwrap: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+enum LauncherExitPolicy {
+    RequireSuccess,
+    AllowTeardownKill,
 }
 
 impl BwrapTestCommand {
@@ -337,14 +345,16 @@ impl BwrapProcesses {
             .sandbox_init
             .start_kill()
             .context("kill bwrap PID namespace init");
-        let (mut check_exit_status, status_check_result) = match child_status {
-            Ok(Some(_)) => (true, Ok(())),
-            Ok(None) => (false, Ok(())),
-            Err(error) => (false, Err(error).context("check bwrap process status")),
+        let (exit_policy, status_check_result) = match child_status {
+            Ok(Some(_)) => (LauncherExitPolicy::RequireSuccess, Ok(())),
+            Ok(None) => (LauncherExitPolicy::AllowTeardownKill, Ok(())),
+            Err(error) => (
+                LauncherExitPolicy::RequireSuccess,
+                Err(error).context("check bwrap process status"),
+            ),
         };
         let mut fallback_started = false;
         let early_fallback_result = if sandbox_kill_result.is_err() {
-            check_exit_status = false;
             fallback_started = true;
             self.start_kill_launcher()
         } else {
@@ -356,7 +366,6 @@ impl BwrapProcesses {
             .await
             .context("wait for bwrap PID namespace init");
         let late_fallback_result = if sandbox_wait_result.is_err() && !fallback_started {
-            check_exit_status = false;
             self.start_kill_launcher()
         } else {
             Ok(())
@@ -373,7 +382,6 @@ impl BwrapProcesses {
                     launcher_timeout_result = Err(anyhow::anyhow!(
                         "timed out waiting for bwrap launcher after {BWRAP_CLEANUP_TIMEOUT:?}"
                     ));
-                    check_exit_status = false;
                     timeout_kill_result = self.start_kill_launcher();
                     match tokio::time::timeout(BWRAP_CLEANUP_TIMEOUT, self.child.wait()).await {
                         Ok(result) => result.context("wait for killed bwrap launcher"),
@@ -383,13 +391,7 @@ impl BwrapProcesses {
                     }
                 }
             }
-            .and_then(|status| {
-                anyhow::ensure!(
-                    !check_exit_status || status.success(),
-                    "bwrap process exited with {status}"
-                );
-                Ok(())
-            });
+            .and_then(|status| ensure_launcher_exit_status(status, exit_policy));
 
         // Every cleanup action has been attempted, so an individual error
         // should not cause the blocking fallback to repeat them.
@@ -480,6 +482,18 @@ impl Drop for BwrapProcesses {
             self.shutdown_blocking();
         }
     }
+}
+
+fn ensure_launcher_exit_status(status: ExitStatus, policy: LauncherExitPolicy) -> Result<()> {
+    // bwrap normalizes a SIGKILL of its PID-namespace init to 128 + SIGKILL.
+    // Killing the launcher directly leaves it signal-terminated instead.
+    let expected_teardown_kill = matches!(policy, LauncherExitPolicy::AllowTeardownKill)
+        && (status.code() == Some(128 + libc::SIGKILL) || status.signal() == Some(libc::SIGKILL));
+    anyhow::ensure!(
+        status.success() || expected_teardown_kill,
+        "bwrap process exited with {status}"
+    );
+    Ok(())
 }
 
 fn log_panic_cleanup(args: std::fmt::Arguments<'_>) {
