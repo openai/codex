@@ -8,6 +8,7 @@ mod value;
 pub(crate) use array::ArraySchema;
 pub(crate) use constraints::ConstraintSet;
 pub(crate) use constraints::annotation;
+pub(crate) use constraints::normalized;
 #[cfg(test)]
 pub(crate) use method::Argument;
 pub(crate) use method::Arguments;
@@ -53,6 +54,7 @@ pub struct SchemaRules {
     pub any_of: Option<UnionSchema>,
     pub one_of: Option<UnionSchema>,
     pub constraints: ConstraintSet,
+    pub(crate) source: Value,
 }
 
 impl ApiSchema {
@@ -117,6 +119,16 @@ impl ApiSchema {
                 node => return Ok((id, node)),
             }
         }
+    }
+
+    pub(crate) fn snapshot(&self, id: SchemaId) -> Result<Value> {
+        let (_, node) = self.resolve(id)?;
+        Ok(match node {
+            SchemaNode::Any => Value::Bool(true),
+            SchemaNode::Never => Value::Bool(false),
+            SchemaNode::Reference(_) => unreachable!("resolve returns a concrete node"),
+            SchemaNode::Rules(rules) => rules.source.clone(),
+        })
     }
 }
 

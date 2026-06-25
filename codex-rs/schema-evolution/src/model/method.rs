@@ -91,6 +91,13 @@ impl Method {
 }
 
 impl Arguments {
+    pub(crate) fn argument(&self) -> Option<Argument> {
+        match self {
+            Self::None => None,
+            Self::Map(argument) | Self::List(argument) | Self::Value(argument) => Some(*argument),
+        }
+    }
+
     fn classify(parser: &Parser<'_>, argument: Argument) -> Result<Self> {
         let (_, node) = parser.schema.resolve(argument.schema)?;
         let SchemaNode::Rules(rules) = node else {

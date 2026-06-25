@@ -29,6 +29,18 @@ impl JsonType {
             _ => Err(anyhow!("unsupported JSON Schema type {value}")),
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Array => "array",
+            Self::Boolean => "boolean",
+            Self::Integer => "integer",
+            Self::Null => "null",
+            Self::Number => "number",
+            Self::Object => "object",
+            Self::String => "string",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,6 +76,18 @@ impl TypeSet {
         }
         accepted
     }
+
+    pub fn to_json(&self) -> Value {
+        let values = self
+            .declared
+            .iter()
+            .map(|value| Value::String(value.as_str().to_string()))
+            .collect::<Vec<_>>();
+        match values.as_slice() {
+            [value] => value.clone(),
+            _ => Value::Array(values),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,5 +119,9 @@ impl ValueSet {
         values.sort_by_key(|value| serde_json::to_string(value).unwrap_or_default());
         values.dedup();
         Ok(Some(Self { values }))
+    }
+
+    pub fn to_json(&self) -> Value {
+        Value::Array(self.values.clone())
     }
 }
