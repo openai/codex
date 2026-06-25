@@ -1,3 +1,4 @@
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -35,7 +36,7 @@ impl SpawnAgentsOnCsvHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             payload,
             ..
         } = invocation;
@@ -49,7 +50,7 @@ impl SpawnAgentsOnCsvHandler {
             }
         };
 
-        handle(session, turn, arguments)
+        handle(session, step_context, arguments)
             .await
             .map(boxed_tool_output)
     }
@@ -68,9 +69,10 @@ impl CoreToolRuntime for SpawnAgentsOnCsvHandler {
 /// `report_agent_job_result`, then exported to CSV on completion.
 pub async fn handle(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     arguments: String,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
+    let turn = &step_context.turn;
     let args: SpawnAgentsOnCsvArgs = parse_arguments(arguments.as_str())?;
     if args.instruction.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
@@ -78,7 +80,7 @@ pub async fn handle(
         ));
     }
 
-    let cwd = single_local_environment_cwd(&turn)?;
+    let cwd = single_local_environment_cwd(&step_context.environments)?;
     let db = required_state_db(&session)?;
     let input_path = cwd.join(args.csv_path);
     let input_path_display = input_path.display().to_string();
@@ -182,7 +184,7 @@ pub async fn handle(
         })?;
 
     let requested_concurrency = args.max_concurrency.or(args.max_workers);
-    let options = match build_runner_options(&session, &turn, requested_concurrency).await {
+    let options = match build_runner_options(&session, &step_context, requested_concurrency).await {
         Ok(options) => options,
         Err(err) => {
             let error_message = err.to_string();
@@ -199,14 +201,7 @@ pub async fn handle(
                 "failed to transition agent job {job_id} to running: {err}"
             ))
         })?;
-    if let Err(err) = run_agent_job_loop(
-        session.clone(),
-        turn.clone(),
-        db.clone(),
-        job_id.clone(),
-        options,
-    )
-    .await
+    if let Err(err) = run_agent_job_loop(session.clone(), db.clone(), job_id.clone(), options).await
     {
         let error_message = format!("job runner failed: {err}");
         let _ = db
@@ -299,8 +294,15 @@ pub async fn handle(
     Ok(FunctionToolOutput::from_text(content, Some(true)))
 }
 
-fn single_local_environment_cwd(turn: &TurnContext) -> Result<AbsolutePathBuf, FunctionCallError> {
-    let [turn_environment] = turn.environments.turn_environments.as_slice() else {
+fn single_local_environment_cwd(
+    environments: &TurnEnvironmentSnapshot,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
+    if !environments.starting.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agents_on_csv requires exactly one local environment".to_string(),
+        ));
+    }
+    let [turn_environment] = environments.turn_environments.as_slice() else {
         return Err(FunctionCallError::RespondToModel(
             "spawn_agents_on_csv requires exactly one local environment".to_string(),
         ));
