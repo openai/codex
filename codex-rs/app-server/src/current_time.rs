@@ -23,6 +23,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
 const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CURRENT_TIME_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn app_server_time_provider(
     outgoing: Arc<OutgoingMessageSender>,
@@ -51,10 +52,32 @@ impl TimeProvider for AppServerTimeProvider {
         })
     }
 
-    fn sleep(&self, _thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
+    fn sleep(&self, thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
+        let outgoing = self.outgoing.clone();
+        let thread_state_manager = self.thread_state_manager.clone();
         Box::pin(async move {
-            tokio::time::sleep(duration).await;
-            Ok(())
+            let outgoing = outgoing
+                .upgrade()
+                .context("app-server current-time provider is unavailable")?;
+            let started_at =
+                request_current_time(outgoing.clone(), thread_state_manager.clone(), thread_id)
+                    .await?;
+            let wake_at = started_at
+                .checked_add_signed(
+                    chrono::Duration::from_std(duration)
+                        .context("external sleep duration is outside the supported range")?,
+                )
+                .context("external sleep deadline is outside the supported range")?;
+
+            loop {
+                tokio::time::sleep(CURRENT_TIME_POLL_INTERVAL).await;
+                if request_current_time(outgoing.clone(), thread_state_manager.clone(), thread_id)
+                    .await?
+                    >= wake_at
+                {
+                    return Ok(());
+                }
+            }
         })
     }
 }
