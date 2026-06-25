@@ -338,7 +338,7 @@ async fn explicit_yield_frame_precedes_notification_and_terminal_output_drops_ti
     let session_id = SessionId::new("session-1").expect("session ID");
     writer
         .write(&ClientToHost::Request {
-            id: request_id(1),
+            id: request_id(/*value*/ 1),
             request: HostRequest::OpenSession {
                 session_id: session_id.clone(),
             },
@@ -348,7 +348,7 @@ async fn explicit_yield_frame_precedes_notification_and_terminal_output_drops_ti
     assert_eq!(
         reader.read::<HostToClient>().await.expect("session ready"),
         Some(HostToClient::Response {
-            id: request_id(1),
+            id: request_id(/*value*/ 1),
             result: WireResult::Ok {
                 value: HostResponse::SessionReady {
                     session_id: session_id.clone(),
@@ -359,7 +359,7 @@ async fn explicit_yield_frame_precedes_notification_and_terminal_output_drops_ti
 
     writer
         .write(&ClientToHost::Request {
-            id: request_id(2),
+            id: request_id(/*value*/ 2),
             request: HostRequest::Execute {
                 session_id: session_id.clone(),
                 request: execute_request(
@@ -383,7 +383,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             .await
             .expect("execution started"),
         Some(HostToClient::Response {
-            id: request_id(2),
+            id: request_id(/*value*/ 2),
             result: WireResult::Ok {
                 value: HostResponse::ExecutionStarted {
                     cell_id: cell_id("1").into(),
@@ -397,7 +397,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             .await
             .expect("initial response"),
         Some(HostToClient::InitialResponse {
-            id: request_id(2),
+            id: request_id(/*value*/ 2),
             result: WireResult::Ok {
                 value: RuntimeResponse::Yielded {
                     cell_id: cell_id("1"),
@@ -444,7 +444,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
         .expect("notification response");
     writer
         .write(&ClientToHost::Request {
-            id: request_id(3),
+            id: request_id(/*value*/ 3),
             request: HostRequest::Wait {
                 session_id: session_id.clone(),
                 request: WaitRequest {
@@ -463,7 +463,9 @@ setTimeout(() => { text("should never emit"); }, 60000);
             .await
             .expect("terminal response")
         {
-            Some(HostToClient::Response { id, result }) if id == request_id(3) => break result,
+            Some(HostToClient::Response { id, result }) if id == request_id(/*value*/ 3) => {
+                break result;
+            }
             Some(HostToClient::CellClosed {
                 session_id: closed_session_id,
                 cell_id: closed_cell_id,
@@ -492,7 +494,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
 
     writer
         .write(&ClientToHost::Request {
-            id: request_id(4),
+            id: request_id(/*value*/ 4),
             request: HostRequest::ShutdownSession {
                 session_id: session_id.clone(),
             },
@@ -505,7 +507,7 @@ setTimeout(() => { text("should never emit"); }, 60000);
             .await
             .expect("shutdown response")
         {
-            Some(HostToClient::Response { id, result }) if id == request_id(4) => {
+            Some(HostToClient::Response { id, result }) if id == request_id(/*value*/ 4) => {
                 assert_eq!(
                     result,
                     WireResult::Ok {
