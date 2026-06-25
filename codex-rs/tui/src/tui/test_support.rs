@@ -11,7 +11,7 @@ use crate::custom_terminal::Terminal;
 
 pub(crate) fn make_test_tui() -> io::Result<Tui> {
     let backend = CrosstermBackend::new(stdout());
-    let terminal = Terminal::with_screen_size_and_cursor_position(
+    let terminal = Terminal::with_screen_size_and_cursor_position_for_test(
         backend,
         Size {
             width: 80,
