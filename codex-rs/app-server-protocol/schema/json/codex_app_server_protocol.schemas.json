@@ -12094,6 +12094,12 @@
         "title": "McpServerRefreshResponse",
         "type": "object"
       },
+      "McpServerStartupFailureReason": {
+        "enum": [
+          "reauthenticationRequired"
+        ],
+        "type": "string"
+      },
       "McpServerStartupState": {
         "enum": [
           "starting",
@@ -12163,6 +12169,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "failureReason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerStartupFailureReason"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "name": {
