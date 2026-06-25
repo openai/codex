@@ -8099,11 +8099,13 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         });
     let mut previous_context_item = turn_context.to_turn_context_item();
     previous_context_item.turn_id = Some("previous-turn-id".to_string());
-    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item));
-        state.history.set_world_state_baseline(world_state);
+        state
+            .history
+            .set_world_state_baseline(world_state.snapshot());
     }
 
     session
@@ -8773,12 +8775,13 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
-    let world_state =
-        Arc::new(build_world_state_from_turn_context(&session, &previous_context).await);
+    let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
-        state.history.set_world_state_baseline(world_state);
+        state
+            .history
+            .set_world_state_baseline(world_state.snapshot());
     }
     let rollout_path = attach_thread_persistence(&mut session).await;
 
