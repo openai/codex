@@ -8,7 +8,6 @@ use super::TurnContext;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_config::McpServerConfig;
-use codex_core_plugins::ExecutorPluginRuntime;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpConfig;
@@ -28,7 +27,6 @@ pub(super) enum McpRuntimeScope<'a> {
 
 struct ProjectedMcpConfig {
     bindings: Vec<(usize, ResolvedSelectedCapabilityRoot)>,
-    plugins: Vec<(usize, ExecutorPluginRuntime)>,
     config: McpConfig,
     runtime_context: McpRuntimeContext,
 }
@@ -50,25 +48,7 @@ impl Session {
         }
         let bindings = selected_bindings(selected_roots, resolved_roots);
         let cached_runtime = cache.runtime_for_bindings(&bindings);
-        let mut plugins = cache.plugins_for_bindings(&bindings).unwrap_or_default();
-        let mut discovered_plugin = false;
-        if cached_runtime.is_some() {
-            let unresolved = bindings
-                .iter()
-                .filter(|(order, _)| {
-                    !plugins
-                        .iter()
-                        .any(|(plugin_order, _)| plugin_order == order)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let discovered = project_executor_plugins(&unresolved).await;
-            discovered_plugin = !discovered.is_empty();
-            plugins.extend(discovered);
-            plugins.sort_unstable_by_key(|(order, _)| *order);
-        } else {
-            plugins = project_executor_plugins(&bindings).await;
-        }
+        let plugins = cache.project_plugins(&bindings).await;
 
         let base = cache.base_runtime();
         let mcp_config = Arc::new(
@@ -83,8 +63,7 @@ impl Session {
             .collect::<Vec<_>>();
         let runtime_context =
             self.mcp_runtime_context(&turn_context.config, environments, &pinned_roots);
-        if !discovered_plugin
-            && let Some(runtime) = cached_runtime
+        if let Some(runtime) = cached_runtime
             && runtime.matches_projection(mcp_config.as_ref(), &runtime_context)
         {
             runtime
@@ -109,7 +88,7 @@ impl Session {
             )
             .await
         };
-        cache.replace_selected_runtime(bindings, plugins, Arc::clone(&runtime));
+        cache.replace_selected_runtime(bindings, Arc::clone(&runtime));
         self.services
             .publish_existing_mcp_runtime(Arc::clone(&runtime));
         runtime
@@ -119,11 +98,16 @@ impl Session {
         &self,
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
-        let projection = self.project_mcp_config_inner(config).await;
+        let mut cache = self.services.selected_mcp_runtime.lock().await;
+        let projection = self.project_mcp_config_inner(config, &mut cache).await;
         (projection.config, projection.runtime_context)
     }
 
-    async fn project_mcp_config_inner(&self, config: &Config) -> ProjectedMcpConfig {
+    async fn project_mcp_config_inner(
+        &self,
+        config: &Config,
+        cache: &mut super::SelectedMcpRuntimeCache,
+    ) -> ProjectedMcpConfig {
         let environments = self.services.turn_environments.snapshot().await;
         let selected_roots = &self.services.selected_capability_roots;
         let resolved_roots = self
@@ -136,7 +120,7 @@ impl Session {
             )
             .await;
         let bindings = selected_bindings(selected_roots, &resolved_roots);
-        let plugins = project_executor_plugins(&bindings).await;
+        let plugins = cache.project_plugins(&bindings).await;
         let base_config = self.services.mcp_manager.runtime_config(config).await;
         let mcp_config = self
             .services
@@ -145,7 +129,6 @@ impl Session {
         let runtime_context = self.mcp_runtime_context(config, &environments, &resolved_roots);
         ProjectedMcpConfig {
             bindings,
-            plugins,
             config: mcp_config,
             runtime_context,
         }
@@ -156,7 +139,7 @@ impl Session {
         config: &Config,
     ) -> Arc<McpRuntimeSnapshot> {
         let mut cache = self.services.selected_mcp_runtime.lock().await;
-        let projection = self.project_mcp_config_inner(config).await;
+        let projection = self.project_mcp_config_inner(config, &mut cache).await;
         let current = cache
             .runtime_for_bindings(&projection.bindings)
             .unwrap_or_else(|| self.services.latest_mcp_runtime());
@@ -183,11 +166,7 @@ impl Session {
         if projection.bindings.is_empty() {
             cache.replace_base_and_invalidate_selected(Arc::clone(&runtime));
         } else {
-            cache.replace_selected_runtime(
-                projection.bindings,
-                projection.plugins,
-                Arc::clone(&runtime),
-            );
+            cache.replace_selected_runtime(projection.bindings, Arc::clone(&runtime));
         }
         self.services
             .publish_existing_mcp_runtime(Arc::clone(&runtime));
@@ -308,24 +287,4 @@ fn selected_bindings(
                 .map(|selection_order| (selection_order, root.clone()))
         })
         .collect()
-}
-
-async fn project_executor_plugins(
-    bindings: &[(usize, ResolvedSelectedCapabilityRoot)],
-) -> Vec<(usize, ExecutorPluginRuntime)> {
-    let mut plugins = Vec::new();
-    for (selection_order, root) in bindings {
-        match ExecutorPluginRuntime::project(root).await {
-            Ok(Some(runtime)) => plugins.push((*selection_order, runtime)),
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!(
-                    selected_root = root.selected_root().id,
-                    error = %err,
-                    "failed to project selected executor plugin runtime"
-                );
-            }
-        }
-    }
-    plugins
 }

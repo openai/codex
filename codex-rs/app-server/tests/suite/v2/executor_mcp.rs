@@ -429,7 +429,7 @@ startup_timeout_sec = 10
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_executor_plugin_activates_after_it_becomes_ready() -> Result<()> {
+async fn selected_executor_plugin_runtime_survives_thread_resume() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_url, apps_server_handle) = start_apps_server_with_delays(
         vec![AppInfo {
@@ -497,40 +497,8 @@ args = ["exec-server", "--listen", "stdio"]
         ),
     )?;
 
-    // The selected root exists, but its manifest arrives after the first model step.
+    // Environment contents are complete before selection and remain stable for the thread.
     let plugin = TempDir::new()?;
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
-    let selected_thread = start_thread(
-        &mut app_server,
-        Some(vec![SelectedCapabilityRoot {
-            id: "executor-demo@1".to_string(),
-            location: CapabilityRootLocation::Environment {
-                environment_id: EXECUTOR_ID.to_string(),
-                path: PathUri::from_host_native_path(plugin.path())?,
-            },
-        }]),
-    )
-    .await?;
-
-    let before_ready = responses::mount_sse_once(
-        &responses_server,
-        responses::sse(vec![
-            responses::ev_response_created("before-ready"),
-            responses::ev_assistant_message("before-ready-message", "Waiting"),
-            responses::ev_completed("before-ready"),
-        ]),
-    )
-    .await;
-    run_turn(&mut app_server, &selected_thread, "Check available tools").await?;
-    let namespace = format!("mcp__{DYNAMIC_MCP_SERVER_NAME}");
-    assert!(
-        before_ready
-            .single_request()
-            .tool_by_name(&namespace, "echo")
-            .is_none()
-    );
-
     std::fs::create_dir_all(plugin.path().join(".codex-plugin"))?;
     std::fs::write(
         plugin.path().join(".codex-plugin/plugin.json"),
@@ -555,6 +523,21 @@ args = ["exec-server", "--listen", "stdio"]
             }
         }))?,
     )?;
+
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let selected_thread = start_thread(
+        &mut app_server,
+        Some(vec![SelectedCapabilityRoot {
+            id: "executor-demo@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: EXECUTOR_ID.to_string(),
+                path: PathUri::from_host_native_path(plugin.path())?,
+            },
+        }]),
+    )
+    .await?;
+    let namespace = format!("mcp__{DYNAMIC_MCP_SERVER_NAME}");
 
     let response_mock = responses::mount_sse_sequence(
         &responses_server,

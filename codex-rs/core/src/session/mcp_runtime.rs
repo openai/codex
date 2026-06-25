@@ -3,34 +3,41 @@ use std::sync::Arc;
 use codex_core_plugins::ExecutorPluginRuntime;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::McpRuntimeSnapshot;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 /// One live selected-plugin MCP runtime retained between model steps.
 ///
-/// A cached runtime is a reuse candidate only for the same ordered selected roots and the same
-/// process-local environment instances. The caller additionally compares the effective MCP config
-/// and runtime context before reuse. Selected environment contents are treated as stable, so
-/// manifest and MCP config file changes do not invalidate this cache.
+/// Selected environment identity and contents are stable. Plugin manifests, MCP declarations, and
+/// app declarations are therefore cached by the complete selected root for the session lifetime.
+/// Missing or failed projections are not cached, so a deferred environment can recover later.
+///
+/// A live runtime is a separate cache: it is reusable only for the same ordered selected roots and
+/// the same process-local environment handles. The caller additionally compares the effective MCP
+/// config and runtime context. Replacing a connection handle may rebuild live processes, but it
+/// reuses the stable plugin projection and does not reread capability files.
 ///
 /// Within a live session, the selected runtime is invalidated in exactly two ways:
 ///
 /// 1. [`Self::replace_base_and_invalidate_selected`] installs a new base MCP runtime.
 /// 2. [`Self::replace_selected_runtime`] stores a newly projected runtime. This happens when the
-///    bindings change, when a previously unavailable plugin appears, or when the effective config
-///    or runtime context changes. An unavailable environment disappears from the binding list and
-///    therefore follows this path; returning with a new environment instance rebuilds the live
-///    runtime even when the stable environment ID is unchanged.
+///    active bindings or effective runtime configuration change.
 ///
 /// In-flight [`McpRuntimeSnapshot`] values retain their manager until their model step finishes.
 #[derive(Default)]
 pub(crate) struct SelectedMcpRuntimeCache {
     base_runtime: Option<Arc<McpRuntimeSnapshot>>,
+    plugin_projections: Vec<CachedExecutorPluginProjection>,
     runtime: Option<CachedSelectedRuntime>,
 }
 
 struct CachedSelectedRuntime {
     bindings: Vec<(usize, ResolvedSelectedCapabilityRoot)>,
-    plugins: Vec<(usize, ExecutorPluginRuntime)>,
     runtime: Arc<McpRuntimeSnapshot>,
+}
+
+struct CachedExecutorPluginProjection {
+    selected_root: SelectedCapabilityRoot,
+    plugin: ExecutorPluginRuntime,
 }
 
 impl SelectedMcpRuntimeCache {
@@ -59,27 +66,51 @@ impl SelectedMcpRuntimeCache {
             .map(|cached| Arc::clone(&cached.runtime))
     }
 
-    pub(crate) fn plugins_for_bindings(
-        &self,
+    pub(crate) async fn project_plugins(
+        &mut self,
         bindings: &[(usize, ResolvedSelectedCapabilityRoot)],
-    ) -> Option<Vec<(usize, ExecutorPluginRuntime)>> {
-        self.runtime
-            .as_ref()
-            .filter(|cached| same_bindings(&cached.bindings, bindings))
-            .map(|cached| cached.plugins.clone())
+    ) -> Vec<(usize, ExecutorPluginRuntime)> {
+        let mut plugins = Vec::new();
+        for (selection_order, root) in bindings {
+            let selected_root = root.selected_root();
+            if let Some(plugin) = self
+                .plugin_projections
+                .iter()
+                .find(|cached| &cached.selected_root == selected_root)
+                .map(|cached| cached.plugin.clone())
+            {
+                plugins.push((*selection_order, plugin));
+                continue;
+            }
+
+            match ExecutorPluginRuntime::project(root).await {
+                Ok(Some(plugin)) => {
+                    self.plugin_projections
+                        .push(CachedExecutorPluginProjection {
+                            selected_root: selected_root.clone(),
+                            plugin: plugin.clone(),
+                        });
+                    plugins.push((*selection_order, plugin));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        selected_root = selected_root.id,
+                        error = %err,
+                        "failed to project selected executor plugin runtime"
+                    );
+                }
+            }
+        }
+        plugins
     }
 
     pub(crate) fn replace_selected_runtime(
         &mut self,
         bindings: Vec<(usize, ResolvedSelectedCapabilityRoot)>,
-        plugins: Vec<(usize, ExecutorPluginRuntime)>,
         runtime: Arc<McpRuntimeSnapshot>,
     ) {
-        self.runtime = Some(CachedSelectedRuntime {
-            bindings,
-            plugins,
-            runtime,
-        });
+        self.runtime = Some(CachedSelectedRuntime { bindings, runtime });
     }
 }
 
@@ -88,8 +119,8 @@ fn same_bindings(
     right: &[(usize, ResolvedSelectedCapabilityRoot)],
 ) -> bool {
     // Order is part of the key because later selected roots can be renamed when MCP server names
-    // collide. Arc identity is part of the key because live processes and connections belong to
-    // one exact environment instance, even when a replacement reuses the same stable ID.
+    // collide. Arc identity is only a live-connection key: stable plugin metadata is cached above
+    // by selected root and survives connection-handle replacement.
     left.len() == right.len()
         && left
             .iter()
