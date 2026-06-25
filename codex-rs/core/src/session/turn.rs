@@ -18,6 +18,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
+use crate::hook_runtime::HookRuntimeOutcome;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -164,24 +165,52 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
+    let session_start_outcome = run_pending_session_start_hooks(&sess, &turn_context).await;
+    if session_start_outcome.should_stop {
+        sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+            .await;
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
+        return Ok(None);
+    }
+    let (inspected_input, blocked_input) = inspect_inputs(&sess, &turn_context, &input).await;
+    if blocked_input {
+        sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+            .await;
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
+        record_inspected_inputs(&sess, &turn_context, inspected_input).await;
+        return Ok(None);
+    }
+
     // Keep the exact model-visible state used by this turn and its inline compactions.
     let mut world_state = sess
         .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
+    record_additional_contexts(
+        &sess,
+        &turn_context,
+        session_start_outcome.additional_contexts,
+    )
+    .await;
 
     let Some((injection_items, explicitly_enabled_connectors)) =
         build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
     else {
+        record_inspected_inputs(&sess, &turn_context, inspected_input).await;
         return Ok(None);
     };
 
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return Ok(None);
-    }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
-        return Ok(None);
-    }
+    record_inspected_inputs(&sess, &turn_context, inspected_input).await;
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
@@ -472,17 +501,41 @@ async fn run_hooks_and_record_inputs(
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
 ) -> bool {
+    let (inspected_input, blocked_input) = inspect_inputs(sess, turn_context, input).await;
+    record_inspected_inputs(sess, turn_context, inspected_input).await;
+    blocked_input
+}
+
+async fn inspect_inputs<'a>(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &'a [TurnInput],
+) -> (Vec<(&'a TurnInput, HookRuntimeOutcome)>, bool) {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
+    let mut inspected_input = Vec::with_capacity(input.len());
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
+        } else if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty())
+        {
+            accepted_user_input = true;
+        }
+        inspected_input.push((input_item, hook_outcome));
+    }
+    (inspected_input, blocked_input && !accepted_user_input)
+}
+
+async fn record_inspected_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    inspected_input: Vec<(&TurnInput, HookRuntimeOutcome)>,
+) {
+    for (input_item, hook_outcome) in inspected_input {
+        if hook_outcome.should_stop {
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
-                accepted_user_input = true;
-            }
             record_pending_input(
                 sess,
                 turn_context,
@@ -492,7 +545,6 @@ async fn run_hooks_and_record_inputs(
             .await;
         }
     }
-    blocked_input && !accepted_user_input
 }
 
 #[instrument(level = "trace", skip_all)]

@@ -48,6 +48,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
+#[derive(Default)]
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
     pub additional_contexts: Vec<String>,
@@ -103,7 +104,8 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
 pub(crate) async fn run_pending_session_start_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> bool {
+) -> HookRuntimeOutcome {
+    let mut combined_outcome = HookRuntimeOutcome::default();
     while let Some(session_start_source) = sess.take_pending_session_start_source().await {
         // Pending session-start hooks are reused to dispatch thread-spawn subagent
         // starts. Other subagent sessions are internal/system work and do not run
@@ -122,7 +124,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                     agent_type: context.agent_type,
                 }
             }
-            SessionSource::SubAgent(_) => return false,
+            SessionSource::SubAgent(_) => return combined_outcome,
             _ => StartHookTarget::SessionStart {
                 source: session_start_source,
             },
@@ -138,21 +140,23 @@ pub(crate) async fn run_pending_session_start_hooks(
         };
         let hooks = sess.hooks();
         let preview_runs = hooks.preview_session_start(&request);
-        if run_context_injecting_hook(
+        let outcome = run_context_injecting_hook(
             sess,
             turn_context,
             preview_runs,
             hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
         )
-        .await
-        .record_additional_contexts(sess, turn_context)
-        .await
-        {
-            return true;
+        .await;
+        combined_outcome
+            .additional_contexts
+            .extend(outcome.additional_contexts);
+        if outcome.should_stop {
+            combined_outcome.should_stop = true;
+            return combined_outcome;
         }
     }
 
-    false
+    combined_outcome
 }
 
 /// Runs matching `PreToolUse` hooks before a tool executes.
@@ -578,18 +582,6 @@ where
     let outcome = outcome_future.await.into();
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     outcome.outcome
-}
-
-impl HookRuntimeOutcome {
-    async fn record_additional_contexts(
-        self,
-        sess: &Arc<Session>,
-        turn_context: &Arc<TurnContext>,
-    ) -> bool {
-        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
-
-        self.should_stop
-    }
 }
 
 pub(crate) async fn record_additional_contexts(
