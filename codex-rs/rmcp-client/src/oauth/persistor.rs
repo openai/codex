@@ -632,7 +632,7 @@ enum RefreshReason {
 }
 
 impl RefreshReason {
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Expiry => "expiry",
             Self::Unauthorized => "unauthorized",
