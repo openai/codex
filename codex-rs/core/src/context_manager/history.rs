@@ -90,20 +90,14 @@ impl ContextManager {
         world_state: &WorldState,
     ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
         let snapshot = world_state.snapshot();
-        let (fragments, rollout_item) = self.world_state_baseline.as_ref().map_or_else(
-            || {
-                (
-                    world_state.render_full(),
-                    Some(WorldStateItem::full(snapshot.clone().into_value())),
-                )
-            },
+        let fragments =
+            world_state.render_history_diff(self.world_state_baseline.as_ref(), &self.items);
+        let rollout_item = self.world_state_baseline.as_ref().map_or_else(
+            || Some(WorldStateItem::full(snapshot.clone().into_value())),
             |previous| {
-                (
-                    world_state.render_diff(previous),
-                    snapshot
-                        .merge_patch_from(previous)
-                        .map(WorldStateItem::patch),
-                )
+                snapshot
+                    .merge_patch_from(previous)
+                    .map(WorldStateItem::patch)
             },
         );
         self.world_state_baseline = Some(snapshot);

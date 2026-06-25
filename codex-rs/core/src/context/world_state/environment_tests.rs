@@ -220,7 +220,10 @@ fn single_environment_diff_ignores_unknown_shell() -> Result<()> {
 
     assert_eq!(
         None,
-        render_fragment(WorldStateSection::render_diff(&current, Some(&previous)))
+        render_fragment(WorldStateSection::render_diff(
+            &current,
+            PreviousSectionState::Known(&previous),
+        ))
     );
     Ok(())
 }
@@ -248,7 +251,7 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
         )),
         render_fragment(WorldStateSection::render_diff(
             &EnvironmentsState::default(),
-            Some(&previous),
+            PreviousSectionState::Known(&previous),
         )),
     );
     Ok(())

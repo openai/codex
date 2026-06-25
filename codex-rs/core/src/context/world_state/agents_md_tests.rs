@@ -53,6 +53,34 @@ fn changed_and_removed_state_supersedes_previous_instructions() {
     );
 }
 
+#[test]
+fn unknown_previous_state_is_explicitly_superseded() {
+    let loaded = LoadedAgentsMd::from_text_for_testing("current instructions");
+    let current = AgentsMdState::new(Some(&loaded));
+    assert_eq!(
+        vec![user_message(
+            "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nThese AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\ncurrent instructions\n</INSTRUCTIONS>",
+        )],
+        render_fragments(vec![
+            WorldStateSection::render_diff(&current, PreviousSectionState::Unknown)
+                .expect("unknown state should be replaced"),
+        ]),
+    );
+
+    assert_eq!(
+        vec![user_message(
+            "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nThe previously provided AGENTS.md instructions no longer apply.\n</INSTRUCTIONS>",
+        )],
+        render_fragments(vec![
+            WorldStateSection::render_diff(
+                &AgentsMdState::default(),
+                PreviousSectionState::Unknown,
+            )
+            .expect("unknown state should be removed"),
+        ]),
+    );
+}
+
 fn render_fragments(fragments: Vec<Box<dyn ContextualUserFragment>>) -> Vec<ResponseItem> {
     fragments
         .into_iter()
