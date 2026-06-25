@@ -396,6 +396,8 @@ pub struct McpToolCallAppContext {
     pub connector_id: String,
     pub link_id: Option<String>,
     pub resource_uri: Option<String>,
+    pub app_name: Option<String>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -895,6 +897,8 @@ impl From<CoreTurnItem> for ThreadItem {
                         connector_id,
                         link_id: mcp.link_id,
                         resource_uri: mcp.mcp_app_resource_uri.clone(),
+                        app_name: mcp.app_name,
+                        template_id: mcp.template_id,
                     }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
                     plugin_id: mcp.plugin_id,

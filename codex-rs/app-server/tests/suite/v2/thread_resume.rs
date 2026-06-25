@@ -747,6 +747,8 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                     connector_id: "calendar".to_string(),
                     link_id: Some("link_calendar".to_string()),
                     resource_uri: Some("ui://widget/lookup.html".to_string()),
+                    app_name: None,
+                    template_id: None,
                 })
             );
             let result = result.as_ref().expect("redacted MCP result");
@@ -797,6 +799,8 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
             resource_uri: Some("ui://widget/lookup.html".to_string()),
+            app_name: None,
+            template_id: None,
         })
     );
     let result = result.as_ref().expect("normal MCP result");
@@ -903,6 +907,8 @@ fn append_resume_redaction_history(
             connector_id: Some("calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
             link_id: Some("link_calendar".to_string()),
+            app_name: None,
+            template_id: None,
             plugin_id: None,
             duration: Duration::from_millis(8),
             result: Ok(CallToolResult {

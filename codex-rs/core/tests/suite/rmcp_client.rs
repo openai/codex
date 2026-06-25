@@ -1352,6 +1352,8 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             connector_id: None,
             mcp_app_resource_uri: None,
             link_id: None,
+            app_name: None,
+            template_id: None,
             plugin_id: None,
         },
     );
