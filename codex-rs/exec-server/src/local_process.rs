@@ -823,26 +823,25 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    let (sandboxed, metrics, termination_requested) = {
+    let sandboxed = {
         let mut processes = inner.processes.lock().await;
         match processes.get_mut(&process_id) {
-            Some(ProcessEntry::Running(process)) => (
-                process.sandbox != SandboxType::None,
-                process.metrics.take(),
-                process.termination_requested,
-            ),
-            Some(ProcessEntry::Starting(_)) | None => (false, None, false),
+            Some(ProcessEntry::Running(process)) => {
+                let sandboxed = process.sandbox != SandboxType::None;
+                if let Some(metrics) = process.metrics.take() {
+                    metrics.finish(if process.termination_requested {
+                        "terminated"
+                    } else if exit_code == 0 {
+                        "success"
+                    } else {
+                        "error"
+                    });
+                }
+                sandboxed
+            }
+            Some(ProcessEntry::Starting(_)) | None => false,
         }
     };
-    if let Some(metrics) = metrics {
-        metrics.finish(if termination_requested {
-            "terminated"
-        } else if exit_code == 0 {
-            "success"
-        } else {
-            "error"
-        });
-    }
     if sandboxed {
         let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
     }

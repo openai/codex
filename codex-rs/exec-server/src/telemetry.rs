@@ -46,7 +46,7 @@ pub struct ExecServerTelemetry {
 
 struct ExecServerTelemetryInner {
     metrics: MetricsClient,
-    active: Mutex<ActiveCounts>,
+    active: Arc<Mutex<ActiveCounts>>,
 }
 
 #[derive(Default)]
@@ -55,6 +55,16 @@ struct ActiveCounts {
     stdio_connections: i64,
     websocket_connections: i64,
     processes: i64,
+}
+
+impl ActiveCounts {
+    fn connections(&self, transport: ConnectionTransport) -> i64 {
+        match transport {
+            ConnectionTransport::Relay => self.relay_connections,
+            ConnectionTransport::Stdio => self.stdio_connections,
+            ConnectionTransport::WebSocket => self.websocket_connections,
+        }
+    }
 }
 
 pub(crate) struct ConnectionMetricGuard {
@@ -70,11 +80,10 @@ pub(crate) struct ProcessMetricGuard {
 
 impl ExecServerTelemetry {
     pub fn new(metrics: MetricsClient) -> Self {
+        let active = Arc::new(Mutex::new(ActiveCounts::default()));
+        register_active_gauges(&metrics, &active);
         Self {
-            inner: Some(Arc::new(ExecServerTelemetryInner {
-                metrics,
-                active: Mutex::new(ActiveCounts::default()),
-            })),
+            inner: Some(Arc::new(ExecServerTelemetryInner { metrics, active })),
         }
     }
 
@@ -191,23 +200,11 @@ impl ExecServerTelemetryInner {
             ConnectionTransport::WebSocket => &mut active.websocket_connections,
         };
         *count += delta;
-        self.gauge(
-            CONNECTIONS_ACTIVE_METRIC,
-            CONNECTIONS_ACTIVE_DESCRIPTION,
-            *count,
-            &[("transport", transport.metric_tag())],
-        );
     }
 
     fn adjust_process_count(&self, delta: i64) {
         let mut active = self.active_counts();
         active.processes += delta;
-        self.gauge(
-            PROCESSES_ACTIVE_METRIC,
-            PROCESSES_ACTIVE_DESCRIPTION,
-            active.processes,
-            &[],
-        );
     }
 
     fn counter(&self, name: &str, description: &str, tags: &[(&str, &str)]) {
@@ -229,14 +226,57 @@ impl ExecServerTelemetryInner {
             warn!(metric = name, "failed to emit exec-server duration");
         }
     }
+}
 
-    fn gauge(&self, name: &str, description: &str, value: i64, tags: &[(&str, &str)]) {
-        if self
-            .metrics
-            .gauge_with_description(name, description, value, tags)
-            .is_err()
-        {
-            warn!(metric = name, "failed to emit exec-server gauge");
-        }
+fn register_active_gauges(metrics: &MetricsClient, active: &Arc<Mutex<ActiveCounts>>) {
+    for transport in [
+        ConnectionTransport::Relay,
+        ConnectionTransport::Stdio,
+        ConnectionTransport::WebSocket,
+    ] {
+        register_active_gauge(
+            metrics,
+            active,
+            CONNECTIONS_ACTIVE_METRIC,
+            CONNECTIONS_ACTIVE_DESCRIPTION,
+            &[("transport", transport.metric_tag())],
+            move |active| active.connections(transport),
+        );
+    }
+
+    register_active_gauge(
+        metrics,
+        active,
+        PROCESSES_ACTIVE_METRIC,
+        PROCESSES_ACTIVE_DESCRIPTION,
+        &[],
+        |active| active.processes,
+    );
+}
+
+fn register_active_gauge(
+    metrics: &MetricsClient,
+    active: &Arc<Mutex<ActiveCounts>>,
+    name: &str,
+    description: &str,
+    tags: &[(&str, &str)],
+    read: impl Fn(&ActiveCounts) -> i64 + Send + Sync + 'static,
+) {
+    let active = Arc::clone(active);
+    if metrics
+        .register_observable_gauge_with_description(
+            name,
+            description,
+            move || {
+                let active = active
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                read(&active)
+            },
+            tags,
+        )
+        .is_err()
+    {
+        warn!(metric = name, "failed to register exec-server gauge");
     }
 }
