@@ -1,8 +1,8 @@
 //! Hook events are append-only across requirements layers. The managed hook
-//! directory is different: only one directory is usable on a given platform, so
-//! conflicting values for the active platform fail closed. The inactive platform
-//! field is first-filled to allow the same layer stack to carry OS-specific
-//! directories.
+//! directory is a singleton: only one directory is usable on a given platform,
+//! so conflicting values for the active platform fail closed.
+//! The inactive platform field is first-filled to allow the same layer stack to
+//! carry OS-specific directories.
 
 use crate::HookEventsToml;
 use crate::ManagedHooksRequirementsToml;
@@ -210,12 +210,12 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         pre_compact,
         post_compact,
         session_start,
+        user_instructions,
         user_prompt_submit,
         subagent_start,
         subagent_stop,
         stop,
     } = incoming;
-
     let mut changed = false;
     changed |= append_vec(&mut existing.pre_tool_use, pre_tool_use);
     changed |= append_vec(&mut existing.permission_request, permission_request);
@@ -223,6 +223,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
     changed |= append_vec(&mut existing.pre_compact, pre_compact);
     changed |= append_vec(&mut existing.post_compact, post_compact);
     changed |= append_vec(&mut existing.session_start, session_start);
+    changed |= append_vec(&mut existing.user_instructions, user_instructions);
     changed |= append_vec(&mut existing.user_prompt_submit, user_prompt_submit);
     changed |= append_vec(&mut existing.subagent_start, subagent_start);
     changed |= append_vec(&mut existing.subagent_stop, subagent_stop);

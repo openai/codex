@@ -1310,6 +1310,13 @@
           },
           "type": "array"
         },
+        "UserInstructions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookHandlerConfig"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {

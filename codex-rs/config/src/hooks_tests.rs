@@ -113,6 +113,68 @@ statusMessage = "checking"
 }
 
 #[test]
+fn user_instructions_event_deserializes_from_toml() {
+    let parsed: HookEventsToml = toml::from_str(
+        r#"
+    [[UserInstructions]]
+    type = "command"
+    command = "python3 /tmp/user_instructions.py"
+"#,
+    )
+    .expect("UserInstructions hook TOML should deserialize");
+
+    assert_eq!(
+        parsed,
+        HookEventsToml {
+            user_instructions: vec![HookHandlerConfig::Command {
+                command: "python3 /tmp/user_instructions.py".to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }],
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn user_instructions_event_preserves_multiple_hooks() {
+    let parsed = toml::from_str::<HookEventsToml>(
+        r#"
+[[UserInstructions]]
+type = "command"
+command = "python3 /tmp/first.py"
+
+[[UserInstructions]]
+type = "command"
+command = "python3 /tmp/second.py"
+"#,
+    )
+    .expect("multiple UserInstructions hooks should deserialize");
+
+    assert_eq!(
+        parsed.user_instructions,
+        vec![
+            HookHandlerConfig::Command {
+                command: "python3 /tmp/first.py".to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            },
+            HookHandlerConfig::Command {
+                command: "python3 /tmp/second.py".to_string(),
+                command_windows: None,
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            },
+        ]
+    );
+}
+
+#[test]
 fn hooks_toml_deserializes_inline_events_and_state_map() {
     let parsed: HooksToml = toml::from_str(
         r#"

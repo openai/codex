@@ -8132,6 +8132,12 @@
           },
           "type": "array"
         },
+        "UserInstructions": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookHandler"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -8161,6 +8167,7 @@
         "Stop",
         "SubagentStart",
         "SubagentStop",
+        "UserInstructions",
         "UserPromptSubmit"
       ],
       "type": "object"

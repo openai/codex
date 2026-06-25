@@ -803,6 +803,50 @@ managed_dir = "/managed/high"
 }
 
 #[test]
+fn user_instructions_hooks_append_across_requirements_layers() {
+    let composed = compose_with_hook_directory_field(
+        vec![
+            layer(
+                "req_low",
+                "Low",
+                r#"
+[[hooks.UserInstructions]]
+type = "command"
+command = "low"
+"#,
+            ),
+            layer(
+                "req_high",
+                "High",
+                r#"
+[[hooks.UserInstructions]]
+type = "command"
+command = "high"
+"#,
+            ),
+        ],
+        HookDirectoryField::ManagedDir,
+    )
+    .expect("UserInstructions hooks should compose")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[[hooks.UserInstructions]]
+type = "command"
+command = "high"
+
+[[hooks.UserInstructions]]
+type = "command"
+command = "low"
+"#
+        )
+    );
+}
+
+#[test]
 fn active_windows_managed_dir_conflicts_fail_closed() {
     let err = compose_with_hook_directory_field(
         vec![
