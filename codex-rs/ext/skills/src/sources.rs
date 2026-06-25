@@ -1,6 +1,13 @@
 use std::fmt;
 use std::sync::Arc;
 
+use codex_core_skills::runtime::SkillReadRequest as RuntimeSkillReadRequest;
+use codex_core_skills::runtime::SkillSource;
+use codex_core_skills::runtime::SkillSourceFuture;
+use codex_core_skills::runtime::SkillSourceIdentity;
+use codex_core_skills::runtime::SkillSources;
+use codex_mcp::McpResourceClient;
+
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
@@ -17,6 +24,7 @@ pub struct SkillProviderSource {
     kind: SkillSourceKind,
     label: String,
     provider: Arc<dyn SkillProvider>,
+    identity: SkillSourceIdentity,
 }
 
 impl SkillProviderSource {
@@ -25,10 +33,12 @@ impl SkillProviderSource {
         label: impl Into<String>,
         provider: Arc<dyn SkillProvider>,
     ) -> Self {
+        let identity = SkillSourceIdentity::from_owner(Arc::new(Arc::clone(&provider)));
         Self {
             kind,
             label: label.into(),
             provider,
+            identity,
         }
     }
 
@@ -55,6 +65,17 @@ impl SkillProviderSource {
 
     fn owns_kind(&self, kind: &SkillSourceKind) -> bool {
         &self.kind == kind
+    }
+
+    fn bind(&self, query: SkillListQuery) -> Arc<dyn SkillSource> {
+        Arc::new(BoundSkillProvider {
+            kind: self.kind.clone(),
+            provider: Arc::clone(&self.provider),
+            identity: self.identity.clone(),
+            host_snapshot: query.host_snapshot.clone(),
+            mcp_resources: query.mcp_resources.clone(),
+            query: Some(query),
+        })
     }
 }
 
@@ -108,74 +129,48 @@ impl SkillProviders {
     }
 
     pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
-        self.list_matching(&query, |source| source.should_list(&query))
-            .await
+        self.sources_for_turn(query).list().await
     }
 
     pub(crate) async fn list_orchestrator_for_turn(
         &self,
         query: SkillListQuery,
     ) -> SkillProviderResult<SkillCatalog> {
-        let mut catalog = SkillCatalog::default();
-
-        for source in self
-            .sources
-            .iter()
-            .filter(|source| source.kind == SkillSourceKind::Orchestrator)
-        {
-            let source_catalog = source.provider.list(query.clone()).await.map_err(|err| {
-                SkillProviderError::new(format!(
-                    "{} skills unavailable: {}",
-                    source.label, err.message
-                ))
-            })?;
-            catalog.extend(source_catalog);
-        }
-
-        Ok(catalog)
+        self.sources_for_turn(query)
+            .list_kind(&SkillSourceKind::Orchestrator)
+            .await
     }
 
-    async fn list_matching(
-        &self,
-        query: &SkillListQuery,
-        should_list: impl Fn(&SkillProviderSource) -> bool,
-    ) -> SkillCatalog {
-        let mut catalog = SkillCatalog::default();
-
-        for source in self.sources.iter().filter(|source| should_list(source)) {
-            extend_catalog(
-                &mut catalog,
-                source.provider.list(query.clone()).await,
-                source.label.as_str(),
-            );
-        }
-
-        catalog
+    fn sources_for_turn(&self, query: SkillListQuery) -> SkillSources {
+        self.sources
+            .iter()
+            .filter(|source| source.should_list(&query))
+            .fold(SkillSources::new(), |sources, source| {
+                sources.with_source(source.label.clone(), source.bind(query.clone()))
+            })
     }
 
     pub(crate) async fn read(
         &self,
         request: SkillReadRequest,
     ) -> Result<SkillReadResult, SkillProviderError> {
-        let mut last_error = None;
-        for source in self
+        let mut sources = self
             .sources
             .iter()
-            .filter(|source| source.owns_kind(&request.authority.kind))
-        {
-            match source.provider.read(request.clone()).await {
-                Ok(result) => return Ok(result),
-                Err(err) => last_error = Some(err),
-            }
-        }
-
-        match last_error {
-            Some(err) => Err(err),
-            None => Err(SkillProviderError::new(format!(
+            .filter(|source| source.owns_kind(&request.authority.kind));
+        let Some(source) = sources.next() else {
+            return Err(SkillProviderError::new(format!(
                 "{} skill provider is not configured",
                 request.authority.kind
-            ))),
+            )));
+        };
+        if sources.next().is_some() {
+            return Err(SkillProviderError::new(format!(
+                "{} skill authority is ambiguous",
+                request.authority.kind
+            )));
         }
+        source.provider.read(request).await
     }
 
     pub async fn search(
@@ -204,15 +199,42 @@ impl SkillProviders {
     }
 }
 
-fn extend_catalog(
-    catalog: &mut SkillCatalog,
-    result: Result<SkillCatalog, SkillProviderError>,
-    label: &str,
-) {
-    match result {
-        Ok(source_catalog) => catalog.extend(source_catalog),
-        Err(err) => catalog
-            .warnings
-            .push(format!("{label} skills unavailable: {}", err.message)),
+struct BoundSkillProvider {
+    kind: SkillSourceKind,
+    provider: Arc<dyn SkillProvider>,
+    identity: SkillSourceIdentity,
+    host_snapshot: Option<Arc<codex_core_skills::HostSkillsSnapshot>>,
+    mcp_resources: Option<Arc<McpResourceClient>>,
+    query: Option<SkillListQuery>,
+}
+
+impl SkillSource for BoundSkillProvider {
+    fn kind(&self) -> SkillSourceKind {
+        self.kind.clone()
+    }
+
+    fn identity(&self) -> SkillSourceIdentity {
+        self.identity.clone()
+    }
+
+    fn list(&self) -> SkillSourceFuture<'_, SkillCatalog> {
+        let Some(query) = self.query.clone() else {
+            return Box::pin(async {
+                Err(SkillProviderError::new(
+                    "skill source was not bound for catalog listing",
+                ))
+            });
+        };
+        self.provider.list(query)
+    }
+
+    fn read(&self, request: RuntimeSkillReadRequest) -> SkillSourceFuture<'_, SkillReadResult> {
+        self.provider.read(SkillReadRequest {
+            authority: request.authority,
+            package: request.package,
+            resource: request.resource,
+            host_snapshot: self.host_snapshot.clone(),
+            mcp_resources: self.mcp_resources.clone(),
+        })
     }
 }
