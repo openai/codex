@@ -9,7 +9,8 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 ///
 /// Selected environment identity and contents are stable. Plugin manifests, MCP declarations, and
 /// app declarations are therefore cached by the complete selected root for the session lifetime.
-/// Missing or failed projections are not cached, so a deferred environment can recover later.
+/// Successful projections and stable non-plugin roots are cached. Failed reads are not cached, so
+/// a transient executor error can recover later.
 ///
 /// A live runtime is a separate cache: it is reusable only for the same ordered selected roots and
 /// the same process-local environment handles. The caller additionally compares the effective MCP
@@ -37,7 +38,7 @@ struct CachedSelectedRuntime {
 
 struct CachedExecutorPluginProjection {
     selected_root: SelectedCapabilityRoot,
-    plugin: ExecutorPluginRuntime,
+    plugin: Option<ExecutorPluginRuntime>,
 }
 
 impl SelectedMcpRuntimeCache {
@@ -73,26 +74,28 @@ impl SelectedMcpRuntimeCache {
         let mut plugins = Vec::new();
         for (selection_order, root) in bindings {
             let selected_root = root.selected_root();
-            if let Some(plugin) = self
+            if let Some(cached) = self
                 .plugin_projections
                 .iter()
                 .find(|cached| &cached.selected_root == selected_root)
-                .map(|cached| cached.plugin.clone())
             {
-                plugins.push((*selection_order, plugin));
+                if let Some(plugin) = &cached.plugin {
+                    plugins.push((*selection_order, plugin.clone()));
+                }
                 continue;
             }
 
             match ExecutorPluginRuntime::project(root).await {
-                Ok(Some(plugin)) => {
+                Ok(plugin) => {
                     self.plugin_projections
                         .push(CachedExecutorPluginProjection {
                             selected_root: selected_root.clone(),
                             plugin: plugin.clone(),
                         });
-                    plugins.push((*selection_order, plugin));
+                    if let Some(plugin) = plugin {
+                        plugins.push((*selection_order, plugin));
+                    }
                 }
-                Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(
                         selected_root = selected_root.id,

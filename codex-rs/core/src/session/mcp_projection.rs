@@ -116,7 +116,7 @@ impl Session {
             .environment_manager()
             .resolve_selected_capability_roots(
                 selected_roots,
-                &environments.captured_environments(),
+                &environments.captured_environment_availability(),
             )
             .await;
         let bindings = selected_bindings(selected_roots, &resolved_roots);

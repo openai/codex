@@ -17,7 +17,7 @@ use crate::ResolvedExecutorPlugin;
 
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 
-/// MCP and connector declarations read from one exact executor binding.
+/// MCP and connector declarations read from one stable executor capability root.
 #[derive(Clone, Debug)]
 pub struct ExecutorPluginRuntime {
     plugin: ResolvedPlugin,
@@ -26,10 +26,8 @@ pub struct ExecutorPluginRuntime {
 }
 
 impl ExecutorPluginRuntime {
-    /// Reads both runtime declaration files through the root's pinned filesystem.
-    ///
-    /// `Ok(None)` is intentionally not cacheable: the plugin manifest may appear
-    /// once a deferred executor finishes starting.
+    /// Reads both runtime declaration files through the root's current ready filesystem.
+    /// `Ok(None)` means the stable root is not a plugin and may be cached by the caller.
     pub async fn project(root: &ResolvedSelectedCapabilityRoot) -> anyhow::Result<Option<Self>> {
         let Some(plugin) = ExecutorPluginProvider::resolve_pinned(root).await? else {
             return Ok(None);

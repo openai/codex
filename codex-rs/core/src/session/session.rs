@@ -557,10 +557,14 @@ impl Session {
             config.current_time_reminder.as_ref(),
             external_time_provider,
         )?;
-        let selected_capability_roots = if selected_capability_roots.is_empty() {
-            initial_history.get_selected_capability_roots()
-        } else {
+        let selected_capability_roots = if !selected_capability_roots.is_empty() {
             selected_capability_roots
+        } else if let Some(selected_capability_roots) =
+            thread_extension_init.get::<Vec<SelectedCapabilityRoot>>()
+        {
+            selected_capability_roots.as_ref().clone()
+        } else {
+            initial_history.get_selected_capability_roots()
         };
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
