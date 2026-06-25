@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_core_skills::HostSkillsSnapshot;
+use codex_core_skills::SkillInstructions;
+use codex_core_skills::collect_runtime_skill_mentions;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ConfigContributor;
@@ -29,16 +32,10 @@ use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
-use crate::fragments::SkillInstructions;
 use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
-use crate::render::MAX_SKILL_NAME_BYTES;
-use crate::render::MAX_SKILL_PATH_BYTES;
 use crate::render::available_skills_fragment;
-use crate::render::truncate_main_prompt_contents;
-use crate::render::truncate_utf8_to_bytes;
-use crate::selection::collect_explicit_skill_mentions;
 use crate::sources::SkillProviders;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
@@ -133,10 +130,13 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            available_skills_fragment(&catalog)
-                .map(|fragment| PromptFragment::developer_capability(fragment.render()))
-                .into_iter()
-                .collect()
+            let Some((fragment, warning)) = available_skills_fragment(&catalog) else {
+                return Vec::new();
+            };
+            if let Some(warning) = warning {
+                self.emit_warning(thread_store.level_id(), warning);
+            }
+            vec![PromptFragment::developer_capability(fragment.render())]
         })
     }
 }
@@ -199,7 +199,10 @@ where
                 self.emit_warning(&input.turn_id, warning.clone());
             }
 
-            let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
+            let plain_name_conflicts = HashSet::new();
+            let selected_entries =
+                collect_runtime_skill_mentions(&input.user_input, &catalog, &plain_name_conflicts);
+            let mut warnings = catalog.warnings.clone();
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions {
                 let mut turn_catalog = catalog.clone();
@@ -207,12 +210,15 @@ where
                     entry.authority.kind != SkillSourceKind::Executor
                         && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
-                if let Some(fragment) = available_skills_fragment(&turn_catalog) {
+                if let Some((fragment, warning)) = available_skills_fragment(&turn_catalog) {
+                    if let Some(warning) = warning {
+                        self.emit_warning(&input.turn_id, warning.clone());
+                        warnings.push(warning);
+                    }
                     fragments.push(Box::new(fragment));
                 }
             }
 
-            let mut warnings = catalog.warnings.clone();
             let mut main_prompts_injected = false;
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
             for entry in &selected_entries {
@@ -221,8 +227,8 @@ where
                     .await
                 {
                     Ok(read_result) => {
-                        let (contents, truncated) =
-                            truncate_main_prompt_contents(read_result.contents.as_str());
+                        let (fragment, truncated) =
+                            SkillInstructions::from_runtime(entry, &read_result.contents);
                         if truncated {
                             let warning = format!(
                                 "Skill `{}` exceeded the main prompt context limit and was truncated.",
@@ -231,15 +237,6 @@ where
                             self.emit_warning(&input.turn_id, warning.clone());
                             warnings.push(warning);
                         }
-                        let fragment = SkillInstructions {
-                            name: truncate_utf8_to_bytes(&entry.name, MAX_SKILL_NAME_BYTES).0,
-                            path: truncate_utf8_to_bytes(
-                                entry.rendered_path(),
-                                MAX_SKILL_PATH_BYTES,
-                            )
-                            .0,
-                            contents,
-                        };
                         fragments.push(Box::new(fragment));
                         main_prompts_injected = true;
                         if entry.authority.kind == SkillSourceKind::Host {
