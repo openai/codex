@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use codex_core_skills::runtime::SkillAuthority;
+use codex_core_skills::runtime::SkillCatalog;
+use codex_core_skills::runtime::SkillSource;
+use codex_core_skills::runtime::SkillSourceKind;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
 use codex_extension_api::ResponsesApiTool;
@@ -19,11 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::catalog::SkillAuthority;
-use crate::catalog::SkillCatalog;
-use crate::catalog::SkillSourceKind;
-use crate::provider::SkillListQuery;
-use crate::sources::SkillProviders;
+use crate::sources::orchestrator_skill_source;
 use crate::state::SkillsThreadState;
 
 mod list;
@@ -34,13 +34,11 @@ const SKILLS_NAMESPACE: &str = "skills";
 const MAX_HANDLE_BYTES: usize = 2_048;
 
 pub(crate) fn skill_tools(
-    providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let context = SkillToolContext {
-        providers,
-        mcp_resources,
+        mcp_resources: mcp_resources.map(|client| Arc::new(client.snapshot())),
         thread_state,
     };
     vec![
@@ -53,30 +51,22 @@ pub(crate) fn skill_tools(
 
 #[derive(Clone)]
 struct SkillToolContext {
-    providers: SkillProviders,
     mcp_resources: Option<Arc<McpResourceClient>>,
     thread_state: Arc<SkillsThreadState>,
 }
 
 impl SkillToolContext {
-    async fn catalog(&self, turn_id: &str, authority: SkillToolAuthority) -> SkillCatalog {
-        match authority {
-            SkillToolAuthority::Orchestrator => {
-                self.thread_state
-                    .orchestrator_catalog_snapshot(
-                        self.mcp_resources.as_deref(),
-                        self.providers.list_orchestrator_for_turn(SkillListQuery {
-                            turn_id: turn_id.to_string(),
-                            executor_roots: Vec::new(),
-                            host_snapshot: None,
-                            include_host_skills: false,
-                            include_bundled_skills: false,
-                            include_orchestrator_skills: true,
-                            mcp_resources: self.mcp_resources.clone(),
-                        }),
-                    )
-                    .await
-            }
+    fn source(&self) -> Arc<dyn SkillSource> {
+        orchestrator_skill_source(Arc::clone(&self.thread_state), self.mcp_resources.clone())
+    }
+
+    async fn catalog(&self, source: &dyn SkillSource) -> SkillCatalog {
+        match source.list().await {
+            Ok(catalog) => catalog,
+            Err(err) => SkillCatalog {
+                warnings: vec![err.message],
+                ..Default::default()
+            },
         }
     }
 }

@@ -6,14 +6,12 @@ use super::PluginConnectorSource;
 
 #[test]
 fn snapshot_merges_sources_in_order_and_dedupes_provenance() {
-    let host_source = source("host", "Zulu", &["calendar", "calendar"]);
-    let host = ConnectorSnapshot::from_plugin_sources([
-        source("skills", "Skills only", &[]),
-        host_source.clone(),
-    ]);
+    let host_source = source("Zulu", &["calendar", "calendar"]);
+    let host =
+        ConnectorSnapshot::from_plugin_sources([source("Skills only", &[]), host_source.clone()]);
     let selected = ConnectorSnapshot::from_plugin_sources([
-        source("selected-a", "Alpha", &["drive", "calendar"]),
-        source("selected-b", "Alpha", &["calendar"]),
+        source("Alpha", &["drive", "calendar"]),
+        source("Alpha", &["calendar"]),
     ]);
 
     let merged = host.merged_with(&selected);
@@ -36,9 +34,8 @@ fn snapshot_merges_sources_in_order_and_dedupes_provenance() {
     );
 }
 
-fn source(id: &str, display_name: &str, connector_ids: &[&str]) -> PluginConnectorSource {
+fn source(display_name: &str, connector_ids: &[&str]) -> PluginConnectorSource {
     PluginConnectorSource::from_connector_ids(
-        id,
         display_name,
         connector_ids
             .iter()

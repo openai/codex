@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::hash::Hash;
@@ -20,21 +21,14 @@ pub enum SkillSourceKind {
     Executor,
     /// Skills owned by the orchestrator rather than an execution environment.
     Orchestrator,
-    /// A source kind for providers that do not fit an existing transport category.
-    Custom(String),
 }
 
 impl SkillSourceKind {
-    pub fn custom(kind: impl Into<String>) -> Self {
-        Self::Custom(kind.into())
-    }
-
     fn as_str(&self) -> &str {
         match self {
             Self::Host => "host",
             Self::Executor => "executor",
             Self::Orchestrator => "orchestrator",
-            Self::Custom(kind) => kind,
         }
     }
 }
@@ -189,13 +183,6 @@ pub struct SkillCatalog {
 }
 
 impl SkillCatalog {
-    pub fn extend(&mut self, other: SkillCatalog) {
-        for entry in other.entries {
-            self.push_entry(entry);
-        }
-        self.warnings.extend(other.warnings);
-    }
-
     pub fn push_entry(&mut self, entry: SkillCatalogEntry) {
         if self
             .entries
@@ -290,9 +277,6 @@ impl Hash for SkillSourceIdentity {
 /// A resource returned by [`SkillSource::list`] must be read through the same
 /// source instead of being converted into an ambient local path.
 pub trait SkillSource: Send + Sync {
-    /// Returns the authority category owned by this source.
-    fn kind(&self) -> SkillSourceKind;
-
     /// Returns the stable identity of the runtime owner captured by this source.
     fn identity(&self) -> SkillSourceIdentity;
 
@@ -306,7 +290,7 @@ pub trait SkillSource: Send + Sync {
 #[derive(Clone)]
 struct RegisteredSkillSource {
     label: String,
-    source: Arc<dyn SkillSource>,
+    source: Arc<dyn Fn() -> Arc<dyn SkillSource> + Send + Sync>,
 }
 
 /// Bound skill sources used to build and read one runtime catalog.
@@ -323,41 +307,56 @@ impl SkillSources {
     pub fn with_source(mut self, label: impl Into<String>, source: Arc<dyn SkillSource>) -> Self {
         self.sources.push(RegisteredSkillSource {
             label: label.into(),
+            source: Arc::new(move || Arc::clone(&source)),
+        });
+        self
+    }
+
+    pub fn with_source_factory(
+        mut self,
+        label: impl Into<String>,
+        source: Arc<dyn Fn() -> Arc<dyn SkillSource> + Send + Sync>,
+    ) -> Self {
+        self.sources.push(RegisteredSkillSource {
+            label: label.into(),
             source,
         });
         self
     }
 
-    pub async fn list(&self) -> SkillCatalog {
+    pub fn extend(&mut self, other: Self) {
+        self.sources.extend(other.sources);
+    }
+
+    pub(crate) async fn list_with_sources(
+        &self,
+    ) -> (
+        SkillCatalog,
+        HashMap<(SkillAuthority, SkillPackageId), Arc<dyn SkillSource>>,
+    ) {
         let mut catalog = SkillCatalog::default();
+        let mut sources = HashMap::new();
         for source in &self.sources {
-            match source.source.list().await {
-                Ok(source_catalog) => catalog.extend(source_catalog),
+            let bound_source = (source.source)();
+            match bound_source.list().await {
+                Ok(source_catalog) => {
+                    catalog.warnings.extend(source_catalog.warnings);
+                    for entry in source_catalog.entries {
+                        let key = (entry.authority.clone(), entry.id.clone());
+                        if let std::collections::hash_map::Entry::Vacant(route) = sources.entry(key)
+                        {
+                            route.insert(Arc::clone(&bound_source));
+                            catalog.entries.push(entry);
+                        }
+                    }
+                }
                 Err(err) => catalog.warnings.push(format!(
                     "{} skills unavailable: {}",
                     source.label, err.message
                 )),
             }
         }
-        catalog
-    }
-
-    pub async fn list_kind(&self, kind: &SkillSourceKind) -> SkillSourceResult<SkillCatalog> {
-        let mut catalog = SkillCatalog::default();
-        for source in self
-            .sources
-            .iter()
-            .filter(|source| source.source.kind() == *kind)
-        {
-            let source_catalog = source.source.list().await.map_err(|err| {
-                SkillSourceError::new(format!(
-                    "{} skills unavailable: {}",
-                    source.label, err.message
-                ))
-            })?;
-            catalog.extend(source_catalog);
-        }
-        Ok(catalog)
+        (catalog, sources)
     }
 }
 
