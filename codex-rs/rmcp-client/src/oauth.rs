@@ -19,6 +19,7 @@
 mod persistor;
 mod refresh_lock;
 mod resolved_store;
+mod store_lock;
 
 use anyhow::Context;
 use anyhow::Error;
@@ -45,17 +46,16 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
+use self::store_lock::OAuthStore;
+use self::store_lock::OAuthStoreLock;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use codex_utils_home_dir::find_codex_home;
@@ -78,9 +78,6 @@ use rmcp::transport::auth::AuthorizationManager;
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
-const OAUTH_STORE_LOCK_DIR: &str = "mcp-oauth-refresh-locks";
-const STORE_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(60);
-const STORE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -554,89 +551,6 @@ fn delete_oauth_tokens_from_secrets_keyring<K: KeyringStore + Clone + 'static>(
     Ok(secrets_removed)
 }
 
-#[derive(Clone, Copy)]
-enum OAuthStore {
-    File,
-    Secrets,
-}
-
-impl OAuthStore {
-    fn lock_filename(self) -> &'static str {
-        match self {
-            Self::File => "file-store.lock",
-            Self::Secrets => "secrets-store.lock",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::File => "fallback file",
-            Self::Secrets => "encrypted secrets",
-        }
-    }
-}
-
-/// Serializes access to stores that aggregate credentials for multiple MCP servers.
-///
-/// A per-credential transaction lock may be acquired before this lock. Store operations must not
-/// acquire a credential lock, and cross-store cleanup must happen after releasing the first store
-/// lock. This ordering prevents deadlocks while keeping each aggregate read-modify-write atomic.
-struct OAuthStoreLock {
-    _file: File,
-}
-
-impl OAuthStoreLock {
-    fn acquire(store: OAuthStore) -> Result<Self> {
-        Self::acquire_with_timeout(store, STORE_LOCK_ACQUIRE_TIMEOUT)
-    }
-
-    fn acquire_with_timeout(store: OAuthStore, acquire_timeout: Duration) -> Result<Self> {
-        let path = oauth_store_lock_path(store)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .with_context(|| {
-                format!(
-                    "failed to open MCP OAuth {} store lock {}",
-                    store.description(),
-                    path.display()
-                )
-            })?;
-        let started = Instant::now();
-
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Self { _file: file }),
-                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= acquire_timeout => {
-                    anyhow::bail!(
-                        "timed out after {acquire_timeout:?} waiting for MCP OAuth {} store lock {}",
-                        store.description(),
-                        path.display()
-                    );
-                }
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    std::thread::sleep(STORE_LOCK_RETRY_SLEEP.min(acquire_timeout));
-                }
-                Err(error) => {
-                    return Err(std::io::Error::from(error)).with_context(|| {
-                        format!(
-                            "failed to lock MCP OAuth {} store lock {}",
-                            store.description(),
-                            path.display()
-                        )
-                    });
-                }
-            }
-        }
-    }
-}
 const FALLBACK_FILENAME: &str = ".credentials.json";
 const MCP_SERVER_TYPE: &str = "http";
 
@@ -820,13 +734,6 @@ fn compute_secret_name(server_name: &str, server_url: &str) -> Result<SecretName
 
 fn fallback_file_path() -> Result<PathBuf> {
     Ok(find_codex_home()?.join(FALLBACK_FILENAME).to_path_buf())
-}
-
-fn oauth_store_lock_path(store: OAuthStore) -> Result<PathBuf> {
-    Ok(find_codex_home()?
-        .join(OAUTH_STORE_LOCK_DIR)
-        .join(store.lock_filename())
-        .to_path_buf())
 }
 
 fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
