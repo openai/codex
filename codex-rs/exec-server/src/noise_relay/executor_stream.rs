@@ -27,6 +27,7 @@ use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::server::ConnectionProcessor;
+use crate::telemetry::ConnectionTransport;
 
 /// Identifies one completed virtual-stream instance.
 ///
@@ -169,7 +170,9 @@ pub(crate) fn spawn_noise_virtual_stream(
         transport: JsonRpcTransport::Plain,
     };
     tokio::spawn(async move {
-        processor.run_connection(connection).await;
+        processor
+            .run_connection(connection, ConnectionTransport::Relay)
+            .await;
         let _ = processor_closed_stream_tx
             .send(ClosedNoiseVirtualStream {
                 stream_id: processor_stream_id,
