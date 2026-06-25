@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -472,7 +474,17 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
 }
 
 fn default_host_program() -> PathBuf {
-    if let Some(path) = std::env::var_os(CODE_MODE_HOST_PATH_ENV) {
+    resolve_host_program(
+        std::env::var_os(CODE_MODE_HOST_PATH_ENV),
+        std::env::current_exe(),
+    )
+}
+
+fn resolve_host_program(
+    override_path: Option<OsString>,
+    current_exe: io::Result<PathBuf>,
+) -> PathBuf {
+    if let Some(path) = override_path {
         return PathBuf::from(path);
     }
     let executable_name = if cfg!(windows) {
@@ -480,13 +492,10 @@ fn default_host_program() -> PathBuf {
     } else {
         "codex-code-mode-host"
     };
-    if let Ok(current_exe) = std::env::current_exe()
+    if let Ok(current_exe) = current_exe
         && let Some(parent) = current_exe.parent()
     {
-        let sibling = parent.join(executable_name);
-        if sibling.is_file() {
-            return sibling;
-        }
+        return parent.join(executable_name);
     }
     PathBuf::from(executable_name)
 }

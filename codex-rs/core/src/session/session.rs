@@ -1112,7 +1112,13 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                    if config.features.enabled(Feature::CodeModeHost) {
+                        Arc::new(codex_code_mode::ProcessOwnedCodeModeSessionProvider::default())
+                    } else {
+                        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider)
+                    },
+                ),
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };
