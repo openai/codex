@@ -10,8 +10,6 @@
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
 //!   active managed-dir conflicts.
-//! - Higher-priority layers replace each named MCP server requirement as an
-//!   atomic value.
 //! - `permissions.filesystem.deny_read` is a high-priority-first union across
 //!   layers.
 
@@ -19,7 +17,7 @@ use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::Sourced;
-use crate::merge::merge_requirements_toml_values;
+use crate::merge::merge_toml_values;
 use std::cell::OnceCell;
 use std::io;
 use thiserror::Error;
@@ -152,7 +150,7 @@ impl RequirementsLayerStack {
 
         let mut merged_toml = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
-            merge_requirements_toml_values(&mut merged_toml, &layer.regular_toml);
+            merge_toml_values(&mut merged_toml, &layer.regular_toml);
         }
 
         let requirements: ConfigRequirementsToml =
