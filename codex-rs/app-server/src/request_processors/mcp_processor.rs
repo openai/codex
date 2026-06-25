@@ -246,20 +246,14 @@ impl McpRequestProcessor {
         let mcp_manager = self.thread_manager.mcp_manager();
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let auth = self.auth_manager.auth().await;
-        let (mcp_config, runtime_context) = match thread {
-            Some(thread) => {
-                let runtime = thread.current_mcp_runtime();
-                (runtime.config().clone(), runtime.runtime_context().clone())
-            }
-            None => {
-                let mcp_config = mcp_manager.runtime_config(&config).await;
-                let runtime_context = McpRuntimeContext::new(
-                    self.thread_manager.environment_manager(),
-                    config.cwd.to_path_buf(),
-                );
-                (mcp_config, runtime_context)
-            }
+        let mcp_config = match thread {
+            Some(thread) => thread.runtime_mcp_config(&config).await,
+            None => mcp_manager.runtime_config(&config).await,
         };
+        let runtime_context = McpRuntimeContext::new(
+            self.thread_manager.environment_manager(),
+            config.cwd.to_path_buf(),
+        );
 
         tokio::spawn(async move {
             Self::list_mcp_server_status_task(
