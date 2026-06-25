@@ -173,14 +173,7 @@ impl TimeProvider for AppServerTimeProvider {
                 pending_sleeps,
                 key,
             };
-            notify_external_sleep(
-                outgoing,
-                connection_id,
-                thread_id,
-                sleep_id,
-                duration_ms,
-            )
-            .await;
+            notify_external_sleep(outgoing, connection_id, thread_id, sleep_id, duration_ms).await;
             wake_rx.await.context("external sleep was canceled")?;
             Ok(())
         })
