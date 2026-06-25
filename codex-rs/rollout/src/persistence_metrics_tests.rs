@@ -3,7 +3,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
@@ -11,13 +10,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
 
 use super::CompletedTurnMeasurement;
-use super::RolloutProjectionTelemetry;
-use super::RolloutSizeTotals;
-use super::RolloutTurnSizeTracker;
 use super::TurnMeasurementState;
 use super::TurnOutcome;
 use super::TurnSizeTotals;
@@ -262,135 +257,4 @@ fn filtered_item_completion_includes_its_nested_item_type() {
         measurement.items[0].decision,
         super::PersistenceDecision::Dropped
     );
-}
-
-#[test]
-fn rollout_turn_sizes_use_loaded_line_bytes_for_completed_user_turns() {
-    let items = [
-        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            trace_id: None,
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: Default::default(),
-        })),
-        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: "question".to_string(),
-            ..Default::default()
-        })),
-        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
-            message: "answer".to_string(),
-            phase: None,
-            memory_citation: None,
-        })),
-        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: Some("answer".to_string()),
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        })),
-    ];
-    let mut tracker = RolloutTurnSizeTracker::default();
-    for (index, item) in items.iter().enumerate() {
-        tracker.observe(item, (index + 1) as u64);
-    }
-
-    assert_eq!(
-        tracker.finish(),
-        vec![RolloutSizeTotals {
-            items: 4,
-            payload_bytes: 10,
-        }]
-    );
-}
-
-#[test]
-fn rollout_turn_sizes_support_legacy_implicit_turns() {
-    let user = || {
-        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: "question".to_string(),
-            ..Default::default()
-        }))
-    };
-    let answer = || {
-        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
-            message: "answer".to_string(),
-            phase: None,
-            memory_citation: None,
-        }))
-    };
-    let mut tracker = RolloutTurnSizeTracker::default();
-    for item in [user(), answer(), user(), answer()] {
-        tracker.observe(&item, /*payload_bytes*/ 5);
-    }
-
-    assert_eq!(
-        tracker.finish(),
-        vec![
-            RolloutSizeTotals {
-                items: 2,
-                payload_bytes: 10,
-            },
-            RolloutSizeTotals {
-                items: 2,
-                payload_bytes: 10,
-            },
-        ]
-    );
-}
-
-#[test]
-fn rollout_turn_sizes_exclude_incomplete_and_commentary_only_turns() {
-    let mut tracker = RolloutTurnSizeTracker::default();
-    let start = |turn_id: &str| {
-        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: turn_id.to_string(),
-            trace_id: None,
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: Default::default(),
-        }))
-    };
-    let user = || {
-        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: "question".to_string(),
-            ..Default::default()
-        }))
-    };
-    let commentary = RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
-        message: "working".to_string(),
-        phase: Some(codex_protocol::models::MessagePhase::Commentary),
-        memory_citation: None,
-    }));
-    let complete = RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
-        turn_id: "turn-1".to_string(),
-        last_agent_message: None,
-        completed_at: None,
-        duration_ms: None,
-        time_to_first_token_ms: None,
-    }));
-    for item in [start("turn-1"), user(), commentary, complete] {
-        tracker.observe(&item, /*payload_bytes*/ 1);
-    }
-    for item in [start("turn-2"), user()] {
-        tracker.observe(&item, /*payload_bytes*/ 1);
-    }
-
-    assert_eq!(tracker.finish(), Vec::<RolloutSizeTotals>::new());
-}
-
-#[test]
-fn exporter_disabled_path_does_not_prepare_projection_measurement() {
-    let sampled_thread_id = (0..10_000_u128)
-        .find_map(|value| {
-            let thread_id = ThreadId::from_string(&format!("00000000-0000-0000-0000-{value:012x}"))
-                .expect("valid thread id");
-            is_thread_sampled(thread_id).then_some(thread_id)
-        })
-        .expect("sampled thread id");
-    let measurement = RolloutProjectionTelemetry::new(sampled_thread_id)
-        .prepare_response_measurement(/*turn_count*/ 1, /*item_count*/ 1, vec![1]);
-
-    assert!(measurement.is_none());
 }

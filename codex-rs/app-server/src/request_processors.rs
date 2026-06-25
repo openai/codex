@@ -429,8 +429,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_rollout::RolloutProjectionMeasurement;
-use codex_rollout::RolloutProjectionTelemetry;
 use codex_rollout::is_persisted_rollout_item;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::reconcile_rollout;
@@ -621,43 +619,3 @@ pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<T
     }
     builder.finish()
 }
-
-fn prepare_rollout_projection_measurement(
-    thread_id: ThreadId,
-    turns: &[Turn],
-) -> Option<RolloutProjectionMeasurement> {
-    let item_count = turns
-        .iter()
-        .map(|turn| turn.items.len() as u64)
-        .sum::<u64>();
-    RolloutProjectionTelemetry::new(thread_id).prepare_response_measurement(
-        turns.len() as u64,
-        item_count,
-        turns
-            .iter()
-            .filter(|turn| is_completed_user_assistant_turn(turn))
-            .map(|turn| turn.items.len() as u64)
-            .collect(),
-    )
-}
-
-fn is_completed_user_assistant_turn(turn: &Turn) -> bool {
-    turn.status == TurnStatus::Completed
-        && turn
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::UserMessage { .. }))
-        && turn.items.iter().any(|item| {
-            matches!(
-                item,
-                ThreadItem::AgentMessage {
-                    phase: None | Some(codex_protocol::models::MessagePhase::FinalAnswer),
-                    ..
-                }
-            )
-        })
-}
-
-#[cfg(test)]
-#[path = "request_processors_projection_metrics_tests.rs"]
-mod projection_metrics_tests;

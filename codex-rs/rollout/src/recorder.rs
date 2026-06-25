@@ -44,9 +44,6 @@ use super::list::get_threads_in_root;
 use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
-use super::persistence_metrics::RolloutLoadTelemetry;
-use super::persistence_metrics::RolloutSizeTotals;
-use super::persistence_metrics::RolloutTurnSizeTracker;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
 use crate::state_db;
@@ -906,8 +903,6 @@ impl RolloutRecorder {
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
-        let mut loaded_jsonl_bytes = 0_u64;
-        let mut loaded_turns = RolloutTurnSizeTracker::default();
         let mut reader = compression::open_rollout_line_reader(path).await?;
         let mut saw_non_empty_line = false;
         while let Some(line) = reader.next_line().await? {
@@ -939,9 +934,6 @@ impl RolloutRecorder {
                     {
                         thread_id = Some(session_meta_line.meta.id);
                     }
-                    let line_bytes = line.len() as u64;
-                    loaded_jsonl_bytes = loaded_jsonl_bytes.saturating_add(line_bytes);
-                    loaded_turns.observe(&item, line_bytes);
                     items.push(item);
                 }
                 Err(e) => {
@@ -960,15 +952,6 @@ impl RolloutRecorder {
             thread_id,
             parse_errors,
         );
-        if let Some(thread_id) = thread_id {
-            RolloutLoadTelemetry::new(thread_id).record_rollout_load(
-                RolloutSizeTotals {
-                    items: items.len() as u64,
-                    payload_bytes: loaded_jsonl_bytes,
-                },
-                &loaded_turns.finish(),
-            );
-        }
         Ok((items, thread_id, parse_errors))
     }
 
