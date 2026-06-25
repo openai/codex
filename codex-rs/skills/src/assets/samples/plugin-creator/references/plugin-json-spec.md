@@ -205,10 +205,8 @@ use the cachebuster and reinstall flow so Codex reads the updated materialized c
 
 ### Instance semantics
 
-Installing a plugin does not activate its templates. The user reviews a template and explicitly
-creates an ordinary user-owned Scheduled task from it. Codex does not retain a live relationship to
-the plugin or template, so plugin updates affect future creations only. Describe these as Codex
-Scheduled task templates; do not promise availability as ChatGPT or cloud automations.
+Installing a plugin does not activate its templates. Each template is copied into an independent,
+user-owned Scheduled task, so later plugin changes do not update existing tasks.
 
 # Marketplace JSON sample spec
 

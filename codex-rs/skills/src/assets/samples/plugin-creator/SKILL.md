@@ -226,7 +226,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 
 ## Reference to exact spec sample
 
-For exact JSON contracts and authoring guidance, use:
+For the exact canonical sample JSON for both plugin manifests and marketplace entries, use:
 
 - `references/plugin-json-spec.md`
 - `references/installing-and-updating.md` for update/reinstall guidance while
