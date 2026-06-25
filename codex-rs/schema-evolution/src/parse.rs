@@ -1,10 +1,15 @@
 use crate::ApiSchema;
+use crate::ArraySchema;
+use crate::ConstraintSet;
 use crate::ObjectSchema;
 use crate::SchemaId;
 use crate::SchemaNode;
 use crate::SchemaRules;
 use crate::TypeSet;
+use crate::UnionKind;
+use crate::UnionSchema;
 use crate::ValueSet;
+use crate::model::annotation;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
@@ -50,10 +55,18 @@ impl<'a> Parser<'a> {
         let types = TypeSet::parse(object.get("type"))?;
         let values = ValueSet::parse(object)?;
         let object_schema = ObjectSchema::parse(self, object, types.as_ref())?;
+        let array = ArraySchema::parse(self, object, types.as_ref())?;
+        let any_of = UnionSchema::parse(self, object, "anyOf", UnionKind::AnyOf)?;
+        let one_of = UnionSchema::parse(self, object, "oneOf", UnionKind::OneOf)?;
+        let constraints = ConstraintSet::parse(object)?;
         Ok(SchemaNode::Rules(Box::new(SchemaRules {
             types,
             values,
             object: object_schema,
+            array,
+            any_of,
+            one_of,
+            constraints,
         })))
     }
 
@@ -79,22 +92,6 @@ fn single_all_of(object: &Map<String, Value>) -> Result<Option<&Value>> {
     Ok(
         (branches.len() == 1 && object.keys().all(|key| key == "allOf" || annotation(key)))
             .then(|| &branches[0]),
-    )
-}
-
-fn annotation(keyword: &str) -> bool {
-    matches!(
-        keyword,
-        "$comment"
-            | "$id"
-            | "$schema"
-            | "default"
-            | "deprecated"
-            | "description"
-            | "examples"
-            | "readOnly"
-            | "title"
-            | "writeOnly"
     )
 }
 

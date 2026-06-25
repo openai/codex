@@ -1,12 +1,20 @@
+mod array;
+mod constraints;
 mod method;
 mod object;
+mod union;
 mod value;
 
+pub(crate) use array::ArraySchema;
+pub(crate) use constraints::ConstraintSet;
+pub(crate) use constraints::annotation;
 #[cfg(test)]
 pub(crate) use method::Argument;
 pub(crate) use method::Arguments;
 pub(crate) use method::Method;
 pub(crate) use object::ObjectSchema;
+pub(crate) use union::UnionKind;
+pub(crate) use union::UnionSchema;
 pub(crate) use value::JsonType;
 pub(crate) use value::TypeSet;
 pub(crate) use value::ValueSet;
@@ -41,6 +49,10 @@ pub struct SchemaRules {
     pub types: Option<TypeSet>,
     pub values: Option<ValueSet>,
     pub object: Option<ObjectSchema>,
+    pub array: Option<ArraySchema>,
+    pub any_of: Option<UnionSchema>,
+    pub one_of: Option<UnionSchema>,
+    pub constraints: ConstraintSet,
 }
 
 impl ApiSchema {

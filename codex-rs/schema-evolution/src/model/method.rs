@@ -19,6 +19,7 @@ pub struct Method {
 pub enum Arguments {
     None,
     Map(Argument),
+    List(Argument),
     Value(Argument),
 }
 
@@ -97,6 +98,8 @@ impl Arguments {
         };
         if rules.object.is_some() {
             Ok(Self::Map(argument))
+        } else if rules.array.is_some() {
+            Ok(Self::List(argument))
         } else {
             Ok(Self::Value(argument))
         }

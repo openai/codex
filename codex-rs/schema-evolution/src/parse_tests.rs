@@ -7,6 +7,7 @@ fn parses_methods_into_typed_argument_shapes() -> Result<()> {
     let schema = json!({
         "oneOf": [
             request("map", json!({ "properties": { "value": { "type": "string" } }, "type": "object" }), /*required*/ true),
+            request("list", json!({ "items": { "type": "string" }, "type": "array" }), /*required*/ true),
             request("value", json!({ "type": "null" }), /*required*/ false),
             {
                 "properties": { "method": { "const": "none" } },
@@ -18,6 +19,10 @@ fn parses_methods_into_typed_argument_shapes() -> Result<()> {
     let parsed = ApiSchema::parse(&schema)?;
 
     assert!(matches!(parsed.methods["map"].arguments, Arguments::Map(_)));
+    assert!(matches!(
+        parsed.methods["list"].arguments,
+        Arguments::List(_)
+    ));
     assert!(matches!(
         parsed.methods["value"].arguments,
         Arguments::Value(Argument {
@@ -43,7 +48,7 @@ fn keeps_refs_typed_without_expanding_recursive_definitions() -> Result<()> {
     schema["definitions"] = json!({
         "Params": {
             "properties": {
-                "child": { "$ref": "#/definitions/Params" },
+                "child": { "anyOf": [{ "$ref": "#/definitions/Params" }, { "type": "null" }] },
                 "name": { "allOf": [{ "$ref": "#/definitions/Name" }], "description": "alias" }
             },
             "type": "object"
@@ -84,10 +89,12 @@ fn rejects_malformed_protocol_shapes_and_direct_ref_cycles() {
         "allOf": [{ "type": "string" }, { "minLength": 1 }]
     }));
     assert!(ApiSchema::parse(&unsupported_all_of).is_err());
-}
 
-fn request_schema(params: serde_json::Value) -> serde_json::Value {
-    json!({ "oneOf": [request("test/method", params, /*required*/ true)] })
+    let mut opaque_ref = request_schema(json!({
+        "not": { "$ref": "#/definitions/Value" }
+    }));
+    opaque_ref["definitions"] = json!({ "Value": { "type": "string" } });
+    assert!(ApiSchema::parse(&opaque_ref).is_err());
 }
 
 fn request(method: &str, params: serde_json::Value, required: bool) -> serde_json::Value {
@@ -104,4 +111,8 @@ fn request(method: &str, params: serde_json::Value, required: bool) -> serde_jso
         "required": required_fields,
         "type": "object"
     })
+}
+
+fn request_schema(params: serde_json::Value) -> serde_json::Value {
+    json!({ "oneOf": [request("test/method", params, /*required*/ true)] })
 }
