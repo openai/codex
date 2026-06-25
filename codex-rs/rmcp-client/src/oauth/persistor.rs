@@ -71,7 +71,6 @@ impl OAuthPersistor {
             .await
     }
 
-    #[expect(dead_code, reason = "wired by part 4 of this stack")]
     pub(crate) async fn refresh_after_unauthorized(
         &self,
         rejected_access_token: AccessToken,
