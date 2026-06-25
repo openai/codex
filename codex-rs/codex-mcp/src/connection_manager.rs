@@ -107,7 +107,7 @@ pub fn tool_is_model_visible(tool: &ToolInfo) -> bool {
         .any(|target| target.as_str() == Some(MCP_UI_MODEL_VISIBILITY))
 }
 
-/// A thin wrapper around a set of running [`RmcpClient`] instances.
+/// Immutable inputs needed to construct one MCP client during a live replacement.
 #[derive(Clone)]
 struct McpClientRuntime {
     store_mode: OAuthCredentialsStoreMode,
@@ -155,6 +155,7 @@ impl McpClientRuntime {
     }
 }
 
+/// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     server_metadata: HashMap<String, McpServerMetadata>,

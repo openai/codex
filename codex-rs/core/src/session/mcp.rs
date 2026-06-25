@@ -473,6 +473,9 @@ impl Session {
             .services
             .mcp_connection_manager
             .swap(Arc::clone(&replacement_manager));
+        // Publish first, then transfer cancellation ownership while both manager
+        // snapshots are still held here. Dropping an uncommitted replacement
+        // cancels only the client it prepared.
         replacement_manager.take_cancellation_ownership_from(&superseded_manager);
         drop(current_manager);
 

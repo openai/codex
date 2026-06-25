@@ -190,6 +190,7 @@ pub struct McpServerRefreshConfig {
 
 impl fmt::Debug for McpServerRefreshConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Server configuration can contain headers and environment credentials.
         formatter
             .debug_struct("McpServerRefreshConfig")
             .field("mcp_servers", &"<redacted>")
@@ -202,12 +203,15 @@ impl fmt::Debug for McpServerRefreshConfig {
 /// Config payload for replacing one MCP server in a running session.
 #[derive(Clone, PartialEq)]
 pub struct McpServerUpdateConfig {
+    /// Name of the server to replace.
     pub server_name: String,
+    /// Serialized `McpServerConfig` for the replacement.
     pub server: Value,
 }
 
 impl fmt::Debug for McpServerUpdateConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep the server name diagnosable without exposing its credential-bearing config.
         formatter
             .debug_struct("McpServerUpdateConfig")
             .field("server_name", &self.server_name)
