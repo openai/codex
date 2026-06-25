@@ -26,7 +26,9 @@ use std::mem;
 use std::ptr;
 use winapi::shared::minwindef::DWORD;
 use winapi::um::processthreadsapi::*;
+use winapi::um::winnt::HANDLE;
 
+const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x00020002;
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 
 pub struct ProcThreadAttributeList {
@@ -78,6 +80,26 @@ impl ProcThreadAttributeList {
         ensure!(
             res != 0,
             "UpdateProcThreadAttribute failed: {}",
+            IoError::last_os_error()
+        );
+        Ok(())
+    }
+
+    pub fn set_handle_list(&mut self, handles: &mut [HANDLE]) -> Result<(), Error> {
+        let res = unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                handles.as_mut_ptr().cast(),
+                mem::size_of_val(handles),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        ensure!(
+            res != 0,
+            "UpdateProcThreadAttribute for handle list failed: {}",
             IoError::last_os_error()
         );
         Ok(())

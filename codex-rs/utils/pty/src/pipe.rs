@@ -1,38 +1,56 @@
 use std::collections::HashMap;
+#[cfg(not(windows))]
 use std::io;
+#[cfg(not(windows))]
 use std::io::ErrorKind;
 use std::path::Path;
+#[cfg(not(windows))]
 use std::process::Stdio;
+#[cfg(not(windows))]
 use std::sync::Arc;
+#[cfg(not(windows))]
 use std::sync::Mutex as StdMutex;
+#[cfg(not(windows))]
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
+#[cfg(not(windows))]
 use tokio::io::AsyncRead;
+#[cfg(not(windows))]
 use tokio::io::AsyncReadExt;
+#[cfg(not(windows))]
 use tokio::io::AsyncWriteExt;
+#[cfg(not(windows))]
 use tokio::io::BufReader;
+#[cfg(not(windows))]
 use tokio::process::Command;
+#[cfg(not(windows))]
 use tokio::sync::mpsc;
+#[cfg(not(windows))]
 use tokio::sync::oneshot;
+#[cfg(not(windows))]
 use tokio::task::JoinHandle;
 
+#[cfg(not(windows))]
 use crate::process::ChildTerminator;
+#[cfg(not(windows))]
 use crate::process::ProcessHandle;
+#[cfg(not(windows))]
 use crate::process::ProcessSignal;
 use crate::process::SpawnedProcess;
+#[cfg(not(windows))]
 use crate::process::exit_code_from_status;
 
 #[cfg(target_os = "linux")]
 use libc;
 
+#[cfg(not(windows))]
 struct PipeChildTerminator {
-    #[cfg(windows)]
-    pid: u32,
     #[cfg(unix)]
     process_group_id: u32,
 }
 
+#[cfg(not(windows))]
 impl ChildTerminator for PipeChildTerminator {
     fn signal(&mut self, signal: ProcessSignal) -> io::Result<()> {
         match signal {
@@ -56,11 +74,6 @@ impl ChildTerminator for PipeChildTerminator {
             crate::process_group::kill_process_group(self.process_group_id)
         }
 
-        #[cfg(windows)]
-        {
-            kill_process(self.pid)
-        }
-
         #[cfg(not(any(unix, windows)))]
         {
             Ok(())
@@ -68,24 +81,7 @@ impl ChildTerminator for PipeChildTerminator {
     }
 }
 
-#[cfg(windows)]
-fn kill_process(pid: u32) -> io::Result<()> {
-    unsafe {
-        let handle = winapi::um::processthreadsapi::OpenProcess(
-            winapi::um::winnt::PROCESS_TERMINATE,
-            0,
-            pid,
-        );
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let success = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
-        let err = io::Error::last_os_error();
-        winapi::um::handleapi::CloseHandle(handle);
-        if success == 0 { Err(err) } else { Ok(()) }
-    }
-}
-
+#[cfg(not(windows))]
 async fn read_output_stream<R>(mut reader: R, output_tx: mpsc::Sender<Vec<u8>>)
 where
     R: AsyncRead + Unpin,
@@ -103,12 +99,14 @@ where
     }
 }
 
+#[cfg(not(windows))]
 #[derive(Clone, Copy)]
 enum PipeStdinMode {
     Piped,
     Null,
 }
 
+#[cfg(not(windows))]
 async fn spawn_process_with_stdin_mode(
     program: &str,
     args: &[String],
@@ -240,8 +238,6 @@ async fn spawn_process_with_stdin_mode(
     let handle = ProcessHandle::new(
         writer_tx,
         Box::new(PipeChildTerminator {
-            #[cfg(windows)]
-            pid,
             #[cfg(unix)]
             process_group_id,
         }),
@@ -271,7 +267,16 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, &[]).await
+    #[cfg(windows)]
+    {
+        let _ = arg0;
+        crate::win::pipe::spawn_process(program, args, cwd, env).await
+    }
+    #[cfg(not(windows))]
+    {
+        spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, &[])
+            .await
+    }
 }
 
 /// Spawn a process using regular pipes, but close stdin immediately.
@@ -295,14 +300,22 @@ pub async fn spawn_process_no_stdin_with_inherited_fds(
     arg0: &Option<String>,
     inherited_fds: &[i32],
 ) -> Result<SpawnedProcess> {
-    spawn_process_with_stdin_mode(
-        program,
-        args,
-        cwd,
-        env,
-        arg0,
-        PipeStdinMode::Null,
-        inherited_fds,
-    )
-    .await
+    #[cfg(windows)]
+    {
+        let _ = (arg0, inherited_fds);
+        crate::win::pipe::spawn_process_no_stdin(program, args, cwd, env).await
+    }
+    #[cfg(not(windows))]
+    {
+        spawn_process_with_stdin_mode(
+            program,
+            args,
+            cwd,
+            env,
+            arg0,
+            PipeStdinMode::Null,
+            inherited_fds,
+        )
+        .await
+    }
 }
