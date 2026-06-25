@@ -125,9 +125,9 @@ impl OAuthPersistor {
         &self,
         keyring_store: &K,
     ) -> Result<()> {
-        let snapshot = {
+        let (snapshot, unpersisted_refresh) = {
             let state = self.inner.credential_state.lock().await;
-            state.current.clone()
+            (state.current.clone(), state.unpersisted_refresh.clone())
         };
         let (client_id, current_credentials) = self.manager_credentials().await?;
         let manager_changed = match (&snapshot, current_credentials.as_ref()) {
@@ -147,20 +147,13 @@ impl OAuthPersistor {
                 .await?;
         let latest = self.load_resolved_credentials(keyring_store)?;
 
-        let latest_matches_snapshot = match (&latest, &snapshot) {
-            (Some(latest), Some(snapshot)) => {
-                // `expires_in` is reconstructed from the durable `expires_at` timestamp on every
-                // load, so elapsed time alone must not look like a concurrent credential change.
-                let mut comparable_latest = latest.clone();
-                comparable_latest
-                    .token_response
-                    .0
-                    .set_expires_in(snapshot.token_response.0.expires_in().as_ref());
-                comparable_latest == *snapshot
-            }
-            (None, None) => true,
-            (Some(_), None) | (None, Some(_)) => false,
-        };
+        let latest_matches_snapshot = durable_credentials_match_snapshot(&latest, &snapshot)
+            || unpersisted_refresh.as_ref().is_some_and(|pending| {
+                // The failed write never changed durable authority. If storage still contains the
+                // last known durable snapshot, persist the manager's newer result instead of
+                // adopting and replaying that stale snapshot.
+                durable_credentials_match_snapshot(&latest, &pending.previously_persisted)
+            });
 
         if !latest_matches_snapshot {
             // A completed login or logout is authoritative over tokens refreshed inside an RMCP
@@ -172,7 +165,7 @@ impl OAuthPersistor {
                     self.clear_manager_credentials().await;
                     let mut state = self.inner.credential_state.lock().await;
                     state.current = None;
-                    state.has_unpersisted_refresh = false;
+                    state.unpersisted_refresh = None;
                 }
             }
             return Ok(());
@@ -253,8 +246,18 @@ impl OAuthPersistor {
                 if state.current.as_ref() != Some(&stored) {
                     // A provider may already have consumed the old rotating refresh token. Make B
                     // authoritative in this process before the fallible save.
+                    // Preserve the last snapshot known to be durable across repeated in-memory
+                    // changes. Using the immediately preceding in-memory token here could make an
+                    // unchanged stale store look like an external login or refresh.
+                    let previously_persisted = state
+                        .unpersisted_refresh
+                        .take()
+                        .map(|pending| pending.previously_persisted)
+                        .unwrap_or_else(|| state.current.clone());
                     state.current = Some(stored.clone());
-                    state.has_unpersisted_refresh = true;
+                    state.unpersisted_refresh = Some(UnpersistedRefresh {
+                        previously_persisted,
+                    });
                     debug!("persisting refreshed MCP OAuth credentials to the resolved store");
                     let persistence_started_at = Instant::now();
                     let persistence_result = match self.inner.credential_store {
@@ -276,7 +279,7 @@ impl OAuthPersistor {
                         );
                         return Err(error);
                     }
-                    state.has_unpersisted_refresh = false;
+                    state.unpersisted_refresh = None;
                     debug!(
                         persistence_elapsed_ms = persistence_started_at.elapsed().as_millis(),
                         "persisted refreshed MCP OAuth credentials"
@@ -314,7 +317,7 @@ impl OAuthPersistor {
                         self.inner.server_name
                     );
                 }
-                state.has_unpersisted_refresh = false;
+                state.unpersisted_refresh = None;
             }
         }
 
