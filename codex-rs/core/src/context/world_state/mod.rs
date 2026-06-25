@@ -1,5 +1,6 @@
 mod agents_md;
 mod environment;
+mod skills;
 
 use crate::context::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
@@ -14,6 +15,7 @@ use std::fmt;
 
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use environment::EnvironmentsState;
+pub(crate) use skills::SkillsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;

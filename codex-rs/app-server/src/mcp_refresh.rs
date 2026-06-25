@@ -216,12 +216,6 @@ mod tests {
             .expect("refresh tests require state db");
         let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
         let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-        let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
-            codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                Arc::clone(&environment_manager),
-                SessionSource::Exec.restriction_product(),
-            ),
-        );
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 &good_config,
@@ -238,7 +232,6 @@ mod tests {
                         thread_manager: thread_manager.clone(),
                         goal_service: Arc::new(codex_goal_extension::GoalService::new()),
                         environment_manager: Arc::clone(&environment_manager),
-                        executor_skill_provider: Arc::clone(&executor_skill_provider),
                         thread_store: Arc::clone(&thread_store),
                     },
                 ),
