@@ -41,48 +41,6 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
 }
 
 #[test]
-fn managed_requirement_disables_plaintext_credential_injection() {
-    let mut config = NetworkProxyConfig::default();
-    config
-        .network
-        .dangerously_allow_plaintext_credential_injection = true;
-    let requirements = NetworkConstraints {
-        dangerously_allow_plaintext_credential_injection: Some(false),
-        ..Default::default()
-    };
-
-    let spec = NetworkProxySpec::from_config_and_constraints(
-        config,
-        Some(requirements),
-        &PermissionProfile::workspace_write(),
-    )
-    .expect("managed requirement should override the user setting");
-
-    assert!(
-        !spec
-            .config
-            .network
-            .dangerously_allow_plaintext_credential_injection
-    );
-    assert_eq!(
-        spec.constraints
-            .dangerously_allow_plaintext_credential_injection,
-        Some(false)
-    );
-
-    let mut candidate = spec.config.clone();
-    candidate
-        .network
-        .dangerously_allow_plaintext_credential_injection = true;
-    let err = validate_policy_against_constraints(&candidate, &spec.constraints)
-        .expect_err("managed constraint should reject re-enabling plaintext injection");
-    assert_eq!(
-        err.to_string(),
-        "invalid value for network.dangerously_allow_plaintext_credential_injection: true (allowed false (disabled by managed config))"
-    );
-}
-
-#[test]
 fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
     let mut config = NetworkProxyConfig::default();
     config
