@@ -602,7 +602,7 @@ mod tests {
         method: &str,
         params: &P,
     ) {
-        send_request_with_trace(writer, id, method, params, None).await;
+        send_request_with_trace(writer, id, method, params, /*trace*/ None).await;
     }
 
     async fn send_request_with_trace<P: Serialize>(
