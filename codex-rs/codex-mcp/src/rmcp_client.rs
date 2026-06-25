@@ -52,6 +52,9 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
@@ -145,9 +148,17 @@ struct CodexAppsStartupReconnectState {
     retry_not_before: Option<TokioInstant>,
 }
 
+#[derive(Clone)]
+struct CodexAppsStartupStatusContext {
+    submit_id: String,
+    server_name: String,
+    tx_event: Sender<Event>,
+}
+
 pub(crate) struct CodexAppsStartupReconnect {
     factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
     state: StdMutex<CodexAppsStartupReconnectState>,
+    startup_status_context: Option<CodexAppsStartupStatusContext>,
 }
 
 impl CodexAppsStartupReconnect {
@@ -155,7 +166,22 @@ impl CodexAppsStartupReconnect {
         Self {
             factory,
             state: StdMutex::new(CodexAppsStartupReconnectState::default()),
+            startup_status_context: None,
         }
+    }
+
+    fn with_startup_status_context(
+        mut self,
+        submit_id: String,
+        server_name: String,
+        tx_event: Sender<Event>,
+    ) -> Self {
+        self.startup_status_context = Some(CodexAppsStartupStatusContext {
+            submit_id,
+            server_name,
+            tx_event,
+        });
+        self
     }
 
     fn current_client(&self) -> Option<ManagedClient> {
@@ -187,27 +213,45 @@ impl CodexAppsStartupReconnect {
         let reconnect = Arc::clone(self);
         tokio::spawn(async move {
             let result = (reconnect.factory)().await;
-            let mut state = reconnect
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.reconnect_in_flight = false;
-            match result {
-                Ok(client) => {
-                    state.current_client = Some(client);
-                    state.consecutive_failures = 0;
-                    state.retry_not_before = None;
+            let startup_status_context = reconnect.startup_status_context.clone();
+            let recovered = {
+                let mut state = reconnect
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.reconnect_in_flight = false;
+                match result {
+                    Ok(client) => {
+                        state.current_client = Some(client);
+                        state.consecutive_failures = 0;
+                        state.retry_not_before = None;
+                        true
+                    }
+                    Err(error) => {
+                        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                        let retry_after = codex_apps_reconnect_backoff(state.consecutive_failures);
+                        state.retry_not_before = Some(TokioInstant::now() + retry_after);
+                        warn!(
+                            error = %error,
+                            retry_after_ms = retry_after.as_millis(),
+                            "Apps MCP startup reconnect failed; continuing with cached tools"
+                        );
+                        false
+                    }
                 }
-                Err(error) => {
-                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-                    let retry_after = codex_apps_reconnect_backoff(state.consecutive_failures);
-                    state.retry_not_before = Some(TokioInstant::now() + retry_after);
-                    warn!(
-                        error = %error,
-                        retry_after_ms = retry_after.as_millis(),
-                        "Apps MCP startup reconnect failed; continuing with cached tools"
-                    );
-                }
+            };
+
+            if recovered && let Some(context) = startup_status_context {
+                let _ = context
+                    .tx_event
+                    .send(Event {
+                        id: context.submit_id,
+                        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                            server: context.server_name,
+                            status: McpStartupStatus::Ready,
+                        }),
+                    })
+                    .await;
             }
         });
     }
@@ -335,6 +379,7 @@ impl AsyncManagedClient {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         server_name: String,
+        startup_submit_id: String,
         server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
@@ -349,6 +394,8 @@ impl AsyncManagedClient {
         supports_openai_form_elicitation: bool,
     ) -> Self {
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
+        let reconnect_server_name = server_name.clone();
+        let reconnect_tx_event = tx_event.clone();
         let tool_filter = server
             .configured_config()
             .map(ToolFilter::from_config)
@@ -384,9 +431,14 @@ impl AsyncManagedClient {
         let client = startup.start();
         let startup_reconnect = is_codex_apps_mcp_server.then(|| {
             let startup = Arc::clone(&startup);
-            Arc::new(CodexAppsStartupReconnect::new(Arc::new(move || {
-                startup.start()
-            })))
+            Arc::new(
+                CodexAppsStartupReconnect::new(Arc::new(move || startup.start()))
+                    .with_startup_status_context(
+                        startup_submit_id,
+                        reconnect_server_name,
+                        reconnect_tx_event,
+                    ),
+            )
         });
         if cached_tool_info_snapshot.is_some() {
             let startup_task = client.clone();

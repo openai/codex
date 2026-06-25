@@ -186,6 +186,7 @@ impl McpConnectionManager {
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
+                startup_submit_id.clone(),
                 server,
                 store_mode,
                 keyring_backend_kind,
@@ -230,6 +231,10 @@ impl McpConnectionManager {
                     },
                 )
                 .await;
+
+                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+                    async_managed_client.reconnect_failed_startup().await;
+                }
 
                 (server_name, outcome)
             });
