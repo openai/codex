@@ -413,6 +413,7 @@ impl Session {
                 RolloutItem::SessionMeta(_)
                 | RolloutItem::ResponseItem(_)
                 | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {
                     unreachable!("only world-state replay items are collected")
