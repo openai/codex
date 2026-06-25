@@ -21,6 +21,7 @@ impl CurrentTimeReminderState {
         interval_seconds: u64,
     ) -> bool {
         let reminder_is_due = self.last_window_id.as_deref() != Some(window_id)
+            || interval_seconds == 0
             || self.last_delivery_time.is_none_or(|last_delivery_time| {
                 current_time
                     .signed_duration_since(last_delivery_time)

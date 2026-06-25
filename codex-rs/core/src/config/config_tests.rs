@@ -625,12 +625,12 @@ current_time_reminder = true
             r#"
 [features.current_time_reminder]
 enabled = true
-reminder_interval_seconds = 4
+reminder_interval_seconds = 0
 clock_source = "external"
 sleep_tool = true
 "#,
             CurrentTimeReminderConfig {
-                reminder_interval_seconds: 4,
+                reminder_interval_seconds: 0,
                 clock_source: CurrentTimeSource::External,
                 sleep_tool: true,
             },
@@ -640,26 +640,6 @@ sleep_tool = true
         assert!(config.features.enabled(Feature::CurrentTimeReminder));
         assert_eq!(config.current_time_reminder, Some(expected));
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_rejects_zero_current_time_reminder_interval() -> std::io::Result<()> {
-    let error = load_current_time_reminder_config(
-        r#"
-[features.current_time_reminder]
-enabled = true
-reminder_interval_seconds = 0
-"#,
-    )
-    .await
-    .expect_err("zero reminder interval should be rejected");
-
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "features.current_time_reminder.reminder_interval_seconds must be positive"
-    );
     Ok(())
 }
 

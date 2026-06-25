@@ -39,6 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const FIRST_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
+const EARLIER_REMINDER: &str = "It is 2026-06-17 17:33:15 UTC.";
 const SECOND_REMINDER: &str = "It is 2026-06-17 17:35:15 UTC.";
 const THIRD_REMINDER: &str = "It is 2026-06-17 17:36:15 UTC.";
 const FIRST_TIME_UNIX_SECONDS: i64 = 1_781_717_655;
@@ -158,6 +159,44 @@ async fn current_time_reminders_follow_time_interval_and_persist_in_history() ->
     assert_eq!(
         current_time_reminders(&requests[2]),
         vec![FIRST_REMINDER, THIRD_REMINDER]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_current_time_reminder_interval_delivers_when_time_moves_backward() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let time_provider = Arc::new(TestTimeProvider::default());
+    let test = test_codex()
+        .with_config(|config| {
+            enable_current_time_reminder(config, /*interval*/ 0, CurrentTimeSource::External)
+        })
+        .with_external_time_provider(time_provider.clone())
+        .build(&server)
+        .await?;
+
+    test.submit_turn("first turn").await?;
+    time_provider
+        .current_time
+        .store(FIRST_TIME_UNIX_SECONDS - 60, Ordering::Relaxed);
+    test.submit_turn("second turn").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
+    assert_eq!(
+        current_time_reminders(&requests[1]),
+        vec![FIRST_REMINDER, EARLIER_REMINDER]
     );
     Ok(())
 }

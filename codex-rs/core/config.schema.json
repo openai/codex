@@ -815,7 +815,7 @@
         },
         "reminder_interval_seconds": {
           "format": "uint64",
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "sleep_tool": {
