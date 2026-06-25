@@ -945,6 +945,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
             name: "optional_broken".to_string(),
             status: McpServerStartupState::Starting,
             error: None,
+            failure_reason: None,
         }
     );
 
@@ -977,6 +978,7 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     assert_eq!(failed.thread_id, Some(start_response.thread.id));
     assert_eq!(failed.name, "optional_broken");
     assert_eq!(failed.status, McpServerStartupState::Failed);
+    assert_eq!(failed.failure_reason, None);
     assert!(
         failed
             .error

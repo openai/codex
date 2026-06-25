@@ -200,18 +200,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::McpStartupUpdate(update) => {
-            let (status, error) = match update.status {
+            let (status, error, failure_reason) = match update.status {
                 codex_protocol::protocol::McpStartupStatus::Starting => {
-                    (McpServerStartupState::Starting, None)
+                    (McpServerStartupState::Starting, None, None)
                 }
                 codex_protocol::protocol::McpStartupStatus::Ready => {
-                    (McpServerStartupState::Ready, None)
+                    (McpServerStartupState::Ready, None, None)
                 }
-                codex_protocol::protocol::McpStartupStatus::Failed { error } => {
-                    (McpServerStartupState::Failed, Some(error))
-                }
+                codex_protocol::protocol::McpStartupStatus::Failed { error, reason } => (
+                    McpServerStartupState::Failed,
+                    Some(error),
+                    reason.map(Into::into),
+                ),
                 codex_protocol::protocol::McpStartupStatus::Cancelled => {
-                    (McpServerStartupState::Cancelled, None)
+                    (McpServerStartupState::Cancelled, None, None)
                 }
             };
             let notification = McpServerStatusUpdatedNotification {
@@ -219,6 +221,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 name: update.server,
                 status,
                 error,
+                failure_reason,
             };
             outgoing
                 .send_server_notification(ServerNotification::McpServerStatusUpdated(notification))

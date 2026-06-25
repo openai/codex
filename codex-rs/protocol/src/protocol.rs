@@ -3621,8 +3621,20 @@ pub struct McpStartupUpdateEvent {
 pub enum McpStartupStatus {
     Starting,
     Ready,
-    Failed { error: String },
+    Failed {
+        error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
+        reason: Option<McpStartupFailureReason>,
+    },
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum McpStartupFailureReason {
+    ReauthenticationRequired,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
@@ -5749,6 +5761,7 @@ mod tests {
                 server: "srv".to_string(),
                 status: McpStartupStatus::Failed {
                     error: "boom".to_string(),
+                    reason: Some(McpStartupFailureReason::ReauthenticationRequired),
                 },
             }),
         };
@@ -5758,6 +5771,10 @@ mod tests {
         assert_eq!(value["msg"]["server"], "srv");
         assert_eq!(value["msg"]["status"]["state"], "failed");
         assert_eq!(value["msg"]["status"]["error"], "boom");
+        assert_eq!(
+            value["msg"]["status"]["reason"],
+            "reauthentication_required"
+        );
         Ok(())
     }
 

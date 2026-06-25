@@ -55,9 +55,12 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
+use codex_protocol::protocol::McpStartupFailureReason;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::McpAuthState;
+use codex_rmcp_client::McpLoginRequirement;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
@@ -228,12 +231,16 @@ impl McpConnectionManager {
                     Ok(_) => McpStartupStatus::Ready,
                     Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
                     Err(error) => {
+                        let reason = mcp_startup_failure_reason(auth_entry.as_ref(), error);
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
                             auth_entry.as_ref(),
                             error,
                         );
-                        McpStartupStatus::Failed { error: error_str }
+                        McpStartupStatus::Failed {
+                            error: error_str,
+                            reason,
+                        }
                     }
                 };
 
@@ -266,7 +273,7 @@ impl McpConnectionManager {
                 match outcome {
                     Ok(_) => summary.ready.push(server_name),
                     Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error }) => {
+                    Err(StartupOutcomeError::Failed { error, .. }) => {
                         summary.failed.push(McpStartupFailure {
                             server: server_name,
                             error,
@@ -909,6 +916,28 @@ async fn emit_update(
         .await
 }
 
+fn mcp_startup_failure_reason(
+    entry: Option<&McpAuthStatusEntry>,
+    error: &StartupOutcomeError,
+) -> Option<McpStartupFailureReason> {
+    if !error.is_authentication_required() {
+        return None;
+    }
+
+    match entry.map(|entry| entry.auth_state) {
+        Some(McpAuthState::LoggedOut(McpLoginRequirement::Reauthentication)) => {
+            Some(McpStartupFailureReason::ReauthenticationRequired)
+        }
+        Some(
+            McpAuthState::Unsupported
+            | McpAuthState::LoggedOut(McpLoginRequirement::Login)
+            | McpAuthState::BearerToken
+            | McpAuthState::OAuth,
+        )
+        | None => None,
+    }
+}
+
 fn mcp_init_error_display(
     server_name: &str,
     entry: Option<&McpAuthStatusEntry>,
@@ -955,20 +984,20 @@ fn mcp_init_error_display(
 fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
     match error {
         StartupOutcomeError::Cancelled => "MCP startup cancelled".to_string(),
-        StartupOutcomeError::Failed { error } => error,
+        StartupOutcomeError::Failed { error, .. } => error,
     }
 }
 
 fn is_mcp_client_auth_required_error(error: &StartupOutcomeError) -> bool {
     match error {
-        StartupOutcomeError::Failed { error } => error.contains("Auth required"),
+        StartupOutcomeError::Failed { error, .. } => error.contains("Auth required"),
         _ => false,
     }
 }
 
 fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
     match error {
-        StartupOutcomeError::Failed { error } => {
+        StartupOutcomeError::Failed { error, .. } => {
             error.contains("request timed out")
                 || error.contains("timed out handshaking with MCP server")
         }

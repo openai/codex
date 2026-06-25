@@ -63,6 +63,7 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
+use rmcp::transport::auth::AuthError;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::instrument;
@@ -304,13 +305,39 @@ pub(crate) enum StartupOutcomeError {
     // We can't store the original error here because anyhow::Error doesn't implement
     // `Clone`.
     #[error("MCP startup failed: {error}")]
-    Failed { error: String },
+    Failed {
+        error: String,
+        is_authentication_required: bool,
+    },
+}
+
+impl StartupOutcomeError {
+    pub(crate) fn is_authentication_required(&self) -> bool {
+        match self {
+            Self::Cancelled => false,
+            Self::Failed {
+                is_authentication_required,
+                ..
+            } => *is_authentication_required,
+        }
+    }
 }
 
 impl From<anyhow::Error> for StartupOutcomeError {
     fn from(error: anyhow::Error) -> Self {
+        let is_authentication_required = error.chain().any(|source| {
+            source
+                .downcast_ref::<AuthError>()
+                .is_some_and(|auth_error| {
+                    matches!(
+                        auth_error,
+                        AuthError::AuthorizationRequired | AuthError::TokenExpired
+                    )
+                })
+        });
         Self::Failed {
             error: error.to_string(),
+            is_authentication_required,
         }
     }
 }
@@ -765,6 +792,17 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
+    use rmcp::transport::auth::AuthError;
+
+    #[test]
+    fn startup_outcome_error_identifies_authentication_required() {
+        let error = anyhow::Error::new(AuthError::AuthorizationRequired)
+            .context("failed to initialize MCP server");
+
+        let error = StartupOutcomeError::from(error);
+
+        assert!(error.is_authentication_required());
+    }
 
     #[test]
     fn mcp_initialize_advertises_openai_form_only_when_supported() {

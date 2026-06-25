@@ -1,4 +1,5 @@
 use super::*;
+use crate::ServerNotification;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
@@ -2155,6 +2156,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
         name: "optional_broken".to_string(),
         status: McpServerStartupState::Failed,
         error: Some("handshake failed".to_string()),
+        failure_reason: None,
     };
     assert_eq!(notification, expected);
     assert_eq!(
@@ -2164,6 +2166,33 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
             "name": "optional_broken",
             "status": "failed",
             "error": "handshake failed",
+            "failureReason": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_updated_serializes_failure_reason() {
+    let notification =
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some("thread-1".to_string()),
+            name: "expired-oauth".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("OAuth credentials expired".to_string()),
+            failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
+        });
+
+    assert_eq!(
+        serde_json::to_value(notification).expect("notification should serialize"),
+        json!({
+            "method": "mcpServer/startupStatus/updated",
+            "params": {
+                "threadId": "thread-1",
+                "name": "expired-oauth",
+                "status": "failed",
+                "error": "OAuth credentials expired",
+                "failureReason": "reauthenticationRequired",
+            },
         })
     );
 }

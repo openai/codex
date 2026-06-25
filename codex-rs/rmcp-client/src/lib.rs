@@ -12,6 +12,8 @@ mod rmcp_client;
 mod stdio_server_launcher;
 mod utils;
 
+pub use auth_status::McpAuthState;
+pub use auth_status::McpLoginRequirement;
 pub use auth_status::StreamableHttpOAuthDiscovery;
 pub use auth_status::determine_streamable_http_auth_status;
 pub use auth_status::determine_streamable_http_auth_status_with_http_client;

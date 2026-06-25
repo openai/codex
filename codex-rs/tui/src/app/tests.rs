@@ -3496,6 +3496,7 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             }),
         ),
     )
@@ -3567,6 +3568,7 @@ async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             }),
         ),
     )
@@ -3631,6 +3633,7 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
                     status,
                     error: matches!(status, McpServerStartupState::Failed)
                         .then(|| "sentry is not logged in".to_string()),
+                    failure_reason: None,
                 }),
             ),
         )

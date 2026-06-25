@@ -619,6 +619,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: codex_app_server_protocol::McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             },
         );
         let mut store = ThreadEventStore::new(/*capacity*/ 8);

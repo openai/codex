@@ -28,8 +28,33 @@ pub struct StreamableHttpOAuthDiscovery {
     pub scopes_supported: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpLoginRequirement {
+    Login,
+    Reauthentication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpAuthState {
+    Unsupported,
+    LoggedOut(McpLoginRequirement),
+    BearerToken,
+    OAuth,
+}
+
+impl From<McpAuthState> for McpAuthStatus {
+    fn from(value: McpAuthState) -> Self {
+        match value {
+            McpAuthState::Unsupported => Self::Unsupported,
+            McpAuthState::LoggedOut(_) => Self::NotLoggedIn,
+            McpAuthState::BearerToken => Self::BearerToken,
+            McpAuthState::OAuth => Self::OAuth,
+        }
+    }
+}
+
 enum AuthStatusCheck {
-    Complete(McpAuthStatus),
+    Complete(McpAuthState),
     Discover(HeaderMap),
 }
 
@@ -42,7 +67,7 @@ pub async fn determine_streamable_http_auth_status(
     env_http_headers: Option<HashMap<String, String>>,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-) -> Result<McpAuthStatus> {
+) -> Result<McpAuthState> {
     let default_headers = match auth_status_before_discovery(
         server_name,
         url,
@@ -75,7 +100,7 @@ pub async fn determine_streamable_http_auth_status_with_http_client(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
     http_client: Arc<dyn HttpClient>,
-) -> Result<McpAuthStatus> {
+) -> Result<McpAuthState> {
     let default_headers = match auth_status_before_discovery(
         server_name,
         url,
@@ -110,20 +135,22 @@ fn auth_status_before_discovery(
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<AuthStatusCheck> {
     if bearer_token_env_var.is_some() {
-        return Ok(AuthStatusCheck::Complete(McpAuthStatus::BearerToken));
+        return Ok(AuthStatusCheck::Complete(McpAuthState::BearerToken));
     }
 
     let default_headers = build_default_headers(http_headers, env_http_headers)?;
     if default_headers.contains_key(AUTHORIZATION) {
-        return Ok(AuthStatusCheck::Complete(McpAuthStatus::BearerToken));
+        return Ok(AuthStatusCheck::Complete(McpAuthState::BearerToken));
     }
 
     match oauth_token_status(server_name, url, store_mode, keyring_backend_kind)? {
         StoredOAuthTokenStatus::Usable => {
-            return Ok(AuthStatusCheck::Complete(McpAuthStatus::OAuth));
+            return Ok(AuthStatusCheck::Complete(McpAuthState::OAuth));
         }
         StoredOAuthTokenStatus::AuthorizationRequired => {
-            return Ok(AuthStatusCheck::Complete(McpAuthStatus::NotLoggedIn));
+            return Ok(AuthStatusCheck::Complete(McpAuthState::LoggedOut(
+                McpLoginRequirement::Reauthentication,
+            )));
         }
         StoredOAuthTokenStatus::Missing => {}
     }
@@ -135,15 +162,15 @@ fn determine_auth_status_from_discovery(
     server_name: &str,
     url: &str,
     discovery: Result<Option<StreamableHttpOAuthDiscovery>>,
-) -> Result<McpAuthStatus> {
+) -> Result<McpAuthState> {
     match discovery {
-        Ok(Some(_)) => Ok(McpAuthStatus::NotLoggedIn),
-        Ok(None) => Ok(McpAuthStatus::Unsupported),
+        Ok(Some(_)) => Ok(McpAuthState::LoggedOut(McpLoginRequirement::Login)),
+        Ok(None) => Ok(McpAuthState::Unsupported),
         Err(error) => {
             debug!(
                 "failed to detect OAuth support for MCP server `{server_name}` at {url}: {error:?}"
             );
-            Ok(McpAuthStatus::Unsupported)
+            Ok(McpAuthState::Unsupported)
         }
     }
 }
@@ -336,7 +363,7 @@ mod tests {
         .await
         .expect("status should compute");
 
-        assert_eq!(status, McpAuthStatus::BearerToken);
+        assert_eq!(status, McpAuthState::BearerToken);
     }
 
     #[tokio::test]
@@ -358,7 +385,7 @@ mod tests {
         .await
         .expect("status should compute");
 
-        assert_eq!(status, McpAuthStatus::BearerToken);
+        assert_eq!(status, McpAuthState::BearerToken);
     }
 
     #[tokio::test]
