@@ -3839,6 +3839,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-schema-evolution"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
