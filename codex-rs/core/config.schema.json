@@ -810,6 +810,9 @@
         "clock_source": {
           "$ref": "#/definitions/CurrentTimeSource"
         },
+        "delivery_mode": {
+          "$ref": "#/definitions/CurrentTimeReminderDeliveryMode"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -824,6 +827,25 @@
         }
       },
       "type": "object"
+    },
+    "CurrentTimeReminderDeliveryMode": {
+      "description": "Which inference boundaries may receive current-time reminders.",
+      "oneOf": [
+        {
+          "description": "Allow a reminder before any inference request once the interval is due.",
+          "enum": [
+            "any_inference"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Only allow a reminder after user input or tool output.",
+          "enum": [
+            "after_user_or_tool_output"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "CurrentTimeSource": {
       "enum": [
