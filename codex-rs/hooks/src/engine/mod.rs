@@ -18,6 +18,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::user_instructions::UserInstructionsOutcome;
+use crate::events::user_instructions::UserInstructionsRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -69,6 +71,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::UserInstructions => "user-instructions",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
@@ -152,6 +155,13 @@ impl ClaudeHooksEngine {
         crate::events::pre_tool_use::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_user_instructions(
+        &self,
+        request: &UserInstructionsRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::user_instructions::preview(&self.handlers, request)
+    }
+
     pub(crate) fn preview_permission_request(
         &self,
         request: &PermissionRequestRequest,
@@ -178,6 +188,13 @@ impl ClaudeHooksEngine {
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
         outcome
+    }
+
+    pub(crate) async fn run_user_instructions(
+        &self,
+        request: UserInstructionsRequest,
+    ) -> UserInstructionsOutcome {
+        crate::events::user_instructions::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

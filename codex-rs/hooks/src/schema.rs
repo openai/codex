@@ -27,6 +27,7 @@ const PRE_COMPACT_INPUT_FIXTURE: &str = "pre-compact.command.input.schema.json";
 const PRE_COMPACT_OUTPUT_FIXTURE: &str = "pre-compact.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
+const USER_INSTRUCTIONS_INPUT_FIXTURE: &str = "user-instructions.command.input.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
 const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
 const SUBAGENT_START_INPUT_FIXTURE: &str = "subagent-start.command.input.schema.json";
@@ -109,6 +110,8 @@ pub(crate) enum HookEventNameWire {
     PostCompact,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "UserInstructions")]
+    UserInstructions,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "SubagentStart")]
@@ -518,6 +521,20 @@ impl SessionStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "user-instructions.command.input")]
+pub(crate) struct UserInstructionsCommandInput {
+    pub(crate) session_id: String,
+    pub(crate) transcript_path: NullableString,
+    pub(crate) cwd: String,
+    #[schemars(schema_with = "user_instructions_hook_event_name_schema")]
+    pub(crate) hook_event_name: String,
+    pub(crate) model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub(crate) permission_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "subagent-start.command.input")]
 pub(crate) struct SubagentStartCommandInput {
     pub session_id: String,
@@ -647,6 +664,10 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<SessionStartCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(USER_INSTRUCTIONS_INPUT_FIXTURE),
+        schema_json::<UserInstructionsCommandInput>()?,
+    )?;
+    write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
         schema_json::<UserPromptSubmitCommandInput>()?,
     )?;
@@ -735,6 +756,10 @@ fn canonicalize_json(value: &Value) -> Value {
 
 fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
+}
+
+fn user_instructions_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("UserInstructions")
 }
 
 fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -853,6 +878,7 @@ mod tests {
     use super::SubagentStartCommandInput;
     use super::SubagentStartCommandOutputWire;
     use super::SubagentStopCommandInput;
+    use super::USER_INSTRUCTIONS_INPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_INPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
     use super::UserPromptSubmitCommandInput;
@@ -903,6 +929,9 @@ mod tests {
             }
             SESSION_START_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/session-start.command.output.schema.json")
+            }
+            USER_INSTRUCTIONS_INPUT_FIXTURE => {
+                include_str!("../schema/generated/user-instructions.command.input.schema.json")
             }
             USER_PROMPT_SUBMIT_INPUT_FIXTURE => {
                 include_str!("../schema/generated/user-prompt-submit.command.input.schema.json")
@@ -969,6 +998,7 @@ mod tests {
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
             SESSION_START_OUTPUT_FIXTURE,
+            USER_INSTRUCTIONS_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_OUTPUT_FIXTURE,
             SUBAGENT_START_INPUT_FIXTURE,
