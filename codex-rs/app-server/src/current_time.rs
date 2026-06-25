@@ -10,6 +10,7 @@ use chrono::Utc;
 use codex_app_server_protocol::CurrentTimeReadParams;
 use codex_app_server_protocol::CurrentTimeReadResponse;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_protocol::ThreadId;
@@ -47,6 +48,13 @@ impl TimeProvider for AppServerTimeProvider {
                 .upgrade()
                 .context("app-server current-time provider is unavailable")?;
             request_current_time(outgoing, thread_state_manager, thread_id).await
+        })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async move {
+            tokio::time::sleep(duration).await;
+            Ok(())
         })
     }
 }
