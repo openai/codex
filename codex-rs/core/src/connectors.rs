@@ -213,6 +213,18 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     environment_manager: Arc<EnvironmentManager>,
     mcp_manager: Arc<McpManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    let runtime_context = McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf());
+    list_accessible_connectors_from_mcp_config(config, force_refetch, mcp_config, runtime_context)
+        .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_config(
+    config: &Config,
+    force_refetch: bool,
+    mcp_config: codex_mcp::McpConfig,
+    runtime_context: McpRuntimeContext,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
@@ -226,7 +238,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let mcp_config = mcp_manager.runtime_config(config).await;
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
@@ -246,8 +257,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
-    let runtime_context =
-        McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,

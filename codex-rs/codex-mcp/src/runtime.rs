@@ -5,6 +5,8 @@
 //! tiny shared metrics helper. Transport startup and orchestration live in
 //! [`crate::rmcp_client`] and [`crate::connection_manager`].
 
+use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,8 +17,86 @@ use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::connection_manager::McpConnectionManager;
+use crate::mcp::McpConfig;
+
+/// MCP config, exact environment bindings, and manager used by one model request.
+pub struct McpRuntimeSnapshot {
+    config: Arc<McpConfig>,
+    manager: Arc<McpConnectionManager>,
+    runtime_context: McpRuntimeContext,
+}
+
+impl McpRuntimeSnapshot {
+    pub fn new(
+        config: Arc<McpConfig>,
+        manager: Arc<McpConnectionManager>,
+        runtime_context: McpRuntimeContext,
+    ) -> Self {
+        Self {
+            config,
+            manager,
+            runtime_context,
+        }
+    }
+
+    pub fn config(&self) -> &McpConfig {
+        self.config.as_ref()
+    }
+
+    pub fn manager(&self) -> &McpConnectionManager {
+        self.manager.as_ref()
+    }
+
+    pub fn manager_arc(&self) -> Arc<McpConnectionManager> {
+        Arc::clone(&self.manager)
+    }
+
+    pub fn runtime_context(&self) -> &McpRuntimeContext {
+        &self.runtime_context
+    }
+
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        uri: String,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.manager
+            .read_resource(server, ReadResourceRequestParams::new(uri))
+            .await
+    }
+
+    pub fn matches_projection(
+        &self,
+        config: &McpConfig,
+        runtime_context: &McpRuntimeContext,
+    ) -> bool {
+        crate::configured_mcp_servers(self.config()) == crate::configured_mcp_servers(config)
+            && crate::tool_plugin_provenance(self.config()) == crate::tool_plugin_provenance(config)
+            && self.config.mcp_oauth_credentials_store_mode
+                == config.mcp_oauth_credentials_store_mode
+            && self.config.auth_keyring_backend_kind == config.auth_keyring_backend_kind
+            && self.config.codex_home == config.codex_home
+            && self.config.chatgpt_base_url == config.chatgpt_base_url
+            && self.config.apps_enabled == config.apps_enabled
+            && self.config.prefix_mcp_tool_names == config.prefix_mcp_tool_names
+            && self.config.client_elicitation_capability == config.client_elicitation_capability
+            && self.runtime_context.same_bindings(runtime_context)
+    }
+}
+
+impl fmt::Debug for McpRuntimeSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpRuntimeSnapshot")
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,12 +110,13 @@ pub struct SandboxState {
 
 /// Runtime context used when resolving per-server MCP environments.
 ///
-/// `McpConfig` describes what servers exist. This value carries the canonical
-/// environment registry plus the local stdio fallback cwd used when a local
-/// stdio server omits its own working directory.
+/// `McpConfig` describes what servers exist. This value carries the exact
+/// step bindings when available, the ambient registry for other servers, and
+/// the local stdio fallback cwd.
 #[derive(Clone)]
 pub struct McpRuntimeContext {
     environment_manager: Arc<EnvironmentManager>,
+    pinned_environments: Arc<HashMap<String, Arc<Environment>>>,
     local_stdio_fallback_cwd: PathBuf,
 }
 
@@ -46,12 +127,34 @@ impl McpRuntimeContext {
     ) -> Self {
         Self {
             environment_manager,
+            pinned_environments: Arc::new(HashMap::new()),
             local_stdio_fallback_cwd,
         }
     }
 
+    /// Pins named environments for servers projected from one model step.
+    pub fn with_pinned_environments(
+        mut self,
+        environments: impl IntoIterator<Item = (String, Arc<Environment>)>,
+    ) -> Self {
+        self.pinned_environments = Arc::new(environments.into_iter().collect());
+        self
+    }
+
     pub(crate) fn local_stdio_fallback_cwd(&self) -> PathBuf {
         self.local_stdio_fallback_cwd.clone()
+    }
+
+    fn same_bindings(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.environment_manager, &other.environment_manager)
+            && self.local_stdio_fallback_cwd == other.local_stdio_fallback_cwd
+            && self.pinned_environments.len() == other.pinned_environments.len()
+            && self.pinned_environments.iter().all(|(id, environment)| {
+                other
+                    .pinned_environments
+                    .get(id)
+                    .is_some_and(|other| Arc::ptr_eq(environment, other))
+            })
     }
 
     pub(crate) fn resolve_server_environment(
@@ -63,8 +166,13 @@ impl McpRuntimeContext {
         // HTTP is the one current exception: it can use the ambient HTTP client
         // even when no local Environment is configured.
         if let Some(environment) = self
-            .environment_manager
-            .get_environment(&config.environment_id)
+            .pinned_environments
+            .get(&config.environment_id)
+            .cloned()
+            .or_else(|| {
+                self.environment_manager
+                    .get_environment(&config.environment_id)
+            })
         {
             return Ok(Some(environment));
         }

@@ -594,6 +594,22 @@ impl CodexThread {
         self.codex.session.runtime_mcp_config(config).await
     }
 
+    /// Projects the latest host config through this thread's current selected executor bindings.
+    pub async fn project_mcp_config(
+        &self,
+        config: &crate::config::Config,
+    ) -> (codex_mcp::McpConfig, codex_mcp::McpRuntimeContext) {
+        self.codex.session.project_mcp_config(config).await
+    }
+
+    /// Builds an MCP runtime from the latest host config and current selected executors.
+    pub async fn project_mcp_runtime(
+        &self,
+        config: &crate::config::Config,
+    ) -> Arc<codex_mcp::McpRuntimeSnapshot> {
+        self.codex.session.project_mcp_runtime(config).await
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }

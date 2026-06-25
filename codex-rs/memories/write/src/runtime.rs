@@ -338,6 +338,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                selected_capability_roots: Vec::new(),
                 thread_extension_init: Default::default(),
                 supports_openai_form_elicitation: false,
             })

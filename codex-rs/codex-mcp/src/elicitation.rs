@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::mcp::McpPermissionPromptAutoApproveContext;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
@@ -48,6 +50,8 @@ pub trait ElicitationReviewer: Send + Sync {
 
 pub type ElicitationReviewerHandle = Arc<dyn ElicitationReviewer>;
 
+static NEXT_ELICITATION_ROUTE_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone)]
 pub(crate) struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
@@ -55,6 +59,7 @@ pub(crate) struct ElicitationRequestManager {
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
     reviewer: Option<ElicitationReviewerHandle>,
+    route_id: u64,
 }
 
 impl ElicitationRequestManager {
@@ -69,6 +74,7 @@ impl ElicitationRequestManager {
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
             reviewer,
+            route_id: NEXT_ELICITATION_ROUTE_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -91,13 +97,26 @@ impl ElicitationRequestManager {
         id: RequestId,
         response: ElicitationResponse,
     ) -> Result<()> {
-        self.requests
-            .lock()
-            .await
-            .remove(&(server_name, id))
-            .ok_or_else(|| anyhow!("elicitation request not found"))?
+        if self.try_resolve(server_name, id, response).await? {
+            Ok(())
+        } else {
+            Err(anyhow!("elicitation request not found"))
+        }
+    }
+
+    pub(crate) async fn try_resolve(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<bool> {
+        let Some(responder) = self.requests.lock().await.remove(&(server_name, id)) else {
+            return Ok(false);
+        };
+        responder
             .send(response)
-            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
+            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))?;
+        Ok(true)
     }
 
     pub(crate) fn make_sender(
@@ -110,6 +129,7 @@ impl ElicitationRequestManager {
         let permission_profile = self.permission_profile.clone();
         let auto_deny = self.auto_deny.clone();
         let reviewer = self.reviewer.clone();
+        let route_id = self.route_id;
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
@@ -214,9 +234,10 @@ impl ElicitationRequestManager {
                     },
                 };
                 let (tx, rx) = oneshot::channel();
+                let response_id = RequestId::String(Arc::from(format!("{route_id}:{id}")));
                 {
                     let mut lock = elicitation_requests.lock().await;
-                    lock.insert((server_name.clone(), id.clone()), tx);
+                    lock.insert((server_name.clone(), response_id.clone()), tx);
                 }
                 let _ = tx_event
                     .send(Event {
@@ -224,7 +245,7 @@ impl ElicitationRequestManager {
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             turn_id: None,
                             server_name,
-                            id: match id.clone() {
+                            id: match response_id {
                                 rmcp::model::NumberOrString::String(value) => {
                                     ProtocolRequestId::String(value.to_string())
                                 }

@@ -493,6 +493,7 @@ async fn loads_user_instructions_without_a_primary_environment() -> Result<()> {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })
@@ -707,6 +708,7 @@ async fn multi_environment_thread_loads_every_project_and_keeps_creation_snapsho
                     cwd: PathUri::from_host_native_path(local_root.path())?,
                 },
             ],
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })

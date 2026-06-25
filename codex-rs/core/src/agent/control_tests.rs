@@ -2257,6 +2257,7 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
             metrics_service_name: Some("codex_work_desktop".to_string()),
             parent_trace: None,
             environments: Vec::new(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: ExtensionDataInit::default(),
             supports_openai_form_elicitation: false,
         })

@@ -1129,11 +1129,6 @@ impl ThreadRequestProcessor {
                 DynamicToolSpec::Namespace(namespace) => namespace.tools.len(),
             })
             .sum();
-        let mut thread_extension_init = ExtensionDataInit::new();
-        if !selected_capability_roots.is_empty() {
-            thread_extension_init.insert(selected_capability_roots);
-            codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_extension_init);
-        }
         let create_thread_started_at = std::time::Instant::now();
         let NewThread {
             thread_id,
@@ -1156,7 +1151,8 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
-                thread_extension_init,
+                selected_capability_roots,
+                thread_extension_init: ExtensionDataInit::new(),
                 supports_openai_form_elicitation,
             })
             .instrument(tracing::info_span!(

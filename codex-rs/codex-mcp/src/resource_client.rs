@@ -3,13 +3,14 @@ use std::sync::Weak;
 
 use anyhow::Context;
 use anyhow::Result;
-use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceContent;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 
 use crate::McpConnectionManager;
+use crate::McpRuntimeSnapshot;
 
 /// One page of resources returned by an MCP server.
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +39,7 @@ pub struct McpResourceClient {
 
 #[derive(Clone)]
 enum ResourceManager {
-    Live(Arc<ArcSwap<McpConnectionManager>>),
+    Live(Arc<ArcSwapOption<McpRuntimeSnapshot>>),
     Snapshot(Arc<McpConnectionManager>),
 }
 
@@ -64,9 +65,9 @@ impl std::fmt::Debug for McpResourceClient {
 
 impl McpResourceClient {
     /// Creates a resource client backed by the session's replaceable MCP manager.
-    pub fn new(manager: Arc<ArcSwap<McpConnectionManager>>) -> Self {
+    pub fn new(runtime: Arc<ArcSwapOption<McpRuntimeSnapshot>>) -> Self {
         Self {
-            manager: ResourceManager::Live(manager),
+            manager: ResourceManager::Live(runtime),
         }
     }
 
@@ -80,7 +81,10 @@ impl McpResourceClient {
     /// Returns the exact manager generation used by this client right now.
     pub fn manager_snapshot(&self) -> Arc<McpConnectionManager> {
         match &self.manager {
-            ResourceManager::Live(manager) => manager.load_full(),
+            ResourceManager::Live(runtime) => runtime
+                .load_full()
+                .expect("MCP runtime must be installed before reading resources")
+                .manager_arc(),
             ResourceManager::Snapshot(manager) => Arc::clone(manager),
         }
     }

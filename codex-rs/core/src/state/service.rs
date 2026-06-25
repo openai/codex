@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 
 use crate::SkillsService;
@@ -15,6 +17,8 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::session::McpRuntimeSnapshot;
+use crate::session::SelectedMcpRuntimeCache;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -27,11 +31,12 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_core_plugins::PluginsManager;
 use codex_core_skills::ExecutorSkillCatalogCache;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
+use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeContext;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -45,8 +50,12 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    /// The latest manager; callers retain an owned handle while performing MCP I/O.
-    pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
+    /// The latest atomically published MCP config and manager pair.
+    pub(crate) mcp_runtime: Arc<ArcSwapOption<McpRuntimeSnapshot>>,
+    /// Managers that may still own an outstanding elicitation request.
+    pub(crate) mcp_elicitation_managers: StdMutex<Vec<Weak<McpConnectionManager>>>,
+    /// Successful executor projections and the augmented runtime built from them.
+    pub(crate) selected_mcp_runtime: Mutex<SelectedMcpRuntimeCache>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -80,7 +89,6 @@ pub(crate) struct SessionServices {
     /// Raw capability selections for this thread. Each model step resolves them against its
     /// current executor environments before using them.
     pub(crate) selected_capability_roots: Vec<SelectedCapabilityRoot>,
-    pub(crate) mcp_thread_init: ExtensionDataInit,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
     pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,
@@ -103,12 +111,61 @@ impl SessionServices {
     /// resolve through the session's manager while validation waits.
     pub(crate) async fn install_mcp_connection_manager(
         &self,
+        runtime_config: Arc<McpConfig>,
+        runtime_context: McpRuntimeContext,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        self.mcp_connection_manager.store(Arc::new(manager));
-        self.mcp_connection_manager
-            .load_full()
-            .validate_required_servers()
+        let runtime = self
+            .replace_base_mcp_runtime(runtime_config, runtime_context, manager)
+            .await;
+        runtime.manager().validate_required_servers().await
+    }
+
+    pub(crate) async fn replace_base_mcp_runtime(
+        &self,
+        runtime_config: Arc<McpConfig>,
+        runtime_context: McpRuntimeContext,
+        manager: McpConnectionManager,
+    ) -> Arc<McpRuntimeSnapshot> {
+        let runtime = Arc::new(McpRuntimeSnapshot::new(
+            runtime_config,
+            Arc::new(manager),
+            runtime_context,
+        ));
+        self.replace_base_with_runtime(Arc::clone(&runtime)).await;
+        runtime
+    }
+
+    pub(crate) async fn replace_base_with_runtime(&self, runtime: Arc<McpRuntimeSnapshot>) {
+        self.selected_mcp_runtime
+            .lock()
             .await
+            .replace_base_and_invalidate_selected(Arc::clone(&runtime));
+        self.publish_existing_mcp_runtime(runtime);
+    }
+
+    pub(crate) fn publish_existing_mcp_runtime(&self, runtime: Arc<McpRuntimeSnapshot>) {
+        let manager = runtime.manager_arc();
+        self.track_mcp_elicitation_manager(&manager);
+        self.mcp_runtime.store(Some(runtime));
+    }
+
+    pub(crate) fn track_mcp_elicitation_manager(&self, manager: &Arc<McpConnectionManager>) {
+        let weak_manager = Arc::downgrade(&manager);
+        let mut managers = self
+            .mcp_elicitation_managers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        managers.retain(|manager| manager.strong_count() > 0);
+        if !managers.iter().any(|manager| manager.ptr_eq(&weak_manager)) {
+            managers.push(weak_manager);
+        }
+    }
+
+    pub(crate) fn latest_mcp_runtime(&self) -> Arc<McpRuntimeSnapshot> {
+        let Some(runtime) = self.mcp_runtime.load_full() else {
+            unreachable!("MCP runtime must be installed before handling requests");
+        };
+        runtime
     }
 }
