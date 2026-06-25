@@ -18,6 +18,7 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
+use codex_config::RawMcpServerConfig;
 use codex_config::config_toml::ConfigToml;
 use codex_config::merge_toml_values;
 use codex_core::config::deserialize_config_toml_with_base;
@@ -31,6 +32,7 @@ use codex_core::path_utils::write_atomically;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -293,8 +295,24 @@ impl ConfigManager {
             parsed_segments.push(segments);
         }
 
-        // MCP server entries may be completed by lower-precedence config layers,
-        // while feature requirements must still be checked against the user's
+        // Validate MCP field types before composition so a higher-precedence
+        // layer cannot hide malformed values in the user layer. The raw input
+        // shape intentionally allows the transport to come from another layer.
+        if let Some(mcp_servers) = user_config
+            .as_table()
+            .and_then(|table| table.get("mcp_servers"))
+        {
+            let _: HashMap<String, RawMcpServerConfig> =
+                mcp_servers.clone().try_into().map_err(|err| {
+                    ConfigManagerError::write(
+                        ConfigWriteErrorCode::ConfigValidationError,
+                        format!("Invalid configuration: {err}"),
+                    )
+                })?;
+        }
+
+        // MCP server entries may be completed by other config layers, while
+        // feature requirements must still be checked against the user's
         // explicit settings before the write is persisted.
         let mut user_config_for_feature_validation = user_config.clone();
         if let Some(table) = user_config_for_feature_validation.as_table_mut() {

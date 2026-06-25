@@ -448,6 +448,47 @@ async fn write_value_rejects_partial_mcp_server_without_effective_transport() ->
 }
 
 #[tokio::test]
+async fn write_value_rejects_invalid_mcp_field_type_hidden_by_managed_config() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "")?;
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(
+        &managed_path,
+        r#"[mcp_servers.docs]
+command = "managed-docs-server"
+enabled = false
+"#,
+    )?;
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path),
+        CloudConfigBundleLoader::default(),
+    );
+
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(config_path.display().to_string()),
+            key_path: "mcp_servers.docs.enabled".to_string(),
+            value: serde_json::json!("yes"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("the managed value must not hide an invalid user-layer type");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(error.to_string().contains("expected a boolean"), "{error}");
+    assert_eq!(std::fs::read_to_string(config_path)?, "");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn read_includes_origins_and_layers() {
     let tmp = tempdir().expect("tempdir");
     let user_path = tmp.path().join(CONFIG_TOML_FILE);
