@@ -29,7 +29,8 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(25);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 const CURRENT_TIME_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
-const TWELVE_HOURS_MS: u64 = 12 * 60 * 60 * 1000;
+const TWELVE_HOURS_SECONDS: i64 = 12 * 60 * 60;
+const TWELVE_HOURS_MS: u64 = TWELVE_HOURS_SECONDS as u64 * 1000;
 
 #[tokio::test]
 async fn current_time_read_round_trip_adds_reminder_to_model_input() -> Result<()> {
@@ -160,6 +161,16 @@ async fn external_sleep_notification_waits_for_wake_and_ignores_stale_wakes() ->
     assert!(!params.sleep_id.is_empty());
     let sleep_id = params.sleep_id;
 
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            app_server.read_stream_until_notification_message("turn/completed"),
+        )
+        .await
+        .is_err(),
+        "turn completed before currentTime/wake"
+    );
+
     let wake_params = CurrentTimeWakeParams {
         thread_id: thread.id.clone(),
         sleep_id,
@@ -177,7 +188,12 @@ async fn external_sleep_notification_waits_for_wake_and_ignores_stale_wakes() ->
     .await??;
     let _: CurrentTimeWakeResponse = to_response(wake_response)?;
 
-    respond_to_current_time_read(&mut app_server, &thread.id, CURRENT_TIME_AT + 1).await?;
+    respond_to_current_time_read(
+        &mut app_server,
+        &thread.id,
+        CURRENT_TIME_AT + TWELVE_HOURS_SECONDS,
+    )
+    .await?;
 
     timeout(
         DEFAULT_READ_TIMEOUT,
