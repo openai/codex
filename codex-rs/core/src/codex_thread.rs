@@ -594,6 +594,11 @@ impl CodexThread {
         self.codex.session.runtime_mcp_config(config).await
     }
 
+    /// Returns the exact MCP config, environment bindings, and manager most recently published.
+    pub fn current_mcp_runtime(&self) -> Arc<crate::session::McpRuntimeSnapshot> {
+        self.codex.session.services.latest_mcp_runtime()
+    }
+
     pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
         self.codex.session.multi_agent_version()
     }

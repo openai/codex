@@ -179,14 +179,13 @@ pub(crate) async fn run_turn(
     }
     let mut accepted_user_input = user_input_from_turn_input(&accepted_input);
 
-    let Some((injection_items, explicitly_enabled_connectors, available_connectors)) =
-        build_skills_and_plugins(
-            &sess,
-            turn_context.as_ref(),
-            &accepted_input,
-            &cancellation_token,
-        )
-        .await
+    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+        &sess,
+        first_step_context.as_ref(),
+        &accepted_input,
+        &cancellation_token,
+    )
+    .await
     else {
         return Ok(None);
     };
@@ -250,7 +249,7 @@ pub(crate) async fn run_turn(
         .await;
 
         // Capture once so context, advertised tools, and tool calls share one request view.
-        let step_context = match next_step_context.take() {
+        let mut step_context = match next_step_context.take() {
             Some(step_context) => step_context,
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
@@ -265,7 +264,19 @@ pub(crate) async fn run_turn(
             world_state = sess
                 .record_step_world_state_if_changed(&world_state, step_context.as_ref())
                 .await;
-            let _mcp_refreshed = record_skill_injections(
+            let mcp_tools = if step_context.turn.apps_enabled() {
+                step_context
+                    .mcp
+                    .manager()
+                    .list_all_tools()
+                    .or_cancel(&cancellation_token)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let mut available_connectors =
+                available_connectors_for_step(step_context.as_ref(), &mcp_tools);
+            let (mcp_refreshed, skill_items) = record_skill_injections(
                 &sess,
                 turn_context.as_ref(),
                 step_context.as_ref(),
@@ -275,6 +286,34 @@ pub(crate) async fn run_turn(
                 &mut skill_injection_state,
             )
             .await;
+            if mcp_refreshed {
+                step_context = Arc::new(StepContext::new(
+                    Arc::clone(&step_context.turn),
+                    step_context.environments.clone(),
+                    step_context.selected_capability_roots.clone(),
+                    Arc::clone(&step_context.skills),
+                    sess.services.latest_mcp_runtime(),
+                    step_context.loaded_agents_md.clone(),
+                ));
+                let mcp_tools = if step_context.turn.apps_enabled() {
+                    step_context
+                        .mcp
+                        .manager()
+                        .list_all_tools()
+                        .or_cancel(&cancellation_token)
+                        .await?
+                } else {
+                    Vec::new()
+                };
+                available_connectors =
+                    available_connectors_for_step(step_context.as_ref(), &mcp_tools);
+            }
+            let connector_ids = collect_explicit_app_ids_from_skill_items(
+                &skill_items,
+                &available_connectors,
+                &step_context.skills.skill_name_counts_lower(),
+            );
+            sess.merge_connector_selection(connector_ids).await;
 
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
@@ -544,9 +583,9 @@ async fn record_skill_injections(
     available_connectors: &[connectors::AppInfo],
     cancellation_token: &CancellationToken,
     state: &mut SkillInjectionState,
-) -> bool {
+) -> (bool, Vec<ResponseItem>) {
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
-        return false;
+        return (false, Vec::new());
     }
     for warning in step_context.skills.warnings() {
         emit_skill_warning_once(
@@ -574,7 +613,7 @@ async fn record_skill_injections(
         emit_skill_warning_once(sess, turn_context, warning, &mut state.emitted_warnings).await;
     }
     if injections.items.is_empty() {
-        return false;
+        return (false, Vec::new());
     }
     let selected_entries = injections
         .items
@@ -595,13 +634,6 @@ async fn record_skill_injections(
         .iter()
         .map(|injection| ContextualUserFragment::into(injection.instructions.clone()))
         .collect::<Vec<ResponseItem>>();
-    let connector_ids = collect_explicit_app_ids_from_skill_items(
-        &items,
-        available_connectors,
-        &step_context.skills.skill_name_counts_lower(),
-    );
-    sess.merge_connector_selection(connector_ids).await;
-
     let skill_invocations = injections
         .items
         .iter()
@@ -639,7 +671,7 @@ async fn record_skill_injections(
         state.injected.insert(injection.identity);
     }
     sess.record_conversation_items(turn_context, &items).await;
-    mcp_refreshed
+    (mcp_refreshed, items)
 }
 
 async fn emit_skill_warning_once(
@@ -654,17 +686,38 @@ async fn emit_skill_warning_once(
     }
 }
 
+fn available_connectors_for_step(
+    step_context: &StepContext,
+    mcp_tools: &[codex_mcp::ToolInfo],
+) -> Vec<connectors::AppInfo> {
+    if !step_context.turn.apps_enabled() {
+        return Vec::new();
+    }
+    let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+        step_context
+            .mcp
+            .config()
+            .connector_snapshot
+            .connector_ids()
+            .iter()
+            .map(|connector_id| connector_id.0.clone()),
+        connectors::accessible_connectors_from_mcp_tools(mcp_tools),
+    );
+    connectors::with_app_enabled_state(connectors, &step_context.turn.config)
+}
+
 #[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
-) -> Option<(Vec<ResponseItem>, HashSet<String>, Vec<connectors::AppInfo>)> {
+) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    let turn_context = step_context.turn.as_ref();
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
-        return Some((Vec::new(), HashSet::new(), Vec::new()));
+        return Some((Vec::new(), HashSet::new()));
     }
 
     let user_input = user_input_from_turn_input(input);
@@ -683,17 +736,13 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .load_full()
+        match step_context
+            .mcp
+            .manager()
             .list_all_tools()
             .or_cancel(cancellation_token)
             .await
@@ -705,18 +754,7 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
-    let available_connectors = if turn_context.apps_enabled() {
-        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
-            connector_snapshot
-                .connector_ids()
-                .iter()
-                .map(|connector_id| connector_id.0.clone()),
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-        );
-        connectors::with_app_enabled_state(connectors, &turn_context.config)
-    } else {
-        Vec::new()
-    };
+    let available_connectors = available_connectors_for_step(step_context, &mcp_tools);
     let extension_injection_items =
         build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
             .await?;
@@ -754,11 +792,7 @@ async fn build_skills_and_plugins(
 
     let mut injection_items = plugin_items;
     injection_items.extend(extension_injection_items);
-    Some((
-        injection_items,
-        explicitly_enabled_connectors,
-        available_connectors,
-    ))
+    Some((injection_items, explicitly_enabled_connectors))
 }
 
 #[tracing::instrument(
@@ -1267,7 +1301,7 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
-    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
@@ -1279,9 +1313,7 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
+    let connector_snapshot = &step_context.mcp.config().connector_snapshot;
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =

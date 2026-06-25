@@ -200,15 +200,8 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
         return false;
     }
-    let refresh_servers = sess.runtime_mcp_servers(&refresh_config).await;
-    sess.refresh_mcp_servers_now(
-        turn_context,
-        refresh_servers,
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-        elicitation_reviewer,
-    )
-    .await;
+    sess.refresh_mcp_servers_now(turn_context, &refresh_config, elicitation_reviewer)
+        .await;
     true
 }
 
