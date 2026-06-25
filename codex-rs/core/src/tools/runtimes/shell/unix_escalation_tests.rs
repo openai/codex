@@ -430,6 +430,7 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: permission_profile.clone(),
+        active_permission_profile: None,
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
@@ -566,6 +567,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -631,6 +633,7 @@ fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_pars
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
@@ -682,6 +685,7 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
@@ -724,6 +728,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,
@@ -777,6 +782,7 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         tool_name: GuardianCommandSource::Shell,
         approval_policy: AskForApproval::OnRequest,
         permission_profile,
+        active_permission_profile: None,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::UseDefault,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
@@ -820,6 +826,7 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
             mcp_elicitations: true,
         }),
         permission_profile,
+        active_permission_profile: None,
         file_system_sandbox_policy,
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -859,6 +866,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
         InterceptedExecPolicyContext {
             approval_policy,
             permission_profile: permission_profile.clone(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: super::approval_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
@@ -874,6 +882,7 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
         InterceptedExecPolicyContext {
             approval_policy,
             permission_profile,
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
             enable_shell_wrapper_parsing: false,
@@ -907,6 +916,7 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
         InterceptedExecPolicyContext {
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,

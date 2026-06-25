@@ -5,7 +5,9 @@ use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
 use multimap::MultiMap;
+use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -46,7 +48,7 @@ fn policy_fingerprint(policy: &Policy) -> Vec<String> {
 }
 
 /// TOML representation of `[rules]` within `requirements.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct RequirementsExecPolicyToml {
     pub prefix_rules: Vec<RequirementsExecPolicyPrefixRuleToml>,
 }
@@ -54,11 +56,12 @@ pub struct RequirementsExecPolicyToml {
 /// A TOML representation of the `prefix_rule(...)` Starlark builtin.
 ///
 /// This mirrors the builtin defined in `execpolicy/src/parser.rs`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct RequirementsExecPolicyPrefixRuleToml {
     pub pattern: Vec<RequirementsExecPolicyPatternTokenToml>,
     pub decision: Option<RequirementsExecPolicyDecisionToml>,
     pub justification: Option<String>,
+    pub permissions: Option<String>,
 }
 
 /// TOML-friendly representation of a pattern token.
@@ -66,13 +69,13 @@ pub struct RequirementsExecPolicyPrefixRuleToml {
 /// Starlark supports either a string token or a list of alternative tokens at
 /// each position, but TOML arrays cannot mix strings and arrays. Using an
 /// array of tables sidesteps that restriction.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct RequirementsExecPolicyPatternTokenToml {
     pub token: Option<String>,
     pub any_of: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RequirementsExecPolicyDecisionToml {
     Allow,
@@ -110,6 +113,9 @@ pub enum RequirementsExecPolicyParseError {
     #[error("rules prefix_rule at index {rule_index} has an empty justification")]
     EmptyJustification { rule_index: usize },
 
+    #[error("rules prefix_rule at index {rule_index} has an empty permissions value")]
+    EmptyPermissions { rule_index: usize },
+
     #[error("rules prefix_rule at index {rule_index} is missing a decision")]
     MissingDecision { rule_index: usize },
 
@@ -123,6 +129,22 @@ impl RequirementsExecPolicyToml {
     /// Convert requirements TOML rules into the internal `.rules`
     /// representation used by `codex-execpolicy`.
     pub fn to_policy(&self) -> Result<Policy, RequirementsExecPolicyParseError> {
+        self.to_policy_with_allow_rules(/*allow_allow_decision*/ false)
+    }
+
+    /// Convert config TOML rules into the internal `.rules` representation.
+    ///
+    /// Unlike `requirements.toml`, regular config layers may contain allow
+    /// rules because they are user/project policy rather than managed
+    /// restrictions.
+    pub fn to_config_policy(&self) -> Result<Policy, RequirementsExecPolicyParseError> {
+        self.to_policy_with_allow_rules(/*allow_allow_decision*/ true)
+    }
+
+    fn to_policy_with_allow_rules(
+        &self,
+        allow_allow_decision: bool,
+    ) -> Result<Policy, RequirementsExecPolicyParseError> {
         if self.prefix_rules.is_empty() {
             return Err(RequirementsExecPolicyParseError::EmptyPrefixRules);
         }
@@ -134,6 +156,11 @@ impl RequirementsExecPolicyToml {
                 && justification.trim().is_empty()
             {
                 return Err(RequirementsExecPolicyParseError::EmptyJustification { rule_index });
+            }
+            if let Some(permissions) = &rule.permissions
+                && permissions.trim().is_empty()
+            {
+                return Err(RequirementsExecPolicyParseError::EmptyPermissions { rule_index });
             }
 
             if rule.pattern.is_empty() {
@@ -148,7 +175,7 @@ impl RequirementsExecPolicyToml {
                 .collect::<Result<Vec<_>, _>>()?;
 
             let decision = match rule.decision {
-                Some(RequirementsExecPolicyDecisionToml::Allow) => {
+                Some(RequirementsExecPolicyDecisionToml::Allow) if !allow_allow_decision => {
                     return Err(RequirementsExecPolicyParseError::AllowDecisionNotAllowed {
                         rule_index,
                     });
@@ -159,6 +186,7 @@ impl RequirementsExecPolicyToml {
                 }
             };
             let justification = rule.justification.clone();
+            let permissions = rule.permissions.clone();
 
             let (first_token, remaining_tokens) = pattern_tokens
                 .split_first()
@@ -174,6 +202,7 @@ impl RequirementsExecPolicyToml {
                     },
                     decision,
                     justification: justification.clone(),
+                    permissions: permissions.clone(),
                 });
                 rules_by_program.insert(head.clone(), rule);
             }
