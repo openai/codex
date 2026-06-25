@@ -955,9 +955,11 @@ impl MessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
             }
-            ClientRequest::CurrentTimeWake { params, .. } => {
-                Ok(Some(self.current_time_provider.wake(params).into()))
-            }
+            ClientRequest::CurrentTimeWake { params, .. } => self
+                .current_time_provider
+                .wake(connection_id, params)
+                .map(|response| Some(response.into()))
+                .map_err(|err| invalid_request(err.to_string())),
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)

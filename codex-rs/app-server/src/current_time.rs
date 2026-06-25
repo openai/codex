@@ -58,32 +58,51 @@ struct SleepKey {
 #[derive(Default)]
 struct PendingSleeps {
     // Dropping a canceled sleep future removes its waiter synchronously.
-    wake_senders: Mutex<HashMap<SleepKey, oneshot::Sender<()>>>,
+    entries: Mutex<HashMap<SleepKey, PendingSleep>>,
+}
+
+struct PendingSleep {
+    connection_id: ConnectionId,
+    wake_sender: oneshot::Sender<()>,
 }
 
 impl PendingSleeps {
-    fn register(&self, key: SleepKey) -> oneshot::Receiver<()> {
+    fn register(&self, key: SleepKey, connection_id: ConnectionId) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
-        self.wake_senders
+        self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key, tx);
+            .insert(
+                key,
+                PendingSleep {
+                    connection_id,
+                    wake_sender: tx,
+                },
+            );
         rx
     }
 
-    fn wake(&self, key: &SleepKey) {
-        let sender = self
-            .wake_senders
+    fn wake(&self, key: &SleepKey, connection_id: ConnectionId) -> Result<()> {
+        let mut entries = self
+            .entries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(key);
-        if let Some(sender) = sender {
-            let _ = sender.send(());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries
+            .get(key)
+            .is_some_and(|pending_sleep| pending_sleep.connection_id != connection_id)
+        {
+            bail!("external sleep can only be woken by the client that received it");
         }
+        let pending_sleep = entries.remove(key);
+        drop(entries);
+        if let Some(pending_sleep) = pending_sleep {
+            let _ = pending_sleep.wake_sender.send(());
+        }
+        Ok(())
     }
 
     fn remove(&self, key: &SleepKey) {
-        self.wake_senders
+        self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(key);
@@ -102,12 +121,19 @@ impl Drop for PendingSleepGuard {
 }
 
 impl AppServerTimeProvider {
-    pub(crate) fn wake(&self, params: CurrentTimeWakeParams) -> CurrentTimeWakeResponse {
-        self.pending_sleeps.wake(&SleepKey {
-            thread_id: params.thread_id,
-            sleep_id: params.sleep_id,
-        });
-        CurrentTimeWakeResponse {}
+    pub(crate) fn wake(
+        &self,
+        connection_id: ConnectionId,
+        params: CurrentTimeWakeParams,
+    ) -> Result<CurrentTimeWakeResponse> {
+        self.pending_sleeps.wake(
+            &SleepKey {
+                thread_id: params.thread_id,
+                sleep_id: params.sleep_id,
+            },
+            connection_id,
+        )?;
+        Ok(CurrentTimeWakeResponse {})
     }
 }
 
@@ -133,25 +159,28 @@ impl TimeProvider for AppServerTimeProvider {
                 .context("app-server current-time provider is unavailable")?;
             let duration_ms = u64::try_from(duration.as_millis())
                 .context("external sleep duration exceeds the supported range")?;
+            let deadline = Instant::now() + EXTERNAL_CLOCK_REQUEST_TIMEOUT;
+            let connection_id =
+                wait_for_current_time_connection(thread_state_manager, thread_id, deadline).await?;
             let sleep_id = Uuid::now_v7().to_string();
             let key = SleepKey {
                 thread_id: thread_id.to_string(),
                 sleep_id: sleep_id.clone(),
             };
             // Register before notifying so an eager wake cannot race with the notification.
-            let wake_rx = pending_sleeps.register(key.clone());
+            let wake_rx = pending_sleeps.register(key.clone(), connection_id);
             let _guard = PendingSleepGuard {
                 pending_sleeps,
                 key,
             };
             notify_external_sleep(
                 outgoing,
-                thread_state_manager,
+                connection_id,
                 thread_id,
                 sleep_id,
                 duration_ms,
             )
-            .await?;
+            .await;
             wake_rx.await.context("external sleep was canceled")?;
             Ok(())
         })
@@ -204,14 +233,11 @@ async fn request_current_time(
 
 async fn notify_external_sleep(
     outgoing: Arc<OutgoingMessageSender>,
-    thread_state_manager: ThreadStateManager,
+    connection_id: ConnectionId,
     thread_id: ThreadId,
     sleep_id: String,
     duration_ms: u64,
-) -> Result<()> {
-    let deadline = Instant::now() + EXTERNAL_CLOCK_REQUEST_TIMEOUT;
-    let connection_id =
-        wait_for_current_time_connection(thread_state_manager, thread_id, deadline).await?;
+) {
     outgoing
         .send_server_notification_to_connections(
             &[connection_id],
@@ -222,7 +248,6 @@ async fn notify_external_sleep(
             }),
         )
         .await;
-    Ok(())
 }
 
 async fn wait_for_current_time_connection(
@@ -260,8 +285,11 @@ fn require_single_current_time_connection(connection_ids: &[ConnectionId]) -> Re
 
 #[cfg(test)]
 mod tests {
+    use super::PendingSleeps;
+    use super::SleepKey;
     use super::require_single_current_time_connection;
     use crate::outgoing_message::ConnectionId;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn current_time_connection_must_be_unambiguous() {
@@ -281,5 +309,31 @@ mod tests {
                 .to_string(),
             "expected exactly one client subscribed to the thread, found 2"
         );
+    }
+
+    #[test]
+    fn pending_sleep_can_only_be_woken_by_its_connection() {
+        let pending_sleeps = PendingSleeps::default();
+        let key = SleepKey {
+            thread_id: "thread-1".to_string(),
+            sleep_id: "sleep-1".to_string(),
+        };
+        let mut wake_rx = pending_sleeps.register(key.clone(), ConnectionId(7));
+
+        assert_eq!(
+            pending_sleeps
+                .wake(&key, ConnectionId(8))
+                .unwrap_err()
+                .to_string(),
+            "external sleep can only be woken by the client that received it"
+        );
+        assert_eq!(
+            wake_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+
+        pending_sleeps.wake(&key, ConnectionId(7)).unwrap();
+        assert_eq!(wake_rx.try_recv(), Ok(()));
+        pending_sleeps.wake(&key, ConnectionId(7)).unwrap();
     }
 }
