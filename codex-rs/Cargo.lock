@@ -2587,6 +2587,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-config",
+ "codex-plugin",
+ "indexmap 2.14.0",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2595,6 +2597,18 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+]
+
+[[package]]
+name = "codex-connectors-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-connectors",
+ "codex-core-plugins",
+ "codex-plugin",
+ "codex-utils-path-uri",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2618,6 +2632,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-graph-store",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2758,6 +2773,7 @@ dependencies = [
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
  "codex-git-utils",
@@ -2775,7 +2791,6 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
- "indexmap 2.14.0",
  "libc",
  "pretty_assertions",
  "regex",
@@ -2891,6 +2906,7 @@ dependencies = [
  "codex-exec-server-protocol",
  "codex-file-system",
  "codex-network-proxy",
+ "codex-otel",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2902,6 +2918,8 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "libc",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "prost 0.14.3",
  "reqwest 0.12.28",
@@ -2916,6 +2934,8 @@ dependencies = [
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "uuid",
  "windows-sys 0.52.0",
  "wiremock",
@@ -3309,6 +3329,7 @@ dependencies = [
  "codex-api",
  "codex-async-utils",
  "codex-config",
+ "codex-connectors",
  "codex-exec-server",
  "codex-login",
  "codex-model-provider",
@@ -3551,6 +3572,7 @@ dependencies = [
  "rama-tcp",
  "rama-tls-rustls",
  "rama-unix",
+ "rand 0.9.3",
  "rustls-native-certs",
  "schannel",
  "security-framework 3.5.1",
@@ -4016,7 +4038,6 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "codex-app-server-protocol",
  "codex-code-mode",
  "codex-connectors",
  "codex-features",

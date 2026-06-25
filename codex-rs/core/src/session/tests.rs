@@ -84,7 +84,6 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_app_server_protocol::McpElicitationSchema;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::permissions_toml::FilesystemPermissionToml;
@@ -377,24 +376,18 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
         .load_full()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
-    let requested_schema: McpElicitationSchema = serde_json::from_value(json!({
-        "type": "object",
-        "properties": {},
-    }))
-    .expect("schema should deserialize");
     let response = session
         .request_mcp_server_elicitation(
             turn_context.as_ref(),
+            "codex_apps".to_string(),
             RequestId::String("request-1".into()),
-            McpServerElicitationRequestParams {
-                thread_id: session.thread_id.to_string(),
-                turn_id: Some(turn_context.sub_id.clone()),
-                server_name: "codex_apps".to_string(),
-                request: McpServerElicitationRequest::Form {
-                    meta: None,
-                    message: "Allow this request?".to_string(),
-                    requested_schema,
-                },
+            ElicitationRequest::Form {
+                meta: None,
+                message: "Allow this request?".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                }),
             },
         )
         .await;
@@ -640,6 +633,8 @@ fn make_connector(id: &str, name: &str) -> AppInfo {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -8104,11 +8099,13 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         });
     let mut previous_context_item = turn_context.to_turn_context_item();
     previous_context_item.turn_id = Some("previous-turn-id".to_string());
-    let world_state = Arc::new(build_world_state_from_turn_context(&session, &turn_context).await);
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item));
-        state.history.set_world_state_baseline(world_state);
+        state
+            .history
+            .set_world_state_baseline(world_state.snapshot());
     }
 
     session
@@ -8778,12 +8775,13 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
-    let world_state =
-        Arc::new(build_world_state_from_turn_context(&session, &previous_context).await);
+    let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item.clone()));
-        state.history.set_world_state_baseline(world_state);
+        state
+            .history
+            .set_world_state_baseline(world_state.snapshot());
     }
     let rollout_path = attach_thread_persistence(&mut session).await;
 

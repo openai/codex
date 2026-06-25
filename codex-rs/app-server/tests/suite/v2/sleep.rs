@@ -32,8 +32,9 @@ async fn sleep_emits_started_and_completed_items() -> Result<()> {
         vec![
             responses::sse(vec![
                 responses::ev_response_created("resp-1"),
-                responses::ev_function_call(
+                responses::ev_function_call_with_namespace(
                     CALL_ID,
+                    "clock",
                     "sleep",
                     &serde_json::json!({ "duration_ms": DURATION_MS }).to_string(),
                 ),
@@ -166,7 +167,8 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
-[features]
+[features.current_time_reminder]
+enabled = true
 sleep_tool = true
 "#
         ),

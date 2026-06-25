@@ -446,6 +446,7 @@ use codex_thread_store::SearchThreadsParams as StoreSearchThreadsParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
+use codex_thread_store::ThreadRelationFilter as StoreThreadRelationFilter;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;

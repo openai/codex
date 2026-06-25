@@ -48,6 +48,7 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "ext/connectors",
     "ext/extension-api",
     "ext/goal",
     "ext/guardian",
@@ -504,7 +505,6 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
-    "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",

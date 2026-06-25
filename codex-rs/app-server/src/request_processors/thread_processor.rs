@@ -16,7 +16,7 @@ struct ThreadListFilters {
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
-    parent_thread_id: Option<ThreadId>,
+    relation_filter: Option<StoreThreadRelationFilter>,
 }
 
 fn collect_resume_override_mismatches(
@@ -1431,25 +1431,14 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: ThreadId,
     ) -> Result<Vec<ThreadId>, JSONRPCErrorError> {
-        let mut thread_ids = vec![thread_id];
-        let Some(state_db_ctx) = self.state_db.as_ref() else {
-            return Ok(thread_ids);
-        };
-        let mut seen = HashSet::from([thread_id]);
-        let descendants = state_db_ctx
-            .list_thread_spawn_descendants(thread_id)
+        self.thread_manager
+            .list_agent_subtree_thread_ids(thread_id)
             .await
             .map_err(|err| {
                 internal_error(format!(
                     "failed to list spawned descendants for thread id {thread_id}: {err}"
                 ))
-            })?;
-        for descendant_id in descendants {
-            if seen.insert(descendant_id) {
-                thread_ids.push(descendant_id);
-            }
-        }
-        Ok(thread_ids)
+            })
     }
 
     async fn thread_increment_elicitation_inner(
@@ -1904,13 +1893,25 @@ impl ThreadRequestProcessor {
             use_state_db_only,
             search_term,
             parent_thread_id,
+            ancestor_thread_id,
         } = params;
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
-        let parent_thread_id = parent_thread_id
-            .as_deref()
-            .map(ThreadId::from_string)
-            .transpose()
-            .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?;
+        let relation_filter = match (parent_thread_id, ancestor_thread_id) {
+            (Some(_), Some(_)) => {
+                return Err(invalid_request(
+                    "parentThreadId and ancestorThreadId are mutually exclusive",
+                ));
+            }
+            (Some(parent_thread_id), None) => Some(StoreThreadRelationFilter::DirectChildrenOf(
+                ThreadId::from_string(&parent_thread_id)
+                    .map_err(|err| invalid_request(format!("invalid parent thread id: {err}")))?,
+            )),
+            (None, Some(ancestor_thread_id)) => Some(StoreThreadRelationFilter::DescendantsOf(
+                ThreadId::from_string(&ancestor_thread_id)
+                    .map_err(|err| invalid_request(format!("invalid ancestor thread id: {err}")))?,
+            )),
+            (None, None) => None,
+        };
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -1935,7 +1936,7 @@ impl ThreadRequestProcessor {
                     cwd_filters,
                     search_term,
                     use_state_db_only,
-                    parent_thread_id,
+                    relation_filter,
                 },
             )
             .await?;
@@ -3665,7 +3666,7 @@ impl ThreadRequestProcessor {
             cwd_filters,
             search_term,
             use_state_db_only,
-            parent_thread_id,
+            relation_filter,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -3681,11 +3682,11 @@ impl ThreadRequestProcessor {
                     Some(providers)
                 }
             }
-            None if parent_thread_id.is_some() => None,
+            None if relation_filter.is_some() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let (allowed_sources_vec, source_kind_filter) =
-            if parent_thread_id.is_some() && source_kinds.is_none() {
+            if relation_filter.is_some() && source_kinds.is_none() {
                 (Vec::new(), None)
             } else {
                 compute_source_filters(source_kinds)
@@ -3711,7 +3712,7 @@ impl ThreadRequestProcessor {
                     archived,
                     search_term: search_term.clone(),
                     use_state_db_only,
-                    parent_thread_id,
+                    relation_filter,
                 })
                 .await
                 .map_err(thread_store_list_error)?;

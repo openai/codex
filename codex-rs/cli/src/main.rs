@@ -3560,6 +3560,15 @@ mod tests {
     }
 
     #[test]
+    fn remote_control_pair_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "remote-control", "pair"]).expect("parse");
+        let Some(Subcommand::RemoteControl(remote_control)) = &cli.subcommand else {
+            panic!("expected remote-control subcommand");
+        };
+        assert_eq!(remote_control.subcommand_name(), "remote-control pair");
+    }
+
+    #[test]
     fn remote_flag_parses_for_interactive_root() {
         let cli = MultitoolCli::try_parse_from(["codex", "--remote", "unix://codex.sock"])
             .expect("parse");

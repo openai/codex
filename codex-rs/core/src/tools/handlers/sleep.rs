@@ -9,6 +9,8 @@ use crate::tools::registry::ToolExecutor;
 use codex_protocol::items::SleepItem;
 use codex_protocol::items::TurnItem;
 use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -17,7 +19,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use std::time::Instant;
 
-const SLEEP_TOOL_NAME: &str = "sleep";
+const NAMESPACE: &str = "clock";
+const TOOL_NAME: &str = "sleep";
 const MAX_SLEEP_DURATION_MS: u64 = 3_600_000;
 
 pub struct SleepHandler;
@@ -36,24 +39,28 @@ fn create_sleep_tool() -> ToolSpec {
         ))),
     )]);
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: SLEEP_TOOL_NAME.to_string(),
-        description: "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::object(
-            properties,
-            Some(vec!["duration_ms".to_string()]),
-            /*additional_properties*/ Some(false.into()),
-        ),
-        output_schema: None,
+    ToolSpec::Namespace(ResponsesApiNamespace {
+        name: NAMESPACE.to_string(),
+        description: "Tools for reading and waiting on time.".to_string(),
+        tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+            name: TOOL_NAME.to_string(),
+            description: "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time."
+                .to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::object(
+                properties,
+                Some(vec!["duration_ms".to_string()]),
+                /*additional_properties*/ Some(false.into()),
+            ),
+            output_schema: None,
+        })],
     })
 }
 
 impl ToolExecutor<ToolInvocation> for SleepHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(SLEEP_TOOL_NAME)
+        ToolName::namespaced(NAMESPACE, TOOL_NAME)
     }
 
     fn spec(&self) -> ToolSpec {
@@ -71,7 +78,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             } = invocation;
             let ToolPayload::Function { arguments } = payload else {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "{SLEEP_TOOL_NAME} handler received unsupported payload"
+                    "{TOOL_NAME} handler received unsupported payload"
                 )));
             };
             let args: SleepArgs = parse_arguments(&arguments)?;

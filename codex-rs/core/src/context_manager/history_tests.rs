@@ -32,7 +32,6 @@ use image::Luma;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
-use std::sync::Arc;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -83,16 +82,16 @@ fn world_state_baseline_deduplicates_until_history_is_replaced() {
         state.add_section(EnvironmentsState::from_turn_context_item(
             &reference_context_item(),
         ));
-        Arc::new(state)
+        state
     };
     let mut history = ContextManager::new();
 
-    assert_eq!(1, history.update_world_state(world_state()).len());
-    assert!(history.update_world_state(world_state()).is_empty());
+    assert_eq!(1, history.update_world_state(&world_state()).len());
+    assert!(history.update_world_state(&world_state()).is_empty());
 
     history.replace(Vec::new());
 
-    assert_eq!(1, history.update_world_state(world_state()).len());
+    assert_eq!(1, history.update_world_state(&world_state()).len());
 }
 
 fn user_msg(text: &str) -> ResponseItem {

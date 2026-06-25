@@ -1090,6 +1090,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1216,6 +1217,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1364,6 +1366,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),

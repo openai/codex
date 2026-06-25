@@ -43,6 +43,7 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_api::SharedAuthProvider;
 use codex_config::Constrained;
+use codex_config::McpServerAuth;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -154,7 +155,7 @@ impl McpConnectionManager {
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
-        let codex_apps_auth_provider = auth
+        let chatgpt_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
         let mcp_servers = mcp_servers.clone();
@@ -173,17 +174,13 @@ impl McpConnectionManager {
                 },
             )
             .await;
-            let (codex_apps_tools_cache_context, runtime_auth_provider) =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    codex_apps_cache_context_and_auth_provider(
-                        &server,
-                        &codex_home,
-                        &codex_apps_tools_cache_key,
-                        codex_apps_auth_provider.clone(),
-                    )
-                } else {
-                    regular_mcp_cache_context_and_auth_provider()
-                };
+            let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                codex_apps_tools_cache_context(&codex_home, &codex_apps_tools_cache_key)
+            } else {
+                regular_mcp_tools_cache_context()
+            };
+            let runtime_auth_provider =
+                chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone());
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 server,
@@ -852,48 +849,35 @@ impl Drop for McpConnectionManager {
     }
 }
 
-/// Creates the host-owned state used only by the Codex Apps server.
-///
-/// The tools cache is scoped to the authenticated user. Runtime authentication is supplied only
-/// when the server is not already configured to read a bearer token from the environment.
-fn codex_apps_cache_context_and_auth_provider(
-    server: &EffectiveMcpServer,
+/// Creates the per-user tools cache context used only by the Codex Apps server.
+fn codex_apps_tools_cache_context(
     codex_home: &Path,
     codex_apps_tools_cache_key: &CodexAppsToolsCacheKey,
-    codex_apps_auth_provider: Option<SharedAuthProvider>,
-) -> (
-    Option<CodexAppsToolsCacheContext>,
-    Option<SharedAuthProvider>,
-) {
-    let uses_env_bearer_token =
-        server
-            .configured_config()
-            .is_some_and(|config| match &config.transport {
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var,
-                    ..
-                } => bearer_token_env_var.is_some(),
-                McpServerTransportConfig::Stdio { .. } => false,
-            });
-    (
-        Some(CodexAppsToolsCacheContext {
-            codex_home: codex_home.to_path_buf(),
-            user_key: codex_apps_tools_cache_key.clone(),
-        }),
-        if uses_env_bearer_token {
-            None
-        } else {
-            codex_apps_auth_provider
-        },
-    )
+) -> Option<CodexAppsToolsCacheContext> {
+    Some(CodexAppsToolsCacheContext {
+        codex_home: codex_home.to_path_buf(),
+        user_key: codex_apps_tools_cache_key.clone(),
+    })
 }
 
-/// Keeps regular MCP servers isolated from the host-owned Codex Apps cache and auth provider.
-fn regular_mcp_cache_context_and_auth_provider() -> (
-    Option<CodexAppsToolsCacheContext>,
-    Option<SharedAuthProvider>,
-) {
-    (None, None)
+/// Keeps regular MCP servers isolated from the Codex Apps tools cache.
+fn regular_mcp_tools_cache_context() -> Option<CodexAppsToolsCacheContext> {
+    None
+}
+
+/// Makes ChatGPT authentication available to servers that explicitly opt in.
+/// The HTTP transport applies it only when no configured authorization resolves.
+fn chatgpt_auth_provider_for_server(
+    server: &EffectiveMcpServer,
+    chatgpt_auth_provider: Option<SharedAuthProvider>,
+) -> Option<SharedAuthProvider> {
+    if !server
+        .configured_config()
+        .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
+    {
+        return None;
+    }
+    chatgpt_auth_provider
 }
 
 async fn emit_update(

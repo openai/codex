@@ -4,6 +4,8 @@ codex_rust_crate(
     name = "exec-server",
     crate_name = "codex_exec_server",
     deps_extra = [
+        "@crates//:opentelemetry",
+        "@crates//:opentelemetry_sdk",
         "@crates//:toml",
     ],
     extra_binaries = [

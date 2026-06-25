@@ -1037,7 +1037,7 @@ pub struct Config {
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
-    /// Current-time reminder configuration, when enabled.
+    /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
@@ -1089,11 +1089,13 @@ pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
     "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
 );
 const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 1000;
+const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
+    pub guidance_message: Option<String>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -1101,6 +1103,7 @@ impl Default for TokenBudgetConfig {
         Self {
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
+            guidance_message: None,
         }
     }
 }
@@ -1117,6 +1120,8 @@ pub struct RolloutBudgetConfig {
 pub struct CurrentTimeReminderConfig {
     pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
+    /// Whether to expose the input-interruptible `clock.sleep` tool.
+    pub sleep_tool: bool,
 }
 
 impl Default for CurrentTimeReminderConfig {
@@ -1124,6 +1129,7 @@ impl Default for CurrentTimeReminderConfig {
         Self {
             reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
+            sleep_tool: false,
         }
     }
 }
@@ -1578,7 +1584,10 @@ impl Config {
                 ElicitationCapability::default()
             },
             mcp_server_catalog: catalog.build(),
-            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+            connector_snapshot:
+                codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+                    loaded_plugins.capability_summaries(),
+                ),
         }
     }
 
@@ -2572,9 +2581,25 @@ fn resolve_token_budget_config(
         ));
     }
 
+    let guidance_message = token_budget_config
+        .and_then(|config| config.guidance_message.clone())
+        .filter(|message| !message.trim().is_empty());
+    if guidance_message
+        .as_ref()
+        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+
     Ok(Some(TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
+        guidance_message,
     }))
 }
 
@@ -2672,6 +2697,9 @@ fn resolve_current_time_reminder_config(
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
+        sleep_tool: base
+            .and_then(|config| config.sleep_tool)
+            .unwrap_or(default.sleep_tool),
     }))
 }
 

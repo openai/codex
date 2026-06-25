@@ -186,7 +186,7 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
                 Some("Starter"),
                 Some("Included by default."),
                 /*installed*/ false,
-                /*enabled*/ true,
+                /*enabled*/ false,
                 PluginInstallPolicy::InstalledByDefault,
             ),
         ]),
@@ -665,10 +665,9 @@ async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
 }
 
 #[tokio::test]
-async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+async fn plugin_detail_popup_distinguishes_admin_installed_from_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-
     let summary = plugins_test_summary(
         "plugin-figma",
         "figma",
@@ -676,7 +675,7 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
         Some("Design handoff."),
         /*installed*/ true,
         /*enabled*/ true,
-        PluginInstallPolicy::Available,
+        PluginInstallPolicy::InstalledByDefault,
     );
     let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
         summary.clone(),
@@ -684,31 +683,53 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
+    let mut plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+            (codex_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["Figma", "Slack"],
+        &["figma-mcp", "docs-mcp"],
+    );
     chat.on_plugin_detail_loaded(
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
-            plugin: plugins_test_detail(
-                summary,
-                Some("Turn Figma files into implementation context."),
-                &["design-review", "extract-copy"],
-                &[
-                    (codex_app_server_protocol::HookEventName::PreToolUse, 1),
-                    (codex_app_server_protocol::HookEventName::Stop, 2),
-                ],
-                &["Figma", "Slack"],
-                &["figma-mcp", "docs-mcp"],
-            ),
+            plugin: plugin.clone(),
         }),
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
-        !popup.contains("Data shared with this app is subject to the app's"),
-        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+        popup.contains("Installed by admin")
+            && !popup.contains("Uninstall plugin")
+            && !popup.contains("Data shared with this app is subject to the app's"),
+        "expected admin-installed plugin details to block uninstall and hide the disclosure line, got:\n{popup}"
     );
     assert_chatwidget_snapshot!(
         "plugin_detail_popup_installed",
         strip_osc8_for_snapshot(&popup)
+    );
+
+    plugin.summary.installed = false;
+    plugin.summary.enabled = false;
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Enabled by Admin")
+            && popup.contains("Install plugin")
+            && !popup.contains("Installed by admin"),
+        "expected an unmaterialized default plugin to show its admin assignment and remain installable, got:\n{popup}"
+    );
+    insta::assert_snapshot!(
+        popup
+            .lines()
+            .find(|line| line.contains("Figma ·"))
+            .expect("expected plugin detail header")
+            .trim(),
+        @"Figma · Enabled by Admin · ChatGPT Marketplace"
     );
 }
 
@@ -769,17 +790,20 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
 }
 
 #[tokio::test]
-async fn plugin_detail_remote_install_uses_remote_location() {
+async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
-    let summary = plugins_test_remote_summary(
-        "plugins~Plugin_linear",
-        "linear",
-        Some("Linear"),
-        Some("Issue tracking."),
-        /*installed*/ false,
-    );
+    let summary = PluginSummary {
+        install_policy: PluginInstallPolicy::InstalledByDefault,
+        ..plugins_test_remote_summary(
+            "plugins~Plugin_linear",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ false,
+        )
+    };
     let cwd = chat.config.cwd.clone();
     chat.on_plugins_loaded(
         cwd.to_path_buf(),
@@ -1075,9 +1099,12 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!("plugins_popup_admin_disabled_installed", popup);
     assert!(
-        popup.contains("Disabled by admin")
+        popup.contains("[!] Admin Blocked")
+            && popup.contains("Disabled")
             && popup.contains("Press Enter to view plugin details.")
+            && !popup.contains("Disabled by admin")
             && !popup.contains("Space to disable"),
         "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
     );
@@ -1170,9 +1197,16 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
     let curated_loading_popup =
         select_tab_containing(&mut chat, "Loading OpenAI Curated plugins...");
     let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
+    let shared_loading_popup = select_tab_containing(&mut chat, "Loading Shared with me plugins.");
+    let _ = select_tab_containing(&mut chat, "Loading Workspace plugins.");
 
     chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), Vec::new(), Vec::new());
-    let shared_empty_popup = select_tab_containing(&mut chat, "Shared with me.");
+    let loaded_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_empty_shared_section_hidden", loaded_popup);
+    assert!(
+        !loaded_popup.contains("Shared with me"),
+        "expected empty shared section to stay hidden, got:\n{loaded_popup}"
+    );
 
     chat.on_plugin_remote_sections_loaded(
         cwd.to_path_buf(),
@@ -1203,20 +1237,20 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
         [
             remote_section_state(&curated_loading_popup),
             remote_section_state(&workspace_loading_popup),
-            remote_section_state(&shared_empty_popup),
+            remote_section_state(&shared_loading_popup),
             remote_section_state(&workspace_error_popup),
             remote_section_state(&remote_curated_empty_popup),
         ]
         .join("\n\n"),
         @r###"
         OpenAI Curated marketplace.
-        Loading OpenAI Curated plugins...  This section updates when app-server returns it.
+        Loading OpenAI Curated plugins...  This updates when OpenAI Curated plugins finish loading.
 
         Loading Workspace plugins.
-        Loading Workspace plugins...  This section updates when app-server returns it.
+        Loading Workspace plugins...  This updates when workspace plugins finish loading.
 
-        Shared with me.
-        No shared plugins available  No plugins have been shared with you.
+        Loading Shared with me plugins.
+        Loading Shared with me plugins...  This updates when shared plugins finish loading.
 
         Workspace unavailable.
         Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
@@ -1228,13 +1262,13 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 }
 
 #[tokio::test]
-async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share_is_uninstalled() {
+async fn plugins_popup_remote_detail_tracks_physical_and_policy_install_state() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let remote_plugin_id = "plugins~Plugin_docs";
     let remote_marketplace_name = "workspace-shared-with-me-private";
-    let local_summary = PluginSummary {
+    let mut local_summary = PluginSummary {
         share_context: Some(PluginShareContext {
             remote_plugin_id: remote_plugin_id.to_string(),
             remote_version: None,
@@ -1251,13 +1285,13 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
             Some("Local editable docs plugin."),
             /*installed*/ false,
             /*enabled*/ true,
-            PluginInstallPolicy::Available,
+            PluginInstallPolicy::InstalledByDefault,
         )
     };
     let popup = render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![
-            plugins_test_curated_marketplace(vec![local_summary]),
+            plugins_test_curated_marketplace(vec![local_summary.clone()]),
             PluginMarketplaceEntry {
                 name: remote_marketplace_name.to_string(),
                 path: None,
@@ -1304,6 +1338,62 @@ async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share
         }
         other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
     }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { params, .. }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some(remote_marketplace_name.to_string())
+            );
+            assert_eq!(params.plugin_name, remote_plugin_id);
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+
+    local_summary.install_policy = PluginInstallPolicy::Available;
+    let mut remote_summary = plugins_test_remote_summary(
+        remote_plugin_id,
+        "docs",
+        Some("Docs"),
+        Some("Shared docs plugin."),
+        /*installed*/ false,
+    );
+    remote_summary.install_policy = PluginInstallPolicy::InstalledByDefault;
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![local_summary]),
+            PluginMarketplaceEntry {
+                name: remote_marketplace_name.to_string(),
+                path: None,
+                interface: Some(MarketplaceInterface {
+                    display_name: Some("Shared with me".to_string()),
+                }),
+                plugins: vec![remote_summary],
+            },
+        ]),
+    );
+    assert!(
+        popup.contains("Installed 0 of 1 available plugins.") && popup.contains("Admin assigned"),
+        "expected the unmaterialized admin-assigned remote duplicate to win without counting as installed, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 0 installed plugins.")
+            && installed_popup.contains("No installed plugins")
+            && !installed_popup.contains("Docs"),
+        "expected the unmaterialized admin-assigned plugin to stay out of the Installed tab, got:\n{installed_popup}"
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Left));
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenPluginDetailLoading { .. })
+    ));
     match rx.try_recv() {
         Ok(AppEvent::FetchPluginDetail { params, .. }) => {
             assert_eq!(params.marketplace_path, None);
@@ -1686,6 +1776,44 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
 }
 
 #[tokio::test]
+async fn plugins_popup_search_matches_plugin_descriptions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "document");
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Drive") && !popup.contains("Calendar"),
+        "expected plugin search to match descriptions, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn plugins_popup_installed_tab_filters_rows_and_clears_search() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -1926,6 +2054,8 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -1960,6 +2090,8 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -1975,6 +2107,8 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
                     description: Some("Project tracking".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2021,6 +2155,8 @@ async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
                     description: Some("Connected files".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2036,6 +2172,8 @@ async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
                     description: Some("Directory-only app".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2090,6 +2228,8 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -2105,6 +2245,8 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             description: Some("Project tracking".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -2130,6 +2272,8 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -2179,6 +2323,8 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2194,6 +2340,8 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     description: Some("Team chat".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2225,6 +2373,8 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     description: Some("Spreadsheets".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2240,6 +2390,8 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2255,6 +2407,8 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     description: Some("Team chat".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2298,6 +2452,8 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
         description: Some("Workspace docs".to_string()),
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,
@@ -2341,6 +2497,8 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -2356,6 +2514,8 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
             description: Some("Project tracking".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -2383,6 +2543,8 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2398,6 +2560,8 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
                     description: Some("Should be filtered".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
+                    icon_assets: None,
+                    icon_dark_assets: None,
                     distribution_channel: None,
                     branding: None,
                     app_metadata: None,
@@ -2446,6 +2610,8 @@ async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -2505,6 +2671,8 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -2548,6 +2716,8 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -2570,6 +2740,8 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -2619,6 +2791,8 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
                 description: Some("Project tracking".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,

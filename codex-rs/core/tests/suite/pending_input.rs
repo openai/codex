@@ -2,6 +2,7 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::SleepItem;
@@ -361,8 +362,9 @@ async fn any_new_input_interrupts_sleep() {
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             FIRST_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),
@@ -370,8 +372,9 @@ async fn any_new_input_interrupts_sleep() {
     ];
     let second_chunks = vec![
         chunk(ev_response_created("resp-2")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             SECOND_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),
@@ -388,8 +391,12 @@ async fn any_new_input_interrupts_sleep() {
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::SleepTool)
-                .expect("test config should allow feature update");
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow current-time reminders");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                sleep_tool: true,
+                ..CurrentTimeReminderConfig::default()
+            });
         })
         .build_with_streaming_server(&server)
         .await

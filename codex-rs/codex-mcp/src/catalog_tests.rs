@@ -17,6 +17,7 @@ use super::ResolvedMcpCatalog;
 
 fn server(url: &str) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,

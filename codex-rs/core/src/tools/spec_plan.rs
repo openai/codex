@@ -744,10 +744,14 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
 
     if features.enabled(Feature::CurrentTimeReminder) {
         planned_tools.add(CurrentTimeHandler);
-    }
-
-    if features.enabled(Feature::SleepTool) {
-        planned_tools.add(SleepHandler);
+        if turn_context
+            .config
+            .current_time_reminder
+            .as_ref()
+            .is_some_and(|config| config.sleep_tool)
+        {
+            planned_tools.add(SleepHandler);
+        }
     }
 
     if tool_suggest_enabled(turn_context)
