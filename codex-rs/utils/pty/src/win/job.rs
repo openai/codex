@@ -278,6 +278,10 @@ impl JobProcess {
     pub fn controller(&self) -> KillOnCloseJob {
         self.controller.clone()
     }
+
+    pub(crate) fn try_clone_process_handle(&self) -> io::Result<OwnedHandle> {
+        self.process.try_clone()
+    }
 }
 
 #[cfg(test)]

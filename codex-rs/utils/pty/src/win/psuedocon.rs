@@ -20,12 +20,14 @@
 // SOFTWARE.
 
 use super::WinChild;
+use crate::win::KillOnCloseJob;
+use crate::win::SuspendedProcess;
 use crate::win::procthreadattr::ProcThreadAttributeList;
+use anyhow::Context as _;
 use anyhow::Error;
 use anyhow::bail;
 use anyhow::ensure;
 use filedescriptor::FileDescriptor;
-use filedescriptor::OwnedHandle;
 use lazy_static::lazy_static;
 use portable_pty::cmdbuilder::CommandBuilder;
 use shared_library::shared_library;
@@ -37,7 +39,6 @@ use std::mem;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::AsRawHandle;
-use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::ptr;
 use std::sync::Mutex;
@@ -48,6 +49,7 @@ use winapi::shared::winerror::HRESULT;
 use winapi::shared::winerror::S_OK;
 use winapi::um::handleapi::*;
 use winapi::um::processthreadsapi::*;
+use winapi::um::winbase::CREATE_SUSPENDED;
 use winapi::um::winbase::CREATE_UNICODE_ENVIRONMENT;
 use winapi::um::winbase::EXTENDED_STARTUPINFO_PRESENT;
 use winapi::um::winbase::STARTF_USESTDHANDLES;
@@ -173,6 +175,7 @@ impl PsuedoCon {
     }
 
     pub fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
+        let job = KillOnCloseJob::new().context("failed to create process job")?;
         let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
         si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -199,7 +202,7 @@ impl PsuedoCon {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 0,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
                 env_block.as_mut_ptr() as *mut _,
                 cwd.as_ref().map_or(ptr::null(), std::vec::Vec::as_ptr),
                 &mut si.StartupInfo,
@@ -218,11 +221,17 @@ impl PsuedoCon {
             bail!("{msg}");
         }
 
-        let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
-        let proc = unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) };
+        let suspended = unsafe {
+            SuspendedProcess::from_raw_handles(
+                pi.hProcess.cast(),
+                pi.hThread.cast(),
+                pi.dwProcessId,
+            )
+        };
+        let process = suspended.assign_and_resume(job)?;
 
         Ok(WinChild {
-            proc: Mutex::new(proc),
+            process: Mutex::new(process),
         })
     }
 }
