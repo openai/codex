@@ -197,10 +197,49 @@ impl StepContext {
             environments,
             Vec::new(),
             skills,
-            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            uninitialized_mcp_runtime(&turn.config),
             /*loaded_agents_md*/ None,
         ))
     }
+}
+
+pub(crate) fn uninitialized_mcp_runtime(
+    config: &Config,
+) -> Arc<crate::session::McpRuntimeSnapshot> {
+    let mcp_config = codex_mcp::McpConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        apps_mcp_product_sku: config.apps_mcp_product_sku.clone(),
+        codex_home: config.codex_home.to_path_buf(),
+        mcp_oauth_credentials_store_mode: config.mcp_oauth_credentials_store_mode,
+        auth_keyring_backend_kind: config.auth_keyring_backend_kind(),
+        mcp_oauth_callback_port: config.mcp_oauth_callback_port,
+        mcp_oauth_callback_url: config.mcp_oauth_callback_url.clone(),
+        skill_mcp_dependency_install_enabled: config
+            .features
+            .enabled(Feature::SkillMcpDependencyInstall),
+        approval_policy: config.permissions.approval_policy.clone(),
+        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+        use_legacy_landlock: config.features.use_legacy_landlock(),
+        apps_enabled: config.features.enabled(Feature::Apps),
+        prefix_mcp_tool_names: config.prefix_mcp_tool_names(),
+        client_elicitation_capability: rmcp::model::ElicitationCapability::default(),
+        mcp_server_catalog: codex_mcp::ResolvedMcpCatalog::default(),
+        connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
+    };
+    let manager = codex_mcp::McpConnectionManager::new_uninitialized_with_permission_profile(
+        &config.permissions.approval_policy,
+        config.permissions.permission_profile(),
+        config.prefix_mcp_tool_names(),
+    );
+    let runtime_context = codex_mcp::McpRuntimeContext::new(
+        Arc::new(EnvironmentManager::default_for_tests()),
+        config.cwd.to_path_buf(),
+    );
+    Arc::new(codex_mcp::McpRuntimeSnapshot::new(
+        Arc::new(mcp_config),
+        Arc::new(manager),
+        runtime_context,
+    ))
 }
 
 mod guardian_tests;
@@ -5370,11 +5409,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
+    let mcp_runtime = uninitialized_mcp_runtime(config.as_ref());
+    let mut selected_mcp_runtime = crate::session::SelectedMcpRuntimeCache::default();
+    selected_mcp_runtime.replace_base(Arc::clone(&mcp_runtime));
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
-        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_runtime: Arc::new(arc_swap::ArcSwapOption::from(Some(mcp_runtime))),
+        mcp_elicitation_managers: std::sync::Mutex::new(Vec::new()),
+        selected_mcp_runtime: Mutex::new(selected_mcp_runtime),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -5412,7 +5453,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         selected_capability_roots: Vec::new(),
-        mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
@@ -7445,11 +7485,13 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
+    let mcp_runtime = uninitialized_mcp_runtime(config.as_ref());
+    let mut selected_mcp_runtime = crate::session::SelectedMcpRuntimeCache::default();
+    selected_mcp_runtime.replace_base(Arc::clone(&mcp_runtime));
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
-        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_runtime: Arc::new(arc_swap::ArcSwapOption::from(Some(mcp_runtime))),
+        mcp_elicitation_managers: std::sync::Mutex::new(Vec::new()),
+        selected_mcp_runtime: Mutex::new(selected_mcp_runtime),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7487,7 +7529,6 @@ where
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
         selected_capability_roots: Vec::new(),
-        mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
         network_proxy: arc_swap::ArcSwapOption::from(None),
@@ -7606,14 +7647,8 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
+async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let (session, turn_context) = make_session_and_context().await;
-    let turn_context = Arc::new(turn_context);
-    let old_runtime = session.services.latest_mcp_runtime();
-    let step_context = session
-        .capture_step_context(Arc::clone(&turn_context))
-        .await;
-    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
     let old_token = session.mcp_startup_cancellation_token().await;
     assert!(!old_token.is_cancelled());
 
@@ -7654,9 +7689,6 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
-    let new_runtime = session.services.latest_mcp_runtime();
-    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
-    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
 }
 
 #[tokio::test]

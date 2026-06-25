@@ -744,6 +744,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         user_shell_override: None,
         parent_trace: None,
         environment_selections: Vec::new(),
+        selected_capability_roots: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: false,
         analytics_events_client: None,

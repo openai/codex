@@ -1,3 +1,4 @@
+use super::mcp_projection::McpRuntimeScope;
 use super::*;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
@@ -75,17 +76,7 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 
 impl Session {
     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
-        self.services
-            .mcp_manager
-            .runtime_config_for_thread(config, &self.services.mcp_thread_init)
-            .await
-    }
-
-    pub(crate) async fn runtime_mcp_servers(
-        &self,
-        config: &Config,
-    ) -> HashMap<String, McpServerConfig> {
-        codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+        self.services.mcp_manager.runtime_config(config).await
     }
 
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
@@ -200,35 +191,27 @@ impl Session {
             return Ok(());
         }
 
-        self.services
-            .latest_mcp_runtime()
-            .manager_arc()
-            .resolve_elicitation(server_name, id, response)
-            .await
-    }
-
-    pub async fn list_resources(
-        &self,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourcesResult> {
-        self.services
-            .latest_mcp_runtime()
-            .manager_arc()
-            .list_resources(server, params)
-            .await
-    }
-
-    pub async fn list_resource_templates(
-        &self,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourceTemplatesResult> {
-        self.services
-            .latest_mcp_runtime()
-            .manager_arc()
-            .list_resource_templates(server, params)
-            .await
+        let managers = {
+            let mut managers = self
+                .services
+                .mcp_elicitation_managers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            managers.retain(|manager| manager.strong_count() > 0);
+            managers
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .collect::<Vec<_>>()
+        };
+        for manager in managers {
+            if manager
+                .try_resolve_elicitation(server_name.clone(), id.clone(), response.clone())
+                .await?
+            {
+                return Ok(());
+            }
+        }
+        Err(anyhow::anyhow!("elicitation request not found"))
     }
 
     pub async fn read_resource(
@@ -263,69 +246,20 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let auth = self.services.auth_manager.auth().await;
         let mcp_config = Arc::new(self.runtime_mcp_config(refresh_config).await);
-        let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-        let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let environment_manager = self.services.turn_environments.environment_manager();
-        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
-        // values can be used without falling back to the legacy host cwd.
-        let cwd = turn_context
-            .environments
-            .primary()
-            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
-            .map(|cwd| cwd.to_path_buf())
-            .unwrap_or_else(|| {
-                #[allow(deprecated)]
-                turn_context.cwd.to_path_buf()
-            });
-        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
-        let auth_statuses = compute_auth_statuses(
-            mcp_servers.iter(),
-            mcp_config.mcp_oauth_credentials_store_mode,
-            mcp_config.auth_keyring_backend_kind,
-            auth.as_ref(),
-            &mcp_runtime_context,
-        )
-        .await;
-        let mcp_startup_cancellation_token = {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            // The previous runtime owns the old token and may still be serving an in-flight step.
-            // Its manager cancels that token when the last runtime handle is dropped.
-            let cancellation_token = CancellationToken::new();
-            *guard = cancellation_token.clone();
-            cancellation_token
-        };
-        let refreshed_manager = McpConnectionManager::new(
-            &mcp_servers,
-            mcp_config.mcp_oauth_credentials_store_mode,
-            mcp_config.auth_keyring_backend_kind,
-            auth_statuses,
-            &turn_context.approval_policy,
-            turn_context.sub_id.clone(),
-            self.get_tx_event(),
-            mcp_startup_cancellation_token,
-            turn_context.permission_profile(),
-            mcp_runtime_context.clone(),
-            mcp_config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            mcp_config.prefix_mcp_tool_names,
-            mcp_config.client_elicitation_capability.clone(),
-            self.services
-                .supports_openai_form_elicitation
-                .load(std::sync::atomic::Ordering::Relaxed),
-            tool_plugin_provenance,
-            auth.as_ref(),
-            elicitation_reviewer,
-        )
-        .await;
-        {
-            let current_manager = self.services.latest_mcp_runtime();
-            refreshed_manager
-                .set_elicitations_auto_deny(current_manager.manager().elicitations_auto_deny());
-        }
-        self.services
-            .publish_mcp_runtime(mcp_config, mcp_runtime_context, refreshed_manager);
+        let configured_servers = codex_mcp::configured_mcp_servers(mcp_config.as_ref());
+        let runtime_context =
+            self.mcp_runtime_context(&turn_context.config, &turn_context.environments, &[]);
+        let runtime = self
+            .build_mcp_runtime(
+                McpRuntimeScope::Turn(turn_context),
+                mcp_config,
+                configured_servers,
+                runtime_context,
+                elicitation_reviewer,
+            )
+            .await;
+        self.services.replace_base_with_runtime(runtime).await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(

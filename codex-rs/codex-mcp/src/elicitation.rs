@@ -97,13 +97,26 @@ impl ElicitationRequestManager {
         id: RequestId,
         response: ElicitationResponse,
     ) -> Result<()> {
-        self.requests
-            .lock()
-            .await
-            .remove(&(server_name, id))
-            .ok_or_else(|| anyhow!("elicitation request not found"))?
+        if self.try_resolve(server_name, id, response).await? {
+            Ok(())
+        } else {
+            Err(anyhow!("elicitation request not found"))
+        }
+    }
+
+    pub(crate) async fn try_resolve(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<bool> {
+        let Some(responder) = self.requests.lock().await.remove(&(server_name, id)) else {
+            return Ok(false);
+        };
+        responder
             .send(response)
-            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
+            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))?;
+        Ok(true)
     }
 
     pub(crate) fn make_sender(

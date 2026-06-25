@@ -429,6 +429,18 @@ impl McpConnectionManager {
             .await
     }
 
+    /// Resolves an elicitation only if its routed ID belongs to this manager.
+    pub async fn try_resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<bool> {
+        self.elicitation_requests
+            .try_resolve(server_name, id, response)
+            .await
+    }
+
     pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;

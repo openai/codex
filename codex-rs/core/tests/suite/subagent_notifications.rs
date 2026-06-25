@@ -768,6 +768,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })

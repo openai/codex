@@ -3,8 +3,11 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use codex_config::McpServerConfig;
+use codex_connectors::ConnectorSnapshot;
+use codex_connectors::PluginConnectorSource;
+use codex_core_plugins::ExecutorPluginRuntime;
 use codex_core_plugins::PluginsManager;
-use codex_extension_api::ExtensionDataInit;
+use codex_core_plugins::apps_route_available;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
@@ -62,29 +65,7 @@ impl McpManager {
     /// Returns the MCP config after applying compatibility built-ins and
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
-        self.runtime_config_with_context(config, /*thread_init*/ None)
-            .await
-    }
-
-    pub(crate) async fn runtime_config_for_thread(
-        &self,
-        config: &Config,
-        thread_init: &ExtensionDataInit,
-    ) -> McpConfig {
-        self.runtime_config_with_context(config, Some(thread_init))
-            .await
-    }
-
-    async fn runtime_config_with_context(
-        &self,
-        config: &Config,
-        thread_init: Option<&ExtensionDataInit>,
-    ) -> McpConfig {
-        let context = match thread_init {
-            Some(thread_init) => McpServerContributionContext::for_thread(config, thread_init),
-            None => McpServerContributionContext::global(config),
-        };
-        let mut selected_plugin_registrations = Vec::new();
+        let context = McpServerContributionContext::global(config);
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
         // than enumerating contributors.
@@ -100,20 +81,6 @@ impl McpManager {
                             config,
                         });
                     }
-                    McpServerContribution::SelectedPlugin {
-                        name,
-                        plugin_id,
-                        plugin_display_name,
-                        selection_order,
-                        config,
-                    } => selected_plugin_registrations.push(
-                        McpServerRegistration::from_selected_plugin(
-                            name,
-                            McpPluginAttribution::new(plugin_id, plugin_display_name),
-                            selection_order,
-                            *config,
-                        ),
-                    ),
                     McpServerContribution::Remove { name } => {
                         overlays.push(OrderedMcpOverlay::Remove {
                             contributor_id: contributor.id(),
@@ -126,12 +93,7 @@ impl McpManager {
             }
         }
 
-        let mut mcp_config = config
-            .to_mcp_config_with_plugin_registrations(
-                self.plugins_manager.as_ref(),
-                selected_plugin_registrations,
-            )
-            .await;
+        let mut mcp_config = config.to_mcp_config(self.plugins_manager.as_ref()).await;
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
         if mcp_config.apps_enabled {
             catalog.register(McpServerRegistration::from_compatibility(
@@ -179,6 +141,74 @@ impl McpManager {
             );
         }
         mcp_config.mcp_server_catalog = catalog;
+        mcp_config
+    }
+
+    /// Adds capabilities read from the executor bindings captured for one model step.
+    pub(crate) fn runtime_config_for_executor_plugins(
+        &self,
+        base_config: &McpConfig,
+        config: &Config,
+        plugins: &[(usize, ExecutorPluginRuntime)],
+    ) -> McpConfig {
+        // Step runtimes start from the clean global config, never the thread bootstrap view.
+        let mut mcp_config = base_config.clone();
+        let mut catalog = mcp_config.mcp_server_catalog.to_builder();
+        let selected_connector_snapshot =
+            ConnectorSnapshot::from_plugin_sources(plugins.iter().map(|(_, runtime)| {
+                let plugin = runtime.plugin();
+                PluginConnectorSource::new(
+                    plugin.manifest().display_name(),
+                    runtime.apps().iter().cloned(),
+                )
+            }));
+        let route_apps_over_mcp = config.orchestrator_mcp_enabled
+            && config
+                .features
+                .apps_enabled_for_auth(apps_route_available(self.plugins_manager.auth_mode()));
+
+        for (selection_order, runtime) in plugins {
+            let plugin = runtime.plugin();
+            let plugin_id = plugin.selected_root_id().to_string();
+            let display_name = plugin.manifest().display_name().to_string();
+            let mut servers = runtime
+                .mcp_servers()
+                .iter()
+                .cloned()
+                .collect::<HashMap<_, _>>();
+            config.apply_plugin_mcp_server_requirements(&plugin_id, &mut servers);
+            let mut servers = servers.into_iter().collect::<Vec<_>>();
+            servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            let attribution = McpPluginAttribution::new(plugin_id.clone(), display_name.clone());
+            for (name, server) in servers {
+                let has_app = runtime
+                    .apps()
+                    .iter()
+                    .any(|app| app.name == name && !app.connector_id.0.trim().is_empty());
+                if !route_apps_over_mcp || !has_app {
+                    catalog.register(McpServerRegistration::from_selected_plugin(
+                        name,
+                        attribution.clone(),
+                        *selection_order,
+                        server,
+                    ));
+                }
+            }
+        }
+
+        let catalog = catalog.build();
+        for conflict in catalog.conflicts() {
+            tracing::warn!(
+                server = conflict.name,
+                outcome = ?conflict.outcome,
+                contenders = ?conflict.contenders,
+                "conflicting selected MCP server actions; using resolved catalog outcome"
+            );
+        }
+        mcp_config.mcp_server_catalog = catalog;
+        mcp_config.connector_snapshot = mcp_config
+            .connector_snapshot
+            .merged_with(&selected_connector_snapshot);
         mcp_config
     }
 

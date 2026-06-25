@@ -39,6 +39,7 @@ use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -189,6 +190,7 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+    pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
 }
@@ -639,6 +641,7 @@ impl ThreadManager {
             metrics_service_name: None,
             parent_trace: None,
             environments,
+            selected_capability_roots: Vec::new(),
             thread_extension_init: ExtensionDataInit::default(),
             supports_openai_form_elicitation: false,
         }))
@@ -680,6 +683,7 @@ impl ThreadManager {
             /*inherited_exec_policy*/ None,
             options.parent_trace,
             options.environments,
+            options.selected_capability_roots,
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
@@ -775,6 +779,7 @@ impl ThreadManager {
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
@@ -805,6 +810,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
@@ -844,6 +850,7 @@ impl ThreadManager {
             /*inherited_exec_policy*/ None,
             /*parent_trace*/ None,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
@@ -1025,6 +1032,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
@@ -1344,6 +1352,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
@@ -1382,6 +1391,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
@@ -1422,6 +1432,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*selected_capability_roots*/ Vec::new(),
             thread_extension_init,
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
@@ -1444,6 +1455,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
@@ -1463,6 +1475,7 @@ impl ThreadManagerState {
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
+            selected_capability_roots,
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
@@ -1487,6 +1500,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
@@ -1565,6 +1579,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             environment_selections: environments,
+            selected_capability_roots,
             thread_extension_init,
             supports_openai_form_elicitation,
             analytics_events_client: self.analytics_events_client.clone(),

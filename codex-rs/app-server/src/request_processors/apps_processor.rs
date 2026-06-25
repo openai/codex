@@ -59,12 +59,11 @@ impl AppsRequestProcessor {
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
 
-        if let Some(thread) = thread {
+        if let Some(thread) = thread.as_ref() {
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
-
         let auth = self.auth_manager.auth().await;
         if !config
             .features
@@ -86,11 +85,24 @@ impl AppsRequestProcessor {
             }));
         }
 
+        let mcp_projection = match thread.as_ref() {
+            Some(thread) => thread.project_mcp_config(&config).await,
+            None => {
+                let mcp_config = self
+                    .thread_manager
+                    .mcp_manager()
+                    .runtime_config(&config)
+                    .await;
+                let runtime_context = McpRuntimeContext::new(
+                    self.thread_manager.environment_manager(),
+                    config.cwd.to_path_buf(),
+                );
+                (mcp_config, runtime_context)
+            }
+        };
+
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
-        let environment_manager = self.thread_manager.environment_manager();
-        let mcp_manager = self.thread_manager.mcp_manager();
-        let plugins_manager = self.thread_manager.plugins_manager();
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
@@ -100,9 +112,7 @@ impl AppsRequestProcessor {
                     request,
                     params,
                     config,
-                    environment_manager,
-                    mcp_manager,
-                    plugins_manager,
+                    mcp_projection,
                 ) => {}
             }
         });
@@ -118,24 +128,12 @@ impl AppsRequestProcessor {
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
-        environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
-        plugins_manager: Arc<PluginsManager>,
+        mcp_projection: (codex_mcp::McpConfig, codex_mcp::McpRuntimeContext),
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
-        let retry_environment_manager = Arc::clone(&environment_manager);
-        let retry_mcp_manager = Arc::clone(&mcp_manager);
-        let retry_plugins_manager = Arc::clone(&plugins_manager);
-        let result = Self::apps_list_response(
-            &outgoing,
-            params,
-            config,
-            environment_manager,
-            mcp_manager,
-            plugins_manager,
-        )
-        .await;
+        let retry_mcp_projection = mcp_projection.clone();
+        let result = Self::apps_list_response(&outgoing, params, config, mcp_projection).await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -150,9 +148,7 @@ impl AppsRequestProcessor {
                 &outgoing,
                 retry_params,
                 retry_config,
-                retry_environment_manager,
-                retry_mcp_manager,
-                retry_plugins_manager,
+                retry_mcp_projection,
             )
             .await
             {
@@ -165,9 +161,7 @@ impl AppsRequestProcessor {
         outgoing: &Arc<OutgoingMessageSender>,
         params: AppsListParams,
         config: Config,
-        environment_manager: Arc<EnvironmentManager>,
-        mcp_manager: Arc<McpManager>,
-        plugins_manager: Arc<PluginsManager>,
+        mcp_projection: (codex_mcp::McpConfig, codex_mcp::McpRuntimeContext),
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -183,13 +177,7 @@ impl AppsRequestProcessor {
             None => 0,
         };
 
-        let loaded_plugins = plugins_manager
-            .plugins_for_config(&config.plugins_config_input())
-            .await;
-        let connector_snapshot =
-            codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-                loaded_plugins.capability_summaries(),
-            );
+        let connector_snapshot = mcp_projection.0.connector_snapshot.clone();
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
@@ -202,11 +190,12 @@ impl AppsRequestProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+            let (mcp_config, runtime_context) = mcp_projection;
+            let result = codex_core::connectors::list_accessible_connectors_from_mcp_config(
                 &accessible_config,
                 force_refetch,
-                Arc::clone(&environment_manager),
-                mcp_manager,
+                mcp_config,
+                runtime_context,
             )
             .await
             .map_err(|err| format!("failed to load accessible apps: {err}"));
@@ -234,7 +223,11 @@ impl AppsRequestProcessor {
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
             let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors.as_deref(), accessible_connectors.as_deref()),
+                merge_loaded_apps(
+                    all_connectors.as_deref(),
+                    accessible_connectors.as_deref(),
+                    &connector_snapshot,
+                ),
                 &config,
             );
             if should_send_app_list_updated_notification(
@@ -293,7 +286,11 @@ impl AppsRequestProcessor {
                     accessible_connectors.as_deref()
                 };
             let merged = connectors::with_app_enabled_state(
-                merge_loaded_apps(all_connectors_for_update, accessible_connectors_for_update),
+                merge_loaded_apps(
+                    all_connectors_for_update,
+                    accessible_connectors_for_update,
+                    &connector_snapshot,
+                ),
                 &config,
             );
             if should_send_app_list_updated_notification(
@@ -372,11 +369,19 @@ enum AppListLoadResult {
 fn merge_loaded_apps(
     all_connectors: Option<&[AppInfo]>,
     accessible_connectors: Option<&[AppInfo]>,
+    connector_snapshot: &codex_connectors::ConnectorSnapshot,
 ) -> Vec<AppInfo> {
     let all_connectors_loaded = all_connectors.is_some();
     let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
     let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-    connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
+    let mut merged =
+        connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded);
+    for connector in &mut merged {
+        connector.plugin_display_names = connector_snapshot
+            .plugin_display_names_for_connector_id(&connector.id)
+            .to_vec();
+    }
+    merged
 }
 
 fn should_send_app_list_updated_notification(

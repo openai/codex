@@ -1,12 +1,18 @@
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::routing::get;
 use axum::routing::post;
+use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -16,10 +22,13 @@ use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::stdio_server_bin;
@@ -59,6 +68,14 @@ const EXECUTOR_ENV_VALUE: &str = "executor-only";
 const EXECUTOR_ID: &str = "executor-1";
 const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
+const FALLBACK_MCP_SERVER_NAME: &str = "calendar";
+const DYNAMIC_MCP_SERVER_NAME: &str = "executor_probe";
+const CONNECTOR_ID: &str = "calendar";
+const PLUGIN_DISPLAY_NAME: &str = "Executor Demo";
+const DYNAMIC_TOOL_CALL_ID: &str = "dynamic-executor-mcp-call";
+
+use super::app_list::connector_tool;
+use super::app_list::start_apps_server_with_delays;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_executor_plugin_exposes_its_mcps_only_to_that_thread() -> Result<()> {
@@ -191,7 +208,6 @@ HTTP_PROXY = {http_proxy}
     )
     .await?;
 
-    std::fs::write(plugin.path().join(".mcp.json"), r#"{"mcpServers":{}}"#)?;
     let config_path = codex_home.path().join("config.toml");
     let mut config = std::fs::read_to_string(&config_path)?;
     config.push_str(&format!(
@@ -410,6 +426,283 @@ startup_timeout_sec = 10
     let _ = http_server_handle.await;
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_executor_plugin_activates_after_it_becomes_ready() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_url, apps_server_handle) = start_apps_server_with_delays(
+        vec![AppInfo {
+            id: CONNECTOR_ID.to_string(),
+            name: "Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }],
+        vec![connector_tool(CONNECTOR_ID, "Calendar")?],
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &responses_server.uri(),
+        &apps_url,
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?.replacen(
+        "model_provider = \"mock_provider\"",
+        "mcp_oauth_credentials_store = \"file\"\nmodel_provider = \"mock_provider\"",
+        1,
+    );
+    std::fs::write(config_path, format!("{config}\n[features]\napps = true\n"))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .email("executor-runtime@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            r#"
+include_local = true
+
+[[environments]]
+id = "{EXECUTOR_ID}"
+program = {}
+args = ["exec-server", "--listen", "stdio"]
+[environments.env]
+{EXECUTOR_ENV_NAME} = "{EXECUTOR_ENV_VALUE}"
+"#,
+            toml::Value::String(
+                codex_utils_cargo_bin::cargo_bin("codex")?
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        ),
+    )?;
+
+    // The selected root exists, but its manifest arrives after the first model step.
+    let plugin = TempDir::new()?;
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let selected_thread = start_thread(
+        &mut app_server,
+        Some(vec![SelectedCapabilityRoot {
+            id: "executor-demo@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: EXECUTOR_ID.to_string(),
+                path: PathUri::from_host_native_path(plugin.path())?,
+            },
+        }]),
+    )
+    .await?;
+
+    let before_ready = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("before-ready"),
+            responses::ev_assistant_message("before-ready-message", "Waiting"),
+            responses::ev_completed("before-ready"),
+        ]),
+    )
+    .await;
+    run_turn(&mut app_server, &selected_thread, "Check available tools").await?;
+    let namespace = format!("mcp__{DYNAMIC_MCP_SERVER_NAME}");
+    assert!(
+        before_ready
+            .single_request()
+            .tool_by_name(&namespace, "echo")
+            .is_none()
+    );
+
+    std::fs::create_dir_all(plugin.path().join(".codex-plugin"))?;
+    std::fs::write(
+        plugin.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"executor-demo","apps":"./.app.json","interface":{"displayName":"Executor Demo"}}"#,
+    )?;
+    std::fs::write(
+        plugin.path().join(".app.json"),
+        format!(r#"{{"apps":{{"{FALLBACK_MCP_SERVER_NAME}":{{"id":"{CONNECTOR_ID}"}}}}}}"#),
+    )?;
+    std::fs::write(
+        plugin.path().join(".mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                (FALLBACK_MCP_SERVER_NAME): {
+                    "command": stdio_server_bin()?,
+                },
+                (DYNAMIC_MCP_SERVER_NAME): {
+                    "command": stdio_server_bin()?,
+                    "env_vars": [EXECUTOR_ENV_NAME],
+                    "startup_timeout_sec": 10,
+                }
+            }
+        }))?,
+    )?;
+
+    let response_mock = responses::mount_sse_sequence(
+        &responses_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("executor-call"),
+                responses::ev_function_call_with_namespace(
+                    DYNAMIC_TOOL_CALL_ID,
+                    &namespace,
+                    "echo",
+                    &json!({
+                        "message": "hello from executor",
+                        "env_var": EXECUTOR_ENV_NAME,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("executor-call"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("executor-done"),
+                responses::ev_assistant_message("executor-done-message", "Done"),
+                responses::ev_completed("executor-done"),
+            ]),
+        ],
+    )
+    .await;
+    run_turn(
+        &mut app_server,
+        &selected_thread,
+        "Call the executor MCP echo tool",
+    )
+    .await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].tool_by_name(&namespace, "echo").is_some());
+    assert!(
+        requests[0]
+            .tool_by_name(&format!("mcp__{FALLBACK_MCP_SERVER_NAME}"), "echo")
+            .is_none()
+    );
+    let connector = requests[0]
+        .tool_by_name("mcp__codex_apps__calendar", "connector_calendar")
+        .expect("selected connector should be model-visible");
+    assert!(
+        connector["description"]
+            .as_str()
+            .is_some_and(|description| description.contains(PLUGIN_DISPLAY_NAME))
+    );
+    let tool_output = requests[1].function_call_output(DYNAMIC_TOOL_CALL_ID);
+    let output = tool_output["output"]
+        .as_str()
+        .expect("MCP function output should be text");
+    assert!(output.contains("ECHOING: hello from executor"));
+    assert!(output.contains(EXECUTOR_ENV_VALUE));
+
+    assert_eq!(
+        connector_plugin_names(&mut app_server, &selected_thread).await?,
+        vec![PLUGIN_DISPLAY_NAME.to_string()]
+    );
+
+    drop(app_server);
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let request_id = app_server
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: selected_thread.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response(response)?;
+    assert_eq!(thread.id, selected_thread);
+    let resumed = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("resumed"),
+            responses::ev_assistant_message("resumed-message", "Ready"),
+            responses::ev_completed("resumed"),
+        ]),
+    )
+    .await;
+    run_turn(&mut app_server, &selected_thread, "Check resumed tools").await?;
+    let resumed_request = resumed.single_request();
+    assert!(resumed_request.tool_by_name(&namespace, "echo").is_some());
+    assert!(
+        resumed_request
+            .tool_by_name("mcp__codex_apps__calendar", "connector_calendar")
+            .is_some()
+    );
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+async fn run_turn(app_server: &mut TestAppServer, thread_id: &str, text: &str) -> Result<()> {
+    let request_id = app_server
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(())
+}
+
+async fn connector_plugin_names(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<Vec<String>> {
+    let request_id = app_server
+        .send_apps_list_request(AppsListParams {
+            cursor: None,
+            limit: None,
+            thread_id: Some(thread_id.to_string()),
+            force_refetch: true,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: AppsListResponse = to_response(response)?;
+    Ok(response
+        .data
+        .into_iter()
+        .find(|app| app.id == CONNECTOR_ID)
+        .map(|app| app.plugin_display_names)
+        .unwrap_or_default())
 }
 
 #[derive(Clone, Copy)]

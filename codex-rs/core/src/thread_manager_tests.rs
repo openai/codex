@@ -10,8 +10,6 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
 use codex_models_manager::manager::RefreshStrategy;
-use codex_protocol::capabilities::CapabilityRootLocation;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -20,8 +18,6 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -409,6 +405,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })
@@ -425,295 +422,6 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
-}
-
-#[tokio::test]
-async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
-    struct InitialDataRecorder {
-        lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-        mcp_observed: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
-        fn on_thread_start<'a>(
-            &'a self,
-            input: codex_extension_api::ThreadStartInput<'a, Config>,
-        ) -> codex_extension_api::ExtensionFuture<'a, ()> {
-            Box::pin(async move {
-                let selected_root = input
-                    .thread_store
-                    .get::<Vec<SelectedCapabilityRoot>>()
-                    .and_then(|roots| roots.first().cloned())
-                    .expect("selected root should be available");
-                self.lifecycle_observed
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push((input.thread_store.level_id().to_string(), selected_root.id));
-                input
-                    .thread_store
-                    .insert(Vec::<SelectedCapabilityRoot>::new());
-            })
-        }
-    }
-
-    impl codex_extension_api::McpServerContributor<Config> for InitialDataRecorder {
-        fn id(&self) -> &'static str {
-            "selected_root_test"
-        }
-
-        fn contribute<'a>(
-            &'a self,
-            context: codex_extension_api::McpServerContributionContext<'a, Config>,
-        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
-        {
-            Box::pin(async move {
-                let thread_init = context
-                    .thread_init()
-                    .expect("initial MCP resolution should be thread-scoped");
-                let selected_root = thread_init
-                    .get::<Vec<SelectedCapabilityRoot>>()
-                    .and_then(|roots| roots.first().cloned())
-                    .expect("selected root should be available");
-                self.mcp_observed
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(selected_root.id.clone());
-                let mut server = codex_mcp::codex_apps_mcp_server_config(
-                    "https://selected.invalid",
-                    /*apps_mcp_product_sku*/ None,
-                );
-                let CapabilityRootLocation::Environment { environment_id, .. } =
-                    &selected_root.location;
-                server.environment_id = environment_id.clone();
-                server.enabled = false;
-                let plugin_id = selected_root.id;
-                vec![codex_extension_api::McpServerContribution::SelectedPlugin {
-                    name: plugin_id.clone(),
-                    plugin_display_name: plugin_id.clone(),
-                    plugin_id,
-                    selection_order: 0,
-                    config: Box::new(server),
-                }]
-            })
-        }
-    }
-
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mcp_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let recorder = Arc::new(InitialDataRecorder {
-        lifecycle_observed: Arc::clone(&lifecycle_observed),
-        mcp_observed: Arc::clone(&mcp_observed),
-    });
-    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(recorder.clone());
-    extensions.mcp_server_contributor(recorder);
-    let manager = ThreadManager::new(
-        &config,
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-        SessionSource::Exec,
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        Arc::new(extensions.build()),
-        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
-        /*analytics_events_client*/ None,
-        thread_store_from_config(&config, /*state_db*/ None),
-        /*agent_graph_store*/ None,
-        TEST_INSTALLATION_ID.to_string(),
-        /*attestation_provider*/ None,
-        /*external_time_provider*/ None,
-    );
-    let selected_root_init = |id: &str, environment_id: &str| {
-        let mut init = codex_extension_api::ExtensionDataInit::new();
-        init.insert(vec![SelectedCapabilityRoot {
-            id: id.to_string(),
-            location: CapabilityRootLocation::Environment {
-                environment_id: environment_id.to_string(),
-                path: PathUri::parse(&format!("file:///plugins/{id}")).expect("plugin root URI"),
-            },
-        }]);
-        init
-    };
-
-    let first_thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: selected_root_init("selected-a", "env-a"),
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("start first thread");
-    let second_thread = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: InitialHistory::New,
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: selected_root_init("selected-b", "env-b"),
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("start second thread");
-    let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
-    let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
-
-    assert_eq!(
-        *lifecycle_observed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-        vec![
-            (first_thread.thread_id.to_string(), "selected-a".to_string()),
-            (
-                second_thread.thread_id.to_string(),
-                "selected-b".to_string()
-            ),
-        ]
-    );
-    assert_eq!(
-        *mcp_observed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-        vec![
-            "selected-a".to_string(),
-            "selected-b".to_string(),
-            "selected-a".to_string(),
-            "selected-b".to_string(),
-        ]
-    );
-    let selected_servers = |config: &codex_mcp::McpConfig| {
-        codex_mcp::configured_mcp_servers(config)
-            .into_iter()
-            .filter(|(name, _)| name.starts_with("selected-"))
-            .map(|(name, server)| (name, server.environment_id))
-            .collect::<std::collections::BTreeMap<_, _>>()
-    };
-    assert_eq!(
-        selected_servers(&first_resolved),
-        std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
-    );
-    assert_eq!(
-        selected_servers(&second_resolved),
-        std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
-    );
-}
-
-#[tokio::test]
-async fn selected_capability_roots_round_trip_through_fork_and_explicit_empty_wins() {
-    let temp_dir = tempdir().expect("tempdir");
-    let mut config = test_config().await;
-    config.codex_home = temp_dir.path().join("codex-home").abs();
-    config.cwd = config.codex_home.abs();
-    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
-
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-    );
-    let selected_roots = vec![SelectedCapabilityRoot {
-        id: "demo@1".to_string(),
-        location: CapabilityRootLocation::Environment {
-            environment_id: "build".to_string(),
-            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
-        },
-    }];
-    let fork_history = || {
-        InitialHistory::Forked(vec![RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                selected_capability_roots: selected_roots.clone(),
-                ..SessionMeta::default()
-            },
-            git: None,
-        })])
-    };
-
-    let inherited = manager
-        .start_thread_with_options(StartThreadOptions {
-            config: config.clone(),
-            initial_history: fork_history(),
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: Default::default(),
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("start inherited fork");
-    inherited.thread.ensure_rollout_materialized().await;
-    inherited
-        .thread
-        .flush_rollout()
-        .await
-        .expect("flush inherited fork");
-    let inherited_history = RolloutRecorder::get_rollout_history(
-        &inherited
-            .thread
-            .rollout_path()
-            .expect("inherited fork rollout path"),
-    )
-    .await
-    .expect("read inherited fork rollout");
-
-    assert_eq!(
-        inherited_history.get_selected_capability_roots(),
-        selected_roots
-    );
-
-    let mut explicit_empty = codex_extension_api::ExtensionDataInit::new();
-    explicit_empty.insert(Vec::<SelectedCapabilityRoot>::new());
-    let overridden = manager
-        .start_thread_with_options(StartThreadOptions {
-            config,
-            initial_history: fork_history(),
-            session_source: None,
-            thread_source: None,
-            dynamic_tools: Vec::new(),
-            metrics_service_name: None,
-            parent_trace: None,
-            environments: Vec::new(),
-            thread_extension_init: explicit_empty,
-            supports_openai_form_elicitation: false,
-        })
-        .await
-        .expect("start explicitly empty fork");
-    overridden.thread.ensure_rollout_materialized().await;
-    overridden
-        .thread
-        .flush_rollout()
-        .await
-        .expect("flush explicitly empty fork");
-    let overridden_history = RolloutRecorder::get_rollout_history(
-        &overridden
-            .thread
-            .rollout_path()
-            .expect("explicitly empty fork rollout path"),
-    )
-    .await
-    .expect("read explicitly empty fork rollout");
-
-    assert_eq!(
-        overridden_history.get_selected_capability_roots(),
-        Vec::new()
-    );
 }
 
 #[tokio::test]
@@ -760,6 +468,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })
@@ -1043,6 +752,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            selected_capability_roots: Vec::new(),
             thread_extension_init: Default::default(),
             supports_openai_form_elicitation: false,
         })

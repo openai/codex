@@ -124,8 +124,13 @@ impl McpRequestProcessor {
         let (mcp_config, runtime_context) = match thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
-                let runtime = thread.current_mcp_runtime();
-                (runtime.config().clone(), runtime.runtime_context().clone())
+                let thread_config = thread.config().await;
+                let config = self
+                    .config_manager
+                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+                thread.project_mcp_config(&config).await
             }
             None => {
                 let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
@@ -245,10 +250,7 @@ impl McpRequestProcessor {
         };
         let auth = self.auth_manager.auth().await;
         let (mcp_config, runtime_context) = match thread {
-            Some(thread) => {
-                let runtime = thread.current_mcp_runtime();
-                (runtime.config().clone(), runtime.runtime_context().clone())
-            }
+            Some(thread) => thread.project_mcp_config(&config).await,
             None => {
                 let mcp_config = self
                     .thread_manager
@@ -393,10 +395,20 @@ impl McpRequestProcessor {
 
         if let Some(thread_id) = thread_id {
             let (_, thread) = self.load_thread(&thread_id).await?;
+            let thread_config = thread.config().await;
+            let config = self
+                .config_manager
+                .load_latest_config_for_thread(thread_config.as_ref())
+                .await
+                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+            let runtime = thread.project_mcp_runtime(&config).await;
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
-                let result = thread.read_mcp_resource(&server, &uri).await;
+                let result = runtime
+                    .read_resource(&server, uri)
+                    .await
+                    .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));
                 Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
             });
             return Ok(());
@@ -457,12 +469,20 @@ impl McpRequestProcessor {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
         let (_, thread) = self.load_thread(&thread_id).await?;
+        let thread_config = thread.config().await;
+        let config = self
+            .config_manager
+            .load_latest_config_for_thread(thread_config.as_ref())
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+        let runtime = thread.project_mcp_runtime(&config).await;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 
         tokio::spawn(async move {
-            let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
+            let result = runtime
+                .manager_arc()
+                .call_tool(&params.server, &params.tool, params.arguments, meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));

@@ -36,6 +36,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
     mentioned_skills: &[SkillCatalogEntry],
+    available_mcp_servers: &HashMap<String, McpServerConfig>,
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
 ) -> bool {
     let originator_value = originator().value;
@@ -53,8 +54,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
         return false;
     }
 
-    let installed = sess.runtime_mcp_servers(config.as_ref()).await;
-    let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
+    let missing = collect_missing_mcp_dependencies(mentioned_skills, available_mcp_servers);
     if missing.is_empty() {
         return false;
     }
@@ -72,6 +72,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
             turn_context,
             config.as_ref(),
             mentioned_skills,
+            available_mcp_servers,
             elicitation_reviewer,
         )
         .await;
@@ -84,6 +85,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     turn_context: &TurnContext,
     config: &crate::config::Config,
     mentioned_skills: &[SkillCatalogEntry],
+    available_mcp_servers: &HashMap<String, McpServerConfig>,
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
 ) -> bool {
     if mentioned_skills.is_empty()
@@ -95,8 +97,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
 
     let codex_home = config.codex_home.clone();
-    let installed = sess.runtime_mcp_servers(config).await;
-    let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
+    let missing = collect_missing_mcp_dependencies(mentioned_skills, available_mcp_servers);
     if missing.is_empty() {
         return false;
     }

@@ -21,7 +21,6 @@ codex-features = { workspace = true }
 codex-mcp = { workspace = true }
 codex-protocol = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 codex-config = { workspace = true }

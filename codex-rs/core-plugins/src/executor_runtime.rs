@@ -1,3 +1,4 @@
+use anyhow::Context;
 use codex_config::McpServerConfig;
 use codex_connectors::parse_plugin_app_config;
 use codex_exec_server::ExecutorFileSystem;
@@ -9,12 +10,9 @@ use codex_plugin::ResolvedPlugin;
 use codex_plugin::ResolvedPluginLocation;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_utils_path_uri::PathUri;
-use codex_utils_path_uri::PathUriParseError;
 use std::io;
-use thiserror::Error;
 
 use crate::ExecutorPluginProvider;
-use crate::ExecutorPluginProviderError;
 use crate::ResolvedExecutorPlugin;
 
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
@@ -27,59 +25,12 @@ pub struct ExecutorPluginRuntime {
     apps: Vec<AppDeclaration>,
 }
 
-/// Failure to project runtime capabilities from an executor plugin.
-#[derive(Debug, Error)]
-pub enum ExecutorPluginRuntimeError {
-    #[error(transparent)]
-    Resolve(#[from] ExecutorPluginProviderError),
-    #[error("failed to read MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
-    ReadConfig {
-        plugin_id: String,
-        path: PathUri,
-        #[source]
-        source: io::Error,
-    },
-    #[error(
-        "failed to resolve MCP config path `{relative_path}` below selected plugin `{plugin_id}` at `{root}`: {source}"
-    )]
-    InvalidConfigPath {
-        plugin_id: String,
-        root: PathUri,
-        relative_path: &'static str,
-        #[source]
-        source: PathUriParseError,
-    },
-    #[error("failed to parse MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
-    ParseConfig {
-        plugin_id: String,
-        path: PathUri,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("failed to read app config for selected plugin `{plugin_id}` at `{path}`: {source}")]
-    ReadAppConfig {
-        plugin_id: String,
-        path: PathUri,
-        #[source]
-        source: io::Error,
-    },
-    #[error("failed to parse app config for selected plugin `{plugin_id}` at `{path}`: {source}")]
-    ParseAppConfig {
-        plugin_id: String,
-        path: PathUri,
-        #[source]
-        source: serde_json::Error,
-    },
-}
-
 impl ExecutorPluginRuntime {
     /// Reads both runtime declaration files through the root's pinned filesystem.
     ///
     /// `Ok(None)` is intentionally not cacheable: the plugin manifest may appear
     /// once a deferred executor finishes starting.
-    pub async fn project(
-        root: &ResolvedSelectedCapabilityRoot,
-    ) -> Result<Option<Self>, ExecutorPluginRuntimeError> {
+    pub async fn project(root: &ResolvedSelectedCapabilityRoot) -> anyhow::Result<Option<Self>> {
         let Some(plugin) = ExecutorPluginProvider::resolve_pinned(root).await? else {
             return Ok(None);
         };
@@ -88,17 +39,7 @@ impl ExecutorPluginRuntime {
         } = plugin.plugin().location();
         let mcp_servers =
             load_from_file_system(plugin.plugin(), plugin_root, plugin.file_system()).await?;
-        let apps = match load_apps(&plugin).await {
-            Ok(apps) => apps,
-            Err(err) => {
-                tracing::warn!(
-                    plugin = plugin.plugin().selected_root_id(),
-                    error = %err,
-                    "ignoring invalid executor plugin app declarations"
-                );
-                Vec::new()
-            }
-        };
+        let apps = load_apps(&plugin).await?;
         Ok(Some(Self {
             plugin: plugin.plugin().clone(),
             mcp_servers,
@@ -123,7 +64,7 @@ async fn load_from_file_system(
     plugin: &ResolvedPlugin,
     plugin_root: &PathUri,
     file_system: &dyn ExecutorFileSystem,
-) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginRuntimeError> {
+) -> anyhow::Result<Vec<(String, McpServerConfig)>> {
     let ResolvedPluginLocation::Environment { environment_id, .. } = plugin.location();
     let plugin_id = plugin.selected_root_id();
     let (contents, config_path) = match plugin.manifest().paths.mcp_servers.as_ref() {
@@ -134,10 +75,10 @@ async fn load_from_file_system(
                 file_system
                     .read_file_text(path, /*sandbox*/ None)
                     .await
-                    .map_err(|source| ExecutorPluginRuntimeError::ReadConfig {
-                        plugin_id: plugin_id.to_string(),
-                        path: path.clone(),
-                        source,
+                    .with_context(|| {
+                        format!(
+                            "failed to read MCP config for selected plugin `{plugin_id}` at `{path}`"
+                        )
                     })?,
                 path.clone(),
             )
@@ -149,11 +90,10 @@ async fn load_from_file_system(
         None => {
             let config_path = plugin_root
                 .join(DEFAULT_MCP_CONFIG_FILE)
-                .map_err(|source| ExecutorPluginRuntimeError::InvalidConfigPath {
-                    plugin_id: plugin_id.to_string(),
-                    root: plugin_root.clone(),
-                    relative_path: DEFAULT_MCP_CONFIG_FILE,
-                    source,
+                .with_context(|| {
+                    format!(
+                        "failed to resolve `{DEFAULT_MCP_CONFIG_FILE}` below selected plugin `{plugin_id}` at `{plugin_root}`"
+                    )
                 })?;
             let contents = match file_system
                 .read_file_text(&config_path, /*sandbox*/ None)
@@ -164,23 +104,22 @@ async fn load_from_file_system(
                     return Ok(Vec::new());
                 }
                 Err(source) => {
-                    return Err(ExecutorPluginRuntimeError::ReadConfig {
-                        plugin_id: plugin_id.to_string(),
-                        path: config_path.clone(),
-                        source,
+                    return Err(source).with_context(|| {
+                        format!(
+                            "failed to read MCP config for selected plugin `{plugin_id}` at `{config_path}`"
+                        )
                     });
                 }
             };
             (contents, config_path)
         }
     };
-    let parsed = parse_executor_plugin_mcp_config(plugin_root, &contents, environment_id).map_err(
-        |source| ExecutorPluginRuntimeError::ParseConfig {
-            plugin_id: plugin_id.to_string(),
-            path: config_path,
-            source,
-        },
-    )?;
+    let parsed = parse_executor_plugin_mcp_config(plugin_root, &contents, environment_id)
+        .with_context(|| {
+            format!(
+                "failed to parse MCP config for selected plugin `{plugin_id}` at `{config_path}`"
+            )
+        })?;
 
     for error in parsed.errors {
         tracing::warn!(
@@ -194,9 +133,7 @@ async fn load_from_file_system(
     Ok(parsed.servers.into_iter().collect())
 }
 
-async fn load_apps(
-    plugin: &ResolvedExecutorPlugin,
-) -> Result<Vec<AppDeclaration>, ExecutorPluginRuntimeError> {
+async fn load_apps(plugin: &ResolvedExecutorPlugin) -> anyhow::Result<Vec<AppDeclaration>> {
     let resolved_plugin = plugin.plugin();
     let plugin_id = resolved_plugin.selected_root_id();
     let Some(PluginResourceLocator::Environment {
@@ -209,16 +146,12 @@ async fn load_apps(
         .file_system()
         .read_file_text(config_path, /*sandbox*/ None)
         .await
-        .map_err(|source| ExecutorPluginRuntimeError::ReadAppConfig {
-            plugin_id: plugin_id.to_string(),
-            path: config_path.clone(),
-            source,
+        .with_context(|| {
+            format!(
+                "failed to read app config for selected plugin `{plugin_id}` at `{config_path}`"
+            )
         })?;
-    parse_plugin_app_config(&contents).map_err(|source| {
-        ExecutorPluginRuntimeError::ParseAppConfig {
-            plugin_id: plugin_id.to_string(),
-            path: config_path.clone(),
-            source,
-        }
+    parse_plugin_app_config(&contents).with_context(|| {
+        format!("failed to parse app config for selected plugin `{plugin_id}` at `{config_path}`")
     })
 }

@@ -490,6 +490,7 @@ impl Session {
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         agent_control: AgentControl,
@@ -556,11 +557,11 @@ impl Session {
             config.current_time_reminder.as_ref(),
             external_time_provider,
         )?;
-        let selected_capability_roots = thread_extension_init
-            .get::<Vec<SelectedCapabilityRoot>>()
-            .map(|roots| roots.as_ref().clone())
-            .unwrap_or_else(|| initial_history.get_selected_capability_roots());
-        let mcp_thread_init = thread_extension_init.clone();
+        let selected_capability_roots = if selected_capability_roots.is_empty() {
+            initial_history.get_selected_capability_roots()
+        } else {
+            selected_capability_roots
+        };
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
             thread_id.to_string(),
             thread_extension_init,
@@ -653,7 +654,6 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
-        let mcp_thread_init_for_startup = &mcp_thread_init;
         let mcp_runtime_context = McpRuntimeContext::new(
             Arc::clone(&environment_manager),
             session_configuration.cwd().to_path_buf(),
@@ -661,9 +661,7 @@ impl Session {
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_config = mcp_manager_for_mcp
-                .runtime_config_for_thread(&config_for_mcp, mcp_thread_init_for_startup)
-                .await;
+            let mcp_config = mcp_manager_for_mcp.runtime_config(&config_for_mcp).await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
             let auth_statuses = compute_auth_statuses(
@@ -993,20 +991,10 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            // Keep one stable manager handle for the session so extension resource clients
-            // automatically observe the manager installed at startup and on later refreshes.
-            let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(
-                McpConnectionManager::new_uninitialized_with_permission_profile(
-                    &config.permissions.approval_policy,
-                    config.permissions.permission_profile(),
-                    config.prefix_mcp_tool_names(),
-                ),
-            ));
+            let mcp_runtime = Arc::new(arc_swap::ArcSwapOption::empty());
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
-            session_extension_data.insert(McpResourceClient::new(Arc::clone(
-                &mcp_connection_manager,
-            )));
+            session_extension_data.insert(McpResourceClient::new(Arc::clone(&mcp_runtime)));
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1019,15 +1007,9 @@ impl Session {
             }
 
             let services = SessionServices {
-                // Initialize the MCP connection manager with an uninitialized
-                // instance. It will be replaced with one created via
-                // McpConnectionManager::new() once all its constructor args are
-                // available. This also ensures `SessionConfigured` is emitted
-                // before any MCP-related events. It is reasonable to consider
-                // changing this to use Option or OnceCell, though the current
-                // setup is straightforward enough and performs well.
-                mcp_connection_manager,
-                mcp_runtime: arc_swap::ArcSwapOption::empty(),
+                mcp_runtime,
+                mcp_elicitation_managers: std::sync::Mutex::new(Vec::new()),
+                selected_mcp_runtime: Mutex::new(Default::default()),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1057,7 +1039,6 @@ impl Session {
                 session_extension_data,
                 thread_extension_data,
                 selected_capability_roots,
-                mcp_thread_init,
                 supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(
                     supports_openai_form_elicitation,
                 ),

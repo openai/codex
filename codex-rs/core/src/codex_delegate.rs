@@ -120,6 +120,7 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
         environment_selections: parent_ctx.environments.to_selections(),
+        selected_capability_roots: Vec::new(),
         thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: parent_session
             .services

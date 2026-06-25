@@ -40,7 +40,6 @@ pub use app_mcp_routing::apps_route_available;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use executor_runtime::ExecutorPluginRuntime;
-pub use executor_runtime::ExecutorPluginRuntimeError;
 pub use loader::PluginHookLoadOutcome;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
