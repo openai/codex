@@ -2338,7 +2338,7 @@ async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Resu
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     wait_for_mcp_server(&configured_auth_fixture.codex, "configured_auth").await?;
