@@ -810,12 +810,15 @@
         "clock_source": {
           "$ref": "#/definitions/CurrentTimeSource"
         },
+        "delivery_mode": {
+          "$ref": "#/definitions/CurrentTimeReminderDeliveryMode"
+        },
         "enabled": {
           "type": "boolean"
         },
         "reminder_interval_seconds": {
           "format": "uint64",
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "sleep_tool": {
@@ -824,6 +827,25 @@
         }
       },
       "type": "object"
+    },
+    "CurrentTimeReminderDeliveryMode": {
+      "description": "Which inference boundaries may receive current-time reminders.",
+      "oneOf": [
+        {
+          "description": "Allow a reminder before any inference request once the interval is due.",
+          "enum": [
+            "any_inference"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Allow reminders after user input or tool output; new context windows still force one.",
+          "enum": [
+            "after_user_or_tool_output"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "CurrentTimeSource": {
       "enum": [
@@ -2889,12 +2911,12 @@
         },
         "guidance_message": {
           "description": "Guidance appended to the context-window metadata in a developer message.",
-          "maxLength": 1000,
+          "maxLength": 2000,
           "type": "string"
         },
         "reminder_message_template": {
           "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
-          "maxLength": 1000,
+          "maxLength": 2000,
           "minLength": 1,
           "type": "string"
         },

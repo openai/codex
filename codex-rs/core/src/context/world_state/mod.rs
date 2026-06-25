@@ -1,6 +1,12 @@
+mod agents_md;
 mod environment;
 
 use crate::context::ContextualUserFragment;
+use codex_extension_api::PreviousWorldStateSection;
+use codex_extension_api::RenderedWorldStateFragment;
+use codex_extension_api::WorldStateSectionContribution;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -9,12 +15,18 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub(crate) use agents_md::AgentsMdState;
 pub(crate) use environment::EnvironmentsState;
 
 trait ErasedWorldStateSection: Send + Sync {
     fn snapshot(&self) -> Option<Value>;
 
-    fn render_diff(&self, previous: Option<&Value>) -> Option<Box<dyn ContextualUserFragment>>;
+    fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool;
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Value>,
+    ) -> Option<Box<dyn ContextualUserFragment>>;
 }
 
 impl<S: WorldStateSection> ErasedWorldStateSection for S {
@@ -41,20 +53,95 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
         Some(snapshot)
     }
 
-    fn render_diff(&self, previous: Option<&Value>) -> Option<Box<dyn ContextualUserFragment>> {
-        let previous = previous.and_then(|previous| {
-            serde_json::from_value::<S::Snapshot>(previous.clone())
-                .inspect_err(|err| {
-                    tracing::warn!(
-                        section_id = S::ID,
-                        %err,
-                        "failed to restore world-state section snapshot"
-                    );
-                })
-                .ok()
-        });
-        WorldStateSection::render_diff(self, previous.as_ref())
+    fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
+        S::matches_legacy_fragment(role, text)
     }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Value>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
+        let typed_snapshot;
+        let previous = match previous {
+            PreviousSectionState::Known(previous) => {
+                match serde_json::from_value::<S::Snapshot>(previous.clone()) {
+                    Ok(previous) => {
+                        typed_snapshot = previous;
+                        PreviousSectionState::Known(&typed_snapshot)
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            section_id = S::ID,
+                            %err,
+                            "failed to restore world-state section snapshot"
+                        );
+                        PreviousSectionState::Unknown
+                    }
+                }
+            }
+            PreviousSectionState::Absent => PreviousSectionState::Absent,
+            PreviousSectionState::Unknown => PreviousSectionState::Unknown,
+        };
+        WorldStateSection::render_diff(self, previous)
+    }
+}
+
+struct ExtensionWorldStateSection(WorldStateSectionContribution);
+
+impl ErasedWorldStateSection for ExtensionWorldStateSection {
+    fn snapshot(&self) -> Option<Value> {
+        let mut snapshot = self.0.snapshot().clone();
+        remove_null_object_fields(&mut snapshot);
+        (!snapshot.is_null()).then_some(snapshot)
+    }
+
+    fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
+        self.0.matches_legacy_fragment(role, text)
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Value>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
+        let previous = match previous {
+            PreviousSectionState::Absent => PreviousWorldStateSection::Absent,
+            PreviousSectionState::Unknown => PreviousWorldStateSection::Unknown,
+            PreviousSectionState::Known(previous) => PreviousWorldStateSection::Known(previous),
+        };
+        self.0
+            .render_diff(previous)
+            .map(|fragment| Box::new(WorldStateContextFragment(fragment)) as _)
+    }
+}
+
+struct WorldStateContextFragment(RenderedWorldStateFragment);
+
+impl ContextualUserFragment for WorldStateContextFragment {
+    fn role(&self) -> &'static str {
+        self.0.role()
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        self.0.markers()
+    }
+
+    fn body(&self) -> String {
+        self.0.body().to_string()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+}
+
+/// What is known about a section's previously model-visible state.
+pub(crate) enum PreviousSectionState<'a, T> {
+    /// No persisted snapshot or matching fragment exists in retained history.
+    Absent,
+    /// Retained history contains the section, but its typed snapshot is unavailable.
+    Unknown,
+    /// The exact persisted snapshot is available.
+    Known(&'a T),
 }
 
 /// A typed portion of the state visible to the model.
@@ -63,16 +150,22 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
 /// earlier snapshot of the same section. `ID` is persisted in rollouts and
 /// must remain stable. `Snapshot` should contain only the comparison data
 /// needed to decide what the model must be told next, and must not serialize
-/// to null because merge-patch nulls represent deletion.
+/// to null because merge-patch nulls represent deletion. Sections migrated
+/// from older context can recognize their previous fragments through
+/// `matches_legacy_fragment`.
 pub(crate) trait WorldStateSection: Send + Sync + 'static {
     const ID: &'static str;
     type Snapshot: DeserializeOwned + Serialize;
 
     fn snapshot(&self) -> Self::Snapshot;
 
+    fn matches_legacy_fragment(_role: &str, _text: &str) -> bool {
+        false
+    }
+
     fn render_diff(
         &self,
-        previous: Option<&Self::Snapshot>,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>>;
 }
 
@@ -127,6 +220,16 @@ impl WorldState {
         self.sections.insert(id, Box::new(section));
     }
 
+    pub(crate) fn add_extension_section(&mut self, section: WorldStateSectionContribution) {
+        let id = section.id();
+        assert!(
+            !self.sections.contains_key(id),
+            "duplicate world-state section ID: {id}"
+        );
+        self.sections
+            .insert(id, Box::new(ExtensionWorldStateSection(section)));
+    }
+
     pub(crate) fn snapshot(&self) -> WorldStateSnapshot {
         WorldStateSnapshot {
             sections: self
@@ -141,19 +244,64 @@ impl WorldState {
         }
     }
 
+    /// Renders every section as new, without any known previous state.
     pub(crate) fn render_full(&self) -> Vec<Box<dyn ContextualUserFragment>> {
-        self.render_diff(&WorldStateSnapshot::default())
+        self.render_with(|_, _| PreviousSectionState::Absent)
     }
 
+    /// Renders each section against the exact persisted snapshot when available.
     pub(crate) fn render_diff(
         &self,
         previous: &WorldStateSnapshot,
     ) -> Vec<Box<dyn ContextualUserFragment>> {
+        self.render_with(|id, _| match previous.sections.get(id) {
+            Some(previous) => PreviousSectionState::Known(previous),
+            None => PreviousSectionState::Absent,
+        })
+    }
+
+    /// Falls back to retained model history when no exact persisted snapshot is available.
+    pub(crate) fn render_history_diff(
+        &self,
+        previous: Option<&WorldStateSnapshot>,
+        items: &[ResponseItem],
+    ) -> Vec<Box<dyn ContextualUserFragment>> {
+        self.render_with(|id, section| {
+            if let Some(previous) = previous.and_then(|previous| previous.sections.get(id)) {
+                PreviousSectionState::Known(previous)
+            } else if has_legacy_fragment(items, section) {
+                PreviousSectionState::Unknown
+            } else {
+                PreviousSectionState::Absent
+            }
+        })
+    }
+
+    fn render_with<'a>(
+        &self,
+        mut previous: impl FnMut(&str, &dyn ErasedWorldStateSection) -> PreviousSectionState<'a, Value>,
+    ) -> Vec<Box<dyn ContextualUserFragment>> {
         self.sections
             .iter()
-            .filter_map(|(id, section)| section.render_diff(previous.sections.get(*id)))
+            .filter_map(|(id, section)| section.render_diff(previous(id, section.as_ref())))
             .collect()
     }
+}
+
+fn has_legacy_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateSection) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if content.iter().any(|content| {
+                    matches!(
+                        content,
+                        ContentItem::InputText { text }
+                            if section.matches_legacy_fragment(role, text)
+                    )
+                })
+        )
+    })
 }
 
 fn remove_null_object_fields(value: &mut Value) {

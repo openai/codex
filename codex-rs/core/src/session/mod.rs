@@ -14,7 +14,6 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
-use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -248,7 +247,6 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
-use self::world_state::build_world_state_from_environment_snapshot;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -308,7 +306,6 @@ pub(crate) struct PreviousTurnSettings {
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsService;
-use crate::agents_md::load_project_instructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpManager;
@@ -417,6 +414,7 @@ pub struct CodexSpawnOk {
 
 pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) allow_provider_model_fallback: bool,
     pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -506,6 +504,7 @@ impl Codex {
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
             mut config,
+            allow_provider_model_fallback,
             user_instructions,
             installation_id,
             auth_manager,
@@ -579,8 +578,23 @@ impl Codex {
             let _ = models_manager.list_models(refresh_strategy).await;
         }
         let model = models_manager
-            .get_default_model(&config.model, refresh_strategy)
+            .get_default_model(
+                &config.model,
+                allow_provider_model_fallback,
+                refresh_strategy,
+            )
             .await;
+        if allow_provider_model_fallback
+            && let Some(requested_model) = config.model.as_ref()
+            && model != *requested_model
+        {
+            info!(
+                model_provider = %config.model_provider_id,
+                requested_model,
+                fallback_model = %model,
+                "replaced unavailable requested model with provider default"
+            );
+        }
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
@@ -627,7 +641,6 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
-            loaded_agents_md: None,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -842,10 +855,11 @@ impl Codex {
     }
 
     pub(crate) async fn instruction_sources(&self) -> Vec<PathUri> {
-        let state = self.session.state.lock().await;
-        state
-            .session_configuration
-            .loaded_agents_md
+        self.session
+            .services
+            .agents_md_manager
+            .get_loaded()
+            .await
             .as_ref()
             .map_or_else(Vec::new, |instructions| instructions.sources().collect())
     }
@@ -1542,13 +1556,7 @@ impl Session {
     }
 
     pub(crate) async fn user_instructions(&self) -> Option<codex_extension_api::UserInstructions> {
-        let state = self.state.lock().await;
-        state
-            .session_configuration
-            .loaded_agents_md
-            .as_ref()
-            .and_then(LoadedAgentsMd::user_instructions)
-            .cloned()
+        self.services.agents_md_manager.user_instructions()
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
@@ -2767,6 +2775,7 @@ impl Session {
         let items = items.as_ref();
         {
             let mut state = self.state.lock().await;
+            state.current_time_reminder.note_recorded_items(items);
             state.record_items(
                 items.iter(),
                 turn_context.model_info.truncation_policy.into(),
@@ -2776,17 +2785,14 @@ impl Session {
         self.send_raw_response_items(turn_context, items).await;
     }
 
-    pub(crate) async fn record_step_environment_context_if_changed(
+    pub(crate) async fn record_step_world_state_if_changed(
         &self,
         previous_world_state: &Arc<WorldState>,
         step_context: &step_context::StepContext,
     ) -> Arc<WorldState> {
         let turn_context = step_context.turn.as_ref();
         // Render model-visible state from the same step used to build and run tools.
-        let world_state = Arc::new(
-            self.build_world_state_for_environments(turn_context, &step_context.environments)
-                .await,
-        );
+        let world_state = Arc::new(self.build_world_state_for_step(step_context).await);
         // Derive the model update and persisted patch from the same two snapshots.
         let previous_snapshot = previous_world_state.snapshot();
         let world_state_snapshot = world_state.snapshot();
@@ -2814,21 +2820,47 @@ impl Session {
         world_state
     }
 
+    /// Captures one request-scoped view of dynamic state.
+    ///
+    /// This may refresh filesystem-derived state. Normal turns should call it only from
+    /// `run_turn` and pass the result down; standalone request or history boundaries may capture
+    /// their own step.
     pub(crate) async fn capture_step_context(
         &self,
         turn_context: Arc<TurnContext>,
     ) -> Arc<StepContext> {
-        // Keep the old turn-frozen view unless deferred executors are explicitly enabled.
-        let environments = if turn_context
+        let deferred_executor_enabled = turn_context
             .config
             .features
-            .enabled(Feature::DeferredExecutor)
-        {
+            .enabled(Feature::DeferredExecutor);
+        // Keep the old turn-frozen environment view unless deferred executors are enabled.
+        let environments = if deferred_executor_enabled {
             self.services.turn_environments.snapshot().await
         } else {
             turn_context.environments.clone()
         };
-        Arc::new(StepContext::new(turn_context, environments))
+        if deferred_executor_enabled {
+            self.services
+                .agents_md_manager
+                .refresh(&turn_context.config, &environments)
+                .await;
+        }
+        let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
+        let selected_capability_roots = self
+            .services
+            .turn_environments
+            .environment_manager()
+            .resolve_selected_capability_roots(
+                &self.services.selected_capability_roots,
+                &environments.captured_environments(),
+            )
+            .await;
+        Arc::new(StepContext::new(
+            turn_context,
+            environments,
+            selected_capability_roots,
+            loaded_agents_md,
+        ))
     }
 
     pub(crate) async fn record_inter_agent_communication(
@@ -2846,6 +2878,7 @@ impl Session {
         let response_item = items[0].clone();
         {
             let mut state = self.state.lock().await;
+            state.current_time_reminder.note_recorded_items(items);
             state.record_items(
                 items.iter(),
                 turn_context.model_info.truncation_policy.into(),
@@ -3088,26 +3121,6 @@ impl Session {
         items
     }
 
-    pub(crate) async fn build_world_state_for_environments(
-        &self,
-        turn_context: &TurnContext,
-        environments: &TurnEnvironmentSnapshot,
-    ) -> WorldState {
-        let environment_subagents = if turn_context.config.include_environment_context {
-            self.services
-                .agent_control
-                .format_environment_context_subagents(self.thread_id)
-                .await
-        } else {
-            String::new()
-        };
-        build_world_state_from_environment_snapshot(
-            turn_context,
-            environments,
-            &environment_subagents,
-        )
-    }
-
     pub(crate) async fn build_initial_context_with_world_state(
         &self,
         turn_context: &TurnContext,
@@ -3310,9 +3323,6 @@ impl Session {
                     &mut separate_developer_sections,
                 );
             }
-        }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(user_instructions.to_string());
         }
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
@@ -3519,8 +3529,9 @@ impl Session {
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
-        turn_context: &TurnContext,
+        step_context: &StepContext,
     ) -> Arc<WorldState> {
+        let turn_context = step_context.turn.as_ref();
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
@@ -3528,10 +3539,7 @@ impl Session {
         let turn_context_item = turn_context.to_turn_context_item();
         let turn_context_changed = reference_context_item.as_ref() != Some(&turn_context_item);
         let should_inject_full_context = reference_context_item.is_none();
-        let world_state = Arc::new(
-            self.build_world_state_for_environments(turn_context, &turn_context.environments)
-                .await,
-        );
+        let world_state = Arc::new(self.build_world_state_for_step(step_context).await);
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self

@@ -57,6 +57,11 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    /// Allow a provider with an authoritative static model catalog to replace an unavailable
+    /// requested model with its default.
+    #[experimental("thread/start.allowProviderModelFallback")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_provider_model_fallback: bool,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",
@@ -1025,6 +1030,7 @@ pub struct ThreadBackgroundTerminalsTerminateResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// DEPRECATED: `thread/rollback` will be removed soon.
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.

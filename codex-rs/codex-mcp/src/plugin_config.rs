@@ -173,8 +173,35 @@ fn environment_cwd(
 
 fn bind_environment_env_vars(config: &mut McpServerConfig) -> Result<(), String> {
     let is_local_environment = config.is_local_environment();
-    let McpServerTransportConfig::Stdio { env_vars, .. } = &mut config.transport else {
-        return Ok(());
+    let env_vars = match &mut config.transport {
+        McpServerTransportConfig::Stdio { env_vars, .. } => env_vars,
+        // Never resolve executor-owned environment references in the host process.
+        // Remove this rejection once the owning executor resolves these fields.
+        McpServerTransportConfig::StreamableHttp {
+            bearer_token_env_var,
+            env_http_headers,
+            ..
+        } => {
+            if is_local_environment {
+                return Ok(());
+            }
+            if bearer_token_env_var.is_some() {
+                return Err(
+                    "`bearer_token_env_var` requires executor-side environment resolution for an executor-owned HTTP MCP"
+                        .to_string(),
+                );
+            }
+            if env_http_headers
+                .as_ref()
+                .is_some_and(|headers| !headers.is_empty())
+            {
+                return Err(
+                    "`env_http_headers` requires executor-side environment resolution for an executor-owned HTTP MCP"
+                        .to_string(),
+                );
+            }
+            return Ok(());
+        }
     };
     for env_var in env_vars {
         match env_var {
