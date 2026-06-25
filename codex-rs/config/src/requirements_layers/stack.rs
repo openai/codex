@@ -9,7 +9,7 @@
 //! - `remote_sandbox_config` is evaluated within each layer before merging.
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
-//!   active managed-dir conflicts.
+//!   active managed-dir and `UserInstructions` conflicts.
 //! - `permissions.filesystem.deny_read` is a high-priority-first union across
 //!   layers.
 

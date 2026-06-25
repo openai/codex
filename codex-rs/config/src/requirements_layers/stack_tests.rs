@@ -803,6 +803,73 @@ managed_dir = "/managed/high"
 }
 
 #[test]
+fn user_instructions_hook_is_a_singleton_across_requirements_layers() {
+    let err = compose_with_hook_directory_field(
+        vec![
+            layer(
+                "req_low",
+                "Low",
+                r#"
+[hooks.UserInstructions]
+type = "command"
+command = "low"
+"#,
+            ),
+            layer(
+                "req_high",
+                "High",
+                r#"
+[hooks.UserInstructions]
+type = "command"
+command = "high"
+"#,
+            ),
+        ],
+        HookDirectoryField::ManagedDir,
+    )
+    .expect_err("conflicting UserInstructions hooks should fail closed");
+
+    assert!(err.to_string().contains("hooks.UserInstructions"));
+    assert!(err.to_string().contains("High (req_high)"));
+    assert!(err.to_string().contains("Low (req_low)"));
+
+    let composed = compose_with_hook_directory_field(
+        vec![
+            layer(
+                "req_low",
+                "Low",
+                r#"
+[hooks.UserInstructions]
+type = "command"
+command = "same"
+"#,
+            ),
+            layer(
+                "req_high",
+                "High",
+                r#"
+[hooks.UserInstructions]
+type = "command"
+command = "same"
+"#,
+            ),
+        ],
+        HookDirectoryField::ManagedDir,
+    )
+    .expect("matching UserInstructions hooks should compose")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed
+            .hooks
+            .expect("hooks requirements")
+            .hooks
+            .handler_count(),
+        1
+    );
+}
+
+#[test]
 fn active_windows_managed_dir_conflicts_fail_closed() {
     let err = compose_with_hook_directory_field(
         vec![

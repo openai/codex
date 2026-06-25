@@ -1,8 +1,9 @@
-//! Hook events are append-only across requirements layers. The managed hook
-//! directory is different: only one directory is usable on a given platform, so
-//! conflicting values for the active platform fail closed. The inactive platform
-//! field is first-filled to allow the same layer stack to carry OS-specific
-//! directories.
+//! Hook events are append-only across requirements layers, except for
+//! `UserInstructions`, which is a singleton and fails closed on conflicts. The
+//! managed hook directory is also a singleton: only one directory is usable on a
+//! given platform, so conflicting values for the active platform fail closed.
+//! The inactive platform field is first-filled to allow the same layer stack to
+//! carry OS-specific directories.
 
 use crate::HookEventsToml;
 use crate::ManagedHooksRequirementsToml;
@@ -48,6 +49,7 @@ impl HookDirectoryField {
 pub(super) struct HookMergeState {
     directory_field: HookDirectoryField,
     dir_sources: BTreeMap<HookDirectoryField, RequirementSource>,
+    user_instructions_source: Option<RequirementSource>,
 }
 
 impl HookMergeState {
@@ -55,6 +57,7 @@ impl HookMergeState {
         Self {
             directory_field,
             dir_sources: BTreeMap::new(),
+            user_instructions_source: None,
         }
     }
 
@@ -78,6 +81,9 @@ impl HookMergeState {
                 &incoming.windows_managed_dir,
                 source,
             );
+            if incoming.hooks.user_instructions.is_some() {
+                self.user_instructions_source = Some(source.clone());
+            }
             *target = Some(Sourced::new(incoming, source.clone()));
             return Ok(());
         };
@@ -99,6 +105,11 @@ impl HookMergeState {
             incoming_inactive_dir,
             source,
         );
+        changed |= self.merge_user_instructions(
+            &mut existing.value.hooks.user_instructions,
+            incoming.hooks.user_instructions.take(),
+            source,
+        )?;
         changed |= append_hook_events(&mut existing.value.hooks, incoming.hooks);
         if changed {
             merge_output_source(&mut existing.source, source);
@@ -178,6 +189,39 @@ impl HookMergeState {
             false
         }
     }
+
+    fn merge_user_instructions(
+        &mut self,
+        existing: &mut Option<crate::HookHandlerConfig>,
+        incoming: Option<crate::HookHandlerConfig>,
+        incoming_source: &RequirementSource,
+    ) -> Result<bool, super::stack::RequirementsCompositionError> {
+        let Some(incoming) = incoming else {
+            return Ok(false);
+        };
+
+        match existing {
+            Some(existing_value) if existing_value != &incoming => {
+                let existing_source = self
+                    .user_instructions_source
+                    .clone()
+                    .unwrap_or_else(|| incoming_source.clone());
+                Err(composition_conflict(
+                    "hooks.UserInstructions".to_string(),
+                    existing_source,
+                    incoming_source.clone(),
+                    "multiple requirements layers configure different UserInstructions hooks"
+                        .to_string(),
+                ))
+            }
+            Some(_) => Ok(false),
+            None => {
+                *existing = Some(incoming);
+                self.user_instructions_source = Some(incoming_source.clone());
+                Ok(true)
+            }
+        }
+    }
 }
 
 fn take_hook_dir(
@@ -210,11 +254,13 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         pre_compact,
         post_compact,
         session_start,
+        user_instructions,
         user_prompt_submit,
         subagent_start,
         subagent_stop,
         stop,
     } = incoming;
+    debug_assert!(user_instructions.is_none());
 
     let mut changed = false;
     changed |= append_vec(&mut existing.pre_tool_use, pre_tool_use);

@@ -339,6 +339,16 @@
           },
           "type": "array"
         },
+        "UserInstructions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ConfiguredHookHandler"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"

@@ -46,6 +46,14 @@ pub struct HookEventsToml {
     pub post_compact: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
+    // A single handler owns the durable user-instruction snapshot, so multiple
+    // handlers would have ambiguous replacement semantics.
+    #[serde(
+        rename = "UserInstructions",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub user_instructions: Option<HookHandlerConfig>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
     #[serde(rename = "SubagentStart", default)]
@@ -65,6 +73,7 @@ impl HookEventsToml {
             pre_compact,
             post_compact,
             session_start,
+            user_instructions,
             user_prompt_submit,
             subagent_start,
             subagent_stop,
@@ -76,6 +85,7 @@ impl HookEventsToml {
             && pre_compact.is_empty()
             && post_compact.is_empty()
             && session_start.is_empty()
+            && user_instructions.is_none()
             && user_prompt_submit.is_empty()
             && subagent_start.is_empty()
             && subagent_stop.is_empty()
@@ -90,12 +100,13 @@ impl HookEventsToml {
             pre_compact,
             post_compact,
             session_start,
+            user_instructions,
             user_prompt_submit,
             subagent_start,
             subagent_stop,
             stop,
         } = self;
-        [
+        let matcher_group_handlers = [
             pre_tool_use,
             permission_request,
             post_tool_use,
@@ -106,14 +117,16 @@ impl HookEventsToml {
             subagent_start,
             subagent_stop,
             stop,
-        ]
-        .into_iter()
-        .flatten()
-        .map(|group| group.hooks.len())
-        .sum()
+        ];
+        matcher_group_handlers
+            .into_iter()
+            .flatten()
+            .map(|group| group.hooks.len())
+            .sum::<usize>()
+            + user_instructions.iter().count()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 10] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 11] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
@@ -121,6 +134,16 @@ impl HookEventsToml {
             (HookEventName::PreCompact, self.pre_compact),
             (HookEventName::PostCompact, self.post_compact),
             (HookEventName::SessionStart, self.session_start),
+            (
+                HookEventName::UserInstructions,
+                self.user_instructions
+                    .map(|handler| MatcherGroup {
+                        matcher: None,
+                        hooks: vec![handler],
+                    })
+                    .into_iter()
+                    .collect(),
+            ),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
             (HookEventName::SubagentStart, self.subagent_start),
             (HookEventName::SubagentStop, self.subagent_stop),
