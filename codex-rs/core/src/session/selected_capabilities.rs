@@ -146,3 +146,7 @@ impl Session {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "selected_capabilities_tests.rs"]
+mod tests;

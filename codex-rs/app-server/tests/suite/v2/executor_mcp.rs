@@ -9,6 +9,10 @@ use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -22,6 +26,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -29,6 +35,7 @@ const MCP_SERVER_NAME: &str = "executor_demo";
 const EXECUTOR_ENV_NAME: &str = "MCP_EXECUTOR_MARKER";
 const EXECUTOR_ENV_VALUE: &str = "executor-only";
 const EXECUTOR_ID: &str = "executor-1";
+const CANDIDATE_PROBE_SERVER_NAME: &str = "candidate_probe";
 const REFRESH_PROBE_SERVER_NAME: &str = "refresh_probe";
 const TOOL_CALL_ID: &str = "executor-mcp-call";
 
@@ -161,6 +168,13 @@ args = ["exec-server", "--listen", "stdio"]
             .iter()
             .all(|name| name != MCP_SERVER_NAME)
     );
+    activate_selected_mcp(
+        &mut app_server,
+        &responses_server,
+        &selected_thread,
+        "initial-activation",
+    )
+    .await?;
 
     let namespace = format!("mcp__{MCP_SERVER_NAME}");
     let response_mock = responses::mount_sse_sequence(
@@ -219,6 +233,50 @@ args = ["exec-server", "--listen", "stdio"]
         .expect("MCP function output should be text");
     assert!(output.contains("ECHOING: hello from executor"));
     assert!(output.contains(EXECUTOR_ENV_VALUE));
+
+    let request_id = app_server
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: selected_thread.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        thread: forked_thread,
+        ..
+    } = to_response(response)?;
+    let forked_thread_id = forked_thread.id;
+    assert_selected_mcp_inactive(&mut app_server, &forked_thread_id).await?;
+    activate_selected_mcp(
+        &mut app_server,
+        &responses_server,
+        &forked_thread_id,
+        "fork-activation",
+    )
+    .await?;
+    assert_selected_mcp_active(&mut app_server, &forked_thread_id).await?;
+
+    drop(app_server);
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    resume_and_activate_selected_mcp(
+        &mut app_server,
+        &responses_server,
+        &selected_thread,
+        "resume-original",
+    )
+    .await?;
+    resume_and_activate_selected_mcp(
+        &mut app_server,
+        &responses_server,
+        &forked_thread_id,
+        "resume-fork",
+    )
+    .await?;
 
     let config_path = codex_home.path().join("config.toml");
     let mut config = std::fs::read_to_string(&config_path)?;
@@ -312,42 +370,309 @@ startup_timeout_sec = 10
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_required_selected_mcp_keeps_active_manager() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!(
+        r#"
+[mcp_servers.stable]
+command = {}
+startup_timeout_sec = 10
+"#,
+        toml::Value::String(stdio_server_bin()?)
+    ));
+    std::fs::write(config_path, config)?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            r#"
+include_local = true
+
+[[environments]]
+id = "{EXECUTOR_ID}"
+program = {}
+args = ["exec-server", "--listen", "stdio"]
+"#,
+            toml::Value::String(
+                codex_utils_cargo_bin::cargo_bin("codex")?
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        ),
+    )?;
+
+    let plugin = TempDir::new()?;
+    std::fs::create_dir_all(plugin.path().join(".codex-plugin"))?;
+    std::fs::write(
+        plugin.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"broken-selected"}"#,
+    )?;
+    std::fs::write(
+        plugin.path().join(".mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                (CANDIDATE_PROBE_SERVER_NAME): {
+                    "command": stdio_server_bin()?,
+                },
+                "required_broken": {
+                    "command": "this-command-does-not-exist",
+                    "required": true,
+                },
+            }
+        }))?,
+    )?;
+
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
+    let thread_id = start_thread(
+        &mut app_server,
+        Some(vec![SelectedCapabilityRoot {
+            id: "broken-selected@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: EXECUTOR_ID.to_string(),
+                path: PathUri::from_host_native_path(plugin.path())?,
+            },
+        }]),
+    )
+    .await?;
+    let activation_deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut attempt = 0;
+    let validation_failed_before_sampling = loop {
+        let response_id = format!("broken-selected-readiness-{attempt}");
+        let response_mock = responses::mount_sse_once(
+            &responses_server,
+            responses::sse(vec![
+                responses::ev_response_created(&response_id),
+                responses::ev_assistant_message(&format!("{response_id}-message"), "Done"),
+                responses::ev_completed(&response_id),
+            ]),
+        )
+        .await;
+        let request_id = app_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![UserInput::Text {
+                    text: "Activate the broken selected server".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        if response_mock.requests().is_empty() {
+            break true;
+        }
+        if Instant::now() >= activation_deadline {
+            break false;
+        }
+        attempt += 1;
+        sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        validation_failed_before_sampling,
+        "required selected MCP validation should fail before sampling"
+    );
+
+    let request_id = app_server
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread_id.clone(),
+            server: "stable".to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({"message": "still active"})),
+            meta: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(response)?;
+    assert_eq!(
+        response
+            .structured_content
+            .and_then(|content| content.get("echo").cloned()),
+        Some(json!("ECHOING: still active"))
+    );
+    let request_id = app_server
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread_id.clone(),
+            server: CANDIDATE_PROBE_SERVER_NAME.to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({"message": "must not be active"})),
+            meta: None,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains(CANDIDATE_PROBE_SERVER_NAME),
+        "unexpected candidate probe error: {error:?}"
+    );
+    assert!(
+        mcp_server_names(&mut app_server, thread_id)
+            .await?
+            .iter()
+            .all(|name| name != "required_broken")
+    );
+
+    Ok(())
+}
+
 async fn activate_selected_mcp(
     app_server: &mut TestAppServer,
     responses_server: &wiremock::MockServer,
     thread_id: &str,
     response_id: &str,
 ) -> Result<()> {
-    let response_mock = responses::mount_sse_once(
-        responses_server,
-        responses::sse(vec![
-            responses::ev_response_created(response_id),
-            responses::ev_assistant_message(&format!("{response_id}-message"), "Done"),
-            responses::ev_completed(response_id),
-        ]),
-    )
-    .await;
+    let activation_deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut attempt = 0;
+    loop {
+        let activation_response_id = format!("{response_id}-{attempt}");
+        let response_mock = responses::mount_sse_once(
+            responses_server,
+            responses::sse(vec![
+                responses::ev_response_created(&activation_response_id),
+                responses::ev_assistant_message(
+                    &format!("{activation_response_id}-message"),
+                    "Done",
+                ),
+                responses::ev_completed(&activation_response_id),
+            ]),
+        )
+        .await;
+        let request_id = app_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread_id.to_string(),
+                input: vec![UserInput::Text {
+                    text: "Activate selected MCP".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            app_server.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        let requests = response_mock.requests();
+        let Some(request) = requests.first() else {
+            anyhow::bail!("selected MCP activation failed before sampling");
+        };
+        if request
+            .tool_by_name(&format!("mcp__{MCP_SERVER_NAME}"), "echo")
+            .is_some()
+        {
+            let request_id = app_server
+                .send_mcp_server_tool_call_request(McpServerToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    server: MCP_SERVER_NAME.to_string(),
+                    tool: "echo".to_string(),
+                    arguments: Some(json!({
+                        "message": "activation affinity",
+                        "env_var": EXECUTOR_ENV_NAME,
+                    })),
+                    meta: None,
+                })
+                .await?;
+            let response = timeout(
+                DEFAULT_READ_TIMEOUT,
+                app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+            )
+            .await??;
+            let response: McpServerToolCallResponse = to_response(response)?;
+            assert_eq!(
+                response.structured_content,
+                Some(json!({
+                    "echo": "ECHOING: activation affinity",
+                    "env": EXECUTOR_ENV_VALUE,
+                }))
+            );
+            return Ok(());
+        }
+        if Instant::now() >= activation_deadline {
+            break;
+        }
+        attempt += 1;
+        sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("selected MCP tool did not become model-visible after activation retries")
+}
+
+async fn resume_and_activate_selected_mcp(
+    app_server: &mut TestAppServer,
+    responses_server: &wiremock::MockServer,
+    thread_id: &str,
+    response_id: &str,
+) -> Result<()> {
     let request_id = app_server
-        .send_turn_start_request(TurnStartParams {
+        .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread_id.to_string(),
-            input: vec![UserInput::Text {
-                text: "Activate selected MCP".to_string(),
-                text_elements: Vec::new(),
-            }],
             ..Default::default()
         })
         .await?;
-    timeout(
+    let response = timeout(
         DEFAULT_READ_TIMEOUT,
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    response_mock.single_request();
+    let ThreadResumeResponse { thread, .. } = to_response(response)?;
+    assert_eq!(thread.id, thread_id);
+    assert_selected_mcp_inactive(app_server, thread_id).await?;
+    activate_selected_mcp(app_server, responses_server, thread_id, response_id).await?;
+    assert_selected_mcp_active(app_server, thread_id).await
+}
+
+async fn assert_selected_mcp_inactive(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    assert!(
+        mcp_server_names(app_server, thread_id.to_string())
+            .await?
+            .iter()
+            .all(|name| name != MCP_SERVER_NAME)
+    );
+    Ok(())
+}
+
+async fn assert_selected_mcp_active(app_server: &mut TestAppServer, thread_id: &str) -> Result<()> {
+    assert!(
+        mcp_server_names(app_server, thread_id.to_string())
+            .await?
+            .iter()
+            .any(|name| name == MCP_SERVER_NAME)
+    );
     Ok(())
 }
 
