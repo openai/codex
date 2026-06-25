@@ -486,6 +486,12 @@ impl RmcpClient {
             };
         }
 
+        if let Some(runtime) = oauth_persistor
+            && let Err(error) = runtime.persist_if_needed().await
+        {
+            warn!("failed to persist OAuth tokens after initialize: {error}");
+        }
+
         Ok(initialize_result)
     }
 
@@ -722,6 +728,17 @@ impl RmcpClient {
         }
     }
 
+    // RMCP still receives refresh-capable credentials in this intermediate layer. Preserve its
+    // legacy best-effort persistence until the next layer atomically installs request-only
+    // credentials and the Codex-owned all-traffic wrapper.
+    async fn persist_oauth_tokens(&self) {
+        if let Some(runtime) = self.oauth_persistor().await
+            && let Err(error) = runtime.persist_if_needed().await
+        {
+            warn!("failed to persist OAuth tokens: {error}");
+        }
+    }
+
     /// Stop the MCP transport and any stdio server process owned by this client.
     pub async fn shutdown(&self) {
         let previous_state = {
@@ -944,7 +961,19 @@ impl RmcpClient {
                 .await
                 .map_err(|source| anyhow::Error::from(HandshakeError { source })),
         };
-        let service = service_result?;
+        let service = match service_result {
+            Ok(service) => service,
+            Err(error) => {
+                if let Some(runtime) = oauth_persistor.as_ref()
+                    && let Err(persist_error) = runtime.persist_if_needed().await
+                {
+                    warn!(
+                        "failed to persist OAuth tokens after failed initialize: {persist_error}"
+                    );
+                }
+                return Err(error);
+            }
+        };
 
         Ok((Arc::new(service), oauth_persistor))
     }
@@ -1014,7 +1043,11 @@ impl RmcpClient {
             .await;
         }
 
-        result.map_err(Into::into)
+        let result = result.map_err(Into::into);
+        if result.is_ok() {
+            self.persist_oauth_tokens().await;
+        }
+        result
     }
 
     async fn run_service_operation_with_transient_retries<T, F, Fut>(
@@ -1213,6 +1246,12 @@ impl RmcpClient {
                 service,
                 oauth: oauth_persistor.clone(),
             };
+        }
+
+        if let Some(runtime) = oauth_persistor
+            && let Err(error) = runtime.persist_if_needed().await
+        {
+            warn!("failed to persist OAuth tokens after session recovery: {error}");
         }
 
         Ok(())
