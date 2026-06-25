@@ -19,15 +19,10 @@
 // SOFTWARE.
 
 // Local modifications:
-// - Fix Codex bug #13945 in the Windows PTY kill path. The vendored code treated
-//   `TerminateProcess`'s nonzero success return as failure and `0` as success,
-//   which inverts kill outcomes for both `WinChild::do_kill` and
-//   `WinChildKiller::kill`.
-// - This bug still exists in the original WezTerm source as of 2026-03-08, so
-//   this is an intentional divergence from upstream.
+// - Keep each Windows PTY process in a kill-on-close job so terminating the
+//   session also terminates descendants.
 
 use anyhow::Context as _;
-use filedescriptor::OwnedHandle;
 use portable_pty::Child;
 use portable_pty::ChildKiller;
 use portable_pty::ExitStatus;
@@ -39,10 +34,11 @@ use std::sync::Mutex;
 use std::task::Context;
 use std::task::Poll;
 use winapi::shared::minwindef::DWORD;
-use winapi::um::minwinbase::STILL_ACTIVE;
+use winapi::shared::winerror::WAIT_TIMEOUT;
 use winapi::um::processthreadsapi::*;
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
+use winapi::um::winbase::WAIT_OBJECT_0;
 
 pub(crate) mod conpty;
 mod job;
@@ -58,68 +54,73 @@ pub use psuedocon::conpty_supported;
 
 #[derive(Debug)]
 pub struct WinChild {
-    proc: Mutex<OwnedHandle>,
+    process: Mutex<JobProcess>,
 }
 
 impl WinChild {
     fn is_complete(&mut self) -> IoResult<Option<ExitStatus>> {
-        let mut status: DWORD = 0;
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
-        let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
-        if res != 0 {
-            if status == STILL_ACTIVE {
-                Ok(None)
-            } else {
-                Ok(Some(ExitStatus::with_exit_code(status)))
+        let process = self.process.lock().unwrap();
+        let proc = process.try_clone_process_handle()?;
+        let controller = process.controller();
+        drop(process);
+
+        match unsafe {
+            WaitForSingleObject(proc.as_raw_handle() as _, /*dwMilliseconds*/ 0)
+        } {
+            WAIT_TIMEOUT => Ok(None),
+            WAIT_OBJECT_0 => {
+                let mut status: DWORD = 0;
+                let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
+                let status = if res != 0 {
+                    Ok(Some(ExitStatus::with_exit_code(status)))
+                } else {
+                    Err(IoError::last_os_error())
+                };
+                controller.close()?;
+                status
             }
-        } else {
-            Ok(None)
+            _ => {
+                let err = IoError::last_os_error();
+                let _ = controller.terminate_and_close(/*exit_code*/ 1);
+                Err(err)
+            }
         }
     }
 
     fn do_kill(&mut self) -> IoResult<()> {
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
-        let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
-        // Codex bug #13945: Win32 returns nonzero on success, so only `0` is an error.
-        if res == 0 {
-            Err(IoError::last_os_error())
-        } else {
-            Ok(())
-        }
+        self.process
+            .lock()
+            .unwrap()
+            .controller()
+            .terminate_and_close(/*exit_code*/ 1)
     }
 }
 
 impl ChildKiller for WinChild {
     fn kill(&mut self) -> IoResult<()> {
-        self.do_kill().ok();
-        Ok(())
+        self.do_kill()
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
-        Box::new(WinChildKiller { proc })
+        let controller = self.process.lock().unwrap().controller();
+        Box::new(WinChildKiller { controller })
     }
 }
 
 #[derive(Debug)]
 pub struct WinChildKiller {
-    proc: OwnedHandle,
+    controller: KillOnCloseJob,
 }
 
 impl ChildKiller for WinChildKiller {
     fn kill(&mut self) -> IoResult<()> {
-        let res = unsafe { TerminateProcess(self.proc.as_raw_handle() as _, 1) };
-        // Codex bug #13945: Win32 returns nonzero on success, so only `0` is an error.
-        if res == 0 {
-            Err(IoError::last_os_error())
-        } else {
-            Ok(())
-        }
+        self.controller.terminate_and_close(/*exit_code*/ 1)
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-        let proc = self.proc.try_clone().unwrap();
-        Box::new(WinChildKiller { proc })
+        Box::new(WinChildKiller {
+            controller: self.controller.clone(),
+        })
     }
 }
 
@@ -129,30 +130,36 @@ impl Child for WinChild {
     }
 
     fn wait(&mut self) -> IoResult<ExitStatus> {
-        if let Ok(Some(status)) = self.try_wait() {
+        if let Some(status) = self.try_wait()? {
             return Ok(status);
         }
-        let proc = self.proc.lock().unwrap().try_clone().unwrap();
-        unsafe {
-            WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
+        let process = self.process.lock().unwrap();
+        let proc = process.try_clone_process_handle()?;
+        let controller = process.controller();
+        drop(process);
+        let wait_result = unsafe { WaitForSingleObject(proc.as_raw_handle() as _, INFINITE) };
+        if wait_result != WAIT_OBJECT_0 {
+            let err = IoError::last_os_error();
+            let _ = controller.terminate_and_close(/*exit_code*/ 1);
+            return Err(err);
         }
         let mut status: DWORD = 0;
         let res = unsafe { GetExitCodeProcess(proc.as_raw_handle() as _, &mut status) };
-        if res != 0 {
+        let status = if res != 0 {
             Ok(ExitStatus::with_exit_code(status))
         } else {
             Err(IoError::last_os_error())
-        }
+        };
+        controller.close()?;
+        status
     }
 
     fn process_id(&self) -> Option<u32> {
-        let res = unsafe { GetProcessId(self.proc.lock().unwrap().as_raw_handle() as _) };
-        if res == 0 { None } else { Some(res) }
+        Some(self.process.lock().unwrap().process_id())
     }
 
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
-        let proc = self.proc.lock().unwrap();
-        Some(proc.as_raw_handle())
+        Some(self.process.lock().unwrap().as_raw_handle())
     }
 }
 
@@ -164,7 +171,7 @@ impl std::future::Future for WinChild {
             Ok(Some(status)) => Poll::Ready(Ok(status)),
             Err(err) => Poll::Ready(Err(err).context("Failed to retrieve process exit status")),
             Ok(None) => {
-                let proc = self.proc.lock().unwrap().try_clone()?;
+                let proc = self.process.lock().unwrap().try_clone_process_handle()?;
                 let waker = cx.waker().clone();
                 std::thread::spawn(move || {
                     unsafe {
