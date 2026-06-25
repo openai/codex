@@ -1,5 +1,5 @@
 use codex_core::config::Config;
-use codex_core_plugins::ExecutorPluginProvider;
+use codex_core_plugins::ExecutorPluginRuntime;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionFuture;
@@ -11,25 +11,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
-use self::provider::ExecutorPluginMcpProvider;
-
-mod provider;
-
-/// Frozen MCP declarations for one selected package.
-///
-/// Each server config retains the stable logical environment ID. Reconnection may replace the
-/// concrete environment instance without changing that authority.
+/// The runtime declarations frozen for one selected package at thread start.
 #[derive(Clone)]
-struct SelectedPluginMcpServers {
-    plugin_id: String,
-    plugin_display_name: String,
+struct SelectedPluginRuntime {
     selection_order: usize,
-    servers: Vec<(String, codex_config::McpServerConfig)>,
+    runtime: ExecutorPluginRuntime,
 }
 
 #[derive(Default)]
 pub(crate) struct SelectedExecutorPluginMcpState {
-    snapshot: OnceCell<Vec<SelectedPluginMcpServers>>,
+    snapshot: OnceCell<Vec<SelectedPluginRuntime>>,
 }
 
 pub(crate) fn seed_thread_state(thread_init: &mut ExtensionDataInit) {
@@ -37,49 +28,38 @@ pub(crate) fn seed_thread_state(thread_init: &mut ExtensionDataInit) {
 }
 
 pub(crate) struct SelectedExecutorPluginMcpContributor {
-    plugin_provider: ExecutorPluginProvider,
-    mcp_provider: ExecutorPluginMcpProvider,
+    environment_manager: Arc<EnvironmentManager>,
 }
 
 impl SelectedExecutorPluginMcpContributor {
     pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
         Self {
-            plugin_provider: ExecutorPluginProvider::new(Arc::clone(&environment_manager)),
-            mcp_provider: ExecutorPluginMcpProvider,
+            environment_manager,
         }
     }
 
     async fn resolve_snapshot(
         &self,
         selected_roots: &[SelectedCapabilityRoot],
-    ) -> Vec<SelectedPluginMcpServers> {
+    ) -> Vec<SelectedPluginRuntime> {
         let mut snapshot = Vec::new();
+        let resolved_roots = self
+            .environment_manager
+            .bind_selected_capability_roots(selected_roots);
 
-        for (selection_order, selected_root) in selected_roots.iter().enumerate() {
-            let plugin = match self.plugin_provider.resolve_bound(selected_root).await {
-                Ok(Some(plugin)) => plugin,
-                Ok(None) => continue,
-                Err(err) => {
-                    tracing::warn!(
-                        selected_root = selected_root.id,
-                        error = %err,
-                        "failed to resolve selected executor plugin for MCP discovery"
-                    );
-                    continue;
-                }
-            };
-            match self.mcp_provider.load(&plugin).await {
-                Ok(servers) => snapshot.push(SelectedPluginMcpServers {
-                    plugin_id: plugin.plugin().selected_root_id().to_string(),
-                    plugin_display_name: plugin.plugin().manifest().display_name().to_string(),
+        for (selection_order, resolved_root) in resolved_roots.iter().enumerate() {
+            let selected_root = resolved_root.selected_root();
+            match ExecutorPluginRuntime::project(resolved_root).await {
+                Ok(Some(runtime)) => snapshot.push(SelectedPluginRuntime {
                     selection_order,
-                    servers,
+                    runtime,
                 }),
+                Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(
                         selected_root = selected_root.id,
                         error = %err,
-                        "failed to load selected executor plugin MCP servers"
+                        "failed to project selected executor plugin runtime"
                     );
                 }
             }
@@ -115,19 +95,26 @@ impl McpServerContributor<Config> for SelectedExecutorPluginMcpContributor {
                 .await;
             let mut contributions = Vec::new();
 
-            for plugin in snapshot {
-                let mut servers = plugin.servers.iter().cloned().collect::<HashMap<_, _>>();
+            for selected in snapshot {
+                let plugin = selected.runtime.plugin();
+                let plugin_id = plugin.selected_root_id();
+                let mut servers = selected
+                    .runtime
+                    .mcp_servers()
+                    .iter()
+                    .cloned()
+                    .collect::<HashMap<_, _>>();
                 context
                     .config()
-                    .apply_plugin_mcp_server_requirements(&plugin.plugin_id, &mut servers);
+                    .apply_plugin_mcp_server_requirements(plugin_id, &mut servers);
                 let mut servers = servers.into_iter().collect::<Vec<_>>();
                 servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
                 contributions.extend(servers.into_iter().map(|(name, config)| {
                     McpServerContribution::SelectedPlugin {
                         name,
-                        plugin_id: plugin.plugin_id.clone(),
-                        plugin_display_name: plugin.plugin_display_name.clone(),
-                        selection_order: plugin.selection_order,
+                        plugin_id: plugin_id.to_string(),
+                        plugin_display_name: plugin.manifest().display_name().to_string(),
+                        selection_order: selected.selection_order,
                         config: Box::new(config),
                     }
                 }));
