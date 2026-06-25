@@ -190,13 +190,13 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         &metrics,
         "exec_server_request_duration_seconds",
         &[("method", "process/start"), ("result", "success")],
-        None,
+        /*value*/ None,
     );
     assert_metric_point(
         &metrics,
         "exec_server_process_duration_seconds",
         &[("result", "success")],
-        None,
+        /*value*/ None,
     );
     Ok(())
 }
