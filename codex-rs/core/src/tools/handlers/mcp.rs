@@ -19,6 +19,7 @@ use codex_mcp::ToolInfo;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchIdentity;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
@@ -105,10 +106,11 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
                 .map(str::to_string),
         });
 
-        ToolSearchInfo::from_spec(
+        ToolSearchInfo::from_spec_with_identity(
             build_mcp_search_text(&self.tool_info),
             self.spec(),
             source_info,
+            build_mcp_search_identity(&self.tool_info),
         )
     }
 
@@ -264,7 +266,6 @@ fn mcp_hook_tool_input(raw_arguments: &str) -> Value {
 }
 
 fn build_mcp_search_text(info: &ToolInfo) -> String {
-    let tool_name = info.canonical_tool_name();
     let mut schema_properties = info
         .tool
         .input_schema
@@ -273,33 +274,49 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
         .map(|map| map.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     schema_properties.sort();
-    let mut parts = vec![
-        flat_tool_name(&tool_name).into_owned(),
-        info.callable_name.clone(),
-        info.tool.name.to_string(),
-        info.server_name.clone(),
-    ];
-    if let Some(title) = info.tool.title.as_deref().map(str::trim)
-        && !title.is_empty()
-    {
-        parts.push(title.to_string());
-    }
+    let mut parts = Vec::new();
     if let Some(description) = info.tool.description.as_deref().map(str::trim)
         && !description.is_empty()
     {
         parts.push(description.to_string());
-    }
-    if let Some(connector_name) = info.connector_name.as_deref().map(str::trim)
-        && !connector_name.is_empty()
-    {
-        parts.push(connector_name.to_string());
     }
     if let Some(namespace_description) = info.namespace_description.as_deref().map(str::trim)
         && !namespace_description.is_empty()
     {
         parts.push(namespace_description.to_string());
     }
-    parts.extend(
+    parts.extend(schema_properties);
+    parts.join(" ")
+}
+
+fn build_mcp_search_identity(info: &ToolInfo) -> ToolSearchIdentity {
+    let tool_name = info.canonical_tool_name();
+    let mut identity = ToolSearchIdentity::default();
+    identity
+        .canonical_aliases
+        .push(flat_tool_name(&tool_name).into_owned());
+    identity.canonical_aliases.push(format!(
+        "{}.{}",
+        info.callable_namespace, info.callable_name
+    ));
+    identity.canonical_aliases.push(format!(
+        "{}__{}",
+        info.callable_namespace, info.callable_name
+    ));
+    identity.tool_aliases.push(info.callable_name.clone());
+    identity.tool_aliases.push(info.tool.name.to_string());
+    if let Some(title) = info.tool.title.as_deref().map(str::trim)
+        && !title.is_empty()
+    {
+        identity.tool_aliases.push(title.to_string());
+    }
+    identity.source_aliases.push(info.server_name.clone());
+    if let Some(connector_name) = info.connector_name.as_deref().map(str::trim)
+        && !connector_name.is_empty()
+    {
+        identity.source_aliases.push(connector_name.to_string());
+    }
+    identity.source_aliases.extend(
         info.plugin_display_names
             .iter()
             .map(String::as_str)
@@ -307,8 +324,7 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
             .filter(|display_name| !display_name.is_empty())
             .map(str::to_string),
     );
-    parts.extend(schema_properties);
-    parts.join(" ")
+    identity
 }
 
 #[cfg(test)]
