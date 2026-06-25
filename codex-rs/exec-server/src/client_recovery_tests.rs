@@ -33,7 +33,7 @@ fn registry_recovery_retry_delay_exponentially_backs_off_and_caps() {
 
 #[test]
 fn recovery_retries_transient_registry_errors() {
-    let error = registry_error(reqwest::StatusCode::TOO_MANY_REQUESTS, None);
+    let error = registry_error(reqwest::StatusCode::TOO_MANY_REQUESTS, /*code*/ None);
 
     assert!(is_retryable_registry_error(&error));
     assert!(is_retryable_recovery_error(&error));
