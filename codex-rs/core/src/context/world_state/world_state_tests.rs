@@ -111,6 +111,45 @@ fn render_diff_restores_the_typed_section_snapshot() {
 }
 
 #[test]
+fn extension_owned_section_uses_its_snapshot_and_renderer() {
+    let mut world_state = WorldState::default();
+    world_state.add_extension_section(WorldStateSectionContribution::new(
+        "extension_test",
+        json!({"value": "after", "optional": null}),
+        |previous| match previous {
+            PreviousWorldStateSection::Known(previous)
+                if previous == &json!({"value": "before"}) =>
+            {
+                Some(RenderedWorldStateFragment::new(
+                    "developer",
+                    ("<extension_test>", "</extension_test>"),
+                    "after",
+                ))
+            }
+            PreviousWorldStateSection::Absent
+            | PreviousWorldStateSection::Unknown
+            | PreviousWorldStateSection::Known(_) => None,
+        },
+    ));
+    let previous = WorldStateSnapshot {
+        sections: BTreeMap::from([("extension_test".to_string(), json!({"value": "before"}))]),
+    };
+
+    let rendered = world_state.render_diff(&previous);
+
+    assert_eq!(
+        serde_json::to_value(world_state.snapshot()).expect("serialize world-state snapshot"),
+        json!({"extension_test": {"value": "after"}})
+    );
+    assert_eq!(rendered.len(), 1);
+    assert_eq!(rendered[0].role(), "developer");
+    assert_eq!(
+        rendered[0].render(),
+        "<extension_test>after</extension_test>"
+    );
+}
+
+#[test]
 fn unreadable_section_snapshot_is_treated_as_unknown() {
     let mut current = WorldState::default();
     current.add_section(TestSection {

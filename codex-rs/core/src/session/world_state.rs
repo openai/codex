@@ -3,6 +3,7 @@ use super::step_context::StepContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
+use codex_extension_api::WorldStateContributionInput;
 
 impl Session {
     pub(crate) async fn build_world_state_for_step(
@@ -33,6 +34,22 @@ impl Session {
                 )
                 .with_subagents(environment_subagents),
             );
+        }
+        let environments = step_context.environments.to_selections();
+        for contributor in self.services.extensions.context_contributors() {
+            for section in contributor
+                .contribute_world_state(WorldStateContributionInput {
+                    thread_id: self.thread_id(),
+                    turn_id: turn_context.sub_id.as_str(),
+                    environments: &environments,
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn_context.extension_data.as_ref(),
+                })
+                .await
+            {
+                world_state.add_extension_section(section);
+            }
         }
         world_state
     }
