@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::agents_md::LoadedAgentsMd;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
+use codex_core_skills::SkillsSnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 
 /// Request-scoped state that may change between model sampling requests.
@@ -12,6 +13,8 @@ pub(crate) struct StepContext {
     pub(crate) environments: TurnEnvironmentSnapshot,
     /// Capability roots bound to ready environments in this exact step.
     pub(crate) selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    /// Complete skill catalog and exact read routes captured for this step.
+    pub(crate) skills: Arc<SkillsSnapshot>,
     /// The canonical AGENTS.md value observed with this environment snapshot.
     pub(crate) loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
 }
@@ -21,12 +24,14 @@ impl StepContext {
         turn: Arc<TurnContext>,
         environments: TurnEnvironmentSnapshot,
         selected_capability_roots: Vec<ResolvedSelectedCapabilityRoot>,
+        skills: Arc<SkillsSnapshot>,
         loaded_agents_md: Option<Arc<LoadedAgentsMd>>,
     ) -> Self {
         Self {
             turn,
             environments,
             selected_capability_roots,
+            skills,
             loaded_agents_md,
         }
     }

@@ -9,6 +9,7 @@ pub mod render;
 mod root_loader;
 pub mod runtime;
 mod runtime_selection;
+mod runtime_snapshot;
 pub mod service;
 pub mod system;
 
@@ -35,5 +36,9 @@ pub use render::default_skill_metadata_budget;
 pub use render::render_available_skills_body;
 pub use root_loader::PluginSkillSnapshots;
 pub use runtime_selection::collect_runtime_skill_mentions;
+pub use runtime_snapshot::RuntimeSkillInjection;
+pub use runtime_snapshot::RuntimeSkillInjections;
+pub use runtime_snapshot::SkillInjectionIdentity;
+pub use runtime_snapshot::SkillsSnapshot;
 pub use service::SkillsLoadInput;
 pub use service::SkillsService;

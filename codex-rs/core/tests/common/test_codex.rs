@@ -26,6 +26,7 @@ use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadUserInstructionsFuture;
 use codex_extension_api::UserInstructionsProvider;
@@ -287,6 +288,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    thread_extension_init: ExtensionDataInit,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -375,6 +377,11 @@ impl TestCodexBuilder {
 
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
+        self
+    }
+
+    pub fn with_thread_extension_init(mut self, thread_extension_init: ExtensionDataInit) -> Self {
+        self.thread_extension_init = thread_extension_init;
         self
     }
 
@@ -665,7 +672,7 @@ impl TestCodexBuilder {
                         metrics_service_name: None,
                         parent_trace: None,
                         environments,
-                        thread_extension_init: Default::default(),
+                        thread_extension_init: std::mem::take(&mut self.thread_extension_init),
                         supports_openai_form_elicitation: self.supports_openai_form_elicitation,
                     }),
                 )
@@ -1214,6 +1221,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        thread_extension_init: ExtensionDataInit::new(),
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
         external_time_provider: None,

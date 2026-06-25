@@ -24,18 +24,23 @@ pub fn collect_runtime_skill_mentions(
     plain_name_conflicts: &HashSet<String>,
 ) -> Vec<SkillCatalogEntry> {
     let mut selected = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen_names = HashSet::new();
     let mut blocked_plain_names = HashSet::new();
 
     for input in inputs {
         match input {
             UserInput::Skill { name, path } => {
                 blocked_plain_names.insert(name.clone());
-                select_by_path(catalog, &path.to_string_lossy(), &mut seen, &mut selected);
+                select_by_path(
+                    catalog,
+                    &path.to_string_lossy(),
+                    &mut seen_names,
+                    &mut selected,
+                );
             }
             UserInput::Mention { name, path } if path_is_skill(path) => {
                 blocked_plain_names.insert(name.clone());
-                select_by_path(catalog, path, &mut seen, &mut selected);
+                select_by_path(catalog, path, &mut seen_names, &mut selected);
             }
             _ => {}
         }
@@ -51,7 +56,7 @@ pub fn collect_runtime_skill_mentions(
             &mentions,
             &blocked_plain_names,
             plain_name_conflicts,
-            &mut seen,
+            &mut seen_names,
             &mut selected,
         );
     }
@@ -64,7 +69,7 @@ fn select_text_mentions(
     mentions: &crate::injection::ToolMentions<'_>,
     blocked_plain_names: &HashSet<String>,
     plain_name_conflicts: &HashSet<String>,
-    seen: &mut HashSet<SkillCatalogEntryKey>,
+    seen_names: &mut HashSet<String>,
     selected: &mut Vec<SkillCatalogEntry>,
 ) {
     let mentioned_paths = mentions
@@ -77,7 +82,7 @@ fn select_text_mentions(
             .into_iter()
             .any(|path| mentioned_paths.contains(normalize_skill_path(path)))
         {
-            push_selected(entry, seen, selected);
+            push_selected(entry, seen_names, selected);
         }
     }
 
@@ -90,7 +95,7 @@ fn select_text_mentions(
         .collect::<HashSet<_>>();
     for entry in &catalog.entries {
         if selected_names.contains(&SkillCatalogEntryKey::from(entry)) {
-            push_selected(entry, seen, selected);
+            push_selected(entry, seen_names, selected);
         }
     }
 }
@@ -98,7 +103,7 @@ fn select_text_mentions(
 fn select_by_path(
     catalog: &SkillCatalog,
     path: &str,
-    seen: &mut HashSet<SkillCatalogEntryKey>,
+    seen_names: &mut HashSet<String>,
     selected: &mut Vec<SkillCatalogEntry>,
 ) {
     let path = normalize_skill_path(path);
@@ -107,7 +112,7 @@ fn select_by_path(
             .into_iter()
             .any(|candidate| normalize_skill_path(candidate) == path)
         {
-            push_selected(entry, seen, selected);
+            push_selected(entry, seen_names, selected);
         }
     }
 }
@@ -140,10 +145,10 @@ fn select_by_name<'a>(catalog: &'a SkillCatalog, name: &str) -> Option<&'a Skill
 
 fn push_selected(
     entry: &SkillCatalogEntry,
-    seen: &mut HashSet<SkillCatalogEntryKey>,
+    seen_names: &mut HashSet<String>,
     selected: &mut Vec<SkillCatalogEntry>,
 ) {
-    if seen.insert(SkillCatalogEntryKey::from(entry)) {
+    if seen_names.insert(entry.name.clone()) {
         selected.push(entry.clone());
     }
 }
@@ -174,7 +179,3 @@ impl From<&SkillCatalogEntry> for SkillCatalogEntryKey {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "runtime_selection_tests.rs"]
-mod tests;

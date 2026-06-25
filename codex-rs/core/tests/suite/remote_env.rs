@@ -12,6 +12,8 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -468,6 +470,54 @@ async fn serve_environment_with_agents_md(
     }
 }
 
+async fn serve_environment_with_skill(
+    listener: TcpListener,
+    skill_path: PathUri,
+    skill_contents: String,
+    attach: tokio::sync::oneshot::Receiver<()>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> usize {
+    let mut websocket = accept_initialized_exec_server(listener).await;
+    attach.await.expect("attach signal");
+    send_environment_info(&mut websocket).await;
+    let mut reads = 0;
+    let skill_path_string = skill_path.to_string();
+    loop {
+        let request = tokio::select! {
+            request = read_exec_server_json(&mut websocket) => request,
+            _ = &mut shutdown => return reads,
+        };
+        let response = match request["method"].as_str() {
+            Some("fs/walk") => json!({
+                "id": request["id"],
+                "result": {
+                    "entries": [{ "path": skill_path, "kind": "file" }],
+                    "errors": [],
+                    "truncated": false,
+                }
+            }),
+            Some("fs/getMetadata") => json!({
+                "id": request["id"],
+                "error": { "code": -32004, "message": "not found" }
+            }),
+            Some("fs/readFile")
+                if request["params"]["path"].as_str() == Some(skill_path_string.as_str()) =>
+            {
+                reads += 1;
+                json!({
+                    "id": request["id"],
+                    "result": { "dataBase64": BASE64_STANDARD.encode(&skill_contents) }
+                })
+            }
+            method => panic!("unexpected exec-server request: {method:?}"),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .await
+            .expect("filesystem response");
+    }
+}
+
 fn tool_names(body: &Value) -> Vec<String> {
     body["tools"]
         .as_array()
@@ -727,6 +777,127 @@ async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> R
     assert_eq!(agents_md_occurrences(&requests[2], AGENTS_CONTENT), 1);
     assert_eq!(test.codex.instruction_sources().await, vec![agents_path]);
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_executor_replaces_a_colliding_host_skill_for_the_next_step() -> Result<()> {
+    const HOST_BODY: &str = "HOST_SKILL_BODY_MARKER";
+    const EXECUTOR_BODY: &str = "EXECUTOR_SKILL_BODY_MARKER";
+    const SKILL_REPLACEMENT_NOTICE: &str =
+        "These instructions replace the previously provided instructions for this skill.";
+    let root_path = PathUri::from_host_native_path("/remote-capability")?;
+    let skill_path = root_path.join("skills/deploy/SKILL.md")?;
+    let skill_contents = format!(
+        "---\nname: deploy\ndescription: Deploy through the ready executor.\n---\n\n{EXECUTOR_BODY}\n"
+    );
+    let selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "remote-capability@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            path: root_path,
+        },
+    }];
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "wait-1",
+                    "wait_for_environment",
+                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
+        .with_selected_capability_roots(selected_capability_roots)
+        .with_pre_build_hook(|home| {
+            let skill_dir = home.join("skills/deploy");
+            std::fs::create_dir_all(&skill_dir).expect("create host skill directory");
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: deploy\ndescription: Deploy from the host.\n---\n\n{HOST_BODY}\n"
+                ),
+            )
+            .expect("write host skill");
+        })
+        .with_config(|config| {
+            config.project_doc_max_bytes = 0;
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        });
+    let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let exec_server = tokio::spawn(serve_environment_with_skill(
+        listener,
+        skill_path,
+        skill_contents,
+        attach_rx,
+        shutdown_rx,
+    ));
+    let test = timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should not wait for the remote environment")??;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Use $deploy after the environment is ready".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    attach_tx.send(()).expect("attach environment");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    shutdown_tx.send(()).expect("stop exec server");
+    assert_eq!(exec_server.await?, 2);
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first_user_context = requests[0].message_input_texts("user");
+    let host_skill = first_user_context
+        .iter()
+        .find(|text| text.starts_with("<skill>") && text.contains(HOST_BODY))
+        .expect("first request should contain host skill instructions");
+    assert!(!host_skill.contains(SKILL_REPLACEMENT_NOTICE));
+    assert!(
+        first_user_context
+            .iter()
+            .all(|text| !text.contains(EXECUTOR_BODY))
+    );
+    let second_user_context = requests[1].message_input_texts("user");
+    let executor_skill = second_user_context
+        .iter()
+        .find(|text| text.starts_with("<skill>") && text.contains(EXECUTOR_BODY))
+        .expect("second request should contain executor skill instructions");
+    assert!(executor_skill.contains(SKILL_REPLACEMENT_NOTICE));
+    let second_developer_context = requests[1].message_input_texts("developer");
+    let replacement_catalog = second_developer_context
+        .iter()
+        .find(|text| text.contains("This skills list replaces"))
+        .expect("second request should contain the replacement skill catalog");
+    assert!(replacement_catalog.contains("(environment resource:"));
     Ok(())
 }
 
