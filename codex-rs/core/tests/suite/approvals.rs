@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -640,6 +641,7 @@ enum ScenarioGroup {
     UnifiedExec,
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct CommandResult {
     exit_code: Option<i64>,
     stdout: String,
@@ -2691,6 +2693,120 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
         outside_path.exists(),
         "expected matched prefix_rule to rerun touch unsandboxed; output: {}",
         result.stdout
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn allowed_escalated_shell_command_inherits_active_permission_profile() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = ":workspace"
+"#,
+    )?;
+
+    let script_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let script_path = script_dir.path().join("print-permission-profile.sh");
+    let outside_path = script_dir.path().join("unsandboxed-marker");
+    fs::write(
+        &script_path,
+        format!("#!/bin/sh\nprintenv CODEX_PERMISSION_PROFILE\ntouch {outside_path:?}\n"),
+    )?;
+
+    let rules_dir = home.path().join("rules");
+    fs::create_dir_all(&rules_dir)?;
+    let script_pattern = serde_json::to_string(&script_path.to_string_lossy())?;
+    fs::write(
+        rules_dir.join("default.rules"),
+        format!(r#"prefix_rule(pattern=["/bin/sh", {script_pattern}], decision="allow")"#),
+    )?;
+
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+    });
+    let test = builder.build(&server).await?;
+    assert!(!outside_path.starts_with(test.config.cwd.as_path()));
+    assert_eq!(
+        test.session_configured
+            .active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
+    );
+
+    let call_id = "allowed-escalated-shell-inherits-permission-profile";
+    let command = format!("/bin/sh {script_path:?}");
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 5_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-escalated-profile-1"),
+            event,
+            ev_completed("resp-escalated-profile-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-escalated-profile-1", "done"),
+            ev_completed("resp-escalated-profile-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run the allowed script with escalated permissions".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result,
+        CommandResult {
+            exit_code: Some(0),
+            stdout: format!("{BUILT_IN_PERMISSION_PROFILE_WORKSPACE}\n"),
+        }
+    );
+    assert!(
+        outside_path.exists(),
+        "allowed escalated script should run outside the :workspace sandbox"
     );
 
     Ok(())
