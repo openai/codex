@@ -236,14 +236,14 @@ fn client_to_host_v1_variants_are_pinned() {
     let execute_request = execute_request();
     for (id, request, encoded_request) in [
         (
-            request_id(1),
+            request_id(/*value*/ 1),
             HostRequest::OpenSession {
                 session_id: session_id(),
             },
             json!({ "method": "session/open", "sessionId": "session-1" }),
         ),
         (
-            request_id(2),
+            request_id(/*value*/ 2),
             HostRequest::Execute {
                 session_id: session_id(),
                 request: execute_request,
@@ -281,7 +281,7 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         ),
         (
-            request_id(3),
+            request_id(/*value*/ 3),
             HostRequest::Wait {
                 session_id: session_id(),
                 request: WireWaitRequest {
@@ -296,7 +296,7 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         ),
         (
-            request_id(4),
+            request_id(/*value*/ 4),
             HostRequest::Terminate {
                 session_id: session_id(),
                 cell_id: cell_id("cell-1"),
@@ -308,7 +308,7 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         ),
         (
-            request_id(5),
+            request_id(/*value*/ 5),
             HostRequest::ShutdownSession {
                 session_id: session_id(),
             },
@@ -327,7 +327,7 @@ fn client_to_host_v1_variants_are_pinned() {
 
     for (id, result, encoded_result) in [
         (
-            delegate_request_id(6),
+            delegate_request_id(/*value*/ 6),
             WireResult::Ok {
                 value: DelegateResponse::ToolResult {
                     result: json!({ "answer": 42 }),
@@ -339,7 +339,7 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         ),
         (
-            delegate_request_id(7),
+            delegate_request_id(/*value*/ 7),
             WireResult::Ok {
                 value: DelegateResponse::NotificationDelivered,
             },
@@ -349,7 +349,7 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         ),
         (
-            delegate_request_id(8),
+            delegate_request_id(/*value*/ 8),
             WireResult::Err {
                 message: "delegate failed".to_string(),
             },
@@ -371,21 +371,21 @@ fn client_to_host_v1_variants_are_pinned() {
 fn host_to_client_v1_variants_are_pinned() {
     for (id, response, encoded_response) in [
         (
-            request_id(1),
+            request_id(/*value*/ 1),
             HostResponse::SessionReady {
                 session_id: session_id(),
             },
             json!({ "type": "session/ready", "sessionId": "session-1" }),
         ),
         (
-            request_id(2),
+            request_id(/*value*/ 2),
             HostResponse::ExecutionStarted {
                 cell_id: cell_id("cell-1"),
             },
             json!({ "type": "execution/started", "cellId": "cell-1" }),
         ),
         (
-            request_id(3),
+            request_id(/*value*/ 3),
             HostResponse::WaitCompleted {
                 outcome: WireWaitOutcome::LiveCell(WireRuntimeResponse::Yielded {
                     cell_id: cell_id("cell-1"),
@@ -405,7 +405,7 @@ fn host_to_client_v1_variants_are_pinned() {
             }),
         ),
         (
-            request_id(4),
+            request_id(/*value*/ 4),
             HostResponse::WaitCompleted {
                 outcome: WireWaitOutcome::MissingCell(WireRuntimeResponse::Result {
                     cell_id: cell_id("missing-cell"),
@@ -427,7 +427,7 @@ fn host_to_client_v1_variants_are_pinned() {
             }),
         ),
         (
-            request_id(5),
+            request_id(/*value*/ 5),
             HostResponse::SessionClosed {
                 session_id: session_id(),
             },
@@ -448,7 +448,7 @@ fn host_to_client_v1_variants_are_pinned() {
     }
     assert_wire_round_trip(
         HostToClient::Response {
-            id: request_id(6),
+            id: request_id(/*value*/ 6),
             result: WireResult::Err {
                 message: "operation failed".to_string(),
             },
@@ -462,7 +462,7 @@ fn host_to_client_v1_variants_are_pinned() {
 
     assert_wire_round_trip(
         HostToClient::InitialResponse {
-            id: request_id(7),
+            id: request_id(/*value*/ 7),
             result: WireResult::Ok {
                 value: WireRuntimeResponse::Terminated {
                     cell_id: cell_id("cell-1"),
@@ -483,7 +483,7 @@ fn host_to_client_v1_variants_are_pinned() {
     );
     assert_wire_round_trip(
         HostToClient::InitialResponse {
-            id: request_id(8),
+            id: request_id(/*value*/ 8),
             result: WireResult::Err {
                 message: "execution failed".to_string(),
             },
@@ -497,7 +497,7 @@ fn host_to_client_v1_variants_are_pinned() {
 
     assert_wire_round_trip(
         HostToClient::DelegateRequest {
-            id: delegate_request_id(9),
+            id: delegate_request_id(/*value*/ 9),
             session_id: session_id(),
             request: DelegateRequest::InvokeTool {
                 invocation: WireNestedToolCall {
@@ -533,7 +533,7 @@ fn host_to_client_v1_variants_are_pinned() {
     );
     assert_wire_round_trip(
         HostToClient::DelegateRequest {
-            id: delegate_request_id(10),
+            id: delegate_request_id(/*value*/ 10),
             session_id: session_id(),
             request: DelegateRequest::Notify {
                 call_id: "call-1".to_string(),
@@ -555,7 +555,7 @@ fn host_to_client_v1_variants_are_pinned() {
     );
     assert_wire_round_trip(
         HostToClient::CancelDelegateRequest {
-            id: delegate_request_id(11),
+            id: delegate_request_id(/*value*/ 11),
         },
         json!({ "type": "delegate/cancel", "id": 11 }),
     );
