@@ -161,14 +161,16 @@ async fn external_sleep_notification_waits_for_wake_and_ignores_stale_wakes() ->
     assert!(!params.sleep_id.is_empty());
     let sleep_id = params.sleep_id;
 
+    // The second currentTime/read marks the next model-request boundary, so reaching it here
+    // would mean clock.sleep returned before currentTime/wake released the turn.
+    let second_read_before_wake = timeout(
+        Duration::from_millis(100),
+        app_server.read_stream_until_request_message(),
+    )
+    .await;
     assert!(
-        timeout(
-            Duration::from_millis(100),
-            app_server.read_stream_until_notification_message("turn/completed"),
-        )
-        .await
-        .is_err(),
-        "turn completed before currentTime/wake"
+        second_read_before_wake.is_err(),
+        "second currentTime/read arrived before currentTime/wake"
     );
 
     let wake_params = CurrentTimeWakeParams {
