@@ -18,6 +18,7 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::LoaderOverrides;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
@@ -25,6 +26,8 @@ use codex_config::NetworkDomainPermissionsToml;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_skills::HostSkillsSnapshot;
 use core_test_support::test_codex::local_selections;
@@ -7649,6 +7652,64 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let new_runtime = session.services.latest_mcp_runtime();
     assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
     assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
+}
+
+#[tokio::test]
+async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let step_context = session.capture_step_context(turn_context).await;
+
+    let mut refresh_config = step_context.turn.config.as_ref().clone();
+    refresh_config.mcp_servers.set(HashMap::from([(
+        "newer".to_string(),
+        McpServerConfig {
+            auth: Default::default(),
+            transport: McpServerTransportConfig::Stdio {
+                command: "missing-test-mcp-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]))?;
+    session
+        .refresh_mcp_servers_now(
+            step_context.turn.as_ref(),
+            &refresh_config,
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+
+    let router = crate::session::turn::built_tools(
+        session.as_ref(),
+        step_context.as_ref(),
+        &CancellationToken::new(),
+    )
+    .await?;
+    assert!(
+        !router
+            .registered_tool_names_for_test()
+            .iter()
+            .any(|name| name.to_string() == "list_mcp_resources")
+    );
+    Ok(())
 }
 
 #[tokio::test]
