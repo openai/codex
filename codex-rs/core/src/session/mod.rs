@@ -3339,6 +3339,16 @@ impl Session {
                 )
                 .render(),
             );
+            if let Some(guidance_message) = turn_context
+                .config
+                .token_budget
+                .as_ref()
+                .and_then(|config| config.guidance_message.as_deref())
+                .filter(|message| !message.trim().is_empty())
+            {
+                developer_sections
+                    .push(crate::context::ContextWindowGuidance::new(guidance_message).render());
+            }
         }
         for fragment in world_state.render_full() {
             match fragment.role() {

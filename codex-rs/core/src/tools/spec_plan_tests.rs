@@ -31,6 +31,7 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::config::CurrentTimeReminderConfig;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
@@ -721,18 +722,27 @@ async fn host_context_gates_agent_job_tools() {
 }
 
 #[tokio::test]
-async fn sleep_tool_follows_feature_gate() {
+async fn sleep_tool_follows_current_time_config() {
     let disabled = probe(|turn| {
-        set_feature(turn, Feature::SleepTool, /*enabled*/ false);
+        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
     })
     .await;
-    disabled.assert_visible_lacks(&["sleep"]);
+    assert_eq!(disabled.namespace_function_names("clock"), ["curr_time"]);
 
     let enabled = probe(|turn| {
-        set_feature(turn, Feature::SleepTool, /*enabled*/ true);
+        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
+        let mut config = (*turn.config).clone();
+        config.current_time_reminder = Some(CurrentTimeReminderConfig {
+            sleep_tool: true,
+            ..CurrentTimeReminderConfig::default()
+        });
+        turn.config = Arc::new(config);
     })
     .await;
-    enabled.assert_visible_contains(&["sleep"]);
+    assert_eq!(
+        enabled.namespace_function_names("clock"),
+        ["curr_time", "sleep"]
+    );
 }
 
 #[tokio::test]
