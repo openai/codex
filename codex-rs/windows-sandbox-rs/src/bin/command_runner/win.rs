@@ -13,16 +13,18 @@ mod cwd_junction;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_pty::JobProcess;
+use codex_utils_pty::KillOnCloseJob;
 use codex_windows_sandbox::ErrorPayload;
 use codex_windows_sandbox::ErrorStage;
 use codex_windows_sandbox::ExitPayload;
 use codex_windows_sandbox::FramedMessage;
 use codex_windows_sandbox::IPC_PROTOCOL_VERSION;
+use codex_windows_sandbox::JobPipeSpawnHandles;
 use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
 use codex_windows_sandbox::OutputPayload;
 use codex_windows_sandbox::OutputStream;
-use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::ResizePayload;
 use codex_windows_sandbox::SpawnReady;
 use codex_windows_sandbox::SpawnRequest;
@@ -39,7 +41,7 @@ use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
-use codex_windows_sandbox::spawn_process_with_pipes;
+use codex_windows_sandbox::spawn_job_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::token_mode_for_permission_profile;
 use codex_windows_sandbox::write_frame;
@@ -62,38 +64,43 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Console::COORD;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
-use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
-use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
-use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
-use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-use windows_sys::Win32::System::Threading::GetProcessId;
 use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 use windows_sys::Win32::System::Threading::OpenMutexW;
-use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
-use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
+/// Terminates the runner's child job when the parent control transport closes or requests it.
+///
+/// Production uses the shared kill-on-close job controller. Tests implement this boundary to
+/// verify that transport failure is fail-closed without launching a real sandbox account.
+trait RunnerJobController: Send + 'static {
+    fn terminate_job(&self);
+}
+
+impl RunnerJobController for KillOnCloseJob {
+    fn terminate_job(&self) {
+        let _ = self.terminate_and_close(1);
+    }
+}
+
 struct IpcSpawnedProcess {
     log_dir: PathBuf,
-    pi: PROCESS_INFORMATION,
+    process: JobProcess,
     stdout_handle: HANDLE,
     stderr_handle: HANDLE,
     stdin_handle: Option<HANDLE>,
     conpty_owner: Option<codex_windows_sandbox::ConptyInstance>,
     hpc_handle: Option<HANDLE>,
-    _pipe_handles: Option<PipeSpawnHandles>,
+    _pipe_desktop: Option<codex_windows_sandbox::LaunchDesktop>,
 }
 
 /// Small RAII wrapper for raw Win32 handles.
 ///
-/// The elevated runner has a few early-return paths where we acquire a token, job, or pipe
+/// The elevated runner has a few early-return paths where we acquire a token or pipe
 /// handle and then may fail while preparing the child. Keeping those handles in a guard makes
 /// the error paths read more directly and closes the gaps that were previously leaking them.
 struct OwnedWinHandle(HANDLE);
@@ -124,25 +131,6 @@ impl Drop for OwnedWinHandle {
             }
         }
     }
-}
-
-unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
-    let h_job = OwnedWinHandle::new(CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()));
-    if h_job.raw() == 0 {
-        return Err(anyhow::anyhow!("CreateJobObjectW failed"));
-    }
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let ok = SetInformationJobObject(
-        h_job.raw(),
-        JobObjectExtendedLimitInformation,
-        &mut limits as *mut _ as *mut _,
-        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-    );
-    if ok == 0 {
-        return Err(anyhow::anyhow!("SetInformationJobObject failed"));
-    }
-    Ok(h_job.into_raw())
 }
 
 /// Open a named pipe created by the parent process.
@@ -298,9 +286,9 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
 
     let mut conpty_owner = None;
     let mut hpc_handle: Option<HANDLE> = None;
-    let mut pipe_handles = None;
-    let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
-        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
+    let mut pipe_desktop = None;
+    let (process, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
+        let (process, mut conpty) = codex_windows_sandbox::spawn_job_conpty_process_as_user(
             h_token.raw(),
             &req.command,
             &effective_cwd,
@@ -321,7 +309,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             None
         };
         (
-            pi,
+            process,
             output_read,
             windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE,
             stdin_handle,
@@ -332,7 +320,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         } else {
             StdinMode::Closed
         };
-        let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
+        let spawned_pipes: JobPipeSpawnHandles = spawn_job_process_with_pipes(
             h_token.raw(),
             &req.command,
             &effective_cwd,
@@ -342,24 +330,27 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
-        let pi = spawned_pipes.process;
-        let stdout_handle = spawned_pipes.stdout_read;
-        let stderr_handle = spawned_pipes
-            .stderr_read
-            .unwrap_or(windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE);
-        let stdin_handle = spawned_pipes.stdin_write;
-        pipe_handles = Some(spawned_pipes);
-        (pi, stdout_handle, stderr_handle, stdin_handle)
+        let JobPipeSpawnHandles {
+            process,
+            stdin_write: stdin_handle,
+            stdout_read: stdout_handle,
+            stderr_read: stderr_handle,
+            desktop,
+        } = spawned_pipes;
+        let stderr_handle =
+            stderr_handle.unwrap_or(windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE);
+        pipe_desktop = Some(desktop);
+        (process, stdout_handle, stderr_handle, stdin_handle)
     };
     Ok(IpcSpawnedProcess {
         log_dir,
-        pi,
+        process,
         stdout_handle,
         stderr_handle,
         stdin_handle,
         conpty_owner,
         hpc_handle,
-        _pipe_handles: pipe_handles,
+        _pipe_desktop: pipe_desktop,
     })
 }
 
@@ -396,7 +387,7 @@ fn spawn_input_loop(
     mut reader: File,
     stdin_handle: Option<HANDLE>,
     hpc_handle: Arc<StdMutex<Option<HANDLE>>>,
-    process_handle: Arc<StdMutex<Option<HANDLE>>>,
+    job: impl RunnerJobController,
     log_dir: Option<PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -404,8 +395,22 @@ fn spawn_input_loop(
         loop {
             let msg = match read_frame(&mut reader) {
                 Ok(Some(v)) => v,
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) => {
+                    log_note(
+                        "runner control pipe closed; terminating child job",
+                        log_dir.as_deref(),
+                    );
+                    job.terminate_job();
+                    break;
+                }
+                Err(err) => {
+                    log_note(
+                        &format!("runner control pipe read failed: {err}; terminating child job"),
+                        log_dir.as_deref(),
+                    );
+                    job.terminate_job();
+                    break;
+                }
             };
             match msg.message {
                 Message::Stdin { payload } => {
@@ -489,13 +494,7 @@ fn spawn_input_loop(
                     }
                 }
                 Message::Terminate { .. } => {
-                    if let Ok(guard) = process_handle.lock()
-                        && let Some(handle) = guard.as_ref()
-                    {
-                        unsafe {
-                            let _ = TerminateProcess(*handle, 1);
-                        }
-                    }
+                    job.terminate_job();
                 }
                 Message::SpawnRequest { .. } => {}
                 Message::SpawnReady { .. } => {}
@@ -567,27 +566,21 @@ pub fn main() -> Result<()> {
         }
     };
     let log_dir = Some(ipc_spawn.log_dir.as_path());
-    let pi = ipc_spawn.pi;
+    let process = ipc_spawn.process;
+    let process_handle = process.as_raw_handle() as HANDLE;
+    let job = process.controller();
     let stdout_handle = ipc_spawn.stdout_handle;
     let stderr_handle = ipc_spawn.stderr_handle;
     let mut conpty_owner = ipc_spawn.conpty_owner;
+    let pipe_desktop = ipc_spawn._pipe_desktop;
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
-
-    let h_job = unsafe { create_job_kill_on_close().ok() };
-    if let Some(job) = h_job {
-        unsafe {
-            let _ = AssignProcessToJobObject(job, pi.hProcess);
-        }
-    }
-
-    let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
 
     let msg = FramedMessage {
         version: IPC_PROTOCOL_VERSION,
         message: Message::SpawnReady {
             payload: SpawnReady {
-                process_id: unsafe { GetProcessId(pi.hProcess) },
+                process_id: process.process_id(),
             },
         },
     };
@@ -626,32 +619,26 @@ pub fn main() -> Result<()> {
         pipe_read,
         stdin_handle,
         Arc::clone(&hpc_handle),
-        Arc::clone(&process_handle),
+        job.clone(),
         log_dir_owned,
     );
 
     let timeout = req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-    let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
+    let wait_res = unsafe { WaitForSingleObject(process_handle, timeout) };
     let timed_out = wait_res == WAIT_TIMEOUT;
 
     let exit_code: i32;
     unsafe {
         if timed_out {
-            let _ = TerminateProcess(pi.hProcess, 1);
+            let _ = job.terminate_and_close(1);
             exit_code = 128 + 64;
         } else {
             let mut raw_exit: u32 = 1;
-            GetExitCodeProcess(pi.hProcess, &mut raw_exit);
+            GetExitCodeProcess(process_handle, &mut raw_exit);
             exit_code = raw_exit as i32;
-        }
-        if pi.hThread != 0 {
-            CloseHandle(pi.hThread);
-        }
-        if pi.hProcess != 0 {
-            CloseHandle(pi.hProcess);
-        }
-        if let Some(job) = h_job {
-            CloseHandle(job);
+            // Root exit ends the session. Closing the job before joining readers ensures any
+            // surviving descendants are stopped and release inherited output handles.
+            let _ = job.close();
         }
     }
 
@@ -659,6 +646,7 @@ pub fn main() -> Result<()> {
         let _ = guard.take();
     }
     drop(conpty_owner.take());
+    drop(pipe_desktop);
 
     let _ = out_thread.join();
     if let Some(thread) = err_thread {
@@ -682,3 +670,7 @@ pub fn main() -> Result<()> {
 
     std::process::exit(exit_code);
 }
+
+#[cfg(test)]
+#[path = "win_tests.rs"]
+mod tests;
