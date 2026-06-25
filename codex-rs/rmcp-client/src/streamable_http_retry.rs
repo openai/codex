@@ -22,13 +22,81 @@ use super::RmcpClient;
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 pub(super) const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
+#[derive(Default)]
+struct InitializeAttemptContext {
+    oauth_persistor: Option<OAuthPersistor>,
+}
+
 impl RmcpClient {
-    pub(super) async fn connect_pending_transport_with_initialize_retries(
+    pub(super) async fn connect_pending_transport_with_oauth_recovery(
         &self,
         initial_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
         initialize_deadline: &mut Option<Instant>,
+    ) -> Result<(
+        Arc<RunningService<RoleClient, ElicitationClientService>>,
+        Option<OAuthPersistor>,
+    )> {
+        let mut attempt_context = InitializeAttemptContext::default();
+        match self
+            .connect_pending_transport_with_initialize_retries(
+                initial_transport,
+                client_service.clone(),
+                timeout,
+                initialize_deadline,
+                &mut attempt_context,
+            )
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) if Self::is_unauthorized_initialize_error(&error) => {
+                let Some(oauth_persistor) = attempt_context.oauth_persistor else {
+                    return Err(error);
+                };
+                // Initialization gets one OAuth refresh and one reconstructed transport. Reusing
+                // this wrapper for the retry would turn persistent 401s into a refresh loop. The
+                // startup deadline gates whether recovery starts and bounds transport setup plus
+                // the retry handshake, but the refresh transaction has its own bounds and is
+                // deliberately excluded from the startup budget.
+                remaining_initialize_timeout(timeout, *initialize_deadline)?;
+                let refresh_started_at = Instant::now();
+                let refresh_result = oauth_persistor.refresh_after_unauthorized().await;
+                if let Some(deadline) = initialize_deadline.as_mut() {
+                    *deadline += refresh_started_at.elapsed();
+                }
+                refresh_result?;
+                let remaining = remaining_initialize_timeout(timeout, *initialize_deadline)?;
+                let transport = match remaining {
+                    Some(remaining) => time::timeout(
+                        remaining,
+                        Self::create_pending_transport(&self.transport_recipe),
+                    )
+                    .await
+                    .map_err(|_| initialize_timeout_error(timeout, remaining))??,
+                    None => Self::create_pending_transport(&self.transport_recipe).await?,
+                };
+                let mut retry_context = InitializeAttemptContext::default();
+                self.connect_pending_transport_with_initialize_retries(
+                    transport,
+                    client_service,
+                    timeout,
+                    initialize_deadline,
+                    &mut retry_context,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn connect_pending_transport_with_initialize_retries(
+        &self,
+        initial_transport: PendingTransport,
+        client_service: ElicitationClientService,
+        timeout: Option<Duration>,
+        initialize_deadline: &mut Option<Instant>,
+        attempt_context: &mut InitializeAttemptContext,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
@@ -61,6 +129,17 @@ impl RmcpClient {
                         None => Self::create_pending_transport(&self.transport_recipe).await?,
                     }
                 }
+            };
+            // Keep the persistor paired with the transport attempt that returned 401. Rebuilt
+            // transports reuse the recipe's lifecycle-pinned credential source, and this pairing
+            // also keeps the authorization manager and snapshot aligned with the failed attempt.
+            attempt_context.oauth_persistor = match &transport {
+                PendingTransport::StreamableHttpWithOAuth {
+                    oauth_persistor, ..
+                } => Some(oauth_persistor.clone()),
+                PendingTransport::InProcess { .. }
+                | PendingTransport::Stdio { .. }
+                | PendingTransport::StreamableHttp { .. } => None,
             };
             match Self::connect_pending_transport(
                 transport,
@@ -106,6 +185,29 @@ impl RmcpClient {
                     .downcast_ref::<rmcp::service::ClientInitializeError>()
                     .is_some_and(Self::is_retryable_client_initialize_error)
         })
+    }
+
+    fn is_unauthorized_initialize_error(error: &anyhow::Error) -> bool {
+        error.chain().any(|source| {
+            source
+                .downcast_ref::<HandshakeError>()
+                .is_some_and(|error| Self::is_unauthorized_client_initialize_error(&error.source))
+                || source
+                    .downcast_ref::<rmcp::service::ClientInitializeError>()
+                    .is_some_and(Self::is_unauthorized_client_initialize_error)
+        })
+    }
+
+    fn is_unauthorized_client_initialize_error(
+        error: &rmcp::service::ClientInitializeError,
+    ) -> bool {
+        match error {
+            rmcp::service::ClientInitializeError::TransportError { error, .. } => error
+                .error
+                .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+                .is_some_and(Self::is_unauthorized_streamable_http_error),
+            _ => false,
+        }
     }
 
     fn is_retryable_client_initialize_error(error: &rmcp::service::ClientInitializeError) -> bool {

@@ -38,8 +38,15 @@ impl RefreshCredentialLock {
     }
 
     pub(super) async fn acquire(store_key: &str) -> Result<Self> {
+        Self::acquire_with_timeout(store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
+    }
+
+    pub(super) async fn acquire_with_timeout(
+        store_key: &str,
+        acquire_timeout: Duration,
+    ) -> Result<Self> {
         let codex_home = find_codex_home()?;
-        Self::acquire_in(&codex_home, store_key, REFRESH_LOCK_ACQUIRE_TIMEOUT).await
+        Self::acquire_in(&codex_home, store_key, acquire_timeout).await
     }
 
     async fn acquire_in(
