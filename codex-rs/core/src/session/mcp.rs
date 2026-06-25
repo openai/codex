@@ -236,17 +236,17 @@ impl Session {
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        mcp_config: Arc<McpConfig>,
+        mut mcp_config: McpConfig,
         configured_mcp_servers: HashMap<String, McpServerConfig>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
+        mcp_config.mcp_server_catalog = mcp_config
+            .mcp_server_catalog
+            .with_materialized_servers(configured_mcp_servers);
+        let mcp_config = Arc::new(mcp_config);
         let auth = self.services.auth_manager.auth().await;
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-        let mcp_servers = effective_mcp_servers_from_configured(
-            configured_mcp_servers,
-            &mcp_config,
-            auth.as_ref(),
-        );
+        let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
         let environment_manager = self.services.turn_environments.environment_manager();
         // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
         // values can be used without falling back to the legacy host cwd.
@@ -365,7 +365,7 @@ impl Session {
             return;
         }
 
-        let mcp_config = Arc::new(self.runtime_mcp_config(&refresh_config).await);
+        let mcp_config = self.runtime_mcp_config(&refresh_config).await;
         self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
             .await;
     }
@@ -404,7 +404,7 @@ impl Session {
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let mcp_config = Arc::new(self.runtime_mcp_config(refresh_config).await);
+        let mcp_config = self.runtime_mcp_config(refresh_config).await;
         let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
         self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
             .await;
