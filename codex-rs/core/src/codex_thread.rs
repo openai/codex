@@ -44,6 +44,7 @@ use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use rmcp::model::Meta;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -613,12 +614,14 @@ impl CodexThread {
         &self,
         server: &str,
         uri: &str,
+        meta: Option<BTreeMap<String, serde_json::Value>>,
     ) -> anyhow::Result<serde_json::Value> {
-        let result = self
-            .codex
-            .session
-            .read_resource(server, ReadResourceRequestParams::new(uri))
-            .await?;
+        let params = if let Some(meta) = meta {
+            ReadResourceRequestParams::new(uri).with_meta(Meta(meta.into_iter().collect()))
+        } else {
+            ReadResourceRequestParams::new(uri)
+        };
+        let result = self.codex.session.read_resource(server, params).await?;
 
         Ok(serde_json::to_value(result)?)
     }

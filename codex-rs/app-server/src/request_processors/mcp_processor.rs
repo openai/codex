@@ -392,6 +392,7 @@ impl McpRequestProcessor {
             thread_id,
             server,
             uri,
+            meta,
         } = params;
 
         if let Some(thread_id) = thread_id {
@@ -399,7 +400,7 @@ impl McpRequestProcessor {
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
-                let result = thread.read_mcp_resource(&server, &uri).await;
+                let result = thread.read_mcp_resource(&server, &uri, meta).await;
                 Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
             });
             return Ok(());
@@ -427,6 +428,7 @@ impl McpRequestProcessor {
                 runtime_context,
                 &server,
                 &uri,
+                meta,
             )
             .await
             .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));

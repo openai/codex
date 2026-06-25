@@ -827,6 +827,18 @@ impl TestAppServer {
         self.send_request("mcpServer/resource/read", params).await
     }
 
+    /// Send an `mcpServer/resource/read` JSON-RPC request with protocol metadata.
+    pub async fn send_mcp_resource_read_request_with_meta(
+        &mut self,
+        params: McpResourceReadParams,
+        meta: serde_json::Value,
+    ) -> anyhow::Result<i64> {
+        let mut params = serde_json::to_value(params)?;
+        params["_meta"] = meta;
+        self.send_request("mcpServer/resource/read", Some(params))
+            .await
+    }
+
     /// Send an `mcpServer/tool/call` JSON-RPC request.
     pub async fn send_mcp_server_tool_call_request(
         &mut self,

@@ -62,6 +62,24 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn mcp_resource_read_params_deserialize_meta() {
+    let params: McpResourceReadParams = serde_json::from_value(json!({
+        "server": "codex_apps",
+        "uri": "test://codex/resource",
+        "_meta": { "traceId": "trace-123" },
+    }))
+    .expect("deserialize resource read params");
+
+    assert_eq!(
+        params.meta,
+        Some(BTreeMap::from([(
+            "traceId".to_string(),
+            json!("trace-123")
+        )]))
+    );
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),
