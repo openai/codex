@@ -57,16 +57,6 @@ impl ConfiguredMarketplaceUpgradeOutcome {
     }
 }
 
-pub fn configured_git_marketplace_names(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
-    let mut names = load_configured_git_marketplaces(config_layer_stack)
-        .marketplaces
-        .into_iter()
-        .map(|marketplace| marketplace.name)
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names
-}
-
 pub fn upgrade_configured_git_marketplaces(
     codex_home: &Path,
     config_layer_stack: &ConfigLayerStack,

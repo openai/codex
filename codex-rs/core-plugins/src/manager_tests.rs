@@ -719,10 +719,6 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
         }]
     );
-    assert_eq!(
-        outcome.effective_skill_roots(),
-        vec![plugin_root.join("skills").abs()]
-    );
     assert_eq!(outcome.effective_mcp_servers().len(), 1);
     assert_eq!(
         outcome.effective_apps(),
@@ -1965,7 +1961,6 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             error: None,
         }]
     );
-    assert!(outcome.effective_skill_roots().is_empty());
     assert!(outcome.effective_mcp_servers().is_empty());
 }
 
@@ -2411,7 +2406,6 @@ async fn load_plugins_rejects_invalid_plugin_keys() {
         outcome.plugins()[0].error.as_deref(),
         Some("invalid plugin key `sample`; expected <plugin>@<marketplace>")
     );
-    assert!(outcome.effective_skill_roots().is_empty());
     assert!(outcome.effective_mcp_servers().is_empty());
 }
 

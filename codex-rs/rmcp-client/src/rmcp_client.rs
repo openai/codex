@@ -22,14 +22,10 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomNotification;
-use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
-use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
 use rmcp::model::ListResourceTemplatesResult;
@@ -64,7 +60,6 @@ use tracing::warn;
 use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
-use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
@@ -84,9 +79,6 @@ use self::streamable_http_retry::STREAMABLE_HTTP_RETRY_DELAYS_MS;
 use self::streamable_http_retry::sleep_with_retry_deadline;
 
 enum PendingTransport {
-    InProcess {
-        transport: tokio::io::DuplexStream,
-    },
     Stdio {
         transport: StdioServerTransport,
     },
@@ -112,9 +104,6 @@ enum ClientState {
 
 #[derive(Clone)]
 enum TransportRecipe {
-    InProcess {
-        factory: Arc<dyn InProcessTransportFactory>,
-    },
     Stdio {
         command: StdioServerCommand,
         launcher: Arc<dyn StdioServerLauncher>,
@@ -329,26 +318,6 @@ pub struct RmcpClient {
 }
 
 impl RmcpClient {
-    pub async fn new_in_process_client(
-        factory: Arc<dyn InProcessTransportFactory>,
-    ) -> io::Result<Self> {
-        let transport_recipe = TransportRecipe::InProcess { factory };
-        let transport = Self::create_pending_transport(&transport_recipe)
-            .await
-            .map_err(io::Error::other)?;
-
-        Ok(Self {
-            state: Mutex::new(ClientState::Connecting {
-                transport: Some(transport),
-            }),
-            stdio_process: None,
-            transport_recipe,
-            initialize_context: Mutex::new(None),
-            session_recovery_lock: Semaphore::new(/*permits*/ 1),
-            elicitation_pause_state: ElicitationPauseState::new(),
-        })
-    }
-
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
@@ -366,8 +335,7 @@ impl RmcpClient {
             .map_err(io::Error::other)?;
         let stdio_process = match &transport {
             PendingTransport::Stdio { transport } => Some(transport.process_handle()),
-            PendingTransport::InProcess { .. }
-            | PendingTransport::StreamableHttp { .. }
+            PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => None,
         };
 
@@ -655,59 +623,6 @@ impl RmcpClient {
         Ok(result)
     }
 
-    pub async fn send_custom_notification(
-        &self,
-        method: &str,
-        params: Option<serde_json::Value>,
-    ) -> Result<()> {
-        self.refresh_oauth_if_needed().await;
-        self.run_service_operation(
-            "notifications/custom",
-            /*timeout*/ None,
-            move |service| {
-                let params = params.clone();
-                async move {
-                    service
-                        .send_notification(ClientNotification::CustomNotification(
-                            CustomNotification {
-                                method: method.to_string(),
-                                params,
-                                extensions: Extensions::new(),
-                            },
-                        ))
-                        .await
-                }
-                .boxed()
-            },
-        )
-        .await?;
-        self.persist_oauth_tokens().await;
-        Ok(())
-    }
-
-    pub async fn send_custom_request(
-        &self,
-        method: &str,
-        params: Option<serde_json::Value>,
-    ) -> Result<ServerResult> {
-        self.refresh_oauth_if_needed().await;
-        let response = self
-            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
-                let params = params.clone();
-                async move {
-                    service
-                        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
-                            method, params,
-                        )))
-                        .await
-                }
-                .boxed()
-            })
-            .await?;
-        self.persist_oauth_tokens().await;
-        Ok(response)
-    }
-
     async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {
         let guard = self.state.lock().await;
         match &*guard {
@@ -766,10 +681,6 @@ impl RmcpClient {
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
         match transport_recipe {
-            TransportRecipe::InProcess { factory } => {
-                let transport = factory.open().await?;
-                Ok(PendingTransport::InProcess { transport })
-            }
             TransportRecipe::Stdio { command, launcher } => {
                 let transport = launcher.launch(command.clone()).await?;
                 Ok(PendingTransport::Stdio { transport })
@@ -886,10 +797,6 @@ impl RmcpClient {
         Option<OAuthPersistor>,
     )> {
         let (transport, oauth_persistor) = match pending_transport {
-            PendingTransport::InProcess { transport } => (
-                service::serve_client(client_service, transport).boxed(),
-                None,
-            ),
             PendingTransport::Stdio { transport } => (
                 service::serve_client(client_service, transport).boxed(),
                 None,

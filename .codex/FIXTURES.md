@@ -7,7 +7,10 @@ Last updated: 2026-06-25
 - Notes: this behavior-neutral cleanup should require no fixture changes.
 
 ## Mapped fixtures
-- [ ] Record any affected targeted tests after candidate selection.
+- [x] Existing connector snapshot tests cover live snapshot construction.
+- [x] OAuth discovery coverage was retained after deleting its unused wrapper.
+- [x] Existing app-instructions integration tests cover the behavior formerly duplicated by the dead test-only renderer.
 
 ## Coverage gaps
-- [ ] Identify items whose use depends on external consumers or non-default features.
+- [x] No generated fixtures or snapshots changed.
+- [x] External Git consumers remain the only unobservable compatibility risk for removed public `0.0.0` crate APIs.

@@ -60,7 +60,7 @@ struct CodexAppsConnectorAuthFailureMeta<'a> {
     error_action: Option<&'a str>,
 }
 
-pub fn connector_auth_failure_from_tool_result(
+fn connector_auth_failure_from_tool_result(
     result: &CallToolResult,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
@@ -137,7 +137,7 @@ pub fn build_auth_elicitation_plan(
     })
 }
 
-pub fn build_auth_elicitation(
+fn build_auth_elicitation(
     call_id: &str,
     auth_failure: &CodexAppsConnectorAuthFailure,
 ) -> CodexAppsAuthElicitation {
@@ -181,7 +181,7 @@ pub fn auth_elicitation_completed_result(
     }
 }
 
-pub fn auth_elicitation_id(call_id: &str) -> String {
+fn auth_elicitation_id(call_id: &str) -> String {
     format!("codex_apps_auth_{call_id}")
 }
 

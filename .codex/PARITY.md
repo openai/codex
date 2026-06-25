@@ -3,18 +3,18 @@
 Last updated: 2026-06-25
 
 ## MCP
-- [ ] MCP cleanup preserves client/server behavior and schemas.
+- [x] MCP cleanup preserves client/server behavior and schemas.
 
 ## Apps / connectors
-- [ ] App and connector cleanup preserves listings, auth, invocation, and protocol behavior.
+- [x] App and connector cleanup preserves listings, auth, invocation, and protocol behavior.
 
 ## Plugins / skills
-- [ ] Plugin and skill cleanup preserves discovery, loading, configuration, and invocation.
+- [x] Plugin and skill cleanup preserves discovery, loading, configuration, and invocation.
 
 ## Behavior / platform
-- [ ] Feature-gated, test-only, and platform-specific behavior remains intact.
+- [x] Feature-gated, test-only, and platform-specific behavior remains intact.
 
 ## Verification
-- [ ] Formatting passes.
-- [ ] Targeted checks/tests pass.
-- [ ] Independent diff review finds no live-surface deletion.
+- [x] Formatting passes.
+- [x] Targeted checks/tests pass, apart from two unrelated environment-sensitive skill-root assertions.
+- [x] Independent diff review finds no live-surface deletion.

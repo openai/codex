@@ -64,15 +64,6 @@ pub async fn determine_streamable_http_auth_status(
     }
 }
 
-/// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
-pub async fn supports_oauth_login(url: &str) -> Result<bool> {
-    Ok(discover_streamable_http_oauth(
-        url, /*http_headers*/ None, /*env_http_headers*/ None,
-    )
-    .await?
-    .is_some())
-}
-
 pub async fn discover_streamable_http_oauth(
     url: &str,
     http_headers: Option<HashMap<String, String>>,
@@ -352,17 +343,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supports_oauth_login_does_not_require_scopes_supported() {
+    async fn discover_streamable_http_oauth_does_not_require_scopes_supported() {
         let server = spawn_oauth_discovery_server(serde_json::json!({
             "authorization_endpoint": "https://example.com/authorize",
             "token_endpoint": "https://example.com/token",
         }))
         .await;
 
-        let supported = supports_oauth_login(&server.url)
-            .await
-            .expect("support check should succeed");
+        let discovery = discover_streamable_http_oauth(
+            &server.url,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+        )
+        .await
+        .expect("discovery should succeed")
+        .expect("oauth support should be detected");
 
-        assert!(supported);
+        assert_eq!(discovery.scopes_supported, None);
     }
 }

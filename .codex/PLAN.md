@@ -3,9 +3,9 @@
 Last updated: 2026-06-25
 
 ## Definition of Done
-- [ ] All in-scope dead items found by scoped search/compiler evidence are removed.
-- [ ] No live public, protocol, serialized, platform-specific, or test-only surface is removed.
-- [ ] Formatting and relevant Rust checks/tests pass.
+- [x] All in-scope dead items found by scoped search/compiler evidence are removed.
+- [x] No live public, protocol, serialized, platform-specific, or test-only surface is removed.
+- [x] Formatting and relevant Rust checks/tests pass.
 - [ ] Diff is independently reviewed and published as a draft PR with evidence.
 
 ## Milestones
@@ -28,5 +28,5 @@ Last updated: 2026-06-25
 
 ### Cycle 1
 - Goals: implement safe deletions and scoped tests.
-- Exit criteria: clean integrated diff with targeted checks passing.
-- Notes: reassign agents to verification/review after implementation.
+- Exit criteria: clean integrated diff with targeted checks passing. Achieved.
+- Notes: agents were reassigned across workstreams for independent verification; one real cross-crate compile break was found and fixed.

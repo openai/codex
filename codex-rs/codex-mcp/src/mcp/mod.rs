@@ -235,7 +235,7 @@ impl ToolPluginProvenance {
     }
 }
 
-pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
+fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
     config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
 }
 

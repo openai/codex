@@ -108,8 +108,6 @@ struct ArmSessionPostFailureRequest {
 #[derive(Deserialize)]
 struct EchoArgs {
     message: String,
-    #[allow(dead_code)]
-    env_var: Option<String>,
 }
 
 #[tokio::main]
@@ -335,8 +333,7 @@ impl TestToolServer {
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
             "properties": {
-                "message": { "type": "string" },
-                "env_var": { "type": "string" }
+                "message": { "type": "string" }
             },
             "required": ["message"],
             "additionalProperties": false
