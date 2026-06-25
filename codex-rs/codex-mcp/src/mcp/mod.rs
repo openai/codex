@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use async_channel::unbounded;
 use codex_config::Constrained;
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
@@ -26,6 +27,7 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_connectors::ConnectorSnapshot;
 use codex_login::CodexAuth;
+use codex_model_provider::CHATGPT_CODEX_BASE_URL;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
@@ -257,23 +259,28 @@ pub fn effective_mcp_servers_from_configured(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
-    let chatgpt_origin = url::Url::parse(&config.chatgpt_base_url)
+    let chatgpt_origin = url::Url::parse(CHATGPT_CODEX_BASE_URL)
         .ok()
-        .filter(|url| matches!(url.scheme(), "http" | "https"))
         .map(|url| url.origin());
     let mut servers = configured_servers
         .into_iter()
         .map(|(name, mut server)| {
-            if server.use_chatgpt_auth {
-                let server_origin = match &server.transport {
-                    McpServerTransportConfig::StreamableHttp { url, .. } => url::Url::parse(url)
-                        .ok()
-                        .filter(|url| matches!(url.scheme(), "http" | "https"))
-                        .map(|url| url.origin()),
-                    McpServerTransportConfig::Stdio { .. } => None,
-                };
-                server.use_chatgpt_auth =
-                    server_origin.is_some() && server_origin.as_ref() == chatgpt_origin.as_ref();
+            match server.auth.clone() {
+                McpServerAuth::ChatGpt => {
+                    let server_origin = match &server.transport {
+                        McpServerTransportConfig::StreamableHttp { url, .. } => {
+                            url::Url::parse(url)
+                                .ok()
+                                .filter(|url| matches!(url.scheme(), "http" | "https"))
+                                .map(|url| url.origin())
+                        }
+                        McpServerTransportConfig::Stdio { .. } => None,
+                    };
+                    if server_origin.as_ref() != chatgpt_origin.as_ref() {
+                        server.auth = McpServerAuth::OAuth;
+                    }
+                }
+                McpServerAuth::OAuth => {}
             }
             (name, EffectiveMcpServer::configured(server))
         })
@@ -474,7 +481,7 @@ pub fn codex_apps_mcp_server_config(
     mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url(chatgpt_base_url),
         apps_mcp_product_sku,
-        /*use_chatgpt_auth*/ true,
+        McpServerAuth::ChatGpt,
     )
 }
 
@@ -492,14 +499,14 @@ pub fn hosted_plugin_runtime_mcp_server_config(
     mcp_server_config_for_url(
         format!("{base_url}/ps/mcp"),
         apps_mcp_product_sku,
-        /*use_chatgpt_auth*/ true,
+        McpServerAuth::ChatGpt,
     )
 }
 
 fn mcp_server_config_for_url(
     url: String,
     apps_mcp_product_sku: Option<&str>,
-    use_chatgpt_auth: bool,
+    auth_mode: McpServerAuth,
 ) -> McpServerConfig {
     let http_headers = apps_mcp_product_sku.map(|product_sku| {
         HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())])
@@ -512,7 +519,7 @@ fn mcp_server_config_for_url(
             http_headers,
             env_http_headers: None,
         },
-        use_chatgpt_auth,
+        auth: auth_mode,
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,

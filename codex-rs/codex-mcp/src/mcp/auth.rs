@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
@@ -141,7 +142,7 @@ where
         let config = server.configured_config().cloned();
         let has_runtime_auth = config
             .as_ref()
-            .is_some_and(|config| config.use_chatgpt_auth)
+            .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
             && auth.is_some_and(CodexAuth::uses_codex_backend)
             && config.as_ref().is_some_and(|config| {
                 matches!(

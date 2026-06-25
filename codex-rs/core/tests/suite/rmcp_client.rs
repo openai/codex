@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
@@ -268,7 +269,7 @@ fn copy_binary_to_remote_env(
 
 struct TestMcpServerOptions {
     environment_id: String,
-    use_chatgpt_auth: bool,
+    auth: McpServerAuth,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
 }
@@ -277,7 +278,7 @@ impl Default for TestMcpServerOptions {
     fn default() -> Self {
         Self {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            use_chatgpt_auth: false,
+            auth: McpServerAuth::default(),
             supports_parallel_tool_calls: false,
             tool_timeout_sec: None,
         }
@@ -318,7 +319,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
-            use_chatgpt_auth: options.use_chatgpt_auth,
+            auth: options.auth,
             environment_id: options.environment_id,
             enabled: true,
             required: false,
@@ -1231,7 +1232,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
-                    use_chatgpt_auth: false,
+                    auth: Default::default(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
@@ -2304,62 +2305,20 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> anyhow::Result<()> {
+async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let Some(chatgpt_auth_server) =
-        start_streamable_http_test_server("chatgpt-auth", Some("Access Token")).await?
-    else {
-        return Ok(());
-    };
-    let chatgpt_auth_url = chatgpt_auth_server.url().to_string();
-    let chatgpt_base_url = chatgpt_auth_url
-        .strip_suffix("/mcp")
-        .expect("test MCP URL should end in /mcp")
-        .to_string();
-
-    let chatgpt_auth_fixture = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.chatgpt_base_url = chatgpt_base_url;
-            insert_mcp_server(
-                config,
-                "chatgpt_auth",
-                McpServerTransportConfig::StreamableHttp {
-                    url: chatgpt_auth_url,
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                TestMcpServerOptions {
-                    environment_id: remote_aware_environment_id(),
-                    use_chatgpt_auth: true,
-                    ..Default::default()
-                },
-            );
-        })
-        .build_with_remote_env(&server)
-        .await?;
-    wait_for_mcp_server(&chatgpt_auth_fixture.codex, "chatgpt_auth").await?;
-    drop(chatgpt_auth_fixture);
-    chatgpt_auth_server.shutdown().await;
-
     let Some(configured_auth_server) =
         start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
     else {
         return Ok(());
     };
     let configured_auth_url = configured_auth_server.url().to_string();
-    let configured_auth_base_url = configured_auth_url
-        .strip_suffix("/mcp")
-        .expect("test MCP URL should end in /mcp")
-        .to_string();
 
     let configured_auth_fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.chatgpt_base_url = configured_auth_base_url;
             insert_mcp_server(
                 config,
                 "configured_auth",
@@ -2374,7 +2333,7 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
                 },
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
-                    use_chatgpt_auth: true,
+                    auth: McpServerAuth::ChatGpt,
                     ..Default::default()
                 },
             );
@@ -2390,19 +2349,19 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_chatgpt_auth_is_not_sent_to_another_origin() -> anyhow::Result<()> {
+async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let untrusted_server = MockServer::start().await;
     let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
     let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
-    let trusted_chatgpt_base_url = server.uri();
+    let untrusted_chatgpt_base_url = untrusted_apps.chatgpt_base_url;
 
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.chatgpt_base_url = trusted_chatgpt_base_url;
+            config.chatgpt_base_url = untrusted_chatgpt_base_url;
             insert_mcp_server(
                 config,
                 "untrusted_origin",
@@ -2413,7 +2372,7 @@ async fn streamable_http_chatgpt_auth_is_not_sent_to_another_origin() -> anyhow:
                     env_http_headers: None,
                 },
                 TestMcpServerOptions {
-                    use_chatgpt_auth: true,
+                    auth: McpServerAuth::ChatGpt,
                     ..Default::default()
                 },
             );

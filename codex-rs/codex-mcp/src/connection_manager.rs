@@ -43,6 +43,7 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_api::SharedAuthProvider;
 use codex_config::Constrained;
+use codex_config::McpServerAuth;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -872,7 +873,7 @@ fn chatgpt_auth_provider_for_server(
 ) -> Option<SharedAuthProvider> {
     if !server
         .configured_config()
-        .is_some_and(|config| config.use_chatgpt_auth)
+        .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
     {
         return None;
     }
