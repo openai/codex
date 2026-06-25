@@ -4,6 +4,7 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
@@ -287,8 +288,10 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
-    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
-        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    for key in [CODEX_THREAD_ID_ENV_VAR, CODEX_PERMISSION_PROFILE_ENV_VAR] {
+        if let Some(value) = env.get(key) {
+            override_env.insert(key.to_string(), value.clone());
+        }
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
@@ -319,7 +322,9 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
         .map(String::as_str)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
+    keys.push(CODEX_PERMISSION_PROFILE_ENV_VAR);
     keys.sort_unstable();
+    keys.dedup();
 
     build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
 }
