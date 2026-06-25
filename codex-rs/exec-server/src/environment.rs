@@ -54,7 +54,7 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
-    environments: RwLock<HashMap<String, Arc<Environment>>>,
+    pub(super) environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
@@ -574,6 +574,25 @@ impl Environment {
         }
     }
 
+    /// Starts the initial connection after an environment is actually selected for use.
+    pub(crate) fn start_connecting_for_use(environment: &Arc<Self>) {
+        if environment.remote_client.is_none() {
+            return;
+        }
+        let mut startup_task = environment
+            .startup_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if startup_task.is_none() {
+            let environment = Arc::clone(environment);
+            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+                if let Err(error) = environment.wait_until_ready().await {
+                    tracing::debug!(%error, "exec-server environment startup failed");
+                }
+            })));
+        }
+    }
+
     /// Returns whether initial startup has either succeeded or permanently failed.
     pub fn startup_finished(&self) -> bool {
         self.remote_client
@@ -619,6 +638,8 @@ mod tests {
     use crate::client_api::StdioExecServerCommand;
     use crate::environment_provider::EnvironmentDefault;
     use crate::environment_provider::EnvironmentProviderSnapshot;
+    use codex_protocol::capabilities::CapabilityRootLocation;
+    use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use tokio::net::TcpListener;
@@ -1035,7 +1056,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_leaves_stdio_environment_lazy() {
+    async fn selected_capability_root_starts_lazy_stdio_environment() {
         let environment = Environment::remote_with_transport(
             ExecServerTransportParams::StdioCommand {
                 command: StdioExecServerCommand {
@@ -1058,10 +1079,29 @@ mod tests {
         )
         .expect("environment manager");
         let environment = manager.get_environment("stdio").expect("stdio environment");
+        let selected_root = SelectedCapabilityRoot {
+            id: "demo@1".to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "stdio".to_string(),
+                path: PathUri::parse("file:///plugins/demo").expect("plugin URI"),
+            },
+        };
 
         assert!(!environment.startup_finished());
+        assert!(
+            manager
+                .resolve_selected_capability_roots(std::slice::from_ref(&selected_root))
+                .await
+                .is_empty()
+        );
+        timeout(Duration::from_secs(5), async {
+            while !environment.startup_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("selected root should start the lazy stdio environment");
         assert!(environment.wait_until_ready().await.is_err());
-        assert!(environment.startup_finished());
     }
 
     #[tokio::test]
