@@ -16,7 +16,6 @@ use crate::runner_pipe::find_runner_exe;
 use crate::runner_pipe::pipe_pair;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
-use crate::winutil::to_win32_path_wide;
 use anyhow::Context;
 use anyhow::Result;
 use std::ffi::c_void;
@@ -343,7 +342,7 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_win32_path_wide(cwd);
+    let cwd_w = to_wide(cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);

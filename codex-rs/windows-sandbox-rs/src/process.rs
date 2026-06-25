@@ -4,7 +4,6 @@ use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
-use crate::winutil::to_win32_path_wide;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -118,7 +117,7 @@ pub(crate) unsafe fn create_process_as_user(
     let env_block = make_env_block(env_map);
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-    let cwd_wide = to_win32_path_wide(cwd);
+    let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();
     match stdio {
         Some((stdin_h, stdout_h, stderr_h)) => {
