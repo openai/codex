@@ -1384,6 +1384,25 @@
       },
       "type": "object"
     },
+    "McpServerAuth": {
+      "description": "Authentication flow Codex attempts after resolving an HTTP MCP server's configured bearer token and authorization headers, which always take precedence. ChatGPT authentication falls back to stored OAuth credentials when its session provider is unavailable; both modes ultimately fall back to an unauthenticated connection.",
+      "oneOf": [
+        {
+          "description": "Use stored MCP OAuth credentials when available. Starting an OAuth login is a separate operation.",
+          "enum": [
+            "oauth"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the current ChatGPT session for servers on the trusted first-party ChatGPT origin. If no ChatGPT session provider is available, startup can still fall back to stored OAuth credentials.",
+          "enum": [
+            "chatgpt"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "McpServerEnvVar": {
       "anyOf": [
         {
@@ -2427,6 +2446,14 @@
           },
           "type": "array"
         },
+        "auth": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpServerAuth"
+            }
+          ],
+          "default": null
+        },
         "bearer_token_env_var": {
           "type": "string"
         },
@@ -2862,12 +2889,12 @@
         },
         "guidance_message": {
           "description": "Guidance appended to the context-window metadata in a developer message.",
-          "maxLength": 1000,
+          "maxLength": 4096,
           "type": "string"
         },
         "reminder_message_template": {
           "description": "Reminder template. `{n_remaining}` is replaced with the tokens remaining before auto-compaction.",
-          "maxLength": 1000,
+          "maxLength": 4096,
           "minLength": 1,
           "type": "string"
         },

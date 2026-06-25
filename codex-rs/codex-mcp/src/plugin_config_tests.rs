@@ -32,6 +32,7 @@ fn stdio_server(
     env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
             args: Vec::new(),
@@ -66,6 +67,7 @@ fn declared_placement_preserves_local_plugin_normalization() {
         Vec::new(),
     );
     let expected_http = McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: "https://example.com/mcp".to_string(),
             bearer_token_env_var: None,

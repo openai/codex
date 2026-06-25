@@ -161,6 +161,14 @@ pub(crate) enum AppEvent {
         op: AppCommand,
     },
 
+    /// Interrupt, roll back, and retry a safety-buffered turn with the server-selected model.
+    RetrySafetyBufferedTurn {
+        thread_id: ThreadId,
+        turn_id: String,
+        model: String,
+        turn: AppCommand,
+    },
+
     /// Deliver a synthetic history lookup response to a specific thread channel.
     ThreadHistoryEntryResponse {
         thread_id: ThreadId,

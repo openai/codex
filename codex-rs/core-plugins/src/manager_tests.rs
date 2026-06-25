@@ -677,6 +677,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             mcp_servers: HashMap::from([(
                 "sample".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: "https://sample.example/mcp".to_string(),
                         bearer_token_env_var: None,
@@ -768,6 +769,7 @@ enabled = true
         HashMap::from([(
             "counter".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://sample.example/counter/mcp".to_string(),
                     bearer_token_env_var: None,
@@ -1662,6 +1664,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
             HashMap::from([(
                 "custom".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: "https://custom.example/mcp".to_string(),
                         bearer_token_env_var: None,
@@ -1842,6 +1845,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
         HashMap::from([(
             "default".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://default.example/mcp".to_string(),
                     bearer_token_env_var: None,
@@ -2092,6 +2096,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
     let connector = |id: &str| AppConnectorId(id.to_string());
     let app = |name: &str, connector_id: &str| app_declaration(name, connector_id);
     let http_server = |url: &str| McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,
