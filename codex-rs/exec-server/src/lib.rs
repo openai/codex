@@ -28,6 +28,7 @@ mod runtime_paths;
 mod sandboxed_file_system;
 mod server;
 mod telemetry;
+mod trace_context;
 
 use codex_exec_server_protocol as protocol;
 
