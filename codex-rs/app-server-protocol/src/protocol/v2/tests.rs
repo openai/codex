@@ -2834,7 +2834,7 @@ fn skills_extra_roots_set_params_rejects_relative_roots() {
 }
 
 #[test]
-fn plugin_source_serializes_local_git_and_remote_variants() {
+fn plugin_source_serializes_local_git_npm_and_remote_variants() {
     let local_path = if cfg!(windows) {
         r"C:\plugins\linear"
     } else {
@@ -2865,6 +2865,21 @@ fn plugin_source_serializes_local_git_and_remote_variants() {
             "path": "plugins/example",
             "refName": "main",
             "sha": "abc123",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginSource::Npm {
+            package: "@acme/plugin".to_string(),
+            version: Some("^1.2.0".to_string()),
+            registry: Some("https://npm.example.com".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "type": "npm",
+            "package": "@acme/plugin",
+            "version": "^1.2.0",
+            "registry": "https://npm.example.com",
         }),
     );
 
