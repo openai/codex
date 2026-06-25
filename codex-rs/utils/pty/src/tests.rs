@@ -32,6 +32,10 @@ mod windows_conpty_job_tests;
 #[path = "windows_pipe_job_tests.rs"]
 mod windows_pipe_job_tests;
 
+#[cfg(windows)]
+#[path = "windows_pipe_parity_tests.rs"]
+mod windows_pipe_parity_tests;
+
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
         if let Ok(output) = std::process::Command::new(candidate)
