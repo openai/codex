@@ -1257,7 +1257,7 @@ mod tests {
         let persistor = OAuthPersistor::new(
             initial_tokens.server_name.clone(),
             initial_tokens.url.clone(),
-            manager,
+            manager.clone(),
             ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
             Some(initial_tokens),
         );
@@ -1276,6 +1276,16 @@ mod tests {
             "unexpected error: {error:#}"
         );
         assert!(!super::fallback_file_path()?.exists());
+
+        // B remains authoritative in memory without retrying the failed durable write.
+        persistor
+            .persist_if_needed_with_keyring_store(&store)
+            .await?;
+        persistor
+            .refresh_if_needed_with_keyring_store(&store)
+            .await?;
+        let manager_tokens = tokens_from_manager(&manager).await?;
+        assert_eq!(access_token(&manager_tokens), "updated-access-token");
         Ok(())
     }
 
