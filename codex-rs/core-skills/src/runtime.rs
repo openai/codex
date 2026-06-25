@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::hash::Hash;
@@ -306,7 +307,7 @@ pub trait SkillSource: Send + Sync {
 #[derive(Clone)]
 struct RegisteredSkillSource {
     label: String,
-    source: Arc<dyn SkillSource>,
+    source: Arc<dyn Fn() -> Arc<dyn SkillSource> + Send + Sync>,
 }
 
 /// Bound skill sources used to build and read one runtime catalog.
@@ -323,33 +324,70 @@ impl SkillSources {
     pub fn with_source(mut self, label: impl Into<String>, source: Arc<dyn SkillSource>) -> Self {
         self.sources.push(RegisteredSkillSource {
             label: label.into(),
+            source: Arc::new(move || Arc::clone(&source)),
+        });
+        self
+    }
+
+    pub fn with_source_factory(
+        mut self,
+        label: impl Into<String>,
+        source: Arc<dyn Fn() -> Arc<dyn SkillSource> + Send + Sync>,
+    ) -> Self {
+        self.sources.push(RegisteredSkillSource {
+            label: label.into(),
             source,
         });
         self
     }
 
+    pub fn extend(&mut self, other: Self) {
+        self.sources.extend(other.sources);
+    }
+
     pub async fn list(&self) -> SkillCatalog {
+        self.list_with_sources().await.0
+    }
+
+    pub(crate) async fn list_with_sources(
+        &self,
+    ) -> (
+        SkillCatalog,
+        HashMap<(SkillAuthority, SkillPackageId), Arc<dyn SkillSource>>,
+    ) {
         let mut catalog = SkillCatalog::default();
+        let mut sources = HashMap::new();
         for source in &self.sources {
-            match source.source.list().await {
-                Ok(source_catalog) => catalog.extend(source_catalog),
+            let bound_source = (source.source)();
+            match bound_source.list().await {
+                Ok(source_catalog) => {
+                    catalog.warnings.extend(source_catalog.warnings);
+                    for entry in source_catalog.entries {
+                        let key = (entry.authority.clone(), entry.id.clone());
+                        if let std::collections::hash_map::Entry::Vacant(route) = sources.entry(key)
+                        {
+                            route.insert(Arc::clone(&bound_source));
+                            catalog.entries.push(entry);
+                        }
+                    }
+                }
                 Err(err) => catalog.warnings.push(format!(
                     "{} skills unavailable: {}",
                     source.label, err.message
                 )),
             }
         }
-        catalog
+        (catalog, sources)
     }
 
     pub async fn list_kind(&self, kind: &SkillSourceKind) -> SkillSourceResult<SkillCatalog> {
         let mut catalog = SkillCatalog::default();
-        for source in self
-            .sources
-            .iter()
-            .filter(|source| source.source.kind() == *kind)
-        {
-            let source_catalog = source.source.list().await.map_err(|err| {
+        for source in self.sources.iter() {
+            let bound_source = (source.source)();
+            if bound_source.kind() != *kind {
+                continue;
+            }
+            let source_catalog = bound_source.list().await.map_err(|err| {
                 SkillSourceError::new(format!(
                     "{} skills unavailable: {}",
                     source.label, err.message

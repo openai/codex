@@ -18,6 +18,7 @@ use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;
 use crate::provider::SkillReadRequest;
 use crate::provider::SkillSearchRequest;
+use crate::state::SkillsThreadState;
 
 #[derive(Clone)]
 pub struct SkillProviderSource {
@@ -128,10 +129,6 @@ impl SkillProviders {
             .any(|source| source.kind == SkillSourceKind::Orchestrator)
     }
 
-    pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
-        self.sources_for_turn(query).list().await
-    }
-
     pub(crate) async fn list_orchestrator_for_turn(
         &self,
         query: SkillListQuery,
@@ -139,6 +136,50 @@ impl SkillProviders {
         self.sources_for_turn(query)
             .list_kind(&SkillSourceKind::Orchestrator)
             .await
+    }
+
+    pub(crate) fn orchestrator_sources_for_thread(
+        &self,
+        thread_state: Arc<SkillsThreadState>,
+        mcp_resources: Option<Arc<McpResourceClient>>,
+    ) -> SkillSources {
+        self.sources
+            .iter()
+            .filter(|source| source.kind == SkillSourceKind::Orchestrator)
+            .fold(SkillSources::new(), |sources, provider| {
+                let provider = provider.clone();
+                let thread_state = Arc::clone(&thread_state);
+                let mcp_resources = mcp_resources.clone();
+                sources.with_source_factory(
+                    "orchestrator",
+                    Arc::new(move || {
+                        let mcp_resources = mcp_resources
+                            .as_ref()
+                            .map(|client| Arc::new(client.snapshot()));
+                        let identity = mcp_resources
+                            .as_ref()
+                            .map(|client| {
+                                SkillSourceIdentity::from_owner(client.manager_snapshot())
+                            })
+                            .unwrap_or_else(|| provider.identity.clone());
+                        let query = SkillListQuery {
+                            turn_id: String::new(),
+                            executor_roots: Vec::new(),
+                            host_snapshot: None,
+                            include_host_skills: false,
+                            include_bundled_skills: false,
+                            include_orchestrator_skills: true,
+                            mcp_resources: mcp_resources.clone(),
+                        };
+                        Arc::new(CachedOrchestratorSource {
+                            inner: provider.bind(query),
+                            identity,
+                            thread_state: Arc::clone(&thread_state),
+                            mcp_resources,
+                        }) as Arc<dyn SkillSource>
+                    }),
+                )
+            })
     }
 
     fn sources_for_turn(&self, query: SkillListQuery) -> SkillSources {
@@ -196,6 +237,47 @@ impl SkillProviders {
                 request.authority.kind
             ))),
         }
+    }
+}
+
+struct CachedOrchestratorSource {
+    inner: Arc<dyn SkillSource>,
+    identity: SkillSourceIdentity,
+    thread_state: Arc<SkillsThreadState>,
+    mcp_resources: Option<Arc<McpResourceClient>>,
+}
+
+impl SkillSource for CachedOrchestratorSource {
+    fn kind(&self) -> SkillSourceKind {
+        SkillSourceKind::Orchestrator
+    }
+
+    fn identity(&self) -> SkillSourceIdentity {
+        self.identity.clone()
+    }
+
+    fn list(&self) -> SkillSourceFuture<'_, SkillCatalog> {
+        Box::pin(async move {
+            if !self.thread_state.orchestrator_skills_enabled() {
+                return Ok(SkillCatalog::default());
+            }
+            Ok(self
+                .thread_state
+                .orchestrator_catalog_snapshot(self.mcp_resources.as_deref(), self.inner.list())
+                .await)
+        })
+    }
+
+    fn read(&self, request: RuntimeSkillReadRequest) -> SkillSourceFuture<'_, SkillReadResult> {
+        Box::pin(async move {
+            self.thread_state
+                .read_orchestrator_source(
+                    self.inner.as_ref(),
+                    request,
+                    self.mcp_resources.as_deref(),
+                )
+                .await
+        })
     }
 }
 

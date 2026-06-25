@@ -15,10 +15,10 @@ use codex_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::SkillMetadata;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;
+use codex_core_skills::runtime::SkillCatalogEntry;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
@@ -35,13 +35,13 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     sess: &Session,
     turn_context: &TurnContext,
     cancellation_token: &CancellationToken,
-    mentioned_skills: &[SkillMetadata],
+    mentioned_skills: &[SkillCatalogEntry],
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
-) {
+) -> bool {
     let originator_value = originator().value;
     if !is_first_party_originator(originator_value.as_str()) {
         // Only support first-party clients for now.
-        return;
+        return false;
     }
 
     let config = turn_context.config.clone();
@@ -50,24 +50,24 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
             .features
             .enabled(codex_features::Feature::SkillMcpDependencyInstall)
     {
-        return;
+        return false;
     }
 
     let installed = sess.runtime_mcp_servers(config.as_ref()).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
-        return;
+        return false;
     }
 
     let unprompted_missing = filter_prompted_mcp_dependencies(sess, &missing).await;
     if unprompted_missing.is_empty() {
-        return;
+        return false;
     }
 
     if should_install_mcp_dependencies(sess, turn_context, &unprompted_missing, cancellation_token)
         .await
     {
-        maybe_install_mcp_dependencies(
+        return maybe_install_mcp_dependencies(
             sess,
             turn_context,
             config.as_ref(),
@@ -76,35 +76,36 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
         )
         .await;
     }
+    false
 }
 
 pub(crate) async fn maybe_install_mcp_dependencies(
     sess: &Session,
     turn_context: &TurnContext,
     config: &crate::config::Config,
-    mentioned_skills: &[SkillMetadata],
+    mentioned_skills: &[SkillCatalogEntry],
     elicitation_reviewer: Option<ElicitationReviewerHandle>,
-) {
+) -> bool {
     if mentioned_skills.is_empty()
         || !config
             .features
             .enabled(codex_features::Feature::SkillMcpDependencyInstall)
     {
-        return;
+        return false;
     }
 
     let codex_home = config.codex_home.clone();
     let installed = sess.runtime_mcp_servers(config).await;
     let missing = collect_missing_mcp_dependencies(mentioned_skills, &installed);
     if missing.is_empty() {
-        return;
+        return false;
     }
 
     let mut servers = match load_global_mcp_servers(&codex_home).await {
         Ok(servers) => servers,
         Err(err) => {
             warn!("failed to load MCP servers while installing skill dependencies: {err}");
-            return;
+            return false;
         }
     };
 
@@ -120,7 +121,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
 
     if !updated {
-        return;
+        return false;
     }
 
     if let Err(err) = ConfigEditsBuilder::new(&codex_home)
@@ -129,7 +130,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         .await
     {
         warn!("failed to persist MCP dependencies for mentioned skills: {err}");
-        return;
+        return false;
     }
 
     for (name, server_config) in added {
@@ -197,7 +198,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     }
     if let Err(err) = refresh_config.mcp_servers.set(configured_servers) {
         warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
-        return;
+        return false;
     }
     let refresh_servers = sess.runtime_mcp_servers(&refresh_config).await;
     sess.refresh_mcp_servers_now(
@@ -208,6 +209,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         elicitation_reviewer,
     )
     .await;
+    true
 }
 
 async fn should_install_mcp_dependencies(
@@ -416,7 +418,7 @@ fn mcp_dependency_to_server_config(
 }
 
 fn collect_missing_mcp_dependencies(
-    mentioned_skills: &[SkillMetadata],
+    mentioned_skills: &[SkillCatalogEntry],
     installed: &HashMap<String, McpServerConfig>,
 ) -> HashMap<String, McpServerConfig> {
     let mut missing = HashMap::new();

@@ -6,12 +6,14 @@ use crate::runtime::SkillCatalogEntry;
 const MAX_SKILL_NAME_BYTES: usize = 256;
 const MAX_SKILL_PATH_BYTES: usize = 1_024;
 const MAX_SKILL_BODY_BYTES: usize = 8_000;
+const REPLACEMENT_NOTICE: &str = "<replacement_notice>These instructions replace the previously provided instructions for this skill.</replacement_notice>\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillInstructions {
     name: String,
     path: String,
     contents: String,
+    replaces_previous: bool,
 }
 
 impl From<&SkillInjection> for SkillInstructions {
@@ -20,6 +22,7 @@ impl From<&SkillInjection> for SkillInstructions {
             name: skill.name.clone(),
             path: skill.path.clone(),
             contents: skill.contents.clone(),
+            replaces_previous: false,
         }
     }
 }
@@ -33,9 +36,33 @@ impl SkillInstructions {
                 name: truncate_utf8(&entry.name, MAX_SKILL_NAME_BYTES).0,
                 path: truncate_utf8(entry.rendered_path(), MAX_SKILL_PATH_BYTES).0,
                 contents,
+                replaces_previous: false,
             },
             truncated,
         )
+    }
+
+    pub(crate) fn from_runtime_with_total_limit(
+        entry: &SkillCatalogEntry,
+        contents: &str,
+        max_total_bytes: usize,
+        replaces_previous: bool,
+    ) -> Option<(Self, bool)> {
+        let name = truncate_utf8(&entry.name, MAX_SKILL_NAME_BYTES).0;
+        let path = truncate_utf8(entry.rendered_path(), MAX_SKILL_PATH_BYTES).0;
+        let mut instructions = Self {
+            name,
+            path,
+            contents: String::new(),
+            replaces_previous,
+        };
+        let envelope_bytes = instructions.render().len();
+        let max_body_bytes = max_total_bytes
+            .checked_sub(envelope_bytes)?
+            .min(MAX_SKILL_BODY_BYTES);
+        let (contents, truncated) = truncate_utf8(contents, max_body_bytes);
+        instructions.contents = contents;
+        Some((instructions, truncated))
     }
 }
 
@@ -61,8 +88,13 @@ impl ContextualUserFragment for SkillInstructions {
     }
 
     fn body(&self) -> String {
+        let replacement_notice = if self.replaces_previous {
+            REPLACEMENT_NOTICE
+        } else {
+            ""
+        };
         format!(
-            "\n<name>{}</name>\n<path>{}</path>\n{}\n",
+            "\n<name>{}</name>\n<path>{}</path>\n{replacement_notice}{}\n",
             self.name, self.path, self.contents
         )
     }
