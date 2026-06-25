@@ -41,6 +41,7 @@ impl TestTargetOs {
 pub(crate) enum TestEnvironment {
     Local,
     Docker { container_name: String },
+    BwrapExec,
     WineExec,
 }
 
@@ -52,14 +53,14 @@ impl TestEnvironment {
     pub(crate) fn docker_container_name(&self) -> Option<&str> {
         match self {
             Self::Docker { container_name } => Some(container_name),
-            Self::Local | Self::WineExec => None,
+            Self::Local | Self::BwrapExec | Self::WineExec => None,
         }
     }
 
     pub(crate) const fn target_os(&self) -> TestTargetOs {
         match self {
             Self::Local => TestTargetOs::host(),
-            Self::Docker { .. } => TestTargetOs::Linux,
+            Self::Docker { .. } | Self::BwrapExec => TestTargetOs::Linux,
             Self::WineExec => TestTargetOs::Windows,
         }
     }
@@ -67,7 +68,7 @@ impl TestEnvironment {
     pub(crate) fn remote_cwd(&self, instance_id: &str) -> Result<Option<LegacyAppPathString>> {
         let path_uri = match self {
             Self::Local => return Ok(None),
-            Self::Docker { .. } => {
+            Self::Docker { .. } | Self::BwrapExec => {
                 PathUri::parse(&format!("file:///tmp/codex-core-test-cwd-{instance_id}"))?
             }
             Self::WineExec => {
@@ -95,8 +96,16 @@ pub(crate) fn test_environment() -> TestEnvironment {
     )
     .expect("invalid test environment configuration");
 
-    if matches!(environment, TestEnvironment::WineExec) && !cfg!(target_os = "linux") {
-        panic!("{TEST_ENVIRONMENT_ENV_VAR}=wine-exec is only supported on Linux");
+    if !cfg!(target_os = "linux") {
+        match &environment {
+            TestEnvironment::BwrapExec => {
+                panic!("{TEST_ENVIRONMENT_ENV_VAR}=bwrap-exec is only supported on Linux");
+            }
+            TestEnvironment::WineExec => {
+                panic!("{TEST_ENVIRONMENT_ENV_VAR}=wine-exec is only supported on Linux");
+            }
+            TestEnvironment::Local | TestEnvironment::Docker { .. } => {}
+        }
     }
 
     environment
@@ -117,8 +126,14 @@ pub fn is_remote_test_environment() -> bool {
 pub fn test_docker_container_name() -> Option<String> {
     match test_environment() {
         TestEnvironment::Docker { container_name } => Some(container_name),
-        TestEnvironment::Local | TestEnvironment::WineExec => None,
+        TestEnvironment::Local | TestEnvironment::BwrapExec | TestEnvironment::WineExec => None,
     }
+}
+
+/// Returns whether the bubblewrap-backed Linux executor is selected.
+#[doc(hidden)]
+pub fn is_bwrap_exec_test_environment() -> bool {
+    matches!(test_environment(), TestEnvironment::BwrapExec)
 }
 
 /// Returns whether the Wine-backed executor is selected.
@@ -164,9 +179,10 @@ fn parse_test_environment(
                 container_name: non_empty_utf8(container_name_env_var, container_name)?,
             })
         }
+        Some("bwrap-exec") => Ok(TestEnvironment::BwrapExec),
         Some("wine-exec") => Ok(TestEnvironment::WineExec),
         Some(value) => Err(format!(
-            "{TEST_ENVIRONMENT_ENV_VAR} must be one of local, docker, or wine-exec; got {value:?}"
+            "{TEST_ENVIRONMENT_ENV_VAR} must be one of local, docker, bwrap-exec, or wine-exec; got {value:?}"
         )),
     }
 }
