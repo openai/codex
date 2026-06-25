@@ -438,6 +438,9 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
         [
             ("USERNAME", "alice"),
             ("USERPROFILE", r"C:\Users\alice"),
+            ("HTTP_PROXY", "http://127.0.0.1:7890"),
+            ("all_proxy", "socks5://127.0.0.1:1080"),
+            ("CODEX_NETWORK_ALLOW_LOCAL_BINDING", "1"),
             ("OPENAI_API_KEY", "secret"),
         ]
         .map(|(key, value)| {
@@ -454,6 +457,18 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
             ("Path".to_string(), r"C:\Windows\System32".to_string()),
             ("USERNAME".to_string(), "alice".to_string()),
             ("USERPROFILE".to_string(), r"C:\Users\alice".to_string()),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:7890".to_string()
+            ),
+            (
+                "all_proxy".to_string(),
+                "socks5://127.0.0.1:1080".to_string()
+            ),
+            (
+                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "1".to_string(),
+            ),
         ])
     );
 }
