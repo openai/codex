@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tracing::instrument;
@@ -81,6 +83,16 @@ pub enum AgentIdentityAuthPolicy {
     JwtOnly,
     /// Allow managed ChatGPT auth to register or reuse Agent Identity auth.
     ChatGptAuth,
+}
+
+const AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+
+#[derive(Debug)]
+struct AgentIdentityBootstrapCooldown {
+    account_id: String,
+    authapi_base_url: String,
+    retry_at: Instant,
+    error: AgentIdentityAuthError,
 }
 
 impl PartialEq for CodexAuth {
@@ -1742,6 +1754,7 @@ pub struct AuthManager {
     agent_identity_authapi_base_url: Option<String>,
     refresh_lock: Semaphore,
     agent_identity_lock: Semaphore,
+    agent_identity_bootstrap_cooldown: Mutex<Option<AgentIdentityBootstrapCooldown>>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_route_config: Option<AuthRouteConfig>,
 }
@@ -1843,6 +1856,7 @@ impl AuthManager {
             agent_identity_authapi_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::new(None),
             external_auth: RwLock::new(None),
             auth_route_config,
         }
@@ -1868,6 +1882,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::new(None),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1892,6 +1907,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::new(None),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1924,6 +1940,7 @@ impl AuthManager {
             ),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::new(None),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1946,6 +1963,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::new(None),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -2006,15 +2024,64 @@ impl AuthManager {
                 .acquire()
                 .await
                 .map_err(std::io::Error::other)?;
-            return auth
+            let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
+            let cooldown_key = ManagedChatGptAgentIdentityBinding::from_auth(
+                &auth,
+                forced_chatgpt_workspace_id.clone(),
+            )
+            .and_then(|binding| {
+                self.agent_identity_authapi_base_url
+                    .as_ref()
+                    .map(|base_url| (binding.account_id, base_url.clone()))
+            });
+            if let Some((account_id, authapi_base_url)) = cooldown_key.as_ref()
+                && let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock()
+            {
+                let now = Instant::now();
+                if let Some(cooldown) = cooldown.as_ref()
+                    && cooldown.account_id == *account_id
+                    && cooldown.authapi_base_url == *authapi_base_url
+                    && cooldown.retry_at > now
+                {
+                    tracing::warn!(
+                        "agent identity bootstrap retry suppressed during shared cooldown"
+                    );
+                    return Err(std::io::Error::other(cooldown.error.clone()));
+                }
+                *cooldown = None;
+            }
+
+            let result = auth
                 .agent_identity_auth(
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
-                    self.forced_chatgpt_workspace_id(),
+                    forced_chatgpt_workspace_id,
                     self.auth_route_config.as_ref(),
                     session_source,
                 )
                 .await;
+            match &result {
+                Ok(_) => self.clear_agent_identity_bootstrap_cooldown(),
+                Err(err) => {
+                    if let (Some((account_id, authapi_base_url)), Some(error)) = (
+                        cooldown_key,
+                        AgentIdentityAuthError::bootstrap_unavailable(err).cloned(),
+                    ) {
+                        if let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock() {
+                            *cooldown = Some(AgentIdentityBootstrapCooldown {
+                                account_id,
+                                authapi_base_url,
+                                retry_at: Instant::now()
+                                    + AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN,
+                                error,
+                            });
+                        }
+                    } else {
+                        self.clear_agent_identity_bootstrap_cooldown();
+                    }
+                }
+            }
+            return result;
         }
         auth.agent_identity_auth(
             policy,
@@ -2181,6 +2248,12 @@ impl AuthManager {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    fn clear_agent_identity_bootstrap_cooldown(&self) {
+        if let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock() {
+            *cooldown = None;
+        }
     }
 
     pub fn has_external_auth(&self) -> bool {

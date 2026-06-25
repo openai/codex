@@ -30,6 +30,7 @@ use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -469,6 +470,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         .expect("test thread id should be valid");
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
@@ -5415,6 +5417,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
+            AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
@@ -7492,6 +7495,7 @@ where
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
+            AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),

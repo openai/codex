@@ -399,6 +399,7 @@ impl ModelClient {
     /// are passed to [`ModelClientSession::stream`] (and other turn-scoped methods) explicitly.
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
+        agent_identity_policy: AgentIdentityAuthPolicy,
         thread_id: ThreadId,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
@@ -436,17 +437,9 @@ impl ModelClient {
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
-            agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
+            agent_identity_policy,
             prompt_cache_key_override: None,
         }
-    }
-
-    pub(crate) fn with_agent_identity_policy(
-        mut self,
-        agent_identity_policy: AgentIdentityAuthPolicy,
-    ) -> Self {
-        self.agent_identity_policy = agent_identity_policy;
-        self
     }
 
     pub(crate) fn with_prompt_cache_key_override(

@@ -12,6 +12,7 @@ use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_model_provider::ModelProvider;
@@ -250,6 +251,7 @@ impl MemoryStartupContext {
         let session_id_string = session_id.to_string();
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
+            AgentIdentityAuthPolicy::JwtOnly,
             self.thread_id,
             config.model_provider.clone(),
             session_source.clone(),

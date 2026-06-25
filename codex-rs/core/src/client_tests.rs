@@ -93,6 +93,7 @@ fn test_model_client_with_thread_id(
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
         /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
         provider,
         session_source,
@@ -136,6 +137,7 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
     let thread_id = ThreadId::new();
     let client = ModelClient::new(
         Some(auth_manager),
+        AgentIdentityAuthPolicy::ChatGptAuth,
         thread_id,
         provider,
         SessionSource::Cli,
@@ -146,8 +148,7 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         /*beta_features_header*/ None,
         /*item_ids_enabled*/ false,
         /*attestation_provider*/ None,
-    )
-    .with_agent_identity_policy(AgentIdentityAuthPolicy::ChatGptAuth);
+    );
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
             id: None,
@@ -813,6 +814,7 @@ fn model_client_with_counting_attestation(
     };
     let model_client = ModelClient::new(
         auth_manager,
+        AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
         provider,
         SessionSource::Exec,

@@ -542,7 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chatgpt_session_fallback_does_not_leak_between_sessions() {
+    async fn chatgpt_sessions_share_bootstrap_failure_cooldown() {
         let server = MockServer::start().await;
         let registration_count = Arc::new(AtomicUsize::new(0));
         mount_transient_agent_registration(
@@ -553,15 +553,14 @@ mod tests {
         .await;
         let (_codex_home, auth_manager, auth) = chatgpt_auth_manager(server.uri()).await;
         let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        let first_fallback = AgentIdentitySessionFallback::default();
+        let second_fallback = AgentIdentitySessionFallback::default();
 
         resolve_provider_auth_for_scope(
             Some(Arc::clone(&auth_manager)),
             Some(&auth),
             &provider,
-            provider_auth_scope(
-                AgentIdentityAuthPolicy::ChatGptAuth,
-                AgentIdentitySessionFallback::default(),
-            ),
+            provider_auth_scope(AgentIdentityAuthPolicy::ChatGptAuth, first_fallback.clone()),
         )
         .await
         .expect("first session fallback should resolve bearer auth");
@@ -571,12 +570,14 @@ mod tests {
             &provider,
             provider_auth_scope(
                 AgentIdentityAuthPolicy::ChatGptAuth,
-                AgentIdentitySessionFallback::default(),
+                second_fallback.clone(),
             ),
         )
         .await
         .expect("second session fallback should resolve bearer auth");
 
-        assert_eq!(registration_count.load(Ordering::SeqCst), 6);
+        assert!(first_fallback.is_engaged());
+        assert!(second_fallback.is_engaged());
+        assert_eq!(registration_count.load(Ordering::SeqCst), 3);
     }
 }
