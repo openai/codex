@@ -1,4 +1,5 @@
 mod compare;
+mod known_breakage;
 mod model;
 mod parse;
 mod violation;
@@ -7,6 +8,9 @@ mod violation;
 mod test_support;
 
 use compare::compare_api_schemas;
+pub use known_breakage::KnownBreakage;
+pub use known_breakage::KnownBreakageLog;
+pub use known_breakage::check_request_narrowing;
 pub(crate) use model::AdditionalItems;
 pub(crate) use model::AdditionalProperties;
 pub use model::ApiSchema;
