@@ -446,10 +446,7 @@ pub async fn refresh_mcp_server(
     submit_id: String,
 ) {
     let server_name = update.server_name.clone();
-    if let Err(error) = sess
-        .refresh_mcp_server_now(update, submit_id.clone())
-        .await
-    {
+    if let Err(error) = sess.refresh_mcp_server_now(update, submit_id.clone()).await {
         warn!(error = %error, "failed to refresh MCP server");
         sess.send_event_raw(Event {
             id: submit_id,
