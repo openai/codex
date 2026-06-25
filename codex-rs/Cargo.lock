@@ -3844,6 +3844,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "pretty_assertions",
+ "serde",
  "serde_json",
 ]
 
