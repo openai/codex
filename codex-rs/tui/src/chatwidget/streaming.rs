@@ -203,6 +203,11 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
+        if self.safety_buffering_is_waiting() {
+            self.request_redraw();
+            return;
+        }
+
         if self.unified_exec_wait_streak.is_some() {
             // Unified exec waiting should take precedence over reasoning-derived status headers.
             self.request_redraw();
@@ -383,6 +388,7 @@ impl ChatWidget {
     pub(super) fn handle_streaming_delta(&mut self, delta: String) {
         if !delta.is_empty() {
             self.record_visible_turn_activity();
+            self.mark_safety_buffering_agent_message_started();
         }
         if self.stream_controller.is_none() {
             // Before starting an agent stream, flush any active exec cell group.

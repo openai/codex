@@ -337,6 +337,79 @@ impl App {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::RetrySafetyBufferedTurn {
+                thread_id,
+                turn_id,
+                model,
+                mut turn,
+            } => {
+                if self.active_thread_id != Some(thread_id)
+                    || self.chat_widget.thread_id() != Some(thread_id)
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                if !self.chat_widget.can_retry_safety_buffered_turn(&turn_id) {
+                    self.app_event_tx.send(AppEvent::UpdateModel(model));
+                    self.app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(
+                        ReasoningEffortConfig::Low,
+                    )));
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let AppCommand::UserTurn {
+                    model: turn_model,
+                    effort,
+                    collaboration_mode,
+                    ..
+                } = &mut turn
+                else {
+                    self.chat_widget.add_error_message(
+                        "Failed to retry with a faster model: original turn is unavailable."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                *turn_model = model.clone();
+                *effort = Some(ReasoningEffortConfig::Low);
+                *collaboration_mode = collaboration_mode.as_ref().map(|mode| {
+                    mode.with_updates(
+                        Some(model),
+                        Some(Some(ReasoningEffortConfig::Low)),
+                        /*developer_instructions*/ None,
+                    )
+                });
+
+                if let Err(err) = app_server.turn_interrupt(thread_id, turn_id).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to retry with a faster model: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
+                let rollback_response =
+                    match app_server.thread_rollback(thread_id, /*num_turns*/ 1).await {
+                        Ok(response) => response,
+                        Err(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to retry with a faster model: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
+
+                self.chat_widget.prepare_safety_buffering_retry();
+                self.handle_thread_rollback_response_with_origin(
+                    thread_id,
+                    /*num_turns*/ 1,
+                    &rollback_response,
+                    super::thread_routing::ThreadRollbackOrigin::SafetyBufferingRetry,
+                )
+                .await;
+
+                if let Err(err) = self.submit_thread_op(app_server, thread_id, turn).await {
+                    self.chat_widget.fail_safety_buffering_retry();
+                    self.chat_widget
+                        .add_error_message(format!("Failed to retry with a faster model: {err}"));
+                }
+            }
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
             }

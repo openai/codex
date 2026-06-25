@@ -85,6 +85,37 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
+#[derive(Debug)]
+pub(crate) struct SafetyAccessBlockCell;
+
+const SAFETY_ACCESS_BLOCK_TITLE: &str = "This content can't be shown";
+const SAFETY_ACCESS_BLOCK_BODY: &str = "We've limited access to this content for safety reasons. This type of information may be used to benefit or to harm people.";
+
+pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
+    SafetyAccessBlockCell
+}
+
+impl HistoryCell for SafetyAccessBlockCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = vec![vec!["ⓘ ".cyan(), SAFETY_ACCESS_BLOCK_TITLE.bold()].into()];
+        let body = Line::from(vec!["  ".into(), SAFETY_ACCESS_BLOCK_BODY.dim()]);
+        let wrap_width = width.saturating_sub(2).max(1) as usize;
+        let wrapped = adaptive_wrap_line(
+            &body,
+            RtOptions::new(wrap_width).subsequent_indent("  ".into()),
+        );
+        push_owned_lines(&wrapped, &mut lines);
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(SAFETY_ACCESS_BLOCK_TITLE),
+            Line::from(SAFETY_ACCESS_BLOCK_BODY),
+        ]
+    }
+}
+
 const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
 
 #[derive(Debug)]

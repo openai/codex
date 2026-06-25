@@ -5,6 +5,9 @@
 
 use super::*;
 
+const SAFETY_ACCESS_BLOCK_PREFIX: &str =
+    "Invalid prompt: we've limited access to this content for safety reasons.";
+
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
@@ -48,6 +51,7 @@ impl ChatWidget {
 
     pub(super) fn on_task_started(&mut self) {
         self.input_queue.user_turn_pending_start = false;
+        self.reset_safety_buffering_for_turn_start();
         self.turn_lifecycle.start(Instant::now());
         self.transcript.reset_turn_flags();
         self.adaptive_chunking.reset();
@@ -297,6 +301,7 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
+        self.clear_safety_buffering();
         // Drop preview-only stream tail content on any termination path before
         // failed-cell finalization, so transient tail cells are never persisted.
         self.clear_active_stream_tail();
@@ -424,6 +429,18 @@ impl ChatWidget {
             .is_some_and(is_app_server_cyber_policy_error)
         {
             self.on_cyber_policy_error();
+        } else if message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX)
+            || serde_json::from_str::<serde_json::Value>(&message).is_ok_and(|response| {
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with(SAFETY_ACCESS_BLOCK_PREFIX))
+            })
+        {
+            self.input_queue.submit_pending_steers_after_interrupt = false;
+            self.finalize_turn();
+            self.add_to_history(history_cell::new_safety_access_block_event());
+            self.request_redraw();
+            self.maybe_send_next_queued_input();
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)
