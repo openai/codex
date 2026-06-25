@@ -1,0 +1,32 @@
+{
+  "outputs": {
+    "codex-bash": {
+      "platforms": {
+        "macos-aarch64": {
+          "name": "codex-bash-aarch64-apple-darwin.tar.gz",
+          "format": "tar.gz",
+          "hash": "sha256",
+          "path": "codex-bash/bin/bash"
+        },
+        "macos-x86_64": {
+          "name": "codex-bash-x86_64-apple-darwin.tar.gz",
+          "format": "tar.gz",
+          "hash": "sha256",
+          "path": "codex-bash/bin/bash"
+        },
+        "linux-x86_64": {
+          "name": "codex-bash-x86_64-unknown-linux-musl.tar.gz",
+          "format": "tar.gz",
+          "hash": "sha256",
+          "path": "codex-bash/bin/bash"
+        },
+        "linux-aarch64": {
+          "name": "codex-bash-aarch64-unknown-linux-musl.tar.gz",
+          "format": "tar.gz",
+          "hash": "sha256",
+          "path": "codex-bash/bin/bash"
+        }
+      }
+    }
+  }
+}
