@@ -2339,7 +2339,7 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
     wait_for_mcp_server(&chatgpt_auth_fixture.codex, "chatgpt_auth").await?;
     drop(chatgpt_auth_fixture);
@@ -2379,7 +2379,7 @@ async fn streamable_http_chatgpt_auth_respects_configured_authorization() -> any
                 },
             );
         })
-        .build_with_remote_env(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     wait_for_mcp_server(&configured_auth_fixture.codex, "configured_auth").await?;
