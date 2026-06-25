@@ -839,7 +839,7 @@
           "type": "string"
         },
         {
-          "description": "Only allow a reminder after user input or tool output.",
+          "description": "Allow reminders after user input or tool output; new context windows still force one.",
           "enum": [
             "after_user_or_tool_output"
           ],

@@ -148,7 +148,7 @@ pub enum CurrentTimeReminderDeliveryMode {
     /// Allow a reminder before any inference request once the interval is due.
     #[default]
     AnyInference,
-    /// Only allow a reminder after user input or tool output.
+    /// Allow reminders after user input or tool output; new context windows still force one.
     AfterUserOrToolOutput,
 }
 
