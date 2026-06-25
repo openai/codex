@@ -10,6 +10,7 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::CodexAppsToolsCache;
 use codex_mcp::EffectiveMcpServer;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
@@ -38,14 +39,15 @@ enum OrderedMcpOverlay {
 pub struct McpManager {
     plugins_manager: Arc<PluginsManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    codex_apps_tools_cache: CodexAppsToolsCache,
 }
 
 impl McpManager {
     pub fn new(plugins_manager: Arc<PluginsManager>) -> Self {
-        Self {
+        Self::new_with_extensions(
             plugins_manager,
-            extensions: codex_extension_api::empty_extension_registry(),
-        }
+            codex_extension_api::empty_extension_registry(),
+        )
     }
 
     /// Creates a manager that resolves host-installed MCP contributions.
@@ -56,7 +58,12 @@ impl McpManager {
         Self {
             plugins_manager,
             extensions,
+            codex_apps_tools_cache: CodexAppsToolsCache::default(),
         }
+    }
+
+    pub fn codex_apps_tools_cache(&self) -> CodexAppsToolsCache {
+        self.codex_apps_tools_cache.clone()
     }
 
     /// Returns the MCP config after applying compatibility built-ins and

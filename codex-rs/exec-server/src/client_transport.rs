@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::connect_async_with_config;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
 use tracing::warn;
 
@@ -30,6 +31,7 @@ use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
+use crate::trace_context::current_trace_context_headers;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -216,6 +218,14 @@ impl ExecServerClient {
     /// only ciphertext after that. Environment-managed connections use a
     /// retained [`NoiseRendezvousConnectProvider`] so recovery can fetch a fresh
     /// bundle for each reconnect.
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.harness.connect",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.harness.connect",
+        )
+    )]
     pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
@@ -249,10 +259,20 @@ impl ExecServerClient {
             .next()
             .unwrap_or(websocket_url.as_str())
             .to_string();
+        let mut request = websocket_url
+            .as_str()
+            .into_client_request()
+            .map_err(|source| ExecServerError::WebSocketConnect {
+                url: diagnostic_url.clone(),
+                source,
+            })?;
+        request
+            .headers_mut()
+            .extend(current_trace_context_headers());
         let (stream, _) = timeout(
             connect_timeout,
             connect_async_with_config(
-                websocket_url.as_str(),
+                request,
                 Some(noise_relay_websocket_config()),
                 /*disable_nagle*/ false,
             ),
