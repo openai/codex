@@ -1,10 +1,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ShellCommandToolCallParams;
 use pretty_assertions::assert_eq;
 
+use crate::config::PermissionProfileSnapshot;
+use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_permission_profile_env;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
@@ -71,7 +75,15 @@ fn assert_safe(shell: &Shell, command: &str) {
 
 #[tokio::test]
 async fn shell_command_handler_to_exec_params_uses_selected_environment() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
+    let permission_profile = turn_context.config.permissions.permission_profile().clone();
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            permission_profile,
+            ActivePermissionProfile::new("test-profile"),
+        ))
+        .expect("set active permission profile");
 
     let command = "echo hello".to_string();
     let workdir = Some("subdir".to_string());
@@ -99,10 +111,12 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
         PathUri::from_abs_path(&selected_cwd),
         Some(selected_shell),
     );
-    let expected_env = create_env(
+    let mut expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
+    let active_permission_profile = turn_context.config.permissions.active_permission_profile();
+    inject_permission_profile_env(&mut expected_env, active_permission_profile.as_ref());
 
     let params = ShellCommandToolCallParams {
         command,
@@ -129,6 +143,12 @@ async fn shell_command_handler_to_exec_params_uses_selected_environment() {
     assert_eq!(exec_params.command, expected_command);
     assert_eq!(exec_params.cwd, expected_cwd);
     assert_eq!(exec_params.env, expected_env);
+    assert_eq!(
+        exec_params.env.get(CODEX_PERMISSION_PROFILE_ENV_VAR),
+        active_permission_profile
+            .as_ref()
+            .map(|profile| &profile.id)
+    );
     assert_eq!(exec_params.network, turn_context.network);
     assert_eq!(
         exec_params.network_environment_id.as_deref(),
