@@ -276,6 +276,32 @@ dangerously_allow_all_unix_sockets = true
 }
 
 #[test]
+fn apply_network_constraints_includes_plaintext_credential_injection_flag() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "dev"
+
+[permissions.dev.network.mitm]
+dangerously_allow_plaintext_credential_injection = false
+"#,
+    )
+    .expect("permissions profile should parse");
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("permissions profile should deserialize"),
+    )
+    .expect("permissions profile should select a network table")
+    .expect("network table should be present");
+
+    let mut constraints = NetworkProxyConstraints::default();
+    apply_network_constraints(network, &mut constraints);
+
+    assert_eq!(
+        constraints.dangerously_allow_plaintext_credential_injection,
+        Some(false)
+    );
+}
+
+#[test]
 fn selected_network_from_tables_ignores_builtin_profile_without_permissions_table() {
     let config: toml::Value = toml::from_str(
         r#"

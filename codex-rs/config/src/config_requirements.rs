@@ -369,6 +369,7 @@ pub struct NetworkRequirementsToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
@@ -385,6 +386,7 @@ struct RawNetworkRequirementsToml {
     allow_upstream_proxy: Option<bool>,
     dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_all_unix_sockets: Option<bool>,
+    dangerously_allow_plaintext_credential_injection: Option<bool>,
     domains: Option<NetworkDomainPermissionsToml>,
     #[serde(default)]
     allowed_domains: Option<Vec<String>>,
@@ -412,6 +414,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            dangerously_allow_plaintext_credential_injection,
             domains,
             allowed_domains,
             managed_allowed_domains_only,
@@ -440,6 +443,7 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            dangerously_allow_plaintext_credential_injection,
             domains: domains
                 .or_else(|| legacy_domain_permissions_from_lists(allowed_domains, denied_domains)),
             managed_allowed_domains_only,
@@ -491,6 +495,7 @@ pub struct NetworkConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     pub domains: Option<NetworkDomainPermissionsToml>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
@@ -518,6 +523,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            dangerously_allow_plaintext_credential_injection,
             domains,
             managed_allowed_domains_only,
             unix_sockets,
@@ -530,6 +536,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            dangerously_allow_plaintext_credential_injection,
             domains,
             managed_allowed_domains_only,
             unix_sockets,
@@ -3217,6 +3224,7 @@ command = "python3 /enterprise/hooks/pre.py"
             enabled = true
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
+            dangerously_allow_plaintext_credential_injection = false
             managed_allowed_domains_only = true
             allow_local_binding = false
 
@@ -3245,6 +3253,12 @@ command = "python3 /enterprise/hooks/pre.py"
         assert_eq!(
             sourced_network.value.dangerously_allow_all_unix_sockets,
             Some(true)
+        );
+        assert_eq!(
+            sourced_network
+                .value
+                .dangerously_allow_plaintext_credential_injection,
+            Some(false)
         );
         assert_eq!(
             sourced_network.value.domains.as_ref(),

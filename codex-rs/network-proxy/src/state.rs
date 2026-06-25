@@ -30,6 +30,7 @@ pub struct NetworkProxyConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub dangerously_allow_plaintext_credential_injection: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub allowlist_expansion_enabled: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
@@ -212,6 +213,28 @@ pub fn validate_policy_against_constraints(
                 ))
             } else {
                 Ok(())
+            }
+        },
+    )?;
+
+    let allow_plaintext_credential_injection =
+        constraints.dangerously_allow_plaintext_credential_injection;
+    validate(
+        config
+            .network
+            .dangerously_allow_plaintext_credential_injection,
+        move |candidate| match allow_plaintext_credential_injection {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(invalid_value(
+                        "network.dangerously_allow_plaintext_credential_injection",
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
             }
         },
     )?;
