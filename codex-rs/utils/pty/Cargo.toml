@@ -21,11 +21,15 @@ lazy_static = { workspace = true }
 log = { workspace = true }
 shared_library = "0.1.9"
 winapi = { version = "0.3.9", features = [
+    "fileapi",
     "handleapi",
     "jobapi2",
     "minwinbase",
+    "namedpipeapi",
     "processthreadsapi",
+    "stringapiset",
     "synchapi",
+    "sysinfoapi",
     "winbase",
     "wincon",
     "winerror",
