@@ -148,13 +148,12 @@ mod tests {
 
     #[test]
     fn actor_authorization_requires_a_nonempty_header_on_a_provider_auth_path() {
-        let provider = |requires_openai_auth, value: Option<&str>| {
-            let mut provider = ModelProviderInfo::default();
-            provider.requires_openai_auth = requires_openai_auth;
-            provider.http_headers = value.map(|value| {
+        let provider = |requires_openai_auth, value: Option<&str>| ModelProviderInfo {
+            requires_openai_auth,
+            http_headers: value.map(|value| {
                 HashMap::from([(ACTOR_AUTHORIZATION_HEADER.to_string(), value.to_string())])
-            });
-            provider
+            }),
+            ..Default::default()
         };
 
         assert!(provider_uses_actor_authorization(&provider(
@@ -182,11 +181,13 @@ mod tests {
         let registry = builder.build();
         let session_store = ExtensionData::new("session");
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
-        let mut provider = ModelProviderInfo::default();
-        provider.http_headers = Some(HashMap::from([(
-            ACTOR_AUTHORIZATION_HEADER.to_string(),
-            "actor-biscuit".to_string(),
-        )]));
+        let provider = ModelProviderInfo {
+            http_headers: Some(HashMap::from([(
+                ACTOR_AUTHORIZATION_HEADER.to_string(),
+                "actor-biscuit".to_string(),
+            )])),
+            ..Default::default()
+        };
         thread_store.insert(ImageGenerationExtensionConfig {
             available: true,
             uses_provider_auth: true,
