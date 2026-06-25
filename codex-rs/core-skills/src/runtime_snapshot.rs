@@ -100,16 +100,19 @@ impl SkillsSnapshot {
             &host_source,
         );
         for root in executor_roots {
-            let executor_source =
-                Arc::new(ExecutorSkillSource::new(root.clone(), restriction_product));
-            let source_catalog = executor_catalog_cache
-                .catalog_for_stable_root(executor_source.as_ref())
+            let cached = executor_catalog_cache
+                .catalog_for_stable_root(root, restriction_product)
                 .await;
+            let executor_source = Arc::new(ExecutorSkillSource::new(
+                root.clone(),
+                restriction_product,
+                cached.identity(),
+            ));
             let source: Arc<dyn SkillSource> = executor_source;
             merge_bound_catalog(
                 &mut catalog,
                 &mut source_by_entry,
-                source_catalog.as_ref(),
+                cached.catalog(),
                 &source,
             );
         }

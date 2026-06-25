@@ -785,7 +785,7 @@ async fn deferred_executor_loads_agents_md_when_environment_becomes_ready() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_executor_caches_replacement_skill_catalog_for_later_steps() -> Result<()> {
+async fn deferred_executor_reuses_skill_catalog_after_environment_ready() -> Result<()> {
     const HOST_BODY: &str = "HOST_SKILL_BODY_MARKER";
     const EXECUTOR_BODY: &str = "EXECUTOR_SKILL_BODY_MARKER";
     const SKILL_REPLACEMENT_NOTICE: &str =

@@ -28,6 +28,8 @@ use crate::runtime::SkillSourceKind;
 /// whether a cached catalog is projected into a model step, but temporarily losing an environment
 /// does not invalidate its catalog. A different root identity, environment ID, path, or product
 /// restriction produces a cache miss and a new discovery.
+/// The entry also owns the source identity used for injection deduplication, so reconnecting the
+/// same stable environment does not make an unchanged skill look like a different instruction.
 ///
 /// There is intentionally no filesystem-based invalidation. Selected environment contents are
 /// treated as stable for the lifetime of a session. Dropping this cache at session shutdown is the
@@ -38,9 +40,11 @@ pub struct ExecutorSkillCatalogCache {
     entries: Mutex<Vec<CachedExecutorSkillCatalog>>,
 }
 
-struct CachedExecutorSkillCatalog {
+#[derive(Clone)]
+pub(crate) struct CachedExecutorSkillCatalog {
     key: ExecutorSkillCatalogCacheKey,
     catalog: Arc<SkillCatalog>,
+    identity: SkillSourceIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,17 +56,28 @@ struct ExecutorSkillCatalogCacheKey {
 impl ExecutorSkillCatalogCache {
     pub(crate) async fn catalog_for_stable_root(
         &self,
-        source: &ExecutorSkillSource,
-    ) -> Arc<SkillCatalog> {
-        let key = source.catalog_cache_key();
-        if let Some(catalog) = self.catalog(&key) {
-            return catalog;
+        root: &ResolvedSelectedCapabilityRoot,
+        restriction_product: Option<Product>,
+    ) -> CachedExecutorSkillCatalog {
+        let key = ExecutorSkillCatalogCacheKey {
+            selected_root: root.selected_root().clone(),
+            restriction_product,
+        };
+        if let Some(cached) = self.catalog(&key) {
+            return cached;
         }
 
         // Do not hold the cache lock across executor I/O. Concurrent first loads may duplicate
         // discovery, but the second check below ensures only one result becomes authoritative.
+        let identity = SkillSourceIdentity::from_owner(Arc::new(key.clone()));
+        let source = ExecutorSkillSource::new(root.clone(), restriction_product, identity.clone());
         let discovered = Arc::new(source.load_catalog().await);
-        if !discovered.warnings.is_empty() {
+        let discovered = CachedExecutorSkillCatalog {
+            key: key.clone(),
+            catalog: discovered,
+            identity,
+        };
+        if !discovered.warnings().is_empty() {
             return discovered;
         }
         let mut entries = self
@@ -70,22 +85,33 @@ impl ExecutorSkillCatalogCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = entries.iter().find(|entry| entry.key == key) {
-            return Arc::clone(&entry.catalog);
+            return entry.clone();
         }
-        entries.push(CachedExecutorSkillCatalog {
-            key,
-            catalog: Arc::clone(&discovered),
-        });
+        entries.push(discovered.clone());
         discovered
     }
 
-    fn catalog(&self, key: &ExecutorSkillCatalogCacheKey) -> Option<Arc<SkillCatalog>> {
+    fn catalog(&self, key: &ExecutorSkillCatalogCacheKey) -> Option<CachedExecutorSkillCatalog> {
         self.entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|entry| &entry.key == key)
-            .map(|entry| Arc::clone(&entry.catalog))
+            .cloned()
+    }
+}
+
+impl CachedExecutorSkillCatalog {
+    pub(crate) fn catalog(&self) -> &SkillCatalog {
+        self.catalog.as_ref()
+    }
+
+    pub(crate) fn identity(&self) -> SkillSourceIdentity {
+        self.identity.clone()
+    }
+
+    fn warnings(&self) -> &[String] {
+        &self.catalog.warnings
     }
 }
 
@@ -100,22 +126,16 @@ impl ExecutorSkillSource {
     pub(crate) fn new(
         root: ResolvedSelectedCapabilityRoot,
         restriction_product: Option<Product>,
+        identity: SkillSourceIdentity,
     ) -> Self {
         Self {
             authority: SkillAuthority::new(
                 SkillSourceKind::Executor,
                 root.selected_root().id.clone(),
             ),
-            identity: SkillSourceIdentity::from_owner(Arc::clone(root.environment())),
+            identity,
             root,
             restriction_product,
-        }
-    }
-
-    fn catalog_cache_key(&self) -> ExecutorSkillCatalogCacheKey {
-        ExecutorSkillCatalogCacheKey {
-            selected_root: self.root.selected_root().clone(),
-            restriction_product: self.restriction_product,
         }
     }
 
