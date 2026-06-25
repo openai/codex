@@ -167,6 +167,7 @@ pub struct McpConnectionManager {
     client_runtime: Option<Arc<McpClientRuntime>>,
     cancel_on_drop: AtomicBool,
     pending_replacement_cancellation_token: Option<CancellationToken>,
+    cancel_pending_replacement_on_drop: AtomicBool,
 }
 
 impl McpConnectionManager {
@@ -268,6 +269,7 @@ impl McpConnectionManager {
             client_runtime: Some(client_runtime),
             cancel_on_drop: AtomicBool::new(true),
             pending_replacement_cancellation_token: None,
+            cancel_pending_replacement_on_drop: AtomicBool::new(false),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -351,6 +353,7 @@ impl McpConnectionManager {
             client_runtime: None,
             cancel_on_drop: AtomicBool::new(true),
             pending_replacement_cancellation_token: None,
+            cancel_pending_replacement_on_drop: AtomicBool::new(false),
         }
     }
 
@@ -442,11 +445,16 @@ impl McpConnectionManager {
             client_runtime: Some(Arc::clone(runtime)),
             cancel_on_drop: AtomicBool::new(false),
             pending_replacement_cancellation_token: replacement_cancellation_token,
+            cancel_pending_replacement_on_drop: AtomicBool::new(true),
         })
     }
 
     /// Transfers ownership of the shared startup lifecycle after a successful swap.
     pub fn take_cancellation_ownership_from(&self, superseded: &Self) {
+        // Once committed, this manager's replacement client belongs to the shared
+        // lifecycle. A later replacement may drop this snapshot without cancelling it.
+        self.cancel_pending_replacement_on_drop
+            .store(false, Ordering::Release);
         self.cancel_on_drop.store(true, Ordering::Release);
         superseded.cancel_on_drop.store(false, Ordering::Release);
     }
@@ -978,7 +986,11 @@ impl Drop for McpConnectionManager {
     fn drop(&mut self) {
         if self.cancel_on_drop.load(Ordering::Acquire) {
             self.startup_cancellation_token.cancel();
-        } else if let Some(cancel_token) = &self.pending_replacement_cancellation_token {
+        } else if self
+            .cancel_pending_replacement_on_drop
+            .load(Ordering::Acquire)
+            && let Some(cancel_token) = &self.pending_replacement_cancellation_token
+        {
             // A prepared replacement that was never committed owns only its new client.
             cancel_token.cancel();
         }

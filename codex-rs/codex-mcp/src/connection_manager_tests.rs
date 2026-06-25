@@ -1476,7 +1476,32 @@ async fn server_replacement_preserves_and_does_not_cancel_unrelated_clients() {
     assert!(!alpha_cancel.is_cancelled());
     assert!(!replacement.clients["beta"].cancel_token.is_cancelled());
     assert!(!cancel_token.is_cancelled());
-    replacement.shutdown().await;
+
+    let replacement_beta_cancel = replacement.clients["beta"].cancel_token.clone();
+    let next_replacement = Arc::new(
+        replacement
+            .prepare_server_replacement(
+                "alpha".to_string(),
+                local_stdio_server("second-replacement"),
+                None,
+                "second-refresh".to_string(),
+            )
+            .await
+            .expect("second replacement manager should build"),
+    );
+    let next_alpha_cancel = next_replacement.clients["alpha"].cancel_token.clone();
+    next_replacement.take_cancellation_ownership_from(&replacement);
+
+    let retire_task = tokio::spawn(
+        Arc::clone(&replacement).shutdown_server_after_readers_release("alpha".to_string()),
+    );
+    drop(replacement);
+    retire_task.await.expect("retirement task should finish");
+    assert!(alpha_cancel.is_cancelled());
+    assert!(!replacement_beta_cancel.is_cancelled());
+    assert!(!next_alpha_cancel.is_cancelled());
+    assert!(!cancel_token.is_cancelled());
+    next_replacement.shutdown().await;
 }
 
 #[test]
