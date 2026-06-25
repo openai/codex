@@ -40,6 +40,8 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 use winapi::um::winbase::WAIT_OBJECT_0;
 
+#[cfg(test)]
+mod command;
 pub(crate) mod conpty;
 mod job;
 mod procthreadattr;
