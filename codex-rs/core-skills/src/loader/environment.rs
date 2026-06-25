@@ -220,7 +220,9 @@ pub async fn load_environment_skills_from_root(
         .filter_map(|(plugin_root, namespace)| namespace.map(|namespace| (plugin_root, namespace)))
         .collect::<HashMap<_, _>>();
 
-    for path in discovery.skill_files {
+    // Remote executors can multiplex these independent per-skill reads, so polling them together
+    // allows the I/O for each skill and its metadata to happen concurrently.
+    let skill_results = join_all(discovery.skill_files.into_iter().map(|path| {
         let mut ancestor = path.parent();
         let plugin_namespace = loop {
             let Some(current) = ancestor else {
@@ -231,13 +233,16 @@ pub async fn load_environment_skills_from_root(
             }
             ancestor = current.parent();
         };
-        match EnvironmentSkillMetadata::parse(
-            file_system,
-            &path,
-            /*plugin_namespace*/ plugin_namespace,
-        )
-        .await
-        {
+        async move {
+            let result =
+                EnvironmentSkillMetadata::parse(file_system, &path, plugin_namespace).await;
+            (path, result)
+        }
+    }))
+    .await;
+
+    for (path, result) in skill_results {
+        match result {
             Ok(skill) if skill.matches_product_restriction(restriction_product) => {
                 outcome.skills.push(skill);
             }
