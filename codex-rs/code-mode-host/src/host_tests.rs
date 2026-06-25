@@ -61,7 +61,10 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
         )))
     );
 
-    for (request_id, id) in [(request_id(1), "session-1"), (request_id(2), "session-2")] {
+    for (request_id, id) in [
+        (request_id(/*value*/ 1), "session-1"),
+        (request_id(/*value*/ 2), "session-2"),
+    ] {
         writer
             .write(&ClientToHost::Request {
                 id: request_id,
@@ -84,7 +87,10 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
         );
     }
 
-    for (request_id, id) in [(request_id(3), "session-1"), (request_id(4), "session-2")] {
+    for (request_id, id) in [
+        (request_id(/*value*/ 3), "session-1"),
+        (request_id(/*value*/ 4), "session-2"),
+    ] {
         writer
             .write(&ClientToHost::Request {
                 id: request_id,
@@ -145,7 +151,7 @@ async fn incompatible_or_invalid_handshake_is_rejected() {
     let mut writer = FramedWriter::new(client_writer);
     writer
         .write(&ClientToHost::Request {
-            id: request_id(1),
+            id: request_id(/*value*/ 1),
             request: HostRequest::OpenSession {
                 session_id: session_id("session-1"),
             },
@@ -210,13 +216,13 @@ async fn session_id_cannot_be_reused_after_shutdown() {
     let id = session_id("session-1");
     for (request_id, request) in [
         (
-            request_id(1),
+            request_id(/*value*/ 1),
             HostRequest::OpenSession {
                 session_id: id.clone(),
             },
         ),
         (
-            request_id(2),
+            request_id(/*value*/ 2),
             HostRequest::ShutdownSession {
                 session_id: id.clone(),
             },
@@ -237,7 +243,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
     }
     writer
         .write(&ClientToHost::Request {
-            id: request_id(3),
+            id: request_id(/*value*/ 3),
             request: HostRequest::OpenSession { session_id: id },
         })
         .await
@@ -245,7 +251,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
     assert_eq!(
         reader.read::<HostToClient>().await.expect("reuse response"),
         Some(HostToClient::Response {
-            id: request_id(3),
+            id: request_id(/*value*/ 3),
             result: WireResult::Err {
                 message: "code-mode session ID `session-1` was reused".to_string(),
             },
