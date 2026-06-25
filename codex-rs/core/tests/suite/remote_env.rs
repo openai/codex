@@ -51,6 +51,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_target_windows;
@@ -1100,6 +1101,11 @@ async fn exec_command_routing_output(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Select the remote environment's advertised shell in this fixture.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "hard-codes /bin/sh for a bash-only remote environment"
+    );
     // TODO(anp): Remove after remote path fixtures use target-native paths.
     skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_remote_env!(Ok(()));
@@ -1175,6 +1181,11 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Select the remote environment's advertised shell in this fixture.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "hard-codes /bin/sh for a bash-only remote environment"
+    );
     // TODO(anp): Remove after remote path fixtures use target-native paths.
     skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_remote_env!(Ok(()));
@@ -1468,6 +1479,8 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
     skip_if_no_network!(Ok(()));
     // TODO(anp): Remove after remote path fixtures use target-native paths.
     skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    // TODO(anp): Add an isolated bwrap-exec fixture for per-environment approval paths.
+    skip_if_bwrap_exec!(Ok(()), "uses one absolute path in both environments");
     skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1655,6 +1668,11 @@ async fn apply_patch_approvals_are_remembered_per_environment() -> Result<()> {
 async fn apply_patch_intercepted_exec_command_routes_to_selected_remote_environment() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Select the remote environment's advertised shell in this fixture.
+    skip_if_bwrap_exec!(
+        Ok(()),
+        "hard-codes /bin/sh for a bash-only remote environment"
+    );
     // TODO(anp): Remove after remote path fixtures use target-native paths.
     skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
     skip_if_no_remote_env!(Ok(()));
@@ -1798,6 +1816,8 @@ async fn remote_test_env_sandboxed_read_allows_readable_root() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
+    // TODO(anp): Build symlink fixtures through exec-server instead of direct Docker access.
+    skip_if_bwrap_exec!(Ok(()), "fixture setup requires direct Docker access");
     skip_if_target_windows!(Ok(()), "tests POSIX symlink and parent traversal semantics");
     skip_if_no_network!(Ok(()));
     skip_if_no_remote_env!(Ok(()));
@@ -1832,6 +1852,8 @@ async fn remote_test_env_sandboxed_read_rejects_symlink_parent_dotdot_escape() -
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
+    // TODO(anp): Build symlink fixtures through exec-server instead of direct Docker access.
+    skip_if_bwrap_exec!(Ok(()), "fixture setup requires direct Docker access");
     skip_if_target_windows!(Ok(()), "tests POSIX symlink removal semantics");
     skip_if_no_network!(Ok(()));
     skip_if_no_remote_env!(Ok(()));
@@ -1904,6 +1926,8 @@ async fn remote_test_env_remove_removes_symlink_not_target() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_copy_preserves_symlink_source() -> Result<()> {
+    // TODO(anp): Build symlink fixtures through exec-server instead of direct Docker access.
+    skip_if_bwrap_exec!(Ok(()), "fixture setup requires direct Docker access");
     skip_if_target_windows!(Ok(()), "tests POSIX symlink copy semantics");
     skip_if_no_network!(Ok(()));
     skip_if_no_remote_env!(Ok(()));

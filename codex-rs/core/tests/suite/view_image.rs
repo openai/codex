@@ -40,6 +40,7 @@ use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_bwrap_exec;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::test_codex::TestCodex;
@@ -494,6 +495,8 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn view_image_tool_applies_local_sandbox_read_denies() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+    // TODO(anp): Make the local filesystem sandbox work in the bwrap-exec test configuration.
+    skip_if_bwrap_exec!(Ok(()), "exercises the local filesystem sandbox");
 
     let server = start_mock_server().await;
     let mut builder = test_codex();
