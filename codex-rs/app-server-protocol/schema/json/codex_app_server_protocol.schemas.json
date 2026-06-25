@@ -7082,6 +7082,13 @@
           }
         ]
       },
+      "CloudManagedLayer": {
+        "enum": [
+          "baseline",
+          "systemOverlay"
+        ],
+        "type": "string"
+      },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
         "oneOf": [
@@ -8133,7 +8140,7 @@
             "type": "object"
           },
           {
-            "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+            "description": "Legacy cloud config source retained for v2 wire compatibility. New config stacks emit [`Self::CloudManaged`] instead.",
             "properties": {
               "id": {
                 "description": "Stable identifier for the delivered layer.",
@@ -8157,6 +8164,37 @@
               "type"
             ],
             "title": "EnterpriseManagedConfigLayerSource",
+            "type": "object"
+          },
+          {
+            "description": "Config fragment delivered through the generic cloud-managed layer contract.",
+            "properties": {
+              "id": {
+                "description": "Stable identifier for the delivered fragment.",
+                "type": "string"
+              },
+              "layer": {
+                "$ref": "#/definitions/v2/CloudManagedLayer"
+              },
+              "name": {
+                "description": "Human-readable name for diagnostics and source attribution.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "cloudManaged"
+                ],
+                "title": "CloudManagedConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "layer",
+              "name",
+              "type"
+            ],
+            "title": "CloudManagedConfigLayerSource",
             "type": "object"
           },
           {

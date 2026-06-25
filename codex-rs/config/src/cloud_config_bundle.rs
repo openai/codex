@@ -5,12 +5,13 @@
 //! layer entries while preserving each bucket's insertion semantics.
 
 use crate::CloudConfigFragment;
+use crate::CloudManagedLayer;
 use crate::ConfigLayerEntry;
 use crate::RequirementSource;
 use crate::RequirementsLayerEntry;
 use crate::cloud_config_layers::CloudConfigLayerError;
-use crate::cloud_config_layers::cloud_config_layers_from_fragments_strict;
-use crate::cloud_config_layers_from_fragments;
+use crate::cloud_config_layers::cloud_managed_config_layers_from_fragments;
+use crate::cloud_config_layers::cloud_managed_config_layers_from_fragments_strict;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
@@ -131,20 +132,30 @@ impl CloudConfigBundleLayers {
                 },
         } = bundle;
 
-        let parse_config_fragments = |fragments| {
+        let parse_managed_config_fragments = |fragments, layer| {
             if strict_config {
-                cloud_config_layers_from_fragments_strict(fragments, base_dir)
+                cloud_managed_config_layers_from_fragments_strict(fragments, base_dir, layer)
             } else {
-                cloud_config_layers_from_fragments(fragments, base_dir)
+                cloud_managed_config_layers_from_fragments(fragments, base_dir, layer)
             }
         };
-        let baseline_config = parse_config_fragments(config_baseline)?;
-        let system_overlay_config = parse_config_fragments(config_system_overlay)?;
+        let baseline_config =
+            parse_managed_config_fragments(config_baseline, CloudManagedLayer::Baseline)?;
+        let system_overlay_config = parse_managed_config_fragments(
+            config_system_overlay,
+            CloudManagedLayer::SystemOverlay,
+        )?;
 
-        let baseline_requirements =
-            requirements_layers_from_fragments(requirements_baseline, base_dir);
-        let system_overlay_requirements =
-            requirements_layers_from_fragments(requirements_system_overlay, base_dir);
+        let baseline_requirements = requirements_layers_from_fragments(
+            requirements_baseline,
+            base_dir,
+            CloudManagedLayer::Baseline,
+        );
+        let system_overlay_requirements = requirements_layers_from_fragments(
+            requirements_system_overlay,
+            base_dir,
+            CloudManagedLayer::SystemOverlay,
+        );
 
         Ok(Self {
             baseline_config,
@@ -158,12 +169,14 @@ impl CloudConfigBundleLayers {
 fn requirements_layers_from_fragments(
     fragments: Vec<CloudRequirementsFragment>,
     base_dir: &AbsolutePathBuf,
+    layer: CloudManagedLayer,
 ) -> Vec<RequirementsLayerEntry> {
     let mut layers = fragments
         .into_iter()
         .map(|fragment| {
             RequirementsLayerEntry::from_toml(
-                RequirementSource::EnterpriseManaged {
+                RequirementSource::CloudManaged {
+                    layer,
                     id: fragment.id,
                     name: fragment.name,
                 },

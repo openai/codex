@@ -31,12 +31,13 @@ fn base_dir() -> AbsolutePathBuf {
 #[test]
 fn layers_are_returned_in_stack_order() {
     let base_dir = base_dir();
-    let layers = cloud_config_layers_from_fragments(
+    let layers = cloud_managed_config_layers_from_fragments(
         vec![
             fragment("high", "High priority", "model = \"cloud-high\""),
             fragment("low", "Low priority", "model_provider = \"cloud-low\""),
         ],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect("cloud config layers should compose");
 
@@ -46,11 +47,13 @@ fn layers_are_returned_in_stack_order() {
             .map(|layer| layer.name.clone())
             .collect::<Vec<_>>(),
         vec![
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "low".to_string(),
                 name: "Low priority".to_string(),
             },
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "high".to_string(),
                 name: "High priority".to_string(),
             },
@@ -61,9 +64,10 @@ fn layers_are_returned_in_stack_order() {
 #[test]
 fn strict_layers_reject_unknown_config_fields() {
     let base_dir = base_dir();
-    let err = cloud_config_layers_from_fragments_strict(
+    let err = cloud_managed_config_layers_from_fragments_strict(
         vec![fragment("strict", "Strict layer", "unknown_key = true")],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect_err("strict config should reject unknown fields");
 
@@ -80,7 +84,7 @@ fn strict_layers_reject_unknown_config_fields() {
 }
 
 #[test]
-fn enterprise_layers_precede_user_and_override_system() {
+fn system_overlay_layers_precede_user_and_override_system() {
     let base_dir = base_dir();
     let mut layers = vec![ConfigLayerEntry::new(
         ConfigLayerSource::System {
@@ -95,12 +99,13 @@ review_model = "system-review"
         ),
     )];
     layers.extend(
-        cloud_config_layers_from_fragments(
+        cloud_managed_config_layers_from_fragments(
             vec![
                 fragment("high", "High priority", "model_provider = \"cloud-high\""),
                 fragment("low", "Low priority", "review_model = \"cloud-low-review\""),
             ],
             &base_dir,
+            CloudManagedLayer::SystemOverlay,
         )
         .expect("cloud config layers should compose"),
     );
@@ -132,11 +137,13 @@ review_model = "system-review"
             ConfigLayerSource::System {
                 file: test_path_buf("/etc/codex/config.toml").abs(),
             },
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "low".to_string(),
                 name: "Low priority".to_string(),
             },
-            ConfigLayerSource::EnterpriseManaged {
+            ConfigLayerSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "high".to_string(),
                 name: "High priority".to_string(),
             },
@@ -161,13 +168,14 @@ review_model = "cloud-low-review"
 #[test]
 fn relative_absolute_path_fields_resolve_against_base_dir() {
     let base_dir = base_dir();
-    let layers = cloud_config_layers_from_fragments(
+    let layers = cloud_managed_config_layers_from_fragments(
         vec![fragment(
             "cfg_123",
             "Base policy",
             "model_instructions_file = \"instructions.md\"",
         )],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect("relative paths should match existing MDM semantics");
 
@@ -184,13 +192,14 @@ fn relative_absolute_path_fields_resolve_against_base_dir() {
 #[test]
 fn home_relative_path_fields_are_allowed_and_resolved() {
     let base_dir = base_dir();
-    let layers = cloud_config_layers_from_fragments(
+    let layers = cloud_managed_config_layers_from_fragments(
         vec![fragment(
             "cfg_123",
             "Base policy",
             "model_instructions_file = \"~/instructions.md\"",
         )],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect("home-relative paths should be accepted");
 
@@ -205,15 +214,16 @@ fn home_relative_path_fields_are_allowed_and_resolved() {
 }
 
 #[tokio::test]
-async fn raw_toml_diagnostics_use_enterprise_layer_name() {
+async fn raw_toml_diagnostics_use_cloud_managed_layer_name() {
     let base_dir = base_dir();
-    let layers = cloud_config_layers_from_fragments(
+    let layers = cloud_managed_config_layers_from_fragments(
         vec![fragment(
             "cfg_123",
             "Base policy",
             "model_instructions_file = \"instructions.md\"\nmodel = 1",
         )],
         &base_dir,
+        CloudManagedLayer::SystemOverlay,
     )
     .expect("cloud config layers should parse");
 
@@ -223,7 +233,7 @@ async fn raw_toml_diagnostics_use_enterprise_layer_name() {
 
     assert_eq!(
         error.path,
-        Path::new("enterprise-managed (Base policy, cfg_123)").to_path_buf()
+        Path::new("cloud-managed system-overlay (Base policy, cfg_123)").to_path_buf()
     );
     assert_eq!(error.range.start.line, 2);
     assert_eq!(error.range.start.column, 9);

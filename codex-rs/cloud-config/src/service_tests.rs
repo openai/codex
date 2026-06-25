@@ -5,6 +5,9 @@ use crate::backend::RetryableFailureKind;
 use crate::backend::bundle_from_response;
 use crate::cache::CLOUD_CONFIG_BUNDLE_CACHE_FILENAME;
 use crate::cache::CloudConfigBundleCache;
+use crate::cache::CloudConfigBundleCacheFile;
+use crate::cache::cache_payload_bytes;
+use crate::cache::sign_cache_payload;
 use crate::metrics::bundle_shape_tag;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -242,6 +245,36 @@ fn invalid_config_bundle() -> CloudConfigBundle {
             },
         },
         requirements_toml: CloudRequirementsTomlBundle::default(),
+    }
+}
+
+fn conflicting_managed_requirements_bundle() -> CloudConfigBundle {
+    CloudConfigBundle {
+        config_toml: CloudConfigTomlBundle::default(),
+        requirements_toml: CloudRequirementsTomlBundle {
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: vec![CloudRequirementsFragment {
+                    id: "req_baseline".to_string(),
+                    name: "Baseline requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/baseline"
+windows_managed_dir = 'C:\managed\baseline'
+"#
+                    .to_string(),
+                }],
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_overlay".to_string(),
+                    name: "System overlay requirements".to_string(),
+                    contents: r#"
+[hooks]
+managed_dir = "/managed/overlay"
+windows_managed_dir = 'C:\managed\overlay'
+"#
+                    .to_string(),
+                }],
+            },
+        },
     }
 }
 
@@ -502,30 +535,35 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 }
 
 #[tokio::test]
-async fn get_bundle_rejects_invalid_remote_bundle_before_cache_write() {
-    let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(invalid_config_bundle()));
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("business").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
+async fn get_bundle_rejects_invalid_remote_buckets_before_cache_write() {
+    for bundle in [
+        invalid_config_bundle(),
+        conflicting_managed_requirements_bundle(),
+    ] {
+        let codex_home = tempdir().expect("tempdir");
+        let fetcher = Arc::new(StaticBundleClient::new(bundle));
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan("business").await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
 
-    let err = service
-        .load_startup_bundle()
-        .await
-        .expect_err("invalid remote bundle should fail closed");
+        let err = service
+            .load_startup_bundle()
+            .await
+            .expect_err("invalid remote bundle should fail closed");
 
-    assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
-    assert!(err.to_string().contains("invalid cloud config bundle"));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    assert!(
-        !codex_home
-            .path()
-            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
-            .exists()
-    );
+        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        assert!(err.to_string().contains("invalid cloud config bundle"));
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
+        assert!(
+            !codex_home
+                .path()
+                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+                .exists()
+        );
+    }
 }
 
 #[tokio::test]
@@ -571,17 +609,29 @@ async fn get_bundle_rejects_missing_managed_layers_before_cache_write() {
 }
 
 #[tokio::test]
-async fn get_bundle_ignores_invalid_cache_and_refetches() {
+async fn get_bundle_ignores_v1_cache_and_refetches() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     cache
         .save(
             Some("user-12345".to_string()),
             Some("account-12345".to_string()),
-            invalid_config_bundle(),
+            test_bundle(),
         )
         .await
-        .expect("write invalid cache");
+        .expect("write cache");
+    let cache_path = codex_home.path().join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME);
+    let mut cache_file: CloudConfigBundleCacheFile =
+        serde_json::from_slice(&std::fs::read(&cache_path).expect("read cache"))
+            .expect("parse cache");
+    cache_file.signed_payload.version = 1;
+    let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes");
+    cache_file.signature = sign_cache_payload(&payload_bytes).expect("signature");
+    std::fs::write(
+        cache_path,
+        serde_json::to_vec_pretty(&cache_file).expect("serialize v1 cache"),
+    )
+    .expect("write v1 cache");
     let replacement_bundle = test_bundle();
     let fetcher = Arc::new(StaticBundleClient::new(replacement_bundle.clone()));
     let service = CloudConfigBundleService::new(

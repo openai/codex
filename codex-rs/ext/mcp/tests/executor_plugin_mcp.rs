@@ -47,7 +47,7 @@ async fn selected_plugin_servers_use_managed_requirements_for_the_selected_root_
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            CloudConfigBundleFixture::loader_with_system_overlay_requirement(
                 r#"
 [plugins."selected-root".mcp_servers.allowed.identity]
 command = "allowed-command"

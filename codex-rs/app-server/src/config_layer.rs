@@ -1,6 +1,8 @@
+use codex_app_server_protocol::CloudManagedLayer as ApiCloudManagedLayer;
 use codex_app_server_protocol::ConfigLayer as ApiConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata as ApiConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource as ApiConfigLayerSource;
+use codex_config::CloudManagedLayer;
 use codex_config::ConfigLayer;
 use codex_config::ConfigLayerMetadata;
 use codex_config::ConfigLayerSource;
@@ -17,6 +19,13 @@ pub(crate) fn config_layer_source_to_api(source: ConfigLayerSource) -> ApiConfig
         ConfigLayerSource::System { file } => ApiConfigLayerSource::System { file },
         ConfigLayerSource::EnterpriseManaged { id, name } => {
             ApiConfigLayerSource::EnterpriseManaged { id, name }
+        }
+        ConfigLayerSource::CloudManaged { layer, id, name } => {
+            let layer = match layer {
+                CloudManagedLayer::Baseline => ApiCloudManagedLayer::Baseline,
+                CloudManagedLayer::SystemOverlay => ApiCloudManagedLayer::SystemOverlay,
+            };
+            ApiConfigLayerSource::CloudManaged { layer, id, name }
         }
         ConfigLayerSource::User { file, profile } => ApiConfigLayerSource::User { file, profile },
         ConfigLayerSource::Project { dot_codex_folder } => {

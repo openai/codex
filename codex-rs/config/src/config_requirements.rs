@@ -16,6 +16,7 @@ use wildmatch::WildMatchPattern;
 
 use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
+use crate::CloudManagedLayer;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
@@ -35,9 +36,9 @@ pub enum RequirementSource {
     Composite {
         sources: Vec<RequirementSource>,
     },
-    /// A backend-delivered enterprise-managed layer. `id` is the stable backend
-    /// identifier; `name` is the admin-facing display name.
-    EnterpriseManaged {
+    /// A fragment delivered through the generic cloud-managed layer contract.
+    CloudManaged {
+        layer: CloudManagedLayer,
         id: String,
         name: String,
     },
@@ -97,8 +98,8 @@ impl fmt::Display for RequirementSource {
                 }
                 Ok(())
             }
-            RequirementSource::EnterpriseManaged { id, name } => {
-                write!(f, "enterprise-managed requirements {name} ({id})")
+            RequirementSource::CloudManaged { layer, id, name } => {
+                write!(f, "cloud-managed {layer} requirements {name} ({id})")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())

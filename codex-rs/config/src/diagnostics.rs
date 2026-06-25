@@ -256,6 +256,7 @@ fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Op
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }
         | ConfigLayerSource::EnterpriseManaged { .. }
+        | ConfigLayerSource::CloudManaged { .. }
         | ConfigLayerSource::SessionFlags
         | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
     }

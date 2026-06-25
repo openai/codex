@@ -4,6 +4,7 @@ use super::RequirementsCompositionError;
 use super::compose_requirements_for_hostname;
 use super::compose_requirements_for_hostname_and_hook_directory;
 use super::compose_requirements_with_hostname_resolver;
+use crate::CloudManagedLayer;
 use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
@@ -17,7 +18,8 @@ use tempfile::TempDir;
 
 fn layer(id: &str, name: &str, contents: &str) -> RequirementsLayerEntry {
     RequirementsLayerEntry::from_toml(
-        RequirementSource::EnterpriseManaged {
+        RequirementSource::CloudManaged {
+            layer: CloudManagedLayer::SystemOverlay,
             id: id.to_string(),
             name: name.to_string(),
         },
@@ -219,7 +221,7 @@ deny_read = [{high_path:?}, {low_path:?}]
 }
 
 #[test]
-fn single_regular_layer_keeps_enterprise_managed_source() {
+fn single_regular_layer_keeps_cloud_managed_source() {
     let composed = compose_requirements_for_hostname(
         vec![layer(
             "req_1",
@@ -237,7 +239,8 @@ allow_managed_hooks_only = true
         composed.allow_managed_hooks_only,
         Some(Sourced::new(
             /*value*/ true,
-            RequirementSource::EnterpriseManaged {
+            RequirementSource::CloudManaged {
+                layer: CloudManagedLayer::SystemOverlay,
                 id: "req_1".to_string(),
                 name: "Security baseline".to_string(),
             },
@@ -309,11 +312,13 @@ approval_mode = "approve"
 
 #[test]
 fn merged_table_source_is_composite_in_priority_order() {
-    let high_source = RequirementSource::EnterpriseManaged {
+    let high_source = RequirementSource::CloudManaged {
+        layer: CloudManagedLayer::SystemOverlay,
         id: "req_high".to_string(),
         name: "High".to_string(),
     };
-    let low_source = RequirementSource::EnterpriseManaged {
+    let low_source = RequirementSource::CloudManaged {
+        layer: CloudManagedLayer::Baseline,
         id: "req_low".to_string(),
         name: "Low".to_string(),
     };
