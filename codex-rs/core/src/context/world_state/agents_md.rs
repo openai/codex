@@ -1,3 +1,4 @@
+use super::PreviousSectionState;
 use super::WorldStateSection;
 use crate::agents_md::LoadedAgentsMd;
 use crate::context::ContextualUserFragment;
@@ -44,27 +45,35 @@ impl WorldStateSection for AgentsMdState {
         }
     }
 
+    fn matches_legacy_fragment(role: &str, text: &str) -> bool {
+        role == "user" && UserInstructions::matches_text(text)
+    }
+
     fn render_diff(
         &self,
-        previous: Option<&Self::Snapshot>,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
         let current = self.snapshot();
-        if previous == Some(&current) {
+        if matches!(previous, PreviousSectionState::Known(previous) if previous == &current) {
             return None;
         }
 
-        let previous_instructions = previous.and_then(|state| state.text.as_ref());
-        let instructions = match (&self.instructions, previous_instructions) {
-            (Some(instructions), Some(_)) => UserInstructions {
+        let previous_may_contain_instructions = match previous {
+            PreviousSectionState::Known(previous) => previous.text.is_some(),
+            PreviousSectionState::Unknown => true,
+            PreviousSectionState::Absent => false,
+        };
+        let instructions = match (&self.instructions, previous_may_contain_instructions) {
+            (Some(instructions), true) => UserInstructions {
                 directory: instructions.directory.clone(),
                 text: format!("{REPLACEMENT_NOTICE}\n\n{}", instructions.text),
             },
-            (Some(instructions), None) => instructions.clone(),
-            (None, Some(_)) => UserInstructions {
+            (Some(instructions), false) => instructions.clone(),
+            (None, true) => UserInstructions {
                 directory: None,
                 text: REMOVAL_NOTICE.to_string(),
             },
-            (None, None) => return None,
+            (None, false) => return None,
         };
         Some(Box::new(instructions))
     }

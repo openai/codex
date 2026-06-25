@@ -21,11 +21,15 @@ impl WorldStateSection for TestSection {
 
     fn render_diff(
         &self,
-        previous: Option<&Self::Snapshot>,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
-        let previous = previous?;
-        (self.value != previous.value)
-            .then(|| Box::new(TestFragment(self.value.clone())) as Box<dyn ContextualUserFragment>)
+        match previous {
+            PreviousSectionState::Known(previous) if self.value != previous.value => {
+                Some(Box::new(TestFragment(self.value.clone())))
+            }
+            PreviousSectionState::Unknown => Some(Box::new(TestFragment("unknown".to_string()))),
+            PreviousSectionState::Absent | PreviousSectionState::Known(_) => None,
+        }
     }
 }
 
@@ -59,7 +63,7 @@ impl WorldStateSection for DuplicateTestSection {
 
     fn render_diff(
         &self,
-        _previous: Option<&Self::Snapshot>,
+        _previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
         None
     }
@@ -99,6 +103,29 @@ fn render_diff_restores_the_typed_section_snapshot() {
 
     assert_eq!(
         vec!["after"],
+        rendered
+            .into_iter()
+            .map(|fragment| fragment.body())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn unreadable_section_snapshot_is_treated_as_unknown() {
+    let mut current = WorldState::default();
+    current.add_section(TestSection {
+        value: "current".to_string(),
+        optional: None,
+        array: Vec::new(),
+    });
+    let previous = WorldStateSnapshot {
+        sections: BTreeMap::from([("test".to_string(), json!({"invalid": true}))]),
+    };
+
+    let rendered = current.render_diff(&previous);
+
+    assert_eq!(
+        vec!["unknown"],
         rendered
             .into_iter()
             .map(|fragment| fragment.body())
