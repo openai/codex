@@ -5,9 +5,12 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::RequirementsExecPolicyParseError;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -135,7 +138,9 @@ struct ExecPolicyCommands {
 }
 
 pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
-    fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
+    fn exec_policy_layer_inputs(
+        config: &Config,
+    ) -> Vec<(Option<AbsolutePathBuf>, Option<toml::Value>)> {
         config
             .config_layer_stack
             .get_layers(
@@ -143,11 +148,18 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
                 /*include_disabled*/ false,
             )
             .into_iter()
-            .filter_map(codex_config::ConfigLayerEntry::config_folder)
+            .filter(|layer| {
+                !should_ignore_layer_exec_policy_rules(&config.config_layer_stack, layer)
+            })
+            .filter_map(|layer| {
+                let config_folder = layer.config_folder();
+                let rules = layer.config.get("rules").cloned();
+                (config_folder.is_some() || rules.is_some()).then_some((config_folder, rules))
+            })
             .collect()
     }
 
-    exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
+    exec_policy_layer_inputs(parent_config) == exec_policy_layer_inputs(child_config)
         && parent_config
             .config_layer_stack
             .ignore_user_and_project_exec_policy_rules()
@@ -214,6 +226,18 @@ pub enum ExecPolicyError {
         path: String,
         source: codex_execpolicy::Error,
     },
+
+    #[error("failed to parse rules in {path}: {source}")]
+    ParseConfigRules {
+        path: String,
+        source: toml::de::Error,
+    },
+
+    #[error("failed to load rules in {path}: {source}")]
+    InvalidConfigRules {
+        path: String,
+        source: RequirementsExecPolicyParseError,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -240,6 +264,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: PermissionProfile,
+    pub(crate) active_permission_profile: Option<String>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
@@ -274,6 +299,7 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             permission_profile,
+            active_permission_profile,
             windows_sandbox_level,
             sandbox_permissions,
             prefix_rule,
@@ -303,6 +329,7 @@ impl ExecPolicyManager {
         };
         let match_options = MatchOptions {
             resolve_host_executables: true,
+            active_permission_profile,
         };
         let evaluation = exec_policy.check_multiple_with_options(
             commands.iter(),
@@ -403,6 +430,7 @@ impl ExecPolicyManager {
         let current_policy = self.current();
         let match_options = MatchOptions {
             resolve_host_executables: true,
+            active_permission_profile: None,
         };
         let existing_evaluation = current_policy.check_multiple_with_options(
             [&amendment.command],
@@ -550,6 +578,12 @@ pub fn format_exec_policy_error_with_source(error: &ExecPolicyError) -> String {
                 None => format!("{path}: {message}"),
             }
         }
+        ExecPolicyError::ParseConfigRules { path, source } => {
+            format!("{path}: failed to parse [rules]: {source}")
+        }
+        ExecPolicyError::InvalidConfigRules { path, source } => {
+            format!("{path}: failed to load [rules]: {source}")
+        }
         _ => error.to_string(),
     }
 }
@@ -559,9 +593,47 @@ async fn load_exec_policy_with_warning(
 ) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
     match load_exec_policy(config_stack).await {
         Ok(policy) => Ok((policy, None)),
-        Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
+        Err(
+            err @ (ExecPolicyError::ParsePolicy { .. }
+            | ExecPolicyError::ParseConfigRules { .. }
+            | ExecPolicyError::InvalidConfigRules { .. }),
+        ) => Ok((Policy::empty(), Some(err))),
         Err(err) => Err(err),
     }
+}
+
+fn should_ignore_layer_exec_policy_rules(
+    config_stack: &ConfigLayerStack,
+    layer: &ConfigLayerEntry,
+) -> bool {
+    config_stack.ignore_user_and_project_exec_policy_rules()
+        && matches!(
+            layer.name,
+            ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+        )
+}
+
+fn config_layer_rules_path(layer: &ConfigLayerEntry) -> String {
+    codex_config::format_config_layer_source(&layer.name, CONFIG_TOML_FILE)
+}
+
+fn config_layer_rules_policy(layer: &ConfigLayerEntry) -> Result<Option<Policy>, ExecPolicyError> {
+    let Some(rules) = layer.config.get("rules") else {
+        return Ok(None);
+    };
+    let path = config_layer_rules_path(layer);
+    let rules: codex_config::RequirementsExecPolicyToml =
+        rules
+            .clone()
+            .try_into()
+            .map_err(|source| ExecPolicyError::ParseConfigRules {
+                path: path.clone(),
+                source,
+            })?;
+    rules
+        .to_config_policy()
+        .map(Some)
+        .map_err(|source| ExecPolicyError::InvalidConfigRules { path, source })
 }
 
 pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
@@ -570,47 +642,43 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     // Iterate the layers in increasing order of precedence, adding the *.rules
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
+    let mut parser = PolicyParser::new();
     let mut policy_paths = Vec::new();
     for layer in config_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
-        if config_stack.ignore_user_and_project_exec_policy_rules()
-            && matches!(
-                layer.name,
-                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
-            )
-        {
+        if should_ignore_layer_exec_policy_rules(config_stack, layer) {
             continue;
         }
         if let Some(config_folder) = layer.config_folder() {
             let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;
-            policy_paths.extend(layer_policy_paths);
+            for policy_path in layer_policy_paths {
+                let contents = fs::read_to_string(&policy_path).await.map_err(|source| {
+                    ExecPolicyError::ReadFile {
+                        path: policy_path.clone(),
+                        source,
+                    }
+                })?;
+                let identifier = policy_path.to_string_lossy().to_string();
+                parser.parse(&identifier, &contents).map_err(|source| {
+                    ExecPolicyError::ParsePolicy {
+                        path: identifier,
+                        source,
+                    }
+                })?;
+                policy_paths.push(policy_path);
+            }
+        }
+        if let Some(policy) = config_layer_rules_policy(layer)? {
+            parser.merge_overlay(&policy);
         }
     }
     tracing::trace!(
         policy_paths = ?policy_paths,
         "loaded exec policies"
     );
-
-    let mut parser = PolicyParser::new();
-    for policy_path in &policy_paths {
-        let contents =
-            fs::read_to_string(policy_path)
-                .await
-                .map_err(|source| ExecPolicyError::ReadFile {
-                    path: policy_path.clone(),
-                    source,
-                })?;
-        let identifier = policy_path.to_string_lossy().to_string();
-        parser
-            .parse(&identifier, &contents)
-            .map_err(|source| ExecPolicyError::ParsePolicy {
-                path: identifier,
-                source,
-            })?;
-    }
 
     let policy = parser.build();
     tracing::debug!("loaded rules from {} files", policy_paths.len());

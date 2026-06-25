@@ -3236,6 +3236,151 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn permissions_scoped_prefix_rule_uses_active_profile_in_shell_flow() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "project_profile"
+
+[permissions.project_profile.filesystem]
+":minimal" = "read"
+
+[permissions.project_profile.filesystem.":workspace_roots"]
+"." = "write"
+
+[permissions.other_profile.filesystem]
+":minimal" = "read"
+
+[permissions.other_profile.filesystem.":workspace_roots"]
+"." = "write"
+"#,
+    )?;
+    let rules_dir = home.path().join("rules");
+    fs::create_dir_all(&rules_dir)?;
+    fs::write(
+        rules_dir.join("default.rules"),
+        r#"prefix_rule(pattern=["touch", "scoped-allow.txt"], decision="allow", permissions="project_profile")
+prefix_rule(pattern=["touch", "scoped-prompt.txt"], decision="allow", permissions="other_profile")
+"#,
+    )?;
+
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+    });
+    let test = builder.build(&server).await?;
+    assert_eq!(
+        test.session_configured
+            .active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some("project_profile")
+    );
+
+    let allow_call_id = "scoped-profile-allow";
+    let allow_command = "touch scoped-allow.txt";
+    let allow_event = shell_event(
+        allow_call_id,
+        allow_command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-scoped-profile-allow-1"),
+            allow_event,
+            ev_completed("resp-scoped-profile-allow-1"),
+        ]),
+    )
+    .await;
+    let allow_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-scoped-profile-allow", "done"),
+            ev_completed("resp-scoped-profile-allow-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn_preserving_active_permission_profile(
+        &test,
+        "run matching scoped rule",
+        approval_policy,
+    )
+    .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let allow_output = parse_result(
+        &allow_results
+            .single_request()
+            .function_call_output(allow_call_id),
+    );
+    assert_eq!(
+        allow_output.exit_code,
+        Some(0),
+        "expected matching scoped rule to run without approval: {}",
+        allow_output.stdout
+    );
+    let allow_path = test.cwd.path().join("scoped-allow.txt");
+    assert!(
+        allow_path.exists(),
+        "expected matching scoped rule to create {allow_path:?}"
+    );
+    fs::remove_file(allow_path)?;
+
+    let prompt_call_id = "scoped-profile-prompt";
+    let prompt_command = "touch scoped-prompt.txt";
+    let prompt_event = shell_event(
+        prompt_call_id,
+        prompt_command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-scoped-profile-prompt-1"),
+            prompt_event,
+            ev_completed("resp-scoped-profile-prompt-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-scoped-profile-prompt", "done"),
+            ev_completed("resp-scoped-profile-prompt-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn_preserving_active_permission_profile(
+        &test,
+        "run non-matching scoped rule",
+        approval_policy,
+    )
+    .await?;
+    let approval = expect_exec_approval(&test, prompt_command).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+    assert!(
+        !test.cwd.path().join("scoped-prompt.txt").exists(),
+        "non-matching scoped rule should not bypass approval"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn denying_network_policy_amendment_persists_policy_and_skips_future_network_prompt()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
