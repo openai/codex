@@ -26,18 +26,22 @@ use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -405,6 +409,117 @@ async fn running_thread_resume_includes_completion_after_initial_history_snapsho
     Ok(())
 }
 
+#[tokio::test]
+async fn running_thread_resume_reads_history_for_every_response_shape_that_needs_it() -> Result<()>
+{
+    struct Case {
+        exclude_turns: bool,
+        include_initial_page: bool,
+        expected_history_reads: usize,
+    }
+
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
+
+    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let mut client = start_in_process_server(codex_home.path()).await?;
+    let response = client
+        .request(ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: ThreadStartParams::default(),
+        })
+        .await?
+        .expect("thread/start should succeed");
+    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
+    client
+        .request(ClientRequest::TurnStart {
+            request_id: RequestId::Integer(2),
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Materialize one completed turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?
+        .expect("turn/start should succeed");
+    wait_for_thread_notification(&mut client, &thread.id, |notification| {
+        matches!(notification, ServerNotification::TurnCompleted(_))
+    })
+    .await?;
+
+    let cases = [
+        Case {
+            exclude_turns: true,
+            include_initial_page: false,
+            expected_history_reads: 0,
+        },
+        Case {
+            exclude_turns: false,
+            include_initial_page: false,
+            expected_history_reads: 1,
+        },
+        Case {
+            exclude_turns: true,
+            include_initial_page: true,
+            expected_history_reads: 1,
+        },
+        Case {
+            exclude_turns: false,
+            include_initial_page: true,
+            expected_history_reads: 1,
+        },
+    ];
+
+    for (index, case) in cases.into_iter().enumerate() {
+        let reads_before = thread_store.calls().await.load_history;
+        let response = client
+            .request(ClientRequest::ThreadResume {
+                request_id: RequestId::Integer(3 + index as i64),
+                params: ThreadResumeParams {
+                    thread_id: thread.id.clone(),
+                    exclude_turns: case.exclude_turns,
+                    initial_turns_page: case.include_initial_page.then_some(
+                        ThreadResumeInitialTurnsPageParams {
+                            limit: None,
+                            sort_direction: Some(SortDirection::Asc),
+                            items_view: Some(TurnItemsView::Full),
+                        },
+                    ),
+                    ..Default::default()
+                },
+            })
+            .await?
+            .expect("thread/resume should succeed");
+        let response: ThreadResumeResponse = serde_json::from_value(response)?;
+
+        assert_eq!(
+            thread_store.calls().await.load_history,
+            reads_before + case.expected_history_reads
+        );
+        assert_eq!(response.thread.turns.is_empty(), case.exclude_turns);
+        assert_eq!(
+            response.initial_turns_page.is_some(),
+            case.include_initial_page
+        );
+        if let Some(page) = response.initial_turns_page {
+            assert!(!page.data.is_empty());
+            if !case.exclude_turns {
+                assert_eq!(page.data, response.thread.turns);
+            }
+        }
+    }
+
+    client.shutdown().await?;
+    Ok(())
+}
+
 async fn wait_for_thread_notification(
     client: &mut InProcessClientHandle,
     thread_id: &str,
@@ -470,7 +585,10 @@ async fn start_in_process_client(
                 title: None,
                 version: "0.1.0".to_string(),
             },
-            capabilities: None,
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

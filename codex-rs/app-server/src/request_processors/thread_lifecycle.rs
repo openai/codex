@@ -819,13 +819,31 @@ pub(super) fn set_thread_status_and_interrupt_stale_turns(
     loaded_status: ThreadStatus,
     has_live_in_progress_turn: bool,
 ) {
-    let status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
-    if !matches!(status, ThreadStatus::Active { .. }) {
-        for turn in &mut thread.turns {
-            if matches!(turn.status, TurnStatus::InProgress) {
-                turn.status = TurnStatus::Interrupted;
-            }
+    let mut status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
+    if !has_live_in_progress_turn
+        && matches!(&status, ThreadStatus::Active { active_flags } if active_flags.is_empty())
+    {
+        status = ThreadStatus::Idle;
+    }
+
+    interrupt_stale_in_progress_turns(
+        &mut thread.turns,
+        matches!(status, ThreadStatus::Active { .. }),
+    );
+    thread.status = status;
+}
+
+pub(super) fn interrupt_stale_in_progress_turns(turns: &mut [Turn], preserve_latest: bool) {
+    let current_turn_index = preserve_latest
+        .then(|| {
+            turns
+                .iter()
+                .rposition(|turn| matches!(turn.status, TurnStatus::InProgress))
+        })
+        .flatten();
+    for (index, turn) in turns.iter_mut().enumerate() {
+        if matches!(turn.status, TurnStatus::InProgress) && Some(index) != current_turn_index {
+            turn.status = TurnStatus::Interrupted;
         }
     }
-    thread.status = status;
 }
