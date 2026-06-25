@@ -82,7 +82,7 @@ struct PreferredLocalPluginSource {
     marketplace_path: AbsolutePathBuf,
     plugin_name: String,
     installed: bool,
-    shows_as_installed: bool,
+    install_policy: PluginInstallPolicy,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -747,7 +747,7 @@ impl ChatWidget {
         let total = all_entries.len();
         let installed = all_entries
             .iter()
-            .filter(|(_, plugin, _)| plugin_shows_as_installed(plugin))
+            .filter(|(_, plugin, _)| plugin.installed)
             .count();
         let name_column_width = all_entries
             .iter()
@@ -758,7 +758,7 @@ impl ChatWidget {
             .max();
         let installed_entries = all_entries
             .iter()
-            .filter(|(_, plugin, _)| plugin_shows_as_installed(plugin))
+            .filter(|(_, plugin, _)| plugin.installed)
             .cloned()
             .collect();
 
@@ -805,7 +805,7 @@ impl ChatWidget {
         let curated_total = curated_entries.len();
         let curated_installed = curated_entries
             .iter()
-            .filter(|(_, plugin, _)| plugin_shows_as_installed(plugin))
+            .filter(|(_, plugin, _)| plugin.installed)
             .count();
         let curated_has_entries = !curated_entries.is_empty();
         let curated_loading = self.plugin_remote_sections_loading
@@ -896,7 +896,7 @@ impl ChatWidget {
             let marketplace_total = entries.len();
             let marketplace_installed = entries
                 .iter()
-                .filter(|(_, plugin, _)| plugin_shows_as_installed(plugin))
+                .filter(|(_, plugin, _)| plugin.installed)
                 .count();
             let tab_id = marketplace_tab_id(marketplace);
             let can_remove_marketplace =
@@ -1193,7 +1193,6 @@ impl ChatWidget {
                 plugin_detail_request_for_entry(marketplace, plugin, preferred_local_sources);
             let can_view_details = plugin_detail_request.is_some();
             let disabled_by_admin = plugin.availability == PluginAvailability::DisabledByAdmin;
-            let shows_as_installed = plugin_shows_as_installed(plugin);
             let can_toggle_plugin = plugin.installed
                 && plugin.install_policy != PluginInstallPolicy::InstalledByDefault
                 && !disabled_by_admin;
@@ -1211,9 +1210,9 @@ impl ChatWidget {
                 format!("{selected_status_label}   Press Enter to view plugin details.")
             } else if disabled_by_admin {
                 format!("{selected_status_label}   Plugin details are unavailable.")
-            } else if shows_as_installed && can_view_details {
+            } else if plugin.installed && can_view_details {
                 format!("{selected_status_label}   Press Enter to view plugin details.")
-            } else if shows_as_installed {
+            } else if plugin.installed {
                 format!("{selected_status_label}   Plugin details are unavailable.")
             } else if can_view_details {
                 format!("{selected_status_label}   Press Enter to install or view plugin details.")
@@ -1262,7 +1261,7 @@ impl ChatWidget {
                 } else {
                     Vec::new()
                 };
-            let is_disabled = !can_view_details && !shows_as_installed;
+            let is_disabled = !can_view_details && !plugin.installed;
             let disabled_reason = is_disabled.then(|| "plugin details are unavailable".to_string());
 
             items.push(SelectionItem {
@@ -1361,10 +1360,12 @@ fn plugin_entry_preferred(
         return candidate.1.installed;
     }
 
-    let candidate_shows_as_installed = plugin_shows_as_installed(candidate.1);
-    let existing_shows_as_installed = plugin_shows_as_installed(existing.1);
-    if candidate_shows_as_installed != existing_shows_as_installed {
-        return candidate_shows_as_installed;
+    let candidate_is_admin_managed =
+        candidate.1.install_policy == PluginInstallPolicy::InstalledByDefault;
+    let existing_is_admin_managed =
+        existing.1.install_policy == PluginInstallPolicy::InstalledByDefault;
+    if candidate_is_admin_managed != existing_is_admin_managed {
+        return candidate_is_admin_managed;
     }
 
     let candidate_is_local_share =
@@ -1400,7 +1401,7 @@ fn preferred_local_plugin_sources(
                     marketplace_path: marketplace_path.clone(),
                     plugin_name: plugin.name.clone(),
                     installed: plugin.installed,
-                    shows_as_installed: plugin_shows_as_installed(plugin),
+                    install_policy: plugin.install_policy,
                 });
         }
     }
@@ -1431,10 +1432,6 @@ fn plugin_detail_status_label(plugin: &PluginSummary) -> &'static str {
             PluginInstallPolicy::InstalledByDefault => "Installed by admin",
         }
     }
-}
-
-fn plugin_shows_as_installed(plugin: &PluginSummary) -> bool {
-    plugin.installed || plugin.install_policy == PluginInstallPolicy::InstalledByDefault
 }
 
 fn plugin_metadata_items(plugin: &PluginDetail) -> Vec<SelectionItem> {
@@ -1579,8 +1576,10 @@ fn plugin_entries_for_marketplaces<'a>(
 
 fn sort_plugin_entries(entries: &mut [(&PluginMarketplaceEntry, &PluginSummary, String)]) {
     entries.sort_by(|left, right| {
-        plugin_shows_as_installed(right.1)
-            .cmp(&plugin_shows_as_installed(left.1))
+        right
+            .1
+            .installed
+            .cmp(&left.1.installed)
             .then_with(|| {
                 left.2
                     .to_ascii_lowercase()
@@ -1881,7 +1880,7 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
     if !plugin.installed && plugin.install_policy == PluginInstallPolicy::InstalledByDefault {
         return "Admin assigned";
     }
-    if plugin_shows_as_installed(plugin) {
+    if plugin.installed {
         if plugin.enabled {
             "Installed"
         } else {
@@ -1926,7 +1925,7 @@ fn plugin_detail_request_for_entry(
         && let Some(remote_plugin_id) = plugin_remote_identity(plugin)
         && let Some(preferred_source) = preferred_local_sources.get(remote_plugin_id)
         && preferred_source.installed == plugin.installed
-        && preferred_source.shows_as_installed == plugin_shows_as_installed(plugin)
+        && preferred_source.install_policy == plugin.install_policy
     {
         return Some((
             PluginLocation::Local {

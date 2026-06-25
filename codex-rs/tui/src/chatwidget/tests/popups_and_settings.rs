@@ -209,12 +209,12 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
     );
     assert!(
         plugins_test_popup_row_position(&popup, "Alpha Sync")
-            < plugins_test_popup_row_position(&popup, "Starter")
-            && plugins_test_popup_row_position(&popup, "Starter")
-                < plugins_test_popup_row_position(&popup, "Bravo Search")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
             && plugins_test_popup_row_position(&popup, "Bravo Search")
-                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin"),
-        "expected /plugins rows to sort installed and default plugins first, then alphabetically, got:\n{popup}"
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+                < plugins_test_popup_row_position(&popup, "Starter"),
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
     );
 }
 
@@ -1374,9 +1374,19 @@ async fn plugins_popup_remote_detail_tracks_physical_and_policy_install_state() 
         ]),
     );
     assert!(
-        popup.contains("Admin assigned"),
-        "expected the admin-assigned remote duplicate to win, got:\n{popup}"
+        popup.contains("Installed 0 of 1 available plugins.") && popup.contains("Admin assigned"),
+        "expected the unmaterialized admin-assigned remote duplicate to win without counting as installed, got:\n{popup}"
     );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 0 installed plugins.")
+            && installed_popup.contains("No installed plugins")
+            && !installed_popup.contains("Docs"),
+        "expected the unmaterialized admin-assigned plugin to stay out of the Installed tab, got:\n{installed_popup}"
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Left));
 
     while rx.try_recv().is_ok() {}
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
