@@ -5,9 +5,11 @@ use std::future::Future;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
+use std::os::unix::process::ExitStatusExt;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -23,6 +25,8 @@ use tokio::time::timeout;
 
 use super::BwrapTestCommand;
 use super::BwrapTestProcess;
+use super::LauncherExitPolicy;
+use super::ensure_launcher_exit_status;
 
 fn smoke_fixture() -> Result<PathBuf> {
     Ok(codex_utils_cargo_bin::cargo_bin("bwrap-smoke")?)
@@ -101,6 +105,53 @@ fn namespace_identity(namespace: &str) -> Result<String> {
     Ok(fs::read_link(format!("/proc/self/ns/{namespace}"))?
         .to_string_lossy()
         .into_owned())
+}
+
+fn exit_status(code: i32) -> ExitStatus {
+    ExitStatus::from_raw(code << 8)
+}
+
+fn signal_status(signal: i32) -> ExitStatus {
+    ExitStatus::from_raw(signal)
+}
+
+#[test]
+fn launcher_exit_status_distinguishes_payload_failures_from_teardown() {
+    let actual = [
+        ensure_launcher_exit_status(exit_status(0), LauncherExitPolicy::RequireSuccess).is_ok(),
+        ensure_launcher_exit_status(exit_status(73), LauncherExitPolicy::RequireSuccess).is_ok(),
+        ensure_launcher_exit_status(
+            exit_status(128 + libc::SIGKILL),
+            LauncherExitPolicy::RequireSuccess,
+        )
+        .is_ok(),
+        ensure_launcher_exit_status(
+            signal_status(libc::SIGKILL),
+            LauncherExitPolicy::RequireSuccess,
+        )
+        .is_ok(),
+        ensure_launcher_exit_status(exit_status(0), LauncherExitPolicy::AllowTeardownKill).is_ok(),
+        ensure_launcher_exit_status(exit_status(73), LauncherExitPolicy::AllowTeardownKill).is_ok(),
+        ensure_launcher_exit_status(
+            exit_status(128 + libc::SIGKILL),
+            LauncherExitPolicy::AllowTeardownKill,
+        )
+        .is_ok(),
+        ensure_launcher_exit_status(
+            signal_status(libc::SIGKILL),
+            LauncherExitPolicy::AllowTeardownKill,
+        )
+        .is_ok(),
+        ensure_launcher_exit_status(
+            signal_status(libc::SIGTERM),
+            LauncherExitPolicy::AllowTeardownKill,
+        )
+        .is_ok(),
+    ];
+    assert_eq!(
+        actual,
+        [true, false, false, false, true, false, true, true, false]
+    );
 }
 
 #[tokio::test]
