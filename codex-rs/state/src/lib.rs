@@ -85,6 +85,8 @@ pub use runtime::sqlite_error_detail_is_lock;
 pub use runtime::sqlite_integrity_check;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
+pub use runtime::thread_history_db_filename;
+pub use runtime::thread_history_db_path;
 pub use telemetry::DbTelemetry;
 pub use telemetry::DbTelemetryHandle;
 pub use telemetry::install_process_db_telemetry;
@@ -98,6 +100,7 @@ pub const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
 pub const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
 pub const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
 pub const STATE_DB_FILENAME: &str = "state_5.sqlite";
+pub const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub const DB_ERROR_METRIC: &str = "codex.db.error";
