@@ -124,6 +124,38 @@ enabled = false
 }
 
 #[test]
+fn strict_partial_mcp_layer_still_resolves_relative_paths() {
+    let base_dir = base_dir();
+    let layers = cloud_config_layers_from_fragments_strict(
+        vec![fragment(
+            "partial",
+            "Partial MCP",
+            r#"model_instructions_file = "instructions.md"
+
+[mcp_servers.docs]
+enabled = true
+"#,
+        )],
+        &base_dir,
+    )
+    .expect("partial MCP layer should preserve path resolution");
+
+    let expected_path =
+        AbsolutePathBuf::resolve_path_against_base("instructions.md", base_dir.as_path());
+    let mut expected = toml(
+        r#"[mcp_servers.docs]
+enabled = true
+"#,
+    );
+    expected.as_table_mut().expect("config table").insert(
+        "model_instructions_file".to_string(),
+        TomlValue::String(expected_path.to_string_lossy().into_owned()),
+    );
+
+    assert_eq!(layers[0].config, expected);
+}
+
+#[test]
 fn enterprise_layers_precede_user_and_override_system() {
     let base_dir = base_dir();
     let mut layers = vec![ConfigLayerEntry::new(

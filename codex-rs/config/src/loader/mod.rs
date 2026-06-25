@@ -1079,10 +1079,16 @@ pub fn resolve_relative_paths_in_config_toml(
     value_from_config_toml: TomlValue,
     base_dir: &Path,
 ) -> io::Result<TomlValue> {
-    // Use the serialize/deserialize round-trip to convert the
-    // `toml::Value` into a `ConfigToml` with `AbsolutePath
+    // MCP server entries may be partial until config layers are composed, so
+    // exclude them from the ConfigToml round-trip used to resolve path fields.
+    // copy_shape_from_original restores the original MCP fragments below.
+    let mut value_for_path_resolution = value_from_config_toml.clone();
+    if let Some(table) = value_for_path_resolution.as_table_mut() {
+        table.remove("mcp_servers");
+    }
+
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+    let Ok(resolved) = value_for_path_resolution.try_into::<ConfigToml>() else {
         return Ok(value_from_config_toml);
     };
     drop(_guard);
