@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::config::CurrentTimeReminderConfig;
@@ -56,12 +58,23 @@ impl TimeProvider for TestTimeProvider {
                 .expect("test timestamp should be valid"))
         })
     }
+
+    fn sleep(&self, _thread_id: ThreadId, duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async move {
+            tokio::time::sleep(duration).await;
+            Ok(())
+        })
+    }
 }
 
 struct FailingTimeProvider;
 
 impl TimeProvider for FailingTimeProvider {
     fn current_time(&self, _thread_id: ThreadId) -> TimeFuture<'_> {
+        Box::pin(async { Err(anyhow!("test clock unavailable")) })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
         Box::pin(async { Err(anyhow!("test clock unavailable")) })
     }
 }
