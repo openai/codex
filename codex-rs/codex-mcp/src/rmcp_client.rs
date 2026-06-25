@@ -2,7 +2,7 @@
 //!
 //! This module owns startup of individual RMCP clients: building the transport,
 //! initializing the server, listing raw tools, applying per-server tool filters,
-//! and exposing cached startup snapshots while a client is still connecting.
+//! and exposing cached Codex Apps tools while a client is still connecting.
 //! Higher-level aggregation and resource/tool APIs live in
 //! [`crate::connection_manager`].
 
@@ -17,15 +17,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::codex_apps::CachedCodexAppsToolsLoad;
-use crate::codex_apps::CodexAppsToolsCacheContext;
-use crate::codex_apps::load_cached_codex_apps_tools;
-use crate::codex_apps::load_startup_cached_codex_apps_server_info;
-use crate::codex_apps::load_startup_cached_codex_apps_tools_snapshot;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
-use crate::codex_apps::write_codex_apps_tools_cache;
+use crate::codex_apps_cache::CodexAppsToolsCacheContext;
+use crate::codex_apps_cache::CodexAppsToolsFetchSource;
+use crate::codex_apps_cache::load_startup_cached_codex_apps_server_info;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -105,9 +102,10 @@ pub(crate) struct ManagedClient {
 impl ManagedClient {
     fn listed_tools(&self) -> Vec<ToolInfo> {
         let total_start = Instant::now();
-        if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
-            && let CachedCodexAppsToolsLoad::Hit(tools) =
-                load_cached_codex_apps_tools(cache_context)
+        if let Some(tools) = self
+            .codex_apps_tools_cache_context
+            .as_ref()
+            .and_then(CodexAppsToolsCacheContext::current_tools)
         {
             emit_duration(
                 MCP_TOOLS_LIST_DURATION_METRIC,
@@ -133,8 +131,9 @@ impl ManagedClient {
 pub(crate) struct AsyncManagedClient {
     pub(crate) client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     pub(crate) is_codex_apps_mcp_server: bool,
-    pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
+    pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    pub(crate) tool_filter: ToolFilter,
     pub(crate) startup_complete: Arc<AtomicBool>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
@@ -165,19 +164,15 @@ impl AsyncManagedClient {
             .configured_config()
             .map(ToolFilter::from_config)
             .unwrap_or_default();
-        let (cached_tool_info_snapshot, cached_server_info) = if is_codex_apps_mcp_server {
-            (
-                load_startup_cached_codex_apps_tools_snapshot(
-                    codex_apps_tools_cache_context.as_ref(),
-                ),
-                load_startup_cached_codex_apps_server_info(codex_apps_tools_cache_context.as_ref()),
-            )
+        let cached_server_info = if is_codex_apps_mcp_server {
+            codex_apps_tools_cache_context
+                .as_ref()
+                .and_then(load_startup_cached_codex_apps_server_info)
         } else {
-            (None, None)
+            None
         };
-        let cached_tool_info_snapshot =
-            cached_tool_info_snapshot.map(|tools| filter_tools(tools, &tool_filter));
-        let startup_tool_filter = tool_filter;
+        let startup_tool_filter = tool_filter.clone();
+        let codex_apps_tools_cache_context_for_fut = codex_apps_tools_cache_context.clone();
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
         let cancel_token_for_fut = cancel_token.clone();
@@ -214,7 +209,7 @@ impl AsyncManagedClient {
                         tool_filter: startup_tool_filter,
                         tx_event,
                         elicitation_requests,
-                        codex_apps_tools_cache_context,
+                        codex_apps_tools_cache_context: codex_apps_tools_cache_context_for_fut,
                         client_elicitation_capability,
                         supports_openai_form_elicitation,
                     },
@@ -232,7 +227,10 @@ impl AsyncManagedClient {
             outcome
         };
         let client = fut.in_current_span().boxed().shared();
-        if cached_tool_info_snapshot.is_some() {
+        if codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
+        {
             let startup_task = client.clone();
             tokio::spawn(async move {
                 let _ = startup_task.await;
@@ -242,8 +240,9 @@ impl AsyncManagedClient {
         Self {
             client,
             is_codex_apps_mcp_server,
-            cached_tool_info_snapshot,
             cached_server_info,
+            codex_apps_tools_cache_context,
+            tool_filter,
             startup_complete,
             tool_plugin_provenance,
             cancel_token,
@@ -265,15 +264,29 @@ impl AsyncManagedClient {
         }
     }
 
+    pub(crate) fn has_cached_tools(&self) -> bool {
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
+    }
+
+    fn cached_tools(&self) -> Option<Vec<ToolInfo>> {
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .and_then(CodexAppsToolsCacheContext::current_tools)
+            .map(|tools| filter_tools(tools, &self.tool_filter))
+    }
+
     pub(crate) async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         // Keep cache payloads raw; plugin provenance is resolved per-session at read time.
-        let tools = if let Some(startup_tools) = self.cached_tool_info_snapshot_while_initializing()
+        let tools = if !self.startup_complete.load(Ordering::Acquire)
+            && let Some(startup_tools) = self.cached_tools()
         {
             Some(startup_tools)
         } else {
             match self.client().await {
                 Ok(client) => Some(client.listed_tools()),
-                Err(_) => self.cached_tool_info_snapshot.clone(),
+                Err(_) => self.cached_tools(),
             }
         }?;
         Some(if self.is_codex_apps_mcp_server {
@@ -281,13 +294,6 @@ impl AsyncManagedClient {
         } else {
             prepare_regular_mcp_tools_for_model(tools, &self.tool_plugin_provenance)
         })
-    }
-
-    fn cached_tool_info_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
-        if !self.startup_complete.load(Ordering::Acquire) {
-            return self.cached_tool_info_snapshot.clone();
-        }
-        None
     }
 }
 
@@ -570,6 +576,9 @@ async fn start_server_task(
         .is_some();
     let list_start = Instant::now();
     let fetch_start = Instant::now();
+    let fetch_ticket = codex_apps_tools_cache_context
+        .as_ref()
+        .map(|cache_context| cache_context.begin_fetch(CodexAppsToolsFetchSource::Startup));
     let tools = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
@@ -585,21 +594,20 @@ async fn start_server_task(
         &[],
     );
     let server_info = mcp_server_info_from_implementation(initialize_result.server_info);
-    let codex_apps_tools_cache_context = if is_codex_apps_mcp_server {
-        write_codex_apps_tools_cache(
-            codex_apps_tools_cache_context.as_ref(),
-            &server_info,
-            &tools,
-        );
+    let tools = match (codex_apps_tools_cache_context.as_ref(), fetch_ticket) {
+        (Some(cache_context), Some(fetch_ticket)) => {
+            cache_context.publish_if_newest_accepted(fetch_ticket, &server_info, tools)
+        }
+        (None, None) => tools,
+        _ => unreachable!("Codex Apps fetch ticket requires cache context"),
+    };
+    if is_codex_apps_mcp_server {
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        codex_apps_tools_cache_context
-    } else {
-        None
-    };
+    }
     let tools = filter_tools(tools, &tool_filter);
 
     let managed = ManagedClient {

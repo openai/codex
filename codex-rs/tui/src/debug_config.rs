@@ -699,7 +699,7 @@ mod tests {
             mcp_servers: Some(Sourced::new(
                 BTreeMap::from([(
                     "docs".to_string(),
-                    McpServerRequirement {
+                    McpServerRequirement::Identity {
                         identity: McpServerIdentity::Command {
                             command: "codex-mcp".to_string(),
                         },
@@ -778,7 +778,7 @@ mod tests {
             hooks: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Command {
                         command: "codex-mcp".to_string(),
                     },
