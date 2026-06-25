@@ -63,10 +63,10 @@ fn shell_with_snapshot(
 }
 
 async fn test_network_proxy() -> anyhow::Result<NetworkProxy> {
-    let state = codex_network_proxy::build_config_state(
-        NetworkProxyConfig::default(),
-        NetworkProxyConstraints::default(),
-    )?;
+    let mut config = NetworkProxyConfig::default();
+    config.set_credential_broker_enabled(/*enabled*/ true);
+    let state =
+        codex_network_proxy::build_config_state(config, NetworkProxyConstraints::default())?;
     NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(
             state,
@@ -85,8 +85,20 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     let dir = tempdir().expect("create temp dir");
     let command_cwd = dir.path().join("command").abs();
     let native_sandbox_policy_cwd = dir.path().join("sandbox-policy").abs();
-    let mut env = HashMap::from([("CUSTOM_ENV".to_string(), "kept".to_string())]);
+    let github_token = "github_pat_11AA0bbCC_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH";
+    let openai_api_key = "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+    let mut env = HashMap::from([
+        ("CUSTOM_ENV".to_string(), "kept".to_string()),
+        ("GH_TOKEN".to_string(), github_token.to_string()),
+        ("OPENAI_API_KEY".to_string(), openai_api_key.to_string()),
+    ]);
     proxy.apply_to_env(&mut env);
+    assert_ne!(env.get("GH_TOKEN").map(String::as_str), Some(github_token));
+    assert_ne!(
+        env.get("OPENAI_API_KEY").map(String::as_str),
+        Some(openai_api_key)
+    );
+    env.insert("OPENAI_API_KEY".to_string(), "sk-user-override".to_string());
 
     let command = vec!["/bin/echo".to_string(), "ok".to_string()];
     let command = build_sandbox_command(
@@ -146,6 +158,11 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     }
     #[cfg(target_os = "macos")]
     assert_eq!(exec_request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);
+    assert_eq!(exec_request.env.get("GH_TOKEN"), None);
+    assert_eq!(
+        exec_request.env.get("OPENAI_API_KEY"),
+        Some(&"sk-user-override".to_string())
+    );
     assert_eq!(
         exec_request.env.get("CUSTOM_ENV"),
         Some(&"kept".to_string())
@@ -534,8 +551,9 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "nested-thread");
 }
 
-#[test]
-fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
+#[tokio::test]
+async fn snapshot_wrapper_restores_prepared_broker_credentials() -> anyhow::Result<()> {
+    let proxy = test_network_proxy().await?;
     let dir = tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("snapshot.sh");
     std::fs::write(
@@ -544,6 +562,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
          export PIP_PROXY='http://127.0.0.1:8080'\n\
          export HTTP_PROXY='http://127.0.0.1:8080'\n\
          export http_proxy='http://127.0.0.1:8080'\n\
+         export OPENAI_API_KEY='sk-real'\n\
          export GIT_SSH_COMMAND='ssh -o ProxyCommand=stale'\n",
     )
     .expect("write snapshot");
@@ -552,35 +571,72 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_proxy_env_from_process_env() {
     let command = vec![
         "/bin/bash".to_string(),
         "-lc".to_string(),
-        "printf '%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\""
+        "printf '%s\\n%s\\n%s\\n%s\\n%s' \"$PIP_PROXY\" \"$HTTP_PROXY\" \"$http_proxy\" \"$GIT_SSH_COMMAND\" \"$OPENAI_API_KEY\""
             .to_string(),
     ];
+    let real_openai_api_key =
+        "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+    let mut env = proxy
+        .prepare_for_optional_environment(
+            HashMap::from([(
+                "OPENAI_API_KEY".to_string(),
+                real_openai_api_key.to_string(),
+            )]),
+            /*environment_id*/ None,
+        )?
+        .env;
+    let brokered_openai_api_key = env
+        .get("OPENAI_API_KEY")
+        .expect("brokered OpenAI API key")
+        .clone();
+    assert_ne!(brokered_openai_api_key, real_openai_api_key);
+    env.extend([
+        ("PIP_PROXY".to_string(), "http://127.0.0.1:4321".to_string()),
+        (
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:4321".to_string(),
+        ),
+        (
+            "http_proxy".to_string(),
+            "http://127.0.0.1:4321".to_string(),
+        ),
+        (
+            "GIT_SSH_COMMAND".to_string(),
+            "ssh -o ProxyCommand=fresh".to_string(),
+        ),
+    ]);
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
         Some(&shell_snapshot),
         &HashMap::new(),
-        &HashMap::new(),
+        &env,
         &RuntimePathPrepends::default(),
     );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
-        .env(PROXY_ACTIVE_ENV_KEY, "1")
-        .env("PIP_PROXY", "http://127.0.0.1:4321")
-        .env("HTTP_PROXY", "http://127.0.0.1:4321")
-        .env("http_proxy", "http://127.0.0.1:4321")
-        .env("GIT_SSH_COMMAND", "ssh -o ProxyCommand=fresh")
+        .envs(&env)
         .output()
         .expect("run rewritten command");
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "http://127.0.0.1:4321\n\
-         http://127.0.0.1:4321\n\
-         http://127.0.0.1:4321\n\
-         ssh -o ProxyCommand=stale"
+        format!(
+            "http://127.0.0.1:4321\n\
+             http://127.0.0.1:4321\n\
+             http://127.0.0.1:4321\n\
+             ssh -o ProxyCommand=stale\n\
+             {brokered_openai_api_key}"
+        )
     );
+    Ok(())
+}
+
+#[test]
+fn broker_inactive_snapshot_exports_omit_credentials() {
+    let (captures, restores) = build_proxy_env_exports(&HashMap::new());
+    assert!(!format!("{captures}{restores}").contains("OPENAI_API_KEY"));
 }
 
 #[cfg(target_os = "macos")]
