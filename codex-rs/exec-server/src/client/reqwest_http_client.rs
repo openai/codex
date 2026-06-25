@@ -18,6 +18,7 @@ use reqwest::Url;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
+use tracing::Instrument;
 
 use super::HttpResponseBodyStream;
 use super::response_body_stream::send_body_delta;
@@ -146,15 +147,26 @@ impl ReqwestHttpRequestRunner {
             }
         }
 
-        let headers = Self::build_headers(params.headers)?;
+        let request_span = tracing::info_span!(
+            "codex.exec_server.http_request",
+            otel.kind = "client",
+            http.request.method = method.as_str(),
+            server.address = url.host_str().unwrap_or_default(),
+            server.port = u64::from(url.port_or_known_default().unwrap_or_default()),
+            http.response.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        );
+        let mut headers = Self::build_headers(params.headers)?;
+        codex_otel::inject_span_w3c_trace_headers(&request_span, &mut headers);
         let mut request = self.client.request(method.clone(), url).headers(headers);
         if let Some(body) = params.body {
             request = request.body(body.into_inner());
         }
 
-        let response = match request.send().await {
+        let response = match request.send().instrument(request_span.clone()).await {
             Ok(response) => response,
             Err(error) => {
+                request_span.record("error.type", "request");
                 let error_message = error.to_string();
                 log_send_error(&method, error);
                 return Err(internal_error(format!(
@@ -163,6 +175,7 @@ impl ReqwestHttpRequestRunner {
             }
         };
         let status = response.status().as_u16();
+        request_span.record("http.response.status_code", u64::from(status));
         let headers = Self::response_headers(response.headers());
 
         if params.stream_response {

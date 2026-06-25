@@ -49,6 +49,38 @@ pub fn span_w3c_trace_context(span: &Span) -> Option<W3cTraceContext> {
     })
 }
 
+/// Injects the W3C trace context for `span` into HTTP headers.
+///
+/// Existing `traceparent` and `tracestate` values are replaced so callers can
+/// safely reuse a request header map while keeping the supplied span as the
+/// source of truth.
+pub fn inject_span_w3c_trace_headers(span: &Span, headers: &mut http::HeaderMap) -> bool {
+    let Some(trace) = span_w3c_trace_context(span) else {
+        return false;
+    };
+    match trace.traceparent {
+        Some(traceparent) => {
+            if let Ok(value) = http::HeaderValue::from_str(&traceparent) {
+                headers.insert("traceparent", value);
+            }
+        }
+        None => {
+            headers.remove("traceparent");
+        }
+    }
+    match trace.tracestate {
+        Some(tracestate) => {
+            if let Ok(value) = http::HeaderValue::from_str(&tracestate) {
+                headers.insert("tracestate", value);
+            }
+        }
+        None => {
+            headers.remove("tracestate");
+        }
+    }
+    true
+}
+
 pub(crate) fn set_tracestate_entries(
     entries: BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
