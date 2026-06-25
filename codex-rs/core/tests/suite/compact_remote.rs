@@ -5,6 +5,9 @@ use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuth;
+use codex_login::auth::AgentIdentityAuthRecord;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
@@ -133,6 +136,8 @@ const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
+const TEST_AGENT_IDENTITY_PRIVATE_KEY: &str =
+    "MC4CAQAwBQYDK2VwBCIEIJ7kFBaOujmoz1gvBNEC+BeM2IX87FFB0xmISOZ/XO0c";
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
@@ -527,6 +532,79 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 ("Remote Post-Compaction History Layout", follow_up_request),
             ]
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_uses_agent_identity_assertion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex().with_auth(CodexAuth::AgentIdentity(
+            AgentIdentityAuth::from_record(
+                AgentIdentityAuthRecord {
+                    agent_runtime_id: "agent-runtime-compact".to_string(),
+                    agent_private_key: TEST_AGENT_IDENTITY_PRIVATE_KEY.to_string(),
+                    account_id: "account-compact".to_string(),
+                    chatgpt_user_id: "user-compact".to_string(),
+                    email: Some("agent@example.com".to_string()),
+                    plan_type: AccountPlanType::Plus,
+                    chatgpt_account_is_fedramp: false,
+                    task_id: Some("task-compact".to_string()),
+                },
+                "https://auth.openai.com/api/accounts",
+                /*auth_route_config*/ None,
+            )
+            .await?,
+        )),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let _responses_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_REPLY"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_summary_only_output("COMPACTED") }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_request = compact_mock.single_request();
+    assert_eq!(compact_request.path(), "/v1/responses/compact");
+    assert!(
+        compact_request
+            .header("authorization")
+            .is_some_and(|value| value.starts_with("AgentAssertion ")),
+        "compact request should use task-scoped AgentAssertion auth"
+    );
+    assert_eq!(
+        compact_request.header("chatgpt-account-id").as_deref(),
+        Some("account-compact")
     );
 
     Ok(())

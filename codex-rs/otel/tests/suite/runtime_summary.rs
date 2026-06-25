@@ -61,11 +61,13 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
+        /*agent_identity_telemetry*/ None,
     );
     manager.record_websocket_request(
         Duration::from_millis(400),
         /*error*/ None,
         /*connection_reused*/ false,
+        /*agent_identity_telemetry*/ None,
     );
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,

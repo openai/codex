@@ -46,7 +46,7 @@ pub(super) fn require_agent_identity_authapi_base_url(
     })
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum AgentIdentityAuthError {
     #[error(
         "agent identity bootstrap unavailable after {attempts} attempts during {operation}: {message}"
@@ -59,13 +59,14 @@ pub enum AgentIdentityAuthError {
 }
 
 impl AgentIdentityAuthError {
-    pub fn is_bootstrap_unavailable(error: &std::io::Error) -> bool {
-        matches!(
-            error
-                .get_ref()
-                .and_then(|source| source.downcast_ref::<Self>()),
-            Some(Self::BootstrapUnavailable { .. })
-        )
+    pub(super) fn bootstrap_unavailable(error: &std::io::Error) -> Option<&Self> {
+        match error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<Self>())
+        {
+            Some(error @ Self::BootstrapUnavailable { .. }) => Some(error),
+            None => None,
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use codex_core::ResponseEvent;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_otel::MetricsClient;
@@ -2189,6 +2190,7 @@ async fn websocket_harness_with_provider_options(
     let summary = ReasoningSummary::Auto;
     let client = ModelClient::new(
         /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
         provider.clone(),
         SessionSource::Exec,

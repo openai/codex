@@ -8,6 +8,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -1058,6 +1059,11 @@ impl Session {
                 time_provider,
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
+                    if config.features.enabled(Feature::UseAgentIdentity) {
+                        AgentIdentityAuthPolicy::ChatGptAuth
+                    } else {
+                        AgentIdentityAuthPolicy::JwtOnly
+                    },
                     thread_id,
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),

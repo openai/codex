@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tracing::instrument;
@@ -81,6 +83,63 @@ pub enum AgentIdentityAuthPolicy {
     JwtOnly,
     /// Allow managed ChatGPT auth to register or reuse Agent Identity auth.
     ChatGptAuth,
+}
+
+const AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Debug)]
+struct CachedAgentIdentityBootstrapFailure {
+    account_id: String,
+    authapi_base_url: String,
+    retry_at: Instant,
+    error: AgentIdentityAuthError,
+}
+
+#[derive(Debug, Default)]
+struct AgentIdentityBootstrapCooldown {
+    failure: Option<CachedAgentIdentityBootstrapFailure>,
+}
+
+impl AgentIdentityBootstrapCooldown {
+    fn error_for(
+        &mut self,
+        account_id: &str,
+        authapi_base_url: &str,
+        now: Instant,
+    ) -> Option<AgentIdentityAuthError> {
+        let error = self
+            .failure
+            .as_ref()
+            .filter(|failure| {
+                failure.account_id == account_id
+                    && failure.authapi_base_url == authapi_base_url
+                    && failure.retry_at > now
+            })
+            .map(|failure| failure.error.clone());
+        if error.is_none() {
+            self.clear();
+        }
+        error
+    }
+
+    fn record_failure(
+        &mut self,
+        account_id: String,
+        authapi_base_url: String,
+        error: AgentIdentityAuthError,
+        now: Instant,
+    ) {
+        self.failure = Some(CachedAgentIdentityBootstrapFailure {
+            account_id,
+            authapi_base_url,
+            retry_at: now + AGENT_IDENTITY_BOOTSTRAP_FAILURE_COOLDOWN,
+            error,
+        });
+    }
+
+    fn clear(&mut self) {
+        self.failure = None;
+    }
 }
 
 impl PartialEq for CodexAuth {
@@ -1742,6 +1801,7 @@ pub struct AuthManager {
     agent_identity_authapi_base_url: Option<String>,
     refresh_lock: Semaphore,
     agent_identity_lock: Semaphore,
+    agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_route_config: Option<AuthRouteConfig>,
 }
@@ -1843,6 +1903,7 @@ impl AuthManager {
             agent_identity_authapi_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             auth_route_config,
         }
@@ -1868,6 +1929,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1892,6 +1954,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1924,6 +1987,7 @@ impl AuthManager {
             ),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
             auth_route_config: None,
         })
@@ -1946,6 +2010,7 @@ impl AuthManager {
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
+            agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -2006,15 +2071,44 @@ impl AuthManager {
                 .acquire()
                 .await
                 .map_err(std::io::Error::other)?;
-            return auth
+            let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
+            let cooldown_key = ManagedChatGptAgentIdentityBinding::from_auth(
+                &auth,
+                forced_chatgpt_workspace_id.clone(),
+            )
+            .and_then(|binding| {
+                self.agent_identity_authapi_base_url
+                    .as_ref()
+                    .map(|base_url| (binding.account_id, base_url.clone()))
+            });
+            if let Some((account_id, authapi_base_url)) = cooldown_key.as_ref()
+                && let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock()
+                && let Some(error) =
+                    cooldown.error_for(account_id, authapi_base_url, Instant::now())
+            {
+                tracing::warn!("agent identity bootstrap retry suppressed during shared cooldown");
+                return Err(std::io::Error::other(error));
+            }
+
+            let result = auth
                 .agent_identity_auth(
                     policy,
                     self.agent_identity_authapi_base_url.as_deref(),
-                    self.forced_chatgpt_workspace_id(),
+                    forced_chatgpt_workspace_id,
                     self.auth_route_config.as_ref(),
                     session_source,
                 )
                 .await;
+            if let Ok(mut cooldown) = self.agent_identity_bootstrap_cooldown.lock() {
+                if let (Err(err), Some((account_id, authapi_base_url))) = (&result, cooldown_key)
+                    && let Some(error) = AgentIdentityAuthError::bootstrap_unavailable(err).cloned()
+                {
+                    cooldown.record_failure(account_id, authapi_base_url, error, Instant::now());
+                } else {
+                    cooldown.clear();
+                }
+            }
+            return result;
         }
         auth.agent_identity_auth(
             policy,

@@ -584,7 +584,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
         .await
         .expect_err("retry exhaustion should return an error");
 
-    assert!(AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_some());
     assert!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123")
             .is_none()
@@ -648,7 +648,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
         .await
         .expect_err("task retry exhaustion should return an error");
 
-    assert!(AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_some());
     record.task_id = None;
     assert_eq!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123"),
@@ -701,7 +701,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
         .await
         .expect_err("hard registration failure should return an error");
 
-    assert!(!AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_none());
     assert!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123")
             .is_none()
@@ -742,7 +742,7 @@ async fn agent_identity_jwt_task_registration_retry_exhaustion_is_strict() -> an
     .await
     .expect_err("agent identity jwt task retry exhaustion should fail");
 
-    assert!(!AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_none());
     Ok(())
 }
 
