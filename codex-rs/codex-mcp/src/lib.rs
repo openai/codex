@@ -51,6 +51,7 @@ pub use plugin_config::parse_plugin_mcp_config;
 
 pub use mcp::McpServerStatusSnapshot;
 pub use mcp::McpSnapshotDetail;
+pub use mcp::collect_mcp_server_status_snapshot_from_manager_with_detail;
 pub use mcp::collect_mcp_server_status_snapshot_with_detail;
 pub use mcp::read_mcp_resource;
 

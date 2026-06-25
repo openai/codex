@@ -399,8 +399,9 @@ impl Session {
         }
 
         let config = self.get_config().await;
+        let mcp_servers = self.runtime_mcp_servers(config.as_ref()).await;
         let refresh_config = McpServerRefreshConfig {
-            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
+            mcp_servers: serde_json::to_value(mcp_servers)?,
             mcp_oauth_credentials_store_mode: serde_json::to_value(
                 config.mcp_oauth_credentials_store_mode,
             )?,

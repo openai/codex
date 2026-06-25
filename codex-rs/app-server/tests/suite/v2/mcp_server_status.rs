@@ -5,21 +5,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use axum::Router;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::CallToolRequestParams;
+use rmcp::model::CallToolResult;
 use rmcp::model::Implementation;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
@@ -131,6 +139,17 @@ async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()>
     )?;
     std::fs::create_dir_all(workspace.path().join(".git"))?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            r#"
+[mcp_servers.project-server]
+url = "{mcp_server_url}/mcp"
+"#
+        ),
+    )?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -147,18 +166,6 @@ async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()>
     )
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
-
-    let project_config_dir = workspace.path().join(".codex");
-    std::fs::create_dir_all(&project_config_dir)?;
-    std::fs::write(
-        project_config_dir.join("config.toml"),
-        format!(
-            r#"
-[mcp_servers.project-server]
-url = "{mcp_server_url}/mcp"
-"#
-        ),
-    )?;
 
     let threadless_request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
@@ -206,6 +213,135 @@ url = "{mcp_server_url}/mcp"
     Ok(())
 }
 
+#[tokio::test]
+async fn mcp_server_status_list_reflects_installed_manager_generation() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (apps_server_url, apps_server_handle) = start_apps_mcp_server("calendar_lookup").await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &apps_server_url,
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(
+        r#"
+[features]
+apps = false
+"#,
+    );
+    std::fs::write(&config_path, &config_toml)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let stale_thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let stale_thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(stale_thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread: stale_thread,
+        ..
+    } = to_response(stale_thread_start_response)?;
+
+    std::fs::write(
+        &config_path,
+        config_toml.replace("apps = false", "apps = true"),
+    )?;
+
+    let stale_status_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: Some(stale_thread.id),
+        })
+        .await?;
+    let stale_status_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(stale_status_request_id)),
+    )
+    .await??;
+    let stale_status_response: ListMcpServerStatusResponse = to_response(stale_status_response)?;
+    assert_eq!(stale_status_response.data, Vec::new());
+
+    let current_thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let current_thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(current_thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread: current_thread,
+        ..
+    } = to_response(current_thread_start_response)?;
+
+    let current_status_request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: Some(current_thread.id.clone()),
+        })
+        .await?;
+    let current_status_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(current_status_request_id)),
+    )
+    .await??;
+    let current_status_response: ListMcpServerStatusResponse =
+        to_response(current_status_response)?;
+
+    assert_eq!(current_status_response.next_cursor, None);
+    assert_eq!(current_status_response.data.len(), 1);
+    let status = &current_status_response.data[0];
+    assert_eq!(status.name, "codex_apps");
+    assert_eq!(
+        status.tools.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["calendar_lookup".to_string()])
+    );
+
+    let tool_call_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: current_thread.id,
+            server: "codex_apps".to_string(),
+            tool: "missing_tool".to_string(),
+            arguments: Some(json!({})),
+            meta: None,
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(tool_call_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("unknown tool"),
+        "a listed server must receive the call; got: {error:?}"
+    );
+    assert!(!error.error.message.contains("unknown MCP server"));
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+
+    Ok(())
+}
+
 #[derive(Clone)]
 struct McpStatusServer {
     tool_name: Arc<String>,
@@ -241,6 +377,17 @@ impl ServerHandler for McpStatusServer {
             next_cursor: None,
             meta: None,
         })
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Err(rmcp::ErrorData::invalid_params(
+            format!("unknown tool: {}", request.name),
+            None,
+        ))
     }
 }
 
@@ -451,6 +598,14 @@ url = "{underscore_server_url}/mcp"
 }
 
 async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+    start_mcp_server_at(tool_name, "/mcp").await
+}
+
+async fn start_apps_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
+    start_mcp_server_at(tool_name, "/api/codex/ps/mcp").await
+}
+
+async fn start_mcp_server_at(tool_name: &str, route: &str) -> Result<(String, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let tool_name = Arc::new(tool_name.to_string());
@@ -463,7 +618,7 @@ async fn start_mcp_server(tool_name: &str) -> Result<(String, JoinHandle<()>)> {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
-    let router = Router::new().nest_service("/mcp", mcp_service);
+    let router = Router::new().nest_service(route, mcp_service);
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

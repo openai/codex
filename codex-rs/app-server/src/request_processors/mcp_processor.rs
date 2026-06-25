@@ -2,6 +2,18 @@ use super::*;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
+enum McpServerStatusSource {
+    Installed {
+        thread: Arc<CodexThread>,
+        config: Box<Config>,
+    },
+    Configured {
+        mcp_config: Box<codex_mcp::McpConfig>,
+        auth: Option<CodexAuth>,
+        runtime_context: McpRuntimeContext,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -236,7 +248,7 @@ impl McpRequestProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let (config, thread) = match params.thread_id.as_deref() {
+        let source = match params.thread_id.as_deref() {
             Some(thread_id) => {
                 let (_, thread) = self.load_thread(thread_id).await?;
                 let thread_config = thread.config().await;
@@ -245,37 +257,37 @@ impl McpRequestProcessor {
                     .load_latest_config_for_thread(thread_config.as_ref())
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-                (config, Some(thread))
+                McpServerStatusSource::Installed {
+                    thread,
+                    config: Box::new(config),
+                }
             }
-            None => (self.load_latest_config(/*fallback_cwd*/ None).await?, None),
-        };
-        let mcp_config = match thread {
-            Some(thread) => thread.runtime_mcp_config(&config).await,
             None => {
-                self.thread_manager
+                let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+                let mcp_config = self
+                    .thread_manager
                     .mcp_manager()
                     .runtime_config(&config)
-                    .await
+                    .await;
+                let auth = self.auth_manager.auth().await;
+                let environment_manager = self.thread_manager.environment_manager();
+                // This status path has no turn-selected environment. Use config cwd
+                // as the local stdio fallback; named environment stdio MCPs must
+                // declare their own absolute cwd.
+                let runtime_context = McpRuntimeContext::new(
+                    Arc::clone(&environment_manager),
+                    config.cwd.to_path_buf(),
+                );
+                McpServerStatusSource::Configured {
+                    mcp_config: Box::new(mcp_config),
+                    auth,
+                    runtime_context,
+                }
             }
         };
-        let auth = self.auth_manager.auth().await;
-        let environment_manager = self.thread_manager.environment_manager();
-        // This status path has no turn-selected environment. Use config cwd
-        // as the local stdio fallback; named environment stdio MCPs must
-        // declare their own absolute cwd.
-        let runtime_context =
-            McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(
-                outgoing,
-                request,
-                params,
-                mcp_config,
-                auth,
-                runtime_context,
-            )
-            .await;
+            Self::list_mcp_server_status_task(outgoing, request, params, source).await;
         });
         Ok(())
     }
@@ -284,42 +296,41 @@ impl McpRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         params: ListMcpServerStatusParams,
-        mcp_config: codex_mcp::McpConfig,
-        auth: Option<CodexAuth>,
-        runtime_context: McpRuntimeContext,
+        source: McpServerStatusSource,
     ) {
-        let result = Self::list_mcp_server_status_response(
-            request_id.request_id.to_string(),
-            params,
-            mcp_config,
-            auth,
-            runtime_context,
-        )
-        .await;
-        outgoing.send_result(request_id, result).await;
-    }
-
-    async fn list_mcp_server_status_response(
-        request_id: String,
-        params: ListMcpServerStatusParams,
-        mcp_config: codex_mcp::McpConfig,
-        auth: Option<CodexAuth>,
-        runtime_context: McpRuntimeContext,
-    ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
             McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
         };
+        let snapshot = match source {
+            McpServerStatusSource::Installed { thread, config } => {
+                thread
+                    .mcp_server_status_snapshot(config.as_ref(), detail)
+                    .await
+            }
+            McpServerStatusSource::Configured {
+                mcp_config,
+                auth,
+                runtime_context,
+            } => {
+                collect_mcp_server_status_snapshot_with_detail(
+                    mcp_config.as_ref(),
+                    auth.as_ref(),
+                    request_id.request_id.to_string(),
+                    runtime_context,
+                    detail,
+                )
+                .await
+            }
+        };
+        let result = Self::list_mcp_server_status_response(params, snapshot);
+        outgoing.send_result(request_id, result).await;
+    }
 
-        let snapshot = collect_mcp_server_status_snapshot_with_detail(
-            &mcp_config,
-            auth.as_ref(),
-            request_id,
-            runtime_context,
-            detail,
-        )
-        .await;
-
+    fn list_mcp_server_status_response(
+        params: ListMcpServerStatusParams,
+        snapshot: McpServerStatusSnapshot,
+    ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let McpServerStatusSnapshot {
             server_infos,
             tools_by_server,

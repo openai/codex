@@ -335,6 +335,10 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    pub(crate) fn server_names(&self) -> Vec<String> {
+        self.clients.keys().cloned().collect()
+    }
+
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.clients.contains_key(server_name)
     }
