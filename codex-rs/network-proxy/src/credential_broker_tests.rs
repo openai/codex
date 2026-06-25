@@ -65,6 +65,43 @@ fn virtualize_child_env_replaces_supported_credentials() {
 }
 
 #[test]
+fn brokered_credential_dummy_env_keys_follows_dummy_to_another_supported_key() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut env = env_map([("OPENAI_API_KEY", "sk-real")]);
+    broker.virtualize_child_env(&mut env);
+    let dummy = env.remove("OPENAI_API_KEY").expect("dummy OpenAI API key");
+    env.insert("GH_TOKEN".to_string(), dummy);
+
+    assert_eq!(
+        brokered_credential_dummy_env_keys(&env),
+        vec!["GH_TOKEN".to_string()]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn brokered_credentials_match_environment_keys_case_insensitively_on_windows() {
+    let broker = CredentialBroker::new(/*enabled*/ true);
+    let mut env = env_map([
+        ("gh_host", "github.example.com"),
+        ("gh_enterprise_token", "ghp-enterprise-real"),
+    ]);
+
+    broker.virtualize_child_env(&mut env);
+    let dummy = env
+        .get("GH_ENTERPRISE_TOKEN")
+        .expect("dummy GitHub enterprise token");
+    let mut headers = headers_with_bearer(dummy);
+    broker.inject_request_headers("github.example.com", &mut headers);
+
+    assert_eq!(
+        brokered_credential_dummy_env_keys(&env),
+        vec!["GH_ENTERPRISE_TOKEN".to_string()]
+    );
+    assert_eq!(authorization(&headers), Some("Bearer ghp-enterprise-real"));
+}
+
+#[test]
 fn virtualize_child_env_preserves_live_dummy_mappings() {
     let broker = CredentialBroker::new(/*enabled*/ true);
     let mut first_env = env_map([("GH_TOKEN", "ghp-real-one")]);

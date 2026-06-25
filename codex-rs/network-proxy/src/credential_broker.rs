@@ -3,6 +3,7 @@ mod providers;
 use crate::policy::normalize_host;
 use rama_http::HeaderMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -28,6 +29,36 @@ struct CredentialRecord {
     dummy_value: String,
 }
 
+fn env_key_matches(candidate: &str, expected: &str) -> bool {
+    #[cfg(windows)]
+    {
+        candidate.eq_ignore_ascii_case(expected)
+    }
+    #[cfg(not(windows))]
+    {
+        candidate == expected
+    }
+}
+
+fn env_entry<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<(&'a str, &'a str)> {
+    env.iter()
+        .find(|(candidate, _)| env_key_matches(candidate, key))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+}
+
+pub(super) fn env_value<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+    env_entry(env, key).map(|(_, value)| value)
+}
+
+fn set_env_value(env: &mut HashMap<String, String>, key: &str, value: String) {
+    env.retain(|candidate, _| !env_key_matches(candidate, key));
+    env.insert(key.to_string(), value);
+}
+
+fn remove_env_value(env: &mut HashMap<String, String>, key: &str) {
+    env.retain(|candidate, _| !env_key_matches(candidate, key));
+}
+
 impl CredentialBroker {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
@@ -45,14 +76,11 @@ impl CredentialBroker {
     pub(crate) fn virtualize_child_env(&self, env: &mut HashMap<String, String>) {
         let mut state = self.write_state();
         if !state.enabled {
-            env.remove(CREDENTIAL_BROKER_ACTIVE_ENV_KEY);
-            env.remove(BROKERED_CREDENTIALS_ENV_KEY);
+            remove_env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY);
+            remove_env_value(env, BROKERED_CREDENTIALS_ENV_KEY);
             return;
         }
-        env.insert(
-            CREDENTIAL_BROKER_ACTIVE_ENV_KEY.to_string(),
-            "1".to_string(),
-        );
+        set_env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY, "1".to_string());
 
         for provider in providers::credential_providers() {
             for source in provider.sources() {
@@ -132,21 +160,21 @@ fn virtualize_env_var(
         return;
     };
 
-    let dummy_value = state.register(env_var, provider, host_binding, real_value);
-    env.insert(env_var.to_string(), dummy_value);
+    let dummy_value = state.register(env_var, provider, host_binding, &real_value);
+    set_env_value(env, env_var, dummy_value);
 }
 
-fn brokerable_credential_value<'a>(
-    env: &'a HashMap<String, String>,
+fn brokerable_credential_value(
+    env: &HashMap<String, String>,
     state: &CredentialBrokerState,
     env_var: &str,
     provider: &providers::CredentialProvider,
-) -> Option<&'a str> {
-    let real_value = env.get(env_var)?.trim();
+) -> Option<String> {
+    let real_value = env_value(env, env_var)?.trim();
     (!real_value.is_empty()
         && !state.is_dummy_value(real_value)
         && provider.request_header_value(real_value).is_some())
-    .then_some(real_value)
+    .then(|| real_value.to_string())
 }
 
 impl CredentialBrokerState {
@@ -220,18 +248,18 @@ fn update_brokered_credentials_marker(
     state: &CredentialBrokerState,
     env: &mut HashMap<String, String>,
 ) {
-    let brokered = providers::credential_broker_env_keys()
+    let brokered = providers::credential_env_keys()
         .filter_map(|key| {
-            let value = env.get(key)?;
-            state.is_dummy_value(value).then_some((key, value.as_str()))
+            let (actual_key, value) = env_entry(env, key)?;
+            state.is_dummy_value(value).then_some((actual_key, value))
         })
         .collect::<Vec<_>>();
     match serde_json::to_string(&brokered) {
         Ok(marker) => {
-            env.insert(BROKERED_CREDENTIALS_ENV_KEY.to_string(), marker);
+            set_env_value(env, BROKERED_CREDENTIALS_ENV_KEY, marker);
         }
         Err(_) => {
-            env.remove(BROKERED_CREDENTIALS_ENV_KEY);
+            remove_env_value(env, BROKERED_CREDENTIALS_ENV_KEY);
         }
     }
 }
@@ -243,25 +271,33 @@ fn update_brokered_credentials_marker(
 /// replaced by the user are ignored. The environment is not mutated; callers own the decision to
 /// remove the returned keys.
 pub fn brokered_credential_dummy_env_keys(env: &HashMap<String, String>) -> Vec<String> {
-    env.get(BROKERED_CREDENTIALS_ENV_KEY)
+    let recorded_dummy_values = env_value(env, BROKERED_CREDENTIALS_ENV_KEY)
         .and_then(|marker| serde_json::from_str::<Vec<(String, String)>>(marker).ok())
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(key, dummy_value)| {
-            (providers::credential_broker_env_keys().any(|candidate| candidate == key.as_str())
-                && env.get(&key) == Some(&dummy_value))
-            .then_some(key)
+            providers::credential_env_keys()
+                .any(|candidate| env_key_matches(&key, candidate))
+                .then_some(dummy_value)
         })
-        .collect()
+        .collect::<HashSet<_>>();
+    let mut keys = env
+        .iter()
+        .filter(|(key, value)| {
+            providers::credential_env_keys().any(|candidate| env_key_matches(key, candidate))
+                && recorded_dummy_values.contains(*value)
+        })
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys
 }
 
 /// Returns supported credential keys only for an environment with an active broker.
 pub fn brokered_credential_env_keys(
     env: &HashMap<String, String>,
 ) -> impl Iterator<Item = &'static str> {
-    let active = env
-        .get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
-        .is_some_and(|value| value == "1");
+    let active = env_value(env, CREDENTIAL_BROKER_ACTIVE_ENV_KEY).is_some_and(|value| value == "1");
     providers::credential_broker_env_keys().filter(move |_| active)
 }
 

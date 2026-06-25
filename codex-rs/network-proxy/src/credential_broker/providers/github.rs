@@ -1,3 +1,4 @@
+use super::super::env_value;
 use super::CredentialHostBinding;
 use super::CredentialProvider;
 use super::CredentialSource;
@@ -84,8 +85,7 @@ fn github_token_prefix(value: &str) -> &str {
 }
 
 fn github_host_hint(env: &HashMap<String, String>) -> Option<String> {
-    env.get(GH_HOST_ENV_VAR)
-        .map(String::as_str)
+    env_value(env, GH_HOST_ENV_VAR)
         .map(normalize_host)
         .filter(|host| !host.is_empty())
 }
