@@ -123,12 +123,8 @@ impl SessionRegistry {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let entries = {
-            let mut sessions = self.sessions.lock().await;
-            sessions.drain().map(|(_, entry)| entry).collect::<Vec<_>>()
-        };
-
-        for entry in entries {
+        let sessions = std::mem::take(&mut *self.sessions.lock().await);
+        for entry in sessions.into_values() {
             entry.process.shutdown().await;
         }
     }

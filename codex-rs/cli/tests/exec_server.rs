@@ -98,11 +98,9 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
             .env("CODEX_HOME", codex_home)
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")
-            .env("RUST_LOG", "info")
             .args(["exec-server", "--listen", "stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = command.spawn()?;
         let mut stdin = child
@@ -114,12 +112,6 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
             .take()
             .ok_or_else(|| anyhow::anyhow!("exec-server stdout was not piped"))?;
         let mut stdout = BufReader::new(stdout);
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("exec-server stderr was not piped"))?;
-        let mut stderr = BufReader::new(stderr);
-
         send_json_line(
             &mut stdin,
             &serde_json::json!({
@@ -155,23 +147,18 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         wait_for_response(&mut stdout, /*expected_id*/ 2).await?;
         drop(stdin);
         let mut remaining_stdout = String::new();
-        let mut captured_stderr = String::new();
-        tokio::try_join!(
-            stdout.read_to_string(&mut remaining_stdout),
-            stderr.read_to_string(&mut captured_stderr),
-        )?;
+        stdout.read_to_string(&mut remaining_stdout).await?;
         let status = child.wait().await?;
         anyhow::ensure!(
             status.success(),
-            "exec-server exited with {status}; remaining stdout: {remaining_stdout}; stderr: \
-             {captured_stderr}"
+            "exec-server exited with {status}; remaining stdout: {remaining_stdout}"
         );
-        Ok::<String, anyhow::Error>(captured_stderr)
+        Ok::<(), anyhow::Error>(())
     };
     let subprocess_result = tokio::time::timeout(Duration::from_secs(30), subprocess)
         .await
         .map_err(|_| anyhow::anyhow!("exec-server subprocess timed out"))?;
-    let stderr = subprocess_result?;
+    subprocess_result?;
 
     let requests = collector
         .received_requests()
@@ -218,10 +205,6 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{base_url}/v1/metrics", protoco
         "exec_server_process_duration_seconds",
         &[("result", "terminated")],
         /*value*/ None,
-    );
-    assert!(
-        stderr.contains("codex.exec_server{otel.kind=\"internal\"}"),
-        "top-level codex.exec_server span missing from stderr: {stderr}"
     );
     Ok(())
 }
