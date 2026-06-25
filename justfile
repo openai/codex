@@ -148,6 +148,10 @@ write-config-schema:
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
 
+# Check the generated stable client request schema against the merge base.
+app-server-schema-lint: write-app-server-schema
+    {{ python }} ../scripts/app_server_schema_lint.py
+
 [no-cd]
 write-hooks-schema:
     cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures

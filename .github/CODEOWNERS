@@ -5,6 +5,9 @@
 /codex-rs/prompts/ @openai/codex-core-agent-team
 /codex-rs/utils/path-uri/ @openai/codex-core-agent-team
 
+# Keep stable app-server known breakages reviewed by protocol owners.
+/codex-rs/app-server-protocol/stable-api-breakages.toml @openai/codex-core-agent-team
+
 # Keep macOS AKV signing changes reviewed by Codex maintainers.
 /.github/actions/setup-akv-pkcs11-codesigning/ @openai/codex-core-agent-team
 /.github/scripts/macos-signing/ @openai/codex-core-agent-team
