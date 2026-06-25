@@ -1272,7 +1272,7 @@ async fn list_all_tools_retries_failed_codex_apps_startup_twice() {
 }
 
 #[tokio::test]
-async fn list_all_tools_waits_for_apps_recovery_cooldown() {
+async fn list_all_tools_waits_for_apps_recovery_backoff() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_retry = Arc::clone(&attempts);
     let startup_retry = CodexAppsStartupRetry::new(Arc::new(move || {
@@ -1305,7 +1305,7 @@ async fn list_all_tools_waits_for_apps_recovery_cooldown() {
 }
 
 #[tokio::test]
-async fn list_all_tools_retries_apps_again_after_recovery_cooldown() {
+async fn list_all_tools_retries_apps_again_after_recovery_backoff() {
     let recovered_client = create_test_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "drive_search",

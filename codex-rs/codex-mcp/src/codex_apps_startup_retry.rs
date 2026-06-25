@@ -1,3 +1,5 @@
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,9 +12,53 @@ use crate::rmcp_client::StartupOutcomeError;
 
 // Every recreated startup performs a fresh initialize + uncached tools/list and
 // rewrites the tools cache on success. Each recovery episode is bounded to two
-// shared attempts. A failed episode enters a cooldown before a later tool build
-// can begin another episode.
-pub(crate) const CODEX_APPS_STARTUP_RETRY_COOLDOWN: Duration = Duration::from_secs(30);
+// shared attempts. Failed episodes use exponential backoff with per-manager
+// jitter before a later tool build can begin another episode.
+const CODEX_APPS_STARTUP_RETRY_BASE_BACKOFF: Duration = Duration::from_secs(30);
+const CODEX_APPS_STARTUP_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(5 * 60);
+const CODEX_APPS_STARTUP_RETRY_JITTER_DIVISOR: u32 = 5;
+
+enum RetryBackoff {
+    ExponentialWithJitter(RandomState),
+    #[cfg(test)]
+    Fixed(Duration),
+}
+
+impl RetryBackoff {
+    fn exponential_with_jitter() -> Self {
+        Self::ExponentialWithJitter(RandomState::new())
+    }
+
+    fn delay(&self, consecutive_failures: u32, generation: u64) -> Duration {
+        match self {
+            Self::ExponentialWithJitter(random_state) => jittered_exponential_backoff(
+                consecutive_failures,
+                random_state.hash_one((consecutive_failures, generation)),
+            ),
+            #[cfg(test)]
+            Self::Fixed(delay) => *delay,
+        }
+    }
+}
+
+fn jittered_exponential_backoff(consecutive_failures: u32, jitter_sample: u64) -> Duration {
+    let multiplier = 1u32
+        .checked_shl(consecutive_failures.saturating_sub(1))
+        .unwrap_or(u32::MAX);
+    let nominal = CODEX_APPS_STARTUP_RETRY_BASE_BACKOFF
+        .saturating_mul(multiplier)
+        .min(CODEX_APPS_STARTUP_RETRY_MAX_BACKOFF);
+    let jitter = nominal / CODEX_APPS_STARTUP_RETRY_JITTER_DIVISOR;
+    let lower = nominal.saturating_sub(jitter);
+    let upper = nominal
+        .saturating_add(jitter)
+        .min(CODEX_APPS_STARTUP_RETRY_MAX_BACKOFF);
+    let lower_millis = u64::try_from(lower.as_millis()).unwrap_or(u64::MAX);
+    let upper_millis = u64::try_from(upper.as_millis()).unwrap_or(u64::MAX);
+    let jitter_range = upper_millis.saturating_sub(lower_millis);
+    let jitter_offset = jitter_sample % jitter_range.saturating_add(1);
+    Duration::from_millis(lower_millis.saturating_add(jitter_offset))
+}
 
 enum RetryPhase {
     Idle,
@@ -28,29 +74,39 @@ enum RetryPhase {
 
 struct RetryState {
     next_generation: u64,
+    consecutive_failures: u32,
     phase: RetryPhase,
 }
 
 pub(crate) struct CodexAppsStartupRetry {
     factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
-    cooldown: Duration,
+    backoff: RetryBackoff,
     state: Mutex<RetryState>,
 }
 
 impl CodexAppsStartupRetry {
     pub(crate) fn new(factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>) -> Self {
-        Self::new_with_cooldown(factory, CODEX_APPS_STARTUP_RETRY_COOLDOWN)
+        Self::new_with_backoff(factory, RetryBackoff::exponential_with_jitter())
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_cooldown(
         factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
         cooldown: Duration,
     ) -> Self {
+        Self::new_with_backoff(factory, RetryBackoff::Fixed(cooldown))
+    }
+
+    fn new_with_backoff(
+        factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
+        backoff: RetryBackoff,
+    ) -> Self {
         Self {
             factory,
-            cooldown,
+            backoff,
             state: Mutex::new(RetryState {
                 next_generation: 0,
+                consecutive_failures: 0,
                 phase: RetryPhase::Idle,
             }),
         }
@@ -71,10 +127,6 @@ impl CodexAppsStartupRetry {
             return;
         };
         let outcome = retry.clone().await;
-        let retry_after = match &outcome {
-            Ok(_) | Err(StartupOutcomeError::Cancelled) => None,
-            Err(StartupOutcomeError::Failed { .. }) => Some(Instant::now() + self.cooldown),
-        };
 
         let mut state = self.state.lock().await;
         if matches!(
@@ -84,6 +136,19 @@ impl CodexAppsStartupRetry {
                 ..
             } if active_generation == generation
         ) {
+            let retry_after = match &outcome {
+                Ok(_) => {
+                    state.consecutive_failures = 0;
+                    None
+                }
+                Err(StartupOutcomeError::Cancelled) => None,
+                Err(StartupOutcomeError::Failed { .. }) => {
+                    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                    Some(
+                        Instant::now() + self.backoff.delay(state.consecutive_failures, generation),
+                    )
+                }
+            };
             state.phase = RetryPhase::Settled {
                 client: retry,
                 retry_after,
@@ -128,3 +193,7 @@ impl CodexAppsStartupRetry {
         Some((generation, retry))
     }
 }
+
+#[cfg(test)]
+#[path = "codex_apps_startup_retry_tests.rs"]
+mod tests;
