@@ -123,6 +123,18 @@ fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
             "codex_work_desktop",
         ),
         (
+            Some("codex_work_web"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_web",
+        ),
+        (
+            Some("codex_work_mobile"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_mobile",
+        ),
+        (
             None,
             Some("persisted_originator"),
             Some("inherited_originator"),
