@@ -140,7 +140,7 @@ impl SessionServices {
         self.selected_mcp_runtime
             .lock()
             .await
-            .replace_base(Arc::clone(&runtime));
+            .replace_base_and_invalidate_selected(Arc::clone(&runtime));
         self.publish_existing_mcp_runtime(runtime);
     }
 

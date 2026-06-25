@@ -49,8 +49,10 @@ impl Session {
             return base;
         }
         let bindings = selected_bindings(selected_roots, resolved_roots);
-        let mut plugins = cache.plugins(&bindings).unwrap_or_default();
-        if let Some(runtime) = cache.runtime(&bindings) {
+        let cached_runtime = cache.runtime_for_bindings(&bindings);
+        let mut plugins = cache.plugins_for_bindings(&bindings).unwrap_or_default();
+        let mut discovered_plugin = false;
+        if cached_runtime.is_some() {
             let unresolved = bindings
                 .iter()
                 .filter(|(order, _)| {
@@ -61,11 +63,7 @@ impl Session {
                 .cloned()
                 .collect::<Vec<_>>();
             let discovered = project_executor_plugins(&unresolved).await;
-            if discovered.is_empty() {
-                self.services
-                    .publish_existing_mcp_runtime(Arc::clone(&runtime));
-                return runtime;
-            }
+            discovered_plugin = !discovered.is_empty();
             plugins.extend(discovered);
             plugins.sort_unstable_by_key(|(order, _)| *order);
         } else {
@@ -85,6 +83,20 @@ impl Session {
             .collect::<Vec<_>>();
         let runtime_context =
             self.mcp_runtime_context(&turn_context.config, environments, &pinned_roots);
+        if !discovered_plugin
+            && let Some(runtime) = cached_runtime
+            && runtime.matches_projection(mcp_config.as_ref(), &runtime_context)
+        {
+            runtime
+                .manager()
+                .set_approval_policy(&turn_context.approval_policy);
+            runtime
+                .manager()
+                .set_permission_profile(turn_context.permission_profile());
+            self.services
+                .publish_existing_mcp_runtime(Arc::clone(&runtime));
+            return runtime;
+        }
         let runtime = if plugins.is_empty() {
             base
         } else {
@@ -97,7 +109,7 @@ impl Session {
             )
             .await
         };
-        cache.insert_runtime(bindings, plugins, Arc::clone(&runtime));
+        cache.replace_selected_runtime(bindings, plugins, Arc::clone(&runtime));
         self.services
             .publish_existing_mcp_runtime(Arc::clone(&runtime));
         runtime
@@ -146,7 +158,7 @@ impl Session {
         let mut cache = self.services.selected_mcp_runtime.lock().await;
         let projection = self.project_mcp_config_inner(config).await;
         let current = cache
-            .runtime(&projection.bindings)
+            .runtime_for_bindings(&projection.bindings)
             .unwrap_or_else(|| self.services.latest_mcp_runtime());
         if current.matches_projection(&projection.config, &projection.runtime_context) {
             current
@@ -169,9 +181,9 @@ impl Session {
             )
             .await;
         if projection.bindings.is_empty() {
-            cache.replace_base(Arc::clone(&runtime));
+            cache.replace_base_and_invalidate_selected(Arc::clone(&runtime));
         } else {
-            cache.insert_runtime(
+            cache.replace_selected_runtime(
                 projection.bindings,
                 projection.plugins,
                 Arc::clone(&runtime),

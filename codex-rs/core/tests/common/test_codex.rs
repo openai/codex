@@ -388,14 +388,6 @@ impl TestCodexBuilder {
         self
     }
 
-    pub fn with_selected_capability_roots(
-        mut self,
-        selected_capability_roots: Vec<SelectedCapabilityRoot>,
-    ) -> Self {
-        self.thread_extension_init.insert(selected_capability_roots);
-        self
-    }
-
     pub fn with_user_instructions_provider(
         mut self,
         provider: Arc<dyn UserInstructionsProvider>,

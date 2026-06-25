@@ -5268,6 +5268,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        /*selected_capability_roots*/ Vec::new(),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
@@ -5411,7 +5412,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let network_approval = Arc::new(NetworkApprovalService::default());
     let mcp_runtime = uninitialized_mcp_runtime(config.as_ref());
     let mut selected_mcp_runtime = crate::session::SelectedMcpRuntimeCache::default();
-    selected_mcp_runtime.replace_base(Arc::clone(&mcp_runtime));
+    selected_mcp_runtime.replace_base_and_invalidate_selected(Arc::clone(&mcp_runtime));
     let services = SessionServices {
         mcp_runtime: Arc::new(arc_swap::ArcSwapOption::from(Some(mcp_runtime))),
         mcp_elicitation_managers: std::sync::Mutex::new(Vec::new()),
@@ -5646,6 +5647,7 @@ async fn make_session_with_config_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        /*selected_capability_roots*/ Vec::new(),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
@@ -5752,6 +5754,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         plugins_manager,
         mcp_manager,
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        /*selected_capability_roots*/ Vec::new(),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
         agent_control,
@@ -7487,7 +7490,7 @@ where
     let network_approval = Arc::new(NetworkApprovalService::default());
     let mcp_runtime = uninitialized_mcp_runtime(config.as_ref());
     let mut selected_mcp_runtime = crate::session::SelectedMcpRuntimeCache::default();
-    selected_mcp_runtime.replace_base(Arc::clone(&mcp_runtime));
+    selected_mcp_runtime.replace_base_and_invalidate_selected(Arc::clone(&mcp_runtime));
     let services = SessionServices {
         mcp_runtime: Arc::new(arc_swap::ArcSwapOption::from(Some(mcp_runtime))),
         mcp_elicitation_managers: std::sync::Mutex::new(Vec::new()),
