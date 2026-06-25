@@ -2,7 +2,6 @@ use crate::mcp_types::McpServerConfig;
 use crate::mcp_types::McpServerTransportConfig;
 use regex_lite::Regex;
 use serde::Deserialize;
-use serde::de::Error as _;
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
@@ -50,39 +49,45 @@ impl McpServerValueMatcher {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct McpServerCommandMatcher {
-    pub command: String,
+    pub executable: String,
     pub args: Vec<McpServerValueMatcher>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct McpServerUrlMatcher {
-    pub url: McpServerValueMatcher,
+struct RawMcpServerCommandIdentity {
+    command: McpServerCommandMatcher,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RawMcpServerUrlIdentity {
+    url: McpServerValueMatcher,
 }
 
 /// A requirement for one named MCP server.
 ///
 /// The `Identity` variant preserves the released exact-match contract. The
-/// command and URL variants add matcher-based requirements under the same
-/// `mcp_servers` namespace.
+/// command and URL variants are the normalized matcher-based forms accepted
+/// under the `identity` key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerRequirement {
     Identity { identity: McpServerIdentity },
     Command(McpServerCommandMatcher),
-    Url(McpServerUrlMatcher),
+    Url(McpServerValueMatcher),
+}
+
+#[derive(Deserialize)]
+struct RawMcpServerRequirement {
+    identity: RawMcpServerIdentity,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum RawMcpServerRequirement {
-    Identity {
-        identity: McpServerIdentity,
-        command: Option<serde::de::IgnoredAny>,
-        args: Option<serde::de::IgnoredAny>,
-        url: Option<serde::de::IgnoredAny>,
-    },
-    Command(McpServerCommandMatcher),
-    Url(McpServerUrlMatcher),
+enum RawMcpServerIdentity {
+    Exact(McpServerIdentity),
+    Command(RawMcpServerCommandIdentity),
+    Url(RawMcpServerUrlIdentity),
 }
 
 impl<'de> Deserialize<'de> for McpServerRequirement {
@@ -90,22 +95,12 @@ impl<'de> Deserialize<'de> for McpServerRequirement {
     where
         D: serde::Deserializer<'de>,
     {
-        match RawMcpServerRequirement::deserialize(deserializer)? {
-            RawMcpServerRequirement::Identity {
-                identity,
-                command,
-                args,
-                url,
-            } => {
-                if command.is_some() || args.is_some() || url.is_some() {
-                    return Err(D::Error::custom(
-                        "`identity` cannot be combined with matcher keys `command`, `args`, or `url`",
-                    ));
-                }
-                Ok(Self::Identity { identity })
-            }
-            RawMcpServerRequirement::Command(matcher) => Ok(Self::Command(matcher)),
-            RawMcpServerRequirement::Url(matcher) => Ok(Self::Url(matcher)),
+        let RawMcpServerRequirement { identity } =
+            RawMcpServerRequirement::deserialize(deserializer)?;
+        match identity {
+            RawMcpServerIdentity::Exact(identity) => Ok(Self::Identity { identity }),
+            RawMcpServerIdentity::Command(matcher) => Ok(Self::Command(matcher.command)),
+            RawMcpServerIdentity::Url(matcher) => Ok(Self::Url(matcher.url)),
         }
     }
 }
@@ -122,7 +117,7 @@ impl McpServerRequirement {
                 }
                 Ok(())
             }
-            Self::Url(matcher) => matcher.url.validate(),
+            Self::Url(matcher) => matcher.validate(),
         }
     }
 
@@ -147,7 +142,7 @@ impl McpServerRequirement {
                 McpServerTransportConfig::StreamableHttp { url: got_url, .. },
             ) => got_url == want_url,
             (Self::Command(matcher), McpServerTransportConfig::Stdio { command, args, .. }) => {
-                matcher.command == *command
+                matcher.executable == *command
                     && matcher.args.len() == args.len()
                     && matcher
                         .args
@@ -156,7 +151,7 @@ impl McpServerRequirement {
                         .all(|(matcher, arg)| matcher.matches(arg))
             }
             (Self::Url(matcher), McpServerTransportConfig::StreamableHttp { url, .. }) => {
-                matcher.url.matches(url)
+                matcher.matches(url)
             }
             _ => false,
         }

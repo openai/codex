@@ -4291,7 +4291,7 @@ fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
-        command: "company-cli".to_string(),
+        executable: "company-cli".to_string(),
         args: vec![
             McpServerValueMatcher::Exact {
                 value: "mcp".to_string(),
@@ -4492,7 +4492,7 @@ fn filter_plugin_mcp_servers_by_matchers_enforces_name_and_invocation() {
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
-        command: "company-cli".to_string(),
+        executable: "company-cli".to_string(),
         args: vec![McpServerValueMatcher::Exact {
             value: "approved".to_string(),
         }],

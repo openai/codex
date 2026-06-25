@@ -3526,14 +3526,13 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn deserialize_mcp_server_matcher_requirements() -> Result<()> {
         let toml_str = r#"
-            [mcp_servers.internal_mcp_proxy]
-            command = "company-cli"
-            args = [
+            [mcp_servers.internal_mcp_proxy.identity]
+            command = { executable = "company-cli", args = [
                 { match = "exact", value = "mcp" },
                 { match = "exact", value = "proxy" },
                 { match = "exact", value = "--server" },
                 { match = "regex", expression = '^https://[A-Za-z0-9-]+\.mcp\.internal\.example\.com(?::443)?(?:/.*)?$' },
-            ]
+            ] }
         "#;
         let requirements: ConfigRequirements =
             with_unknown_source(from_str(toml_str)?).try_into()?;
@@ -3544,7 +3543,7 @@ command = "python3 /enterprise/hooks/pre.py"
                 BTreeMap::from([(
                     "internal_mcp_proxy".to_string(),
                     McpServerRequirement::Command(McpServerCommandMatcher {
-                        command: "company-cli".to_string(),
+                        executable: "company-cli".to_string(),
                         args: vec![
                             McpServerValueMatcher::Exact {
                                 value: "mcp".to_string(),
@@ -3571,7 +3570,7 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn invalid_mcp_server_requirement_regex_reports_the_server_name_and_source() -> Result<()> {
         let toml_str = r#"
-            [mcp_servers.broken_rule]
+            [mcp_servers.broken_rule.identity]
             url = { match = "regex", expression = "[" }
         "#;
 
@@ -3644,12 +3643,11 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn deserialize_plugin_mcp_server_matcher_requirement() -> Result<()> {
         let toml_str = r#"
-            [plugins."sample@test".mcp_servers.internal_proxy]
-            command = "company-cli"
-            args = [
+            [plugins."sample@test".mcp_servers.internal_proxy.identity]
+            command = { executable = "company-cli", args = [
                 { match = "exact", value = "mcp" },
                 { match = "regex", expression = '^https://[a-z]+\.example\.com$' },
-            ]
+            ] }
         "#;
         let requirements: ConfigRequirements =
             with_unknown_source(from_str(toml_str)?).try_into()?;
@@ -3663,7 +3661,7 @@ command = "python3 /enterprise/hooks/pre.py"
                         mcp_servers: Some(BTreeMap::from([(
                             "internal_proxy".to_string(),
                             McpServerRequirement::Command(McpServerCommandMatcher {
-                                command: "company-cli".to_string(),
+                                executable: "company-cli".to_string(),
                                 args: vec![
                                     McpServerValueMatcher::Exact {
                                         value: "mcp".to_string(),
@@ -3685,7 +3683,7 @@ command = "python3 /enterprise/hooks/pre.py"
     #[test]
     fn invalid_plugin_mcp_server_regex_reports_plugin_and_server_name() -> Result<()> {
         let toml_str = r#"
-            [plugins."sample@test".mcp_servers.broken_rule]
+            [plugins."sample@test".mcp_servers.broken_rule.identity]
             url = { match = "regex", expression = "[" }
         "#;
 

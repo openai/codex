@@ -32,7 +32,7 @@ fn stdio_server(command: &str, args: &[&str]) -> McpServerConfig {
 #[test]
 fn command_matcher_matches_exact_positional_arguments() {
     let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
-        command: "company-cli".to_string(),
+        executable: "company-cli".to_string(),
         args: vec![
             McpServerValueMatcher::Exact {
                 value: "mcp".to_string(),
@@ -117,16 +117,17 @@ command = "company-cli"
 fn requirement_deserializes_command_and_url_matcher_shapes() {
     let command: McpServerRequirement = toml::from_str(
         r#"
-command = "company-cli"
-args = [
+[identity]
+command = { executable = "company-cli", args = [
     { match = "exact", value = "mcp" },
     { match = "regex", expression = '^https://[a-z]+\.example\.com$' },
-]
+] }
 "#,
     )
     .expect("command matcher");
     let url: McpServerRequirement = toml::from_str(
         r#"
+[identity]
 url = { match = "prefix", value = "https://mcp.example.com/" }
 "#,
     )
@@ -135,7 +136,7 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
     assert_eq!(
         command,
         McpServerRequirement::Command(McpServerCommandMatcher {
-            command: "company-cli".to_string(),
+            executable: "company-cli".to_string(),
             args: vec![
                 McpServerValueMatcher::Exact {
                     value: "mcp".to_string(),
@@ -148,41 +149,49 @@ url = { match = "prefix", value = "https://mcp.example.com/" }
     );
     assert_eq!(
         url,
-        McpServerRequirement::Url(McpServerUrlMatcher {
-            url: McpServerValueMatcher::Prefix {
-                value: "https://mcp.example.com/".to_string(),
-            },
+        McpServerRequirement::Url(McpServerValueMatcher::Prefix {
+            value: "https://mcp.example.com/".to_string(),
         })
     );
 }
 
 #[test]
-fn requirement_rejects_identity_combined_with_matcher_keys() {
+fn requirement_rejects_matchers_outside_identity() {
     for contents in [
         r#"
 command = "company-cli"
-[identity]
-command = "company-cli"
 "#,
         r#"
-args = []
-[identity]
-command = "company-cli"
+command = { executable = "company-cli", args = [] }
 "#,
         r#"
 url = { match = "prefix", value = "https://mcp.example.com/" }
-[identity]
-url = "https://mcp.example.com"
 "#,
     ] {
         let err = toml::from_str::<McpServerRequirement>(contents)
-            .expect_err("identity and matcher keys should be mutually exclusive");
+            .expect_err("MCP server requirements should use the identity key");
         assert!(
-            err.to_string().contains(
-                "`identity` cannot be combined with matcher keys `command`, `args`, or `url`"
-            ),
+            err.to_string().contains("missing field `identity`"),
             "{err}"
         );
+    }
+}
+
+#[test]
+fn matcher_identity_rejects_unknown_fields() {
+    for contents in [
+        r#"
+[identity]
+unknown = "value"
+command = { executable = "company-cli", args = [] }
+"#,
+        r#"
+[identity]
+command = { executable = "company-cli", args = [], unknown = "value" }
+"#,
+    ] {
+        toml::from_str::<McpServerRequirement>(contents)
+            .expect_err("matcher identities should reject unknown fields");
     }
 }
 

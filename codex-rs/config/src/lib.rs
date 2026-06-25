@@ -115,7 +115,6 @@ pub use mcp_edit::load_global_mcp_servers;
 pub use mcp_requirements::McpServerCommandMatcher;
 pub use mcp_requirements::McpServerIdentity;
 pub use mcp_requirements::McpServerRequirement;
-pub use mcp_requirements::McpServerUrlMatcher;
 pub use mcp_requirements::McpServerValueMatcher;
 pub use mcp_types::AppToolApproval;
 pub use mcp_types::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
