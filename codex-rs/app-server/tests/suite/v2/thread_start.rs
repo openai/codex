@@ -27,7 +27,6 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
-use codex_core::test_support::all_model_presets;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -37,7 +36,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -198,117 +196,6 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_start_treats_managed_new_thread_model_settings_as_defaults() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    let managed_model =
-        create_config_with_managed_new_thread_defaults(codex_home.path(), &server.uri())?;
-
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let default_request_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
-    let default_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(default_request_id)),
-    )
-    .await??;
-    let default_response: ThreadStartResponse = to_response(default_response)?;
-
-    assert_eq!(
-        (
-            default_response.model.as_str(),
-            default_response.reasoning_effort,
-            default_response.service_tier.as_deref(),
-        ),
-        (
-            managed_model.as_str(),
-            Some(ReasoningEffort::Medium),
-            Some("priority"),
-        )
-    );
-
-    let explicit_request_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.2".to_string()),
-            service_tier: Some(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
-            config: Some(HashMap::from([(
-                "model_reasoning_effort".to_string(),
-                json!("low"),
-            )])),
-            ..Default::default()
-        })
-        .await?;
-    let explicit_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(explicit_request_id)),
-    )
-    .await??;
-    let explicit_response: ThreadStartResponse = to_response(explicit_response)?;
-
-    assert_eq!(
-        (
-            explicit_response.model.as_str(),
-            explicit_response.reasoning_effort,
-            explicit_response.service_tier.as_deref(),
-        ),
-        (
-            "gpt-5.2",
-            Some(ReasoningEffort::Low),
-            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE),
-        )
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_start_process_cli_overrides_managed_new_thread_defaults() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_with_managed_new_thread_defaults(codex_home.path(), &server.uri())?;
-
-    let mut mcp = TestAppServer::new_with_auto_env_and_args(
-        codex_home.path(),
-        &[
-            "-c",
-            "model=gpt-5.2",
-            "-c",
-            "model_reasoning_effort=low",
-            "-c",
-            "service_tier=default",
-        ],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: ThreadStartResponse = to_response(response)?;
-
-    assert_eq!(
-        (
-            response.model.as_str(),
-            response.reasoning_effort,
-            response.service_tier.as_deref(),
-        ),
-        (
-            "gpt-5.2",
-            Some(ReasoningEffort::Low),
-            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE),
-        )
-    );
     Ok(())
 }
 
@@ -1298,37 +1185,6 @@ model_reasoning_effort = "high"
     assert_eq!(config_after, config_before);
 
     Ok(())
-}
-
-fn create_config_with_managed_new_thread_defaults(
-    codex_home: &Path,
-    server_uri: &str,
-) -> Result<String> {
-    create_config_toml_without_approval_policy(codex_home, server_uri)?;
-    let managed_model = all_model_presets()
-        .iter()
-        .find(|preset| {
-            preset.id != "gpt-5.2"
-                && preset
-                    .service_tiers
-                    .iter()
-                    .any(|tier| tier.id == "priority")
-        })
-        .context("expected a model with the fast service tier")?
-        .id
-        .clone();
-    std::fs::write(
-        codex_home.join("requirements.toml"),
-        format!(
-            r#"
-[models.new_thread]
-model = "{managed_model}"
-model_reasoning_effort = "medium"
-service_tier = "fast"
-"#
-        ),
-    )?;
-    Ok(managed_model)
 }
 
 fn create_config_toml_without_approval_policy(

@@ -160,13 +160,6 @@ impl TestAppServer {
     /// URL-based configuration, this helper rejects a `codex_home` containing
     /// that file.
     pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_auto_env_and_args(codex_home, &[]).await
-    }
-
-    pub async fn new_with_auto_env_and_args(
-        codex_home: &Path,
-        args: &[&str],
-    ) -> anyhow::Result<Self> {
         let environments_toml = codex_home.join("environments.toml");
         ensure!(
             !environments_toml
@@ -189,10 +182,7 @@ impl TestAppServer {
             (CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR, None),
             (CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR, None),
         ];
-        let mut all_args = vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG];
-        all_args.extend_from_slice(args);
-        let mut app_server =
-            Self::new_with_env_and_args(codex_home, &env_overrides, &all_args).await?;
+        let mut app_server = Self::new_with_env(codex_home, &env_overrides).await?;
         app_server.auto_env = Some(auto_env);
         Ok(app_server)
     }
