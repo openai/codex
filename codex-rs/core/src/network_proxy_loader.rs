@@ -160,14 +160,6 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }
-    if let Some(dangerously_allow_plaintext_credential_injection) = network
-        .mitm
-        .as_ref()
-        .and_then(|mitm| mitm.dangerously_allow_plaintext_credential_injection)
-    {
-        constraints.dangerously_allow_plaintext_credential_injection =
-            Some(dangerously_allow_plaintext_credential_injection);
-    }
     if let Some(domains) = network.domains.as_ref() {
         let mut config = NetworkProxyConfig::default();
         if let Some(allowed_domains) = constraints.allowed_domains.take() {

@@ -468,7 +468,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
-        dangerously_allow_plaintext_credential_injection,
         domains,
         managed_allowed_domains_only,
         unix_sockets,
@@ -495,13 +494,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
         parts.push(format!(
             "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
-        ));
-    }
-    if let Some(dangerously_allow_plaintext_credential_injection) =
-        dangerously_allow_plaintext_credential_injection
-    {
-        parts.push(format!(
-            "dangerously_allow_plaintext_credential_injection={dangerously_allow_plaintext_credential_injection}"
         ));
     }
     if let Some(domains) = domains {
