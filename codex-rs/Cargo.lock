@@ -2519,7 +2519,10 @@ dependencies = [
  "anyhow",
  "codex-code-mode",
  "codex-code-mode-protocol",
+ "codex-protocol",
+ "codex-utils-cargo-bin",
  "pretty_assertions",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]
