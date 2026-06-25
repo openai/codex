@@ -587,7 +587,9 @@ async fn persisted_credentials_auth_status_child() -> anyhow::Result<()> {
         url: UNEXPIRED_SERVER_URL.to_string(),
         client_id: "test-client-id".to_string(),
         token_response: WrappedOAuthTokenResponse(response),
-        expires_at: Some(now.saturating_add(/*rhs*/ 60_000)),
+        // Keep this outside the 60-second proactive refresh guard band. The test is checking a
+        // healthy persisted access token, not the boundary where a refresh becomes necessary.
+        expires_at: Some(now.saturating_add(/*rhs*/ 120_000)),
     };
     save_oauth_tokens(
         SERVER_NAME,

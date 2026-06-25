@@ -1372,7 +1372,10 @@ mod tests {
             Some("rotated-refresh-token".to_string())
         );
         let second_tokens = tokens_from_manager(&second_manager).await?;
-        assert_eq!(second_tokens.token_response, stored.token_response);
+        assert_token_response_match_without_expiry(
+            &second_tokens.token_response,
+            &stored.token_response,
+        );
         Ok(())
     }
 
