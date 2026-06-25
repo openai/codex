@@ -7,6 +7,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::add_account_routing_override_cookie;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -152,6 +153,50 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[test]
+fn account_routing_override_cookie_is_encoded_and_chatgpt_scoped() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some(CHATGPT_CODEX_BASE_URL.to_string()));
+    let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut headers = http::HeaderMap::new();
+    headers.insert(http::header::COOKIE, http::HeaderValue::from_static("a=b"));
+
+    add_account_routing_override_cookie(
+        &mut headers,
+        Some("us cr;foo=bar"),
+        Some(chatgpt_auth.api_auth_mode()),
+        &provider,
+    );
+
+    assert_eq!(
+        headers
+            .get(http::header::COOKIE)
+            .and_then(|value| value.to_str().ok()),
+        Some("a=b; _account_routing_override=us%20cr%3Bfoo%3Dbar"),
+    );
+
+    let api_key_auth = CodexAuth::from_api_key("test-api-key");
+    let mut api_key_headers = http::HeaderMap::new();
+    add_account_routing_override_cookie(
+        &mut api_key_headers,
+        Some("us_cr"),
+        Some(api_key_auth.api_auth_mode()),
+        &provider,
+    );
+    assert_eq!(api_key_headers.get(http::header::COOKIE), None);
+
+    let mut provider_with_api_key = provider.clone();
+    provider_with_api_key.env_key = Some("OPENAI_API_KEY".to_string());
+    let mut provider_api_key_headers = http::HeaderMap::new();
+    add_account_routing_override_cookie(
+        &mut provider_api_key_headers,
+        Some("us_cr"),
+        Some(chatgpt_auth.api_auth_mode()),
+        &provider_with_api_key,
+    );
+    assert_eq!(provider_api_key_headers.get(http::header::COOKIE), None);
 }
 
 #[derive(Default)]
@@ -637,7 +682,11 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
     );
 
     let headers = model_client
-        .build_websocket_headers(&responses_metadata)
+        .build_websocket_headers(
+            &responses_metadata,
+            /*auth_mode*/ None,
+            /*account_routing_override*/ None,
+        )
         .await;
 
     assert_eq!(
@@ -647,6 +696,27 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         Some("v1.header-1"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn changing_account_routing_override_clears_cached_websocket_state() {
+    let mut client_session = test_model_client(SessionSource::Cli).new_session();
+    client_session.websocket_session.account_routing_override = Some("old".to_string());
+    client_session
+        .websocket_session
+        .last_response_from_untraced_warmup = true;
+
+    client_session.set_account_routing_override(Some("new".to_string()));
+
+    assert_eq!(
+        client_session.websocket_session.account_routing_override,
+        Some("new".to_string()),
+    );
+    assert!(
+        !client_session
+            .websocket_session
+            .last_response_from_untraced_warmup
+    );
 }
 
 #[tokio::test]

@@ -257,6 +257,7 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
+        account_routing_override: Option<String>,
     ) -> CodexResult<String> {
         self.codex
             .session
@@ -265,7 +266,12 @@ impl CodexThread {
             .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
             .await?;
         self.codex
-            .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
+            .submit_user_input_with_client_user_message_id(
+                op,
+                trace,
+                client_user_message_id,
+                account_routing_override,
+            )
             .await
     }
 

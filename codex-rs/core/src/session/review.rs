@@ -138,6 +138,7 @@ pub(super) async fn spawn_review_thread(
         #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
+        account_routing_override: None,
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         turn_metadata_state,
         extension_data,

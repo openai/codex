@@ -90,6 +90,7 @@ use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
+use http::header::COOKIE;
 use reqwest::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
@@ -149,6 +150,7 @@ const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
+const ACCOUNT_ROUTING_OVERRIDE_COOKIE: &str = "_account_routing_override";
 // `/responses/compact` is unary, so the timeout covers the full response rather than one idle
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
@@ -161,6 +163,37 @@ pub(crate) struct CompactConversationRequestSettings {
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
     pub(crate) service_tier: Option<String>,
+}
+
+fn add_account_routing_override_cookie(
+    headers: &mut ApiHeaderMap,
+    account_routing_override: Option<&str>,
+    auth_mode: Option<AuthMode>,
+    provider: &ModelProviderInfo,
+) {
+    if !provider.is_openai()
+        || !provider.requires_openai_auth
+        || provider.env_key.is_some()
+        || provider.experimental_bearer_token.is_some()
+        || provider.auth.is_some()
+        || !auth_mode.is_some_and(AuthMode::has_chatgpt_account)
+    {
+        return;
+    }
+    let Some(account_routing_override) = account_routing_override else {
+        return;
+    };
+    let routing_cookie = format!(
+        "{ACCOUNT_ROUTING_OVERRIDE_COOKIE}={}",
+        urlencoding::encode(account_routing_override)
+    );
+    let cookie = match headers.get(COOKIE).and_then(|value| value.to_str().ok()) {
+        Some(existing_cookie) => format!("{existing_cookie}; {routing_cookie}"),
+        None => routing_cookie,
+    };
+    if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+        headers.insert(COOKIE, cookie);
+    }
 }
 
 fn session_telemetry_for_request(
@@ -274,6 +307,7 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
+    account_routing_override: Option<String>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
@@ -510,6 +544,7 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
         responses_metadata: &CodexResponsesMetadata,
+        account_routing_override: Option<&str>,
     ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
@@ -578,6 +613,12 @@ impl ModelClient {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
         add_responses_lite_header(&mut extra_headers, model_info.use_responses_lite);
+        add_account_routing_override_cookie(
+            &mut extra_headers,
+            account_routing_override,
+            client_setup.auth.as_ref().map(CodexAuth::api_auth_mode),
+            self.state.provider.info(),
+        );
         let compact_request_timeout = client_setup
             .api_provider
             .stream_idle_timeout
@@ -916,11 +957,15 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         api_provider: codex_api::Provider,
         api_auth: SharedAuthProvider,
+        auth_mode: Option<AuthMode>,
+        account_routing_override: Option<&str>,
         responses_metadata: &CodexResponsesMetadata,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(responses_metadata).await;
+        let headers = self
+            .build_websocket_headers(responses_metadata, auth_mode, account_routing_override)
+            .await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context,
@@ -997,6 +1042,8 @@ impl ModelClient {
     async fn build_websocket_headers(
         &self,
         responses_metadata: &CodexResponsesMetadata,
+        auth_mode: Option<AuthMode>,
+        account_routing_override: Option<&str>,
     ) -> ApiHeaderMap {
         let mut headers = build_responses_headers(
             self.state.beta_features_header.as_deref(),
@@ -1024,6 +1071,12 @@ impl ModelClient {
                 HeaderValue::from_static("true"),
             );
         }
+        add_account_routing_override_cookie(
+            &mut headers,
+            account_routing_override,
+            auth_mode,
+            self.state.provider.info(),
+        );
         headers
     }
 }
@@ -1039,6 +1092,17 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
+    }
+
+    pub(crate) fn set_account_routing_override(
+        &mut self,
+        account_routing_override: Option<String>,
+    ) {
+        if self.websocket_session.account_routing_override == account_routing_override {
+            return;
+        }
+        self.reset_websocket_session();
+        self.websocket_session.account_routing_override = account_routing_override;
     }
 
     fn reset_websocket_session(&mut self) {
@@ -1060,6 +1124,7 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         compression: Compression,
         use_responses_lite: bool,
+        auth_mode: Option<AuthMode>,
     ) -> ApiResponsesOptions {
         ApiResponsesOptions {
             session_id: Some(responses_metadata.session_id.to_string()),
@@ -1079,6 +1144,12 @@ impl ModelClientSession {
                     headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
                 }
                 add_responses_lite_header(&mut headers, use_responses_lite);
+                add_account_routing_override_cookie(
+                    &mut headers,
+                    self.websocket_session.account_routing_override.as_deref(),
+                    auth_mode,
+                    self.client.state.provider.info(),
+                );
                 headers
             },
             compression,
@@ -1196,12 +1267,15 @@ impl ModelClientSession {
             client_setup.api_auth.as_ref(),
             PendingUnauthorizedRetry::default(),
         );
+        let auth_mode = client_setup.auth.as_ref().map(CodexAuth::api_auth_mode);
         let connection = self
             .client
             .connect_websocket(
                 session_telemetry,
                 client_setup.api_provider,
                 client_setup.api_auth,
+                auth_mode,
+                self.websocket_session.account_routing_override.as_deref(),
                 responses_metadata,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
@@ -1233,6 +1307,7 @@ impl ModelClientSession {
             session_telemetry,
             api_provider,
             api_auth,
+            auth_mode,
             responses_metadata,
             auth_context,
             request_route_telemetry,
@@ -1252,6 +1327,8 @@ impl ModelClientSession {
                     session_telemetry,
                     api_provider,
                     api_auth,
+                    auth_mode,
+                    self.websocket_session.account_routing_override.as_deref(),
                     responses_metadata,
                     auth_context,
                     request_route_telemetry,
@@ -1346,6 +1423,7 @@ impl ModelClientSession {
                     responses_metadata,
                     compression,
                     model_info.use_responses_lite,
+                    client_setup.auth.as_ref().map(CodexAuth::api_auth_mode),
                 )
                 .await;
 
@@ -1461,6 +1539,7 @@ impl ModelClientSession {
                 client_setup.api_auth.as_ref(),
                 pending_retry,
             );
+            let auth_mode = client_setup.auth.as_ref().map(CodexAuth::api_auth_mode);
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -1498,6 +1577,7 @@ impl ModelClientSession {
                     session_telemetry,
                     api_provider: client_setup.api_provider,
                     api_auth: client_setup.api_auth,
+                    auth_mode,
                     responses_metadata,
                     auth_context: request_auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
@@ -2062,6 +2142,7 @@ struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
     api_auth: SharedAuthProvider,
+    auth_mode: Option<AuthMode>,
     responses_metadata: &'a CodexResponsesMetadata,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,

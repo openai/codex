@@ -498,6 +498,13 @@
     }
   },
   "properties": {
+    "accountRoutingOverride": {
+      "description": "Optional account routing override for ChatGPT-authenticated Responses requests in this turn.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "approvalPolicy": {
       "anyOf": [
         {

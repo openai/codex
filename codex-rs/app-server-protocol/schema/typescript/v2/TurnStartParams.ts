@@ -11,6 +11,10 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, clientUserMessageId?: string | null, input: Array<UserInput>, /**
+ * Optional account routing override for ChatGPT-authenticated Responses requests in this
+ * turn.
+ */
+accountRoutingOverride?: string | null, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

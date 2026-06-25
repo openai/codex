@@ -263,6 +263,7 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.session_telemetry,
             &compaction_trace,
             &responses_metadata,
+            turn_context.account_routing_override.as_deref(),
         )
         .await?;
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
