@@ -426,7 +426,7 @@ fn deserialize_ignores_unknown_server_fields() {
     assert_eq!(
         cfg,
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec![],

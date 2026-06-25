@@ -104,7 +104,7 @@ mod tests {
 
     fn stdio_server(environment_id: &str) -> McpServerConfig {
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: Vec::new(),
@@ -131,7 +131,7 @@ mod tests {
 
     fn http_server(environment_id: &str) -> McpServerConfig {
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "http://127.0.0.1:1".to_string(),
                 bearer_token_env_var: None,

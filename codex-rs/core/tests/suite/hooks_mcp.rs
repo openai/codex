@@ -184,7 +184,7 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
     servers.insert(
         RMCP_SERVER.to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command,
                 args: Vec::new(),

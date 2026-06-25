@@ -114,7 +114,7 @@ use tempfile::TempDir;
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
     McpServerConfig {
-        use_chatgpt_auth: false,
+        auth: Default::default(),
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
             args: Vec::new(),
@@ -141,7 +141,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
 
 fn http_mcp(url: &str) -> McpServerConfig {
     McpServerConfig {
-        use_chatgpt_auth: false,
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,
@@ -5568,7 +5568,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     servers.insert(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
@@ -5926,7 +5926,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: vec!["--verbose".to_string()],
@@ -6006,7 +6006,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6062,7 +6062,7 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6121,7 +6121,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6177,7 +6177,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6245,7 +6245,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6328,7 +6328,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
     let mut servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6367,7 +6367,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
     servers.insert(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -6435,7 +6435,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
         (
             "docs".to_string(),
             McpServerConfig {
-                use_chatgpt_auth: false,
+                auth: Default::default(),
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6464,7 +6464,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
         (
             "logs".to_string(),
             McpServerConfig {
-                use_chatgpt_auth: false,
+                auth: Default::default(),
                 transport: McpServerTransportConfig::Stdio {
                     command: "logs-server".to_string(),
                     args: vec!["--follow".to_string()],
@@ -6553,7 +6553,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6604,7 +6604,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6655,7 +6655,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6711,7 +6711,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
-            use_chatgpt_auth: false,
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,

@@ -345,7 +345,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     };
 
     let new_entry = McpServerConfig {
-        use_chatgpt_auth: false,
+        auth: Default::default(),
         transport: transport.clone(),
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
