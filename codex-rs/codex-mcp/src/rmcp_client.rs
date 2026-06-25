@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -26,7 +27,6 @@ use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps::write_codex_apps_tools_cache;
-use crate::codex_apps_startup_retry::CodexAppsStartupRetry;
 use crate::elicitation::ElicitationRequestManager;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -67,6 +67,7 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::instrument;
@@ -132,6 +133,71 @@ impl ManagedClient {
 
 pub(crate) type ManagedClientFuture =
     Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+
+type ManagedClientAttempt = OnceCell<Result<ManagedClient, StartupOutcomeError>>;
+
+pub(crate) struct CodexAppsStartupReconnect {
+    factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
+    current_client: StdMutex<Option<ManagedClient>>,
+    reconnect: StdMutex<Option<Arc<ManagedClientAttempt>>>,
+}
+
+impl CodexAppsStartupReconnect {
+    pub(crate) fn new(factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>) -> Self {
+        Self {
+            factory,
+            current_client: StdMutex::new(None),
+            reconnect: StdMutex::new(None),
+        }
+    }
+
+    fn current_client(&self) -> Option<ManagedClient> {
+        self.current_client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    async fn reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        // Callers handling the same startup failure share one reconnect attempt.
+        let attempt = {
+            let mut reconnect = self
+                .reconnect
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(client) = self.current_client() {
+                return Ok(client);
+            }
+            reconnect
+                .get_or_insert_with(|| Arc::new(ManagedClientAttempt::new()))
+                .clone()
+        };
+        let result = attempt
+            .get_or_init(|| async {
+                let result = (self.factory)().await;
+                if let Ok(client) = &result {
+                    *self
+                        .current_client
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(client.clone());
+                }
+                result
+            })
+            .await;
+        let mut reconnect = self
+            .reconnect
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Forget only this completed attempt so a later operation can retry after failure.
+        if reconnect
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &attempt))
+        {
+            *reconnect = None;
+        }
+        result.clone()
+    }
+}
 
 #[derive(Clone)]
 struct ManagedClientStartup {
@@ -236,7 +302,7 @@ pub(crate) struct AsyncManagedClient {
     pub(crate) cached_tool_info_snapshot: Option<Vec<ToolInfo>>,
     pub(crate) cached_server_info: Option<McpServerInfo>,
     pub(crate) startup_complete: Arc<AtomicBool>,
-    pub(crate) startup_retry: Option<Arc<CodexAppsStartupRetry>>,
+    pub(crate) startup_reconnect: Option<Arc<CodexAppsStartupReconnect>>,
     pub(crate) tool_plugin_provenance: Arc<ToolPluginProvenance>,
     pub(crate) cancel_token: CancellationToken,
 }
@@ -295,9 +361,9 @@ impl AsyncManagedClient {
             startup_complete: Arc::clone(&startup_complete),
         });
         let client = startup.start();
-        let startup_retry = is_codex_apps_mcp_server.then(|| {
+        let startup_reconnect = is_codex_apps_mcp_server.then(|| {
             let startup = Arc::clone(&startup);
-            Arc::new(CodexAppsStartupRetry::new(Arc::new(move || {
+            Arc::new(CodexAppsStartupReconnect::new(Arc::new(move || {
                 startup.start()
             })))
         });
@@ -314,33 +380,32 @@ impl AsyncManagedClient {
             cached_tool_info_snapshot,
             cached_server_info,
             startup_complete,
-            startup_retry,
+            startup_reconnect,
             tool_plugin_provenance,
             cancel_token,
         }
     }
 
     pub(crate) async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        let client = if let Some(startup_retry) = self.startup_retry.as_ref() {
-            startup_retry
-                .replacement()
-                .await
-                .unwrap_or_else(|| self.client.clone())
-        } else {
-            self.client.clone()
-        };
-        client.await
+        if let Some(client) = self
+            .startup_reconnect
+            .as_ref()
+            .and_then(|reconnect| reconnect.current_client())
+        {
+            return Ok(client);
+        }
+        self.client.clone().await
     }
 
-    pub(crate) async fn retry_failed_startup(&self) {
-        let Some(startup_retry) = self.startup_retry.as_ref() else {
+    pub(crate) async fn reconnect_failed_startup(&self) {
+        let Some(startup_reconnect) = self.startup_reconnect.as_ref() else {
             return;
         };
         if !self.startup_complete.load(Ordering::Acquire) {
             return;
         }
         if matches!(self.client().await, Err(StartupOutcomeError::Failed { .. })) {
-            startup_retry.retry().await;
+            let _ = startup_reconnect.reconnect().await;
         }
     }
 

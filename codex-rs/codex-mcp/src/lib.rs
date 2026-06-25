@@ -73,7 +73,6 @@ pub use tools::declared_openai_file_input_param_names;
 pub(crate) mod auth_elicitation;
 mod catalog;
 pub(crate) mod codex_apps;
-mod codex_apps_startup_retry;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;

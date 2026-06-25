@@ -135,7 +135,7 @@ async fn follow_up_recovers_apps_after_mid_thread_startup_failures() -> Result<(
     );
 
     tokio::fs::remove_dir_all(test.codex_home_path().join("cache/codex_apps_tools")).await?;
-    startup_control.fail_next_initialize_attempts(/*attempts*/ 2);
+    startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
     let runtime_mcp_config = test.codex.runtime_mcp_config(&test.config).await;
     let refresh_config = McpServerRefreshConfig {
         mcp_servers: serde_json::to_value(codex_mcp::configured_mcp_servers(&runtime_mcp_config))?,
@@ -166,7 +166,7 @@ async fn follow_up_recovers_apps_after_mid_thread_startup_failures() -> Result<(
         .is_some(),
         "Calendar should recover on the follow-up turn: {recovered_request}",
     );
-    assert_eq!(startup_control.initialize_attempts(), 4);
+    assert_eq!(startup_control.initialize_attempts(), 3);
 
     Ok(())
 }
