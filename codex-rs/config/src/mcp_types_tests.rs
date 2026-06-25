@@ -463,6 +463,19 @@ fn deserialize_rejects_command_and_url() {
 }
 
 #[test]
+fn deserialize_rejects_missing_transport_with_actionable_error() {
+    let err = toml::from_str::<McpServerConfig>("enabled = true")
+        .expect_err("should reject an MCP server without a transport");
+
+    assert!(
+        err.to_string().contains(
+            "MCP server configuration is incomplete: set `command` for stdio or `url` for streamable HTTP"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn deserialize_rejects_env_for_http_transport() {
     toml::from_str::<McpServerConfig>(
         r#"

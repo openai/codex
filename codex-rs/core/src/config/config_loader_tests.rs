@@ -3242,7 +3242,7 @@ enabled = false
 }
 
 #[tokio::test]
-async fn cli_override_for_disabled_project_local_mcp_server_returns_invalid_transport()
+async fn cli_override_for_disabled_project_local_mcp_server_returns_missing_transport_error()
 -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -3275,7 +3275,9 @@ enabled = false
         .expect_err("untrusted project layer should not provide MCP transport");
 
     assert!(
-        err.to_string().contains("invalid transport")
+        err.to_string().contains(
+            "MCP server configuration is incomplete: set `command` for stdio or `url` for streamable HTTP"
+        )
             && err.to_string().contains("mcp_servers.sentry"),
         "unexpected error: {err}"
     );

@@ -353,7 +353,10 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
                 env_http_headers,
             }
         } else {
-            return Err("invalid transport".to_string());
+            return Err(
+                "MCP server configuration is incomplete: set `command` for stdio or `url` for streamable HTTP"
+                    .to_string(),
+            );
         };
 
         let environment_id =

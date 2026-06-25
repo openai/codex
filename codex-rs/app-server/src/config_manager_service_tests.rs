@@ -441,7 +441,12 @@ async fn write_value_rejects_partial_mcp_server_without_effective_transport() ->
         error.write_error_code(),
         Some(ConfigWriteErrorCode::ConfigValidationError)
     );
-    assert!(error.to_string().contains("invalid transport"), "{error}");
+    assert!(
+        error.to_string().contains(
+            "MCP server configuration is incomplete: set `command` for stdio or `url` for streamable HTTP"
+        ) && error.to_string().contains("mcp_servers.docs"),
+        "{error}"
+    );
     assert_eq!(std::fs::read_to_string(config_path)?, "");
 
     Ok(())
