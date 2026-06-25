@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
@@ -428,6 +429,55 @@ impl Session {
             elicitation_reviewer,
         )
         .await;
+    }
+
+    pub(crate) async fn refresh_mcp_server_now(
+        &self,
+        update: codex_protocol::protocol::McpServerUpdateConfig,
+        submit_id: String,
+    ) -> anyhow::Result<()> {
+        let server_name = update.server_name;
+        let configured_server = serde_json::from_value::<McpServerConfig>(update.server)
+            .with_context(|| format!("failed to parse MCP server update for `{server_name}`"))?;
+        let auth = self.services.auth_manager.auth().await;
+        let config = self.get_config().await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
+        let mut effective_servers = effective_mcp_servers_from_configured(
+            HashMap::from([(server_name.clone(), configured_server)]),
+            &mcp_config,
+            auth.as_ref(),
+        );
+        let server = effective_servers.remove(&server_name).ok_or_else(|| {
+            anyhow::anyhow!("MCP server update did not resolve server `{server_name}`")
+        })?;
+        let mut auth_entries = compute_auth_statuses(
+            std::iter::once((&server_name, &server)),
+            config.mcp_oauth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+            auth.as_ref(),
+        )
+        .await;
+
+        let current_manager = self.services.mcp_connection_manager.load_full();
+        let replacement_manager = Arc::new(
+            current_manager
+                .prepare_server_replacement(
+                    server_name.clone(),
+                    server,
+                    auth_entries.remove(&server_name),
+                    submit_id,
+                )
+                .await?,
+        );
+        let superseded_manager = self
+            .services
+            .mcp_connection_manager
+            .swap(Arc::clone(&replacement_manager));
+        replacement_manager.take_cancellation_ownership_from(&superseded_manager);
+        drop(current_manager);
+
+        tokio::spawn(superseded_manager.shutdown_server_after_readers_release(server_name));
+        Ok(())
     }
 
     #[cfg(test)]
