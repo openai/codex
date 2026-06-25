@@ -88,6 +88,10 @@ pub struct TokenBudgetConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 1000))]
     pub reminder_message_template: Option<String>,
+    /// Guidance appended to the context-window metadata in a developer message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 1000))]
+    pub guidance_message: Option<String>,
 }
 
 impl FeatureConfig for TokenBudgetConfigToml {

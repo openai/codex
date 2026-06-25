@@ -16,6 +16,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
+use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
+use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
@@ -48,6 +50,18 @@ fn recognizes_context_window_as_contextual_developer_content() {
             r#"{CONTEXT_WINDOW_OPEN_TAG}
 Thread id: 00000000-0000-0000-0000-000000000000
 {CONTEXT_WINDOW_CLOSE_TAG}"#
+        ),
+    }];
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
+}
+
+#[test]
+fn recognizes_context_window_guidance_as_contextual_developer_content() {
+    let content = vec![ContentItem::InputText {
+        text: format!(
+            "{CONTEXT_WINDOW_GUIDANCE_OPEN_TAG}\nPreserve important state.\n{CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG}"
         ),
     }];
 
