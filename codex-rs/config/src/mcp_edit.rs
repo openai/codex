@@ -172,6 +172,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         }
     }
 
+    if config.use_chatgpt_auth {
+        entry["use_chatgpt_auth"] = value(true);
+    }
     if !config.enabled {
         entry["enabled"] = value(false);
     }

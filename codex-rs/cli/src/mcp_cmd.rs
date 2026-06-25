@@ -18,6 +18,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core_plugins::PluginsManager;
+use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;
@@ -344,6 +345,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     };
 
     let new_entry = McpServerConfig {
+        use_chatgpt_auth: false,
         transport: transport.clone(),
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
@@ -543,8 +545,11 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await;
+    let auth = auth_manager.auth().await;
     let mcp_servers = mcp_manager.configured_servers(&config).await;
-    let effective_mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None).await;
+    let effective_mcp_servers = mcp_manager.effective_servers(&config, auth.as_ref()).await;
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
@@ -552,7 +557,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         effective_mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        /*auth*/ None,
+        auth.as_ref(),
     )
     .await;
 

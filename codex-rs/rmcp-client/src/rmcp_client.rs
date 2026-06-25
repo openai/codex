@@ -787,6 +787,12 @@ impl RmcpClient {
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
+                let auth_provider =
+                    if bearer_token.is_some() || default_headers.contains_key(AUTHORIZATION) {
+                        None
+                    } else {
+                        auth_provider.clone()
+                    };
 
                 let initial_oauth_tokens = if bearer_token.is_none()
                     && auth_provider.is_none()
@@ -861,7 +867,7 @@ impl RmcpClient {
                         StreamableHttpClientAdapter::new(
                             Arc::clone(http_client),
                             default_headers,
-                            auth_provider.clone(),
+                            auth_provider,
                         ),
                         http_config,
                     );

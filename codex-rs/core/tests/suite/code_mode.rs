@@ -395,6 +395,7 @@ async fn run_code_mode_turn_with_rmcp_config(
         servers.insert(
             "rmcp".to_string(),
             McpServerConfig {
+                use_chatgpt_auth: false,
                 transport: McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
