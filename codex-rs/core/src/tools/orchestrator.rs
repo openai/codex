@@ -27,9 +27,9 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::escalation_profile_preserving_deny_read;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
-use crate::tools::sandboxing::windows_escalation_profile_preserving_deny_read;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::error::CodexErr;
@@ -227,22 +227,19 @@ impl ToolOrchestrator {
             &file_system_sandbox_policy,
         );
         let managed_network_active = turn_ctx.network.is_some();
-        let windows_escalation_profile = windows_escalation_profile_preserving_deny_read(
-            cfg!(windows),
-            sandbox_override,
-            managed_network_active,
-            &turn_ctx.permission_profile,
-        );
-        let attempt_permissions = windows_escalation_profile
+        let escalation_profile =
+            escalation_profile_preserving_deny_read(sandbox_override, &turn_ctx.permission_profile);
+        let attempt_permissions = escalation_profile
             .as_ref()
             .unwrap_or(&turn_ctx.permission_profile);
+        let attempt_file_system_sandbox_policy = attempt_permissions.file_system_sandbox_policy();
         let attempt_network_sandbox_policy = attempt_permissions.network_sandbox_policy();
         let sandbox_preference = tool.sandbox_preference();
         let sandbox_requested = match sandbox_override {
             SandboxOverride::BypassSandboxFirstAttempt => false,
-            SandboxOverride::NoOverride | SandboxOverride::PreserveDenyRead => {
+            SandboxOverride::NoOverride | SandboxOverride::EscalatedSandboxWithDenyRead => {
                 self.sandbox.should_sandbox(
-                    &file_system_sandbox_policy,
+                    &attempt_file_system_sandbox_policy,
                     attempt_network_sandbox_policy,
                     sandbox_preference,
                     managed_network_active,
@@ -251,7 +248,7 @@ impl ToolOrchestrator {
         };
         let initial_sandbox = if sandbox_requested {
             self.sandbox.select_initial(
-                &file_system_sandbox_policy,
+                &attempt_file_system_sandbox_policy,
                 attempt_network_sandbox_policy,
                 sandbox_preference,
                 turn_ctx.windows_sandbox_level,
@@ -430,14 +427,14 @@ impl ToolOrchestrator {
 
                 let retry_sandbox_requested = !unsandboxed_allowed
                     && self.sandbox.should_sandbox(
-                        &file_system_sandbox_policy,
+                        &attempt_file_system_sandbox_policy,
                         attempt_network_sandbox_policy,
                         sandbox_preference,
                         managed_network_active,
                     );
                 let retry_sandbox = if retry_sandbox_requested {
                     self.sandbox.select_initial(
-                        &file_system_sandbox_policy,
+                        &attempt_file_system_sandbox_policy,
                         attempt_network_sandbox_policy,
                         sandbox_preference,
                         turn_ctx.windows_sandbox_level,

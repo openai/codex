@@ -245,7 +245,7 @@ pub(crate) fn default_exec_approval_requirement(
 pub(crate) enum SandboxOverride {
     NoOverride,
     BypassSandboxFirstAttempt,
-    PreserveDenyRead,
+    EscalatedSandboxWithDenyRead,
 }
 
 pub(crate) fn sandbox_override_for_first_attempt(
@@ -266,7 +266,7 @@ pub(crate) fn sandbox_override_for_first_attempt(
     // otherwise approved by rules or explicit escalation.
     if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
         return if bypass_sandbox {
-            SandboxOverride::PreserveDenyRead
+            SandboxOverride::EscalatedSandboxWithDenyRead
         } else {
             SandboxOverride::NoOverride
         };
@@ -281,20 +281,22 @@ pub(crate) fn sandbox_override_for_first_attempt(
     SandboxOverride::NoOverride
 }
 
-pub(crate) fn windows_escalation_profile_preserving_deny_read(
-    is_windows: bool,
+/// Builds an otherwise-unrestricted profile for an escalation that must retain
+/// administrator-defined deny-read restrictions.
+pub(crate) fn escalation_profile_preserving_deny_read(
     sandbox_override: SandboxOverride,
-    managed_network_active: bool,
     permission_profile: &PermissionProfile,
 ) -> Option<PermissionProfile> {
-    if !is_windows
-        || !matches!(sandbox_override, SandboxOverride::PreserveDenyRead)
-        || managed_network_active
-    {
+    if !matches!(
+        sandbox_override,
+        SandboxOverride::EscalatedSandboxWithDenyRead
+    ) {
         return None;
     }
 
-    let file_system_policy = permission_profile.file_system_sandbox_policy();
+    let mut file_system_policy = FileSystemSandboxPolicy::unrestricted();
+    file_system_policy
+        .preserve_deny_read_restrictions_from(&permission_profile.file_system_sandbox_policy());
     Some(
         PermissionProfile::from_runtime_permissions_with_enforcement(
             permission_profile.enforcement(),
