@@ -399,6 +399,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_compact,
         post_compact,
         session_start,
+        user_instructions,
         user_prompt_submit,
         subagent_start,
         subagent_stop,
@@ -414,6 +415,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_compact: map_hook_matcher_groups_to_api(pre_compact),
         post_compact: map_hook_matcher_groups_to_api(post_compact),
         session_start: map_hook_matcher_groups_to_api(session_start),
+        user_instructions: user_instructions.map(map_hook_handler_to_api),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
         subagent_start: map_hook_matcher_groups_to_api(subagent_start),
         subagent_stop: map_hook_matcher_groups_to_api(subagent_stop),
@@ -565,9 +567,14 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::ConfiguredHookHandler;
+    use codex_app_server_protocol::ManagedHooksRequirements;
     use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::HookEventsToml;
+    use codex_config::HookHandlerConfig;
+    use codex_config::ManagedHooksRequirementsToml;
     use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
@@ -581,6 +588,51 @@ mod tests {
 
         assert_eq!(mapped.allow_managed_hooks_only, Some(true));
         assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
+    fn requirements_api_includes_user_instructions_hooks() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            hooks: Some(ManagedHooksRequirementsToml {
+                hooks: HookEventsToml {
+                    user_instructions: Some(HookHandlerConfig::Command {
+                        command: "python3 instructions.py".to_string(),
+                        command_windows: None,
+                        timeout_sec: Some(10),
+                        r#async: false,
+                        status_message: Some("loading instructions".to_string()),
+                    }),
+                    ..HookEventsToml::default()
+                },
+                ..ManagedHooksRequirementsToml::default()
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped.hooks,
+            Some(ManagedHooksRequirements {
+                managed_dir: None,
+                windows_managed_dir: None,
+                pre_tool_use: Vec::new(),
+                permission_request: Vec::new(),
+                post_tool_use: Vec::new(),
+                pre_compact: Vec::new(),
+                post_compact: Vec::new(),
+                session_start: Vec::new(),
+                user_instructions: Some(ConfiguredHookHandler::Command {
+                    command: "python3 instructions.py".to_string(),
+                    command_windows: None,
+                    timeout_sec: Some(10),
+                    r#async: false,
+                    status_message: Some("loading instructions".to_string()),
+                }),
+                user_prompt_submit: Vec::new(),
+                subagent_start: Vec::new(),
+                subagent_stop: Vec::new(),
+                stop: Vec::new(),
+            })
+        );
     }
 
     #[test]

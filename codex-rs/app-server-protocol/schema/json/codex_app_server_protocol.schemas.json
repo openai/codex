@@ -11711,6 +11711,16 @@
             },
             "type": "array"
           },
+          "UserInstructions": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ConfiguredHookHandler"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "UserPromptSubmit": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
