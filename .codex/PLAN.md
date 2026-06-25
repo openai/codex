@@ -6,7 +6,7 @@ Last updated: 2026-06-25
 - [x] All in-scope dead items found by scoped search/compiler evidence are removed.
 - [x] No live public, protocol, serialized, platform-specific, or test-only surface is removed.
 - [x] Formatting and relevant Rust checks/tests pass.
-- [ ] Diff is independently reviewed and published as a draft PR with evidence.
+- [x] Diff is independently reviewed and published as a draft PR with evidence.
 
 ## Milestones
 1. Bootstrap worktree and map candidates.

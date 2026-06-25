@@ -1,10 +1,10 @@
 # Task Board
 
 ## Now
-- [ ] Commit cleanup, push branch, and open draft PR.
+- [ ] Observe draft-PR CI for the full platform matrix.
 
 ## Next
-- [ ] Observe draft-PR CI for the full platform matrix.
+- [ ] Address review or CI feedback if requested.
 
 ## Later
 - [ ] Follow-up cleanup only if it cannot safely fit the focused PR.
@@ -17,3 +17,5 @@
 - [x] Removed unwired plugin/skills clients, legacy methods, errors, dependencies, and exports.
 - [x] Completed independent cross-reviews and resolved the sole blocking finding.
 - [x] Passed targeted tests/checks, scoped Clippy, Bazel lock refresh, formatting, and diff checks.
+- [x] Committed and pushed `codex/delete-dead-integration-code`.
+- [x] Opened draft PR #29991.

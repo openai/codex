@@ -13,6 +13,7 @@ Last updated: 2026-06-25
 - Independent cross-reviews accepted MCP/RMCP and apps/connectors; plugin/skills review found and resolved two stale app-server match arms.
 - Targeted tests/checks and scoped Clippy passed; repository formatting passed after granting access to the existing `uv` cache.
 - Bazel lock refresh succeeded; `MODULE.bazel.lock` was unchanged.
+- Draft PR opened: https://github.com/openai/codex/pull/29991
 
 ## Risks
 - Removed public items belonged to `0.0.0` workspace crates and had no workspace consumers; external Git consumers could still require migration.
