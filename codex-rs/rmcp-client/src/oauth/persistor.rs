@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -17,6 +18,7 @@ use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+use tracing::debug;
 use tracing::warn;
 
 use super::ResolvedOAuthCredentialStore;
@@ -177,10 +179,6 @@ impl OAuthPersistor {
         .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access must be serialized through its mutex"
-    )]
     pub(super) async fn refresh_if_needed_with_keyring_store_and_timeout<
         K: KeyringStore + Clone + 'static,
     >(
@@ -197,12 +195,62 @@ impl OAuthPersistor {
             return Ok(());
         }
 
+        self.run_owned_refresh_transaction(keyring_store.clone(), refresh_request_timeout)
+            .await
+    }
+
+    async fn run_owned_refresh_transaction<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: K,
+        refresh_request_timeout: Duration,
+    ) -> Result<()> {
+        let persistor = self.clone();
+        let server_name = self.inner.server_name.clone();
+        // Once the provider may consume a rotating refresh token, dropping the caller's future
+        // must not also drop refresh plus persistence. Dropping this JoinHandle detaches the task,
+        // which continues under the credential lock until its explicit lock/provider bounds.
+        //
+        // A provider timeout deliberately leaves the outcome unknown, releases the lock, and
+        // permits a later serialized retry. Some providers accept the previous token during a
+        // grace period; otherwise that retry surfaces reauthorization. We accept that residual
+        // token-family-revocation risk rather than holding the lock indefinitely.
+        tokio::spawn(async move {
+            persistor
+                .refresh_transaction(&keyring_store, refresh_request_timeout)
+                .await
+        })
+        .await
+        .with_context(|| format!("OAuth refresh task failed for server {server_name}"))?
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "AuthorizationManager async access must be serialized through its mutex"
+    )]
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(server_name = %self.inner.server_name),
+        err
+    )]
+    async fn refresh_transaction<K: KeyringStore + Clone + 'static>(
+        &self,
+        keyring_store: &K,
+        refresh_request_timeout: Duration,
+    ) -> Result<()> {
+        let transaction_started_at = Instant::now();
+        let lock_started_at = Instant::now();
+        debug!("waiting for the MCP OAuth credential transaction lock");
         let snapshot = {
             let guard = self.inner.last_credentials.lock().await;
             guard.clone()
         };
         let key = compute_store_key(&self.inner.server_name, &self.inner.url)?;
         let _lock = RefreshCredentialLock::acquire(&key).await?;
+        debug!(
+            lock_wait_ms = lock_started_at.elapsed().as_millis(),
+            "acquired the MCP OAuth credential transaction lock"
+        );
         // The refresh transaction must stay on the store that supplied its snapshot. Falling back
         // here could replay an older rotating refresh token from the other store. We assume store
         // availability is stable for this client lifecycle and surface violations of that
@@ -253,26 +301,57 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
+            let provider_started_at = Instant::now();
+            debug!(
+                timeout_ms = refresh_request_timeout.as_millis(),
+                "requesting refreshed MCP OAuth credentials from the provider"
+            );
             match timeout(refresh_request_timeout, guard.refresh_token()).await {
-                Ok(result) => {
-                    result.with_context(|| {
+                Ok(Ok(_token_response)) => {
+                    debug!(
+                        provider_elapsed_ms = provider_started_at.elapsed().as_millis(),
+                        "received refreshed MCP OAuth credentials from the provider"
+                    );
+                }
+                Ok(Err(error)) => {
+                    warn!(
+                        provider_elapsed_ms = provider_started_at.elapsed().as_millis(),
+                        error = %error,
+                        "MCP OAuth provider refresh failed"
+                    );
+                    return Err(error).with_context(|| {
                         format!(
                             "failed to refresh OAuth tokens for server {}",
                             self.inner.server_name
                         )
-                    })?;
+                    });
                 }
-                Err(_) => anyhow::bail!(
-                    "timed out after {refresh_request_timeout:?} refreshing OAuth tokens for server {}",
-                    self.inner.server_name
-                ),
+                Err(_) => {
+                    warn!(
+                        provider_elapsed_ms = provider_started_at.elapsed().as_millis(),
+                        timeout_ms = refresh_request_timeout.as_millis(),
+                        "MCP OAuth provider refresh timed out; the outcome is unknown and a later serialized retry is permitted"
+                    );
+                    anyhow::bail!(
+                        "timed out after {refresh_request_timeout:?} refreshing OAuth tokens for server {}",
+                        self.inner.server_name
+                    );
+                }
             }
         }
 
         // Once the provider returns a rotated token, persistence must finish before the credential
         // lock is released. In particular, caller startup deadlines must not cancel this step.
-        self.persist_if_needed_with_keyring_store(keyring_store)
-            .await
+        let result = self
+            .persist_if_needed_with_keyring_store(keyring_store)
+            .await;
+        if result.is_ok() {
+            debug!(
+                transaction_elapsed_ms = transaction_started_at.elapsed().as_millis(),
+                "completed the MCP OAuth refresh transaction"
+            );
+        }
+        result
     }
 
     async fn adopt_credentials(&self, tokens: StoredOAuthTokens) -> Result<()> {
