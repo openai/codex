@@ -1047,6 +1047,7 @@ impl Session {
                 // TODO(jif): extract session to share between sub-agents
                 session_extension_data,
                 thread_extension_data,
+                selected_capability_roots,
                 mcp_thread_init,
                 supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(
                     supports_openai_form_elicitation,

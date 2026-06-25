@@ -2828,9 +2828,12 @@ impl Session {
                 .await;
         }
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
+        let selected_capability_roots = environments
+            .resolve_selected_capability_roots(&self.services.selected_capability_roots);
         Arc::new(StepContext::new(
             turn_context,
             environments,
+            selected_capability_roots,
             loaded_agents_md,
         ))
     }

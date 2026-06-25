@@ -7,6 +7,9 @@ use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -227,6 +230,27 @@ pub(crate) struct TurnEnvironmentSnapshot {
 }
 
 impl TurnEnvironmentSnapshot {
+    pub(crate) fn resolve_selected_capability_roots(
+        &self,
+        selected_roots: &[SelectedCapabilityRoot],
+    ) -> Vec<ResolvedSelectedCapabilityRoot> {
+        selected_roots
+            .iter()
+            .filter_map(|selected_root| {
+                let CapabilityRootLocation::Environment { environment_id, .. } =
+                    &selected_root.location;
+                let environment = self
+                    .turn_environments
+                    .iter()
+                    .find(|environment| environment.environment_id == *environment_id)?;
+                Some(ResolvedSelectedCapabilityRoot::new(
+                    selected_root.clone(),
+                    Arc::clone(&environment.environment),
+                ))
+            })
+            .collect()
+    }
+
     pub(crate) fn primary(&self) -> Option<&TurnEnvironment> {
         self.turn_environments.first()
     }
@@ -558,6 +582,56 @@ url = "ws://127.0.0.1:8765"
         .await;
 
         assert_eq!(resolved.snapshot().await.to_selections(), vec![local]);
+    }
+
+    #[tokio::test]
+    async fn selected_capability_roots_bind_only_to_their_ready_environment() {
+        let cwd = PathUri::parse("file:///workspace").expect("cwd URI");
+        let primary = Arc::new(Environment::default_for_tests());
+        let selected = Arc::new(Environment::default_for_tests());
+        let snapshot = TurnEnvironmentSnapshot {
+            turn_environments: vec![
+                TurnEnvironment::new(
+                    "primary".to_string(),
+                    Arc::clone(&primary),
+                    cwd.clone(),
+                    /*shell*/ None,
+                ),
+                TurnEnvironment::new(
+                    "selected".to_string(),
+                    Arc::clone(&selected),
+                    cwd,
+                    /*shell*/ None,
+                ),
+            ],
+            starting: Vec::new(),
+        };
+        let plugin_path = PathUri::parse("file:///plugins/demo").expect("plugin URI");
+        let roots = [
+            SelectedCapabilityRoot {
+                id: "demo@1".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "selected".to_string(),
+                    path: plugin_path.clone(),
+                },
+            },
+            SelectedCapabilityRoot {
+                id: "pending@1".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "pending".to_string(),
+                    path: plugin_path,
+                },
+            },
+        ];
+
+        let resolved = snapshot.resolve_selected_capability_roots(&roots);
+
+        let [resolved] = resolved.as_slice() else {
+            panic!("only the ready selected environment should resolve");
+        };
+        assert_eq!(resolved.selected_root(), &roots[0]);
+        assert!(Arc::ptr_eq(resolved.environment(), &selected));
+        assert!(!Arc::ptr_eq(resolved.environment(), &primary));
     }
 
     #[tokio::test]
