@@ -685,11 +685,16 @@ async fn environment_tools_follow_the_step_context() {
     turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
 
     let environments = turn.environments.clone();
+    let skills = Arc::new(codex_core_skills::SkillsSnapshot::from_host(
+        turn.turn_skills.snapshot.clone(),
+        turn.model_context_window(),
+    ));
     turn.environments.turn_environments.clear();
     let step_context = Arc::new(StepContext::new(
         Arc::new(turn),
         environments,
         Vec::new(),
+        skills,
         /*loaded_agents_md*/ None,
     ));
 

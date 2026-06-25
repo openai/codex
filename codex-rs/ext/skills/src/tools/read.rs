@@ -1,3 +1,6 @@
+use codex_core_skills::runtime::SkillPackageId;
+use codex_core_skills::runtime::SkillReadRequest;
+use codex_core_skills::runtime::SkillResourceId;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -7,10 +10,6 @@ use codex_extension_api::ToolSpec;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-
-use crate::catalog::SkillPackageId;
-use crate::catalog::SkillResourceId;
-use crate::provider::SkillReadRequest;
 
 use super::MAX_HANDLE_BYTES;
 use super::SkillToolAuthority;
@@ -62,7 +61,8 @@ impl ToolExecutor<ToolCall> for ReadTool {
             validate_handle("package", &args.package, MAX_HANDLE_BYTES)?;
             validate_handle("resource", &args.resource, MAX_HANDLE_BYTES)?;
 
-            let catalog = self.context.catalog(&call.turn_id, args.authority).await;
+            let source = self.context.source();
+            let catalog = self.context.catalog(source.as_ref()).await;
             let package_is_available = catalog.entries.iter().any(|entry| {
                 entry.enabled && entry.authority == authority && entry.id.0 == args.package
             });
@@ -73,19 +73,12 @@ impl ToolExecutor<ToolCall> for ReadTool {
             }
 
             let requested_resource = SkillResourceId::new(args.resource);
-            let result = self
-                .context
-                .thread_state
-                .read_skill(
-                    &self.context.providers,
-                    SkillReadRequest {
-                        authority,
-                        package: SkillPackageId(args.package),
-                        resource: requested_resource.clone(),
-                        host_snapshot: None,
-                        mcp_resources: self.context.mcp_resources.clone(),
-                    },
-                )
+            let result = source
+                .read(SkillReadRequest {
+                    authority,
+                    package: SkillPackageId(args.package),
+                    resource: requested_resource.clone(),
+                })
                 .await
                 .map_err(|err| {
                     tracing::warn!(

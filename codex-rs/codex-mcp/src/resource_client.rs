@@ -33,7 +33,13 @@ pub struct McpResourceReadResult {
 /// snapshot, so calls automatically use replacements installed during startup and refresh.
 #[derive(Clone)]
 pub struct McpResourceClient {
-    manager: Arc<ArcSwap<McpConnectionManager>>,
+    manager: ResourceManager,
+}
+
+#[derive(Clone)]
+enum ResourceManager {
+    Live(Arc<ArcSwap<McpConnectionManager>>),
+    Snapshot(Arc<McpConnectionManager>),
 }
 
 /// Opaque identity for the manager currently used by an MCP resource client.
@@ -59,19 +65,36 @@ impl std::fmt::Debug for McpResourceClient {
 impl McpResourceClient {
     /// Creates a resource client backed by the session's replaceable MCP manager.
     pub fn new(manager: Arc<ArcSwap<McpConnectionManager>>) -> Self {
-        Self { manager }
+        Self {
+            manager: ResourceManager::Live(manager),
+        }
+    }
+
+    /// Pins resource calls to the manager generation that is current now.
+    pub fn snapshot(&self) -> Self {
+        Self {
+            manager: ResourceManager::Snapshot(self.manager_snapshot()),
+        }
+    }
+
+    /// Returns the exact manager generation used by this client right now.
+    pub fn manager_snapshot(&self) -> Arc<McpConnectionManager> {
+        match &self.manager {
+            ResourceManager::Live(manager) => manager.load_full(),
+            ResourceManager::Snapshot(manager) => Arc::clone(manager),
+        }
     }
 
     /// Returns an identity that changes whenever the published manager changes.
     pub fn cache_key(&self) -> McpResourceClientCacheKey {
-        McpResourceClientCacheKey(Arc::downgrade(&self.manager.load_full()))
+        McpResourceClientCacheKey(Arc::downgrade(&self.manager_snapshot()))
     }
 
     /// Returns whether the current manager contains the named server.
     ///
     /// This does not wait for server startup or imply that startup succeeded.
     pub async fn has_server(&self, server: &str) -> bool {
-        self.manager.load_full().contains_server(server)
+        self.manager_snapshot().contains_server(server)
     }
 
     /// Lists one resource page from the named server.
@@ -83,8 +106,7 @@ impl McpResourceClient {
         let params =
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
         let result = self
-            .manager
-            .load_full()
+            .manager_snapshot()
             .list_resources(server, params)
             .await?;
         let resources = result
@@ -101,8 +123,7 @@ impl McpResourceClient {
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
         let result = self
-            .manager
-            .load_full()
+            .manager_snapshot()
             .read_resource(server, ReadResourceRequestParams::new(uri.to_string()))
             .await?;
         let contents = result

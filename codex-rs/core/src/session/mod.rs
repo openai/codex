@@ -15,7 +15,6 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
-use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -23,7 +22,6 @@ use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
-use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::MultiAgentModeInstructions;
@@ -33,7 +31,6 @@ use crate::context::PersonalitySpecInstructions;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::WorldState;
 use crate::current_time::TimeProvider;
-use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
 use crate::image_preparation::prepare_response_items;
@@ -42,7 +39,6 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
-use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -303,8 +299,6 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-#[cfg(test)]
-use crate::SkillMetadata;
 use crate::SkillsService;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -315,6 +309,8 @@ use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 #[cfg(test)]
 use crate::skills::SkillLoadOutcome;
+#[cfg(test)]
+use crate::skills::SkillMetadata;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
@@ -2837,10 +2833,26 @@ impl Session {
                 &environments.captured_environments(),
             )
             .await;
+        let extra_skill_sources = self
+            .services
+            .thread_extension_data
+            .get::<codex_core_skills::runtime::SkillSources>();
+        let skills = Arc::new(
+            codex_core_skills::SkillsSnapshot::load(
+                turn_context.turn_skills.snapshot.clone(),
+                &self.services.executor_skill_catalog_cache,
+                &selected_capability_roots,
+                extra_skill_sources.as_deref(),
+                turn_context.session_source.restriction_product(),
+                turn_context.model_context_window(),
+            )
+            .await,
+        );
         Arc::new(StepContext::new(
             turn_context,
             environments,
             selected_capability_roots,
+            skills,
             loaded_agents_md,
         ))
     }
@@ -3210,29 +3222,6 @@ impl Session {
                 AppsInstructions::from_connectors(&accessible_and_enabled_connectors)
             {
                 developer_sections.push(apps_instructions.render());
-            }
-        }
-        if turn_context.config.include_skill_instructions {
-            let available_skills = build_available_skills(
-                turn_context.turn_skills.snapshot.outcome(),
-                default_skill_metadata_budget(turn_context.model_info.context_window),
-                SkillRenderSideEffects::ThreadStart {
-                    session_telemetry: &self.services.session_telemetry,
-                },
-            );
-            if let Some(available_skills) = available_skills {
-                let warning_message = available_skills.warning_message.clone();
-                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
-                if let Some(warning_message) = warning_message {
-                    self.send_event_raw(Event {
-                        id: String::new(),
-                        msg: EventMsg::Warning(WarningEvent {
-                            message: warning_message,
-                        }),
-                    })
-                    .await;
-                }
-                developer_sections.push(skills_instructions.render());
             }
         }
         let loaded_plugins = self

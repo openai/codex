@@ -7,9 +7,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::catalog::SkillCatalogEntry;
 use crate::render::truncate_catalog_skill_description;
 use crate::render::truncate_utf8_to_bytes;
+use codex_core_skills::runtime::SkillCatalogEntry;
 
 use super::MAX_HANDLE_BYTES;
 use super::SkillToolAuthority;
@@ -68,7 +68,8 @@ impl ToolExecutor<ToolCall> for ListTool {
         Box::pin(async move {
             let args: ListArgs = parse_args(&call)?;
             let authority = args.authority.into_authority();
-            let catalog = self.context.catalog(&call.turn_id, args.authority).await;
+            let source = self.context.source();
+            let catalog = self.context.catalog(source.as_ref()).await;
             let response = ListResponse {
                 skills: catalog
                     .entries

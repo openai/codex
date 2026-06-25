@@ -2,6 +2,7 @@ use super::session::Session;
 use super::step_context::StepContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::EnvironmentsState;
+use crate::context::world_state::SkillsState;
 use crate::context::world_state::WorldState;
 
 impl Session {
@@ -25,6 +26,10 @@ impl Session {
 
         let mut world_state = WorldState::default();
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
+        world_state.add_section(SkillsState::new(
+            step_context.skills.as_ref(),
+            turn_context.config.include_skill_instructions,
+        ));
         if turn_context.config.include_environment_context {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(

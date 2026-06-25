@@ -2,99 +2,79 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
+use codex_core_skills::runtime::SkillAuthority;
+use codex_core_skills::runtime::SkillCatalog;
+use codex_core_skills::runtime::SkillPackageId;
+use codex_core_skills::runtime::SkillReadRequest;
+use codex_core_skills::runtime::SkillReadResult;
+use codex_core_skills::runtime::SkillResourceId;
+use codex_core_skills::runtime::SkillSourceError;
+use codex_core_skills::runtime::SkillSourceResult;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientCacheKey;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 use tokio::sync::OnceCell;
-
-use crate::SkillsExtensionConfig;
-use crate::catalog::SkillAuthority;
-use crate::catalog::SkillCatalog;
-use crate::catalog::SkillCatalogEntry;
-use crate::catalog::SkillPackageId;
-use crate::catalog::SkillProviderError;
-use crate::catalog::SkillProviderResult;
-use crate::catalog::SkillReadResult;
-use crate::catalog::SkillResourceId;
-use crate::catalog::SkillSourceKind;
-use crate::provider::SkillReadRequest;
-use crate::sources::SkillProviders;
 
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
 const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) struct SkillsThreadState {
-    config: Mutex<SkillsExtensionConfig>,
-    selected_roots: Vec<SelectedCapabilityRoot>,
+    orchestrator_skills_enabled: AtomicBool,
     orchestrator_skills_available: bool,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
 impl SkillsThreadState {
     pub(crate) fn new(
-        config: SkillsExtensionConfig,
-        selected_roots: Vec<SelectedCapabilityRoot>,
+        orchestrator_skills_enabled: bool,
         orchestrator_skills_available: bool,
     ) -> Self {
         Self {
-            config: Mutex::new(config),
-            selected_roots,
+            orchestrator_skills_enabled: AtomicBool::new(orchestrator_skills_enabled),
             orchestrator_skills_available,
             orchestrator_cache: Mutex::new(None),
         }
     }
 
-    pub(crate) fn config(&self) -> SkillsExtensionConfig {
-        self.config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    pub(crate) fn set_config(&self, config: SkillsExtensionConfig) {
-        *self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
-    }
-
-    pub(crate) fn selected_roots(&self) -> &[SelectedCapabilityRoot] {
-        &self.selected_roots
+    pub(crate) fn set_orchestrator_skills_enabled(&self, enabled: bool) {
+        self.orchestrator_skills_enabled
+            .store(enabled, Ordering::Relaxed);
     }
 
     pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
-        self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
+        self.orchestrator_skills_available
+            && self.orchestrator_skills_enabled.load(Ordering::Relaxed)
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(
         &self,
         mcp_resources: Option<&McpResourceClient>,
-        initialize: impl Future<Output = Result<SkillCatalog, SkillProviderError>> + Send,
+        initialize: impl Future<Output = Result<SkillCatalog, SkillSourceError>> + Send,
     ) -> SkillCatalog {
-        self.orchestrator_cache(mcp_resources)
-            .catalog
-            .get_or_init(|| async {
-                initialize.await.unwrap_or_else(|err| SkillCatalog {
-                    warnings: vec![err.message],
-                    ..Default::default()
-                })
-            })
-            .await
-            .clone()
+        let cache = self.orchestrator_cache(mcp_resources);
+        if let Some(catalog) = cache.catalog.get() {
+            return catalog.clone();
+        }
+        let catalog = initialize.await.unwrap_or_else(|err| SkillCatalog {
+            warnings: vec![err.message],
+            ..Default::default()
+        });
+        if !catalog.entries.is_empty() && catalog.warnings.is_empty() {
+            let _ = cache.catalog.set(catalog.clone());
+        }
+        catalog
     }
 
-    pub(crate) async fn read_skill(
+    pub(crate) async fn read_orchestrator_resource(
         &self,
-        providers: &SkillProviders,
-        request: SkillReadRequest,
-    ) -> SkillProviderResult<SkillReadResult> {
-        if request.authority.kind != SkillSourceKind::Orchestrator {
-            return providers.read(request).await;
-        }
-
-        let cache = self.orchestrator_cache(request.mcp_resources.as_deref());
-        let cache_key = SkillReadCacheKey::from(&request);
+        request: &SkillReadRequest,
+        mcp_resources: Option<&McpResourceClient>,
+        read: impl Future<Output = SkillSourceResult<SkillReadResult>> + Send,
+    ) -> SkillSourceResult<SkillReadResult> {
+        let cache_key = SkillReadCacheKey::from(request);
+        let cache = self.orchestrator_cache(mcp_resources);
         if let Some(result) = cache
             .resources
             .lock()
@@ -104,7 +84,7 @@ impl SkillsThreadState {
             return Ok(result);
         }
 
-        let result = providers.read(request).await?;
+        let result = read.await?;
         if result.resource != cache_key.resource {
             return Ok(result);
         }
@@ -195,12 +175,4 @@ impl OrchestratorResourceCache {
         self.entries.insert(key, result.clone());
         result
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SkillsTurnState {
-    pub(crate) catalog: SkillCatalog,
-    pub(crate) selected_entries: Vec<SkillCatalogEntry>,
-    pub(crate) warnings: Vec<String>,
-    pub(crate) main_prompts_injected: bool,
 }

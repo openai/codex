@@ -8,7 +8,6 @@ use codex_plugin::PluginCapabilitySummary;
 /// Connector declarations contributed by one plugin package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginConnectorSource {
-    plugin_id: String,
     plugin_display_name: String,
     connector_ids: Vec<AppConnectorId>,
 }
@@ -16,12 +15,10 @@ pub struct PluginConnectorSource {
 impl PluginConnectorSource {
     /// Creates one plugin source from parsed app declarations.
     pub fn new(
-        plugin_id: impl Into<String>,
         plugin_display_name: impl Into<String>,
         declarations: impl IntoIterator<Item = AppDeclaration>,
     ) -> Self {
         Self::from_connector_ids(
-            plugin_id,
             plugin_display_name,
             declarations
                 .into_iter()
@@ -31,7 +28,6 @@ impl PluginConnectorSource {
 
     /// Creates one plugin source from connector IDs that were already parsed.
     pub fn from_connector_ids(
-        plugin_id: impl Into<String>,
         plugin_display_name: impl Into<String>,
         connector_ids: impl IntoIterator<Item = AppConnectorId>,
     ) -> Self {
@@ -42,7 +38,6 @@ impl PluginConnectorSource {
             .filter(|connector_id| seen_connector_ids.insert(connector_id.clone()))
             .collect();
         Self {
-            plugin_id: plugin_id.into(),
             plugin_display_name: plugin_display_name.into(),
             connector_ids,
         }
@@ -105,7 +100,6 @@ impl ConnectorSnapshot {
     pub fn from_plugin_capability_summaries(summaries: &[PluginCapabilitySummary]) -> Self {
         Self::from_plugin_sources(summaries.iter().map(|summary| {
             PluginConnectorSource::from_connector_ids(
-                summary.config_name.clone(),
                 summary.display_name.clone(),
                 summary.app_connector_ids.clone(),
             )

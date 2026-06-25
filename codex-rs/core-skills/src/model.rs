@@ -148,6 +148,10 @@ impl HostSkillsSnapshot {
         self.outcome.as_ref()
     }
 
+    pub(crate) fn outcome_arc(&self) -> Arc<SkillLoadOutcome> {
+        Arc::clone(&self.outcome)
+    }
+
     pub async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
         let fs = self
             .outcome
