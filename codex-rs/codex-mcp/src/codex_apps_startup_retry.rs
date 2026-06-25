@@ -6,9 +6,9 @@ use futures::FutureExt;
 use crate::rmcp_client::ManagedClientFuture;
 use crate::rmcp_client::StartupOutcomeError;
 
-// Recreated startup bypasses the tools cache and rewrites it on success. The
-// first attempt recreates the client; the second is the one final cache-refresh
-// retry before the manager keeps serving its startup snapshot.
+// Every recreated startup performs a fresh initialize + uncached tools/list and
+// rewrites the tools cache on success. Bound recovery to two shared attempts
+// before the manager keeps serving its startup snapshot.
 pub(crate) struct CodexAppsStartupRetry {
     factory: Arc<dyn Fn() -> ManagedClientFuture + Send + Sync>,
     retry: OnceLock<ManagedClientFuture>,

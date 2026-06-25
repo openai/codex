@@ -1229,7 +1229,7 @@ async fn list_all_tools_uses_cached_tool_info_snapshot_when_client_startup_fails
 }
 
 #[tokio::test]
-async fn list_all_tools_retries_failed_codex_apps_startup_with_cache_refresh_fallback() {
+async fn list_all_tools_retries_failed_codex_apps_startup_twice() {
     let recovered_client = create_test_managed_client(vec![create_test_tool(
         CODEX_APPS_MCP_SERVER_NAME,
         "drive_search",
