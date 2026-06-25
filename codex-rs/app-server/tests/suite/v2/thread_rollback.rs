@@ -3,6 +3,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -23,6 +24,48 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_rollback_does_not_emit_deprecation_notice_to_codex_tui() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex-tui".to_string(),
+            title: None,
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+    let JSONRPCMessage::Response(_) = initialized else {
+        panic!("expected initialize response, got {initialized:?}");
+    };
+    mcp.clear_message_buffer();
+
+    let rollback_id = mcp
+        .send_thread_rollback_request(ThreadRollbackParams {
+            thread_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            num_turns: 1,
+        })
+        .await?;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Notification(notification) => {
+                assert_ne!(notification.method, "deprecationNotice");
+            }
+            JSONRPCMessage::Error(error) if error.id == RequestId::Integer(rollback_id) => {
+                break;
+            }
+            message => {
+                panic!("expected rollback error response, got {message:?}");
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()> {

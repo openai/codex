@@ -8,6 +8,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
 const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
     "thread/rollback is deprecated and will be removed soon";
 
@@ -634,9 +635,12 @@ impl ThreadRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.send_thread_rollback_deprecation_notice(request_id.connection_id)
-            .await;
+        if app_server_client_name != Some(CODEX_TUI_CLIENT_NAME) {
+            self.send_thread_rollback_deprecation_notice(request_id.connection_id)
+                .await;
+        }
         self.thread_rollback_inner(request_id, params)
             .await
             .map(|()| None)
