@@ -97,6 +97,21 @@ impl ConstraintSet {
         Ok(constraints)
     }
 
+    pub(crate) fn to_json(&self) -> Value {
+        let mut values = serde_json::Map::new();
+        for (kind, value) in &self.lower_bounds {
+            values.insert(kind.as_str().to_string(), Value::Number(value.clone()));
+        }
+        for (kind, value) in &self.upper_bounds {
+            values.insert(kind.as_str().to_string(), Value::Number(value.clone()));
+        }
+        if let Some(value) = self.unique_items {
+            values.insert("uniqueItems".to_string(), Value::Bool(value));
+        }
+        values.extend(self.opaque.clone());
+        Value::Object(values)
+    }
+
     fn insert_lower(&mut self, kind: LowerBound, value: &Value) -> Result<()> {
         self.lower_bounds.insert(
             kind,

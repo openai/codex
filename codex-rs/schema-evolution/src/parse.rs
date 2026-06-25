@@ -10,6 +10,7 @@ use crate::UnionKind;
 use crate::UnionSchema;
 use crate::ValueSet;
 use crate::model::annotation;
+use crate::model::normalized;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
@@ -67,6 +68,7 @@ impl<'a> Parser<'a> {
             any_of,
             one_of,
             constraints,
+            source: normalized(value),
         })))
     }
 
