@@ -13,16 +13,21 @@ use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_pty::JobProcess;
+use codex_utils_pty::KillOnCloseJob;
 use codex_utils_pty::PsuedoCon;
 use codex_utils_pty::RawConPty;
+use codex_utils_pty::SuspendedProcess;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::windows::io::IntoRawHandle;
+use std::os::windows::io::RawHandle;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
@@ -99,6 +104,57 @@ pub fn spawn_conpty_process_as_user(
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
+    spawn_conpty_process_as_user_with_extra_flags(
+        h_token,
+        argv,
+        cwd,
+        env_map,
+        use_private_desktop,
+        logs_base_dir,
+        /*extra_creation_flags*/ 0,
+    )
+}
+
+/// Spawns a suspended ConPTY process, attaches it to a kill-on-close job, and resumes it.
+pub fn spawn_job_conpty_process_as_user(
+    h_token: HANDLE,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    use_private_desktop: bool,
+    logs_base_dir: Option<&Path>,
+) -> Result<(JobProcess, ConptyInstance)> {
+    let job = KillOnCloseJob::new()?;
+    let (process_info, conpty) = spawn_conpty_process_as_user_with_extra_flags(
+        h_token,
+        argv,
+        cwd,
+        env_map,
+        use_private_desktop,
+        logs_base_dir,
+        CREATE_SUSPENDED,
+    )?;
+    let suspended = unsafe {
+        SuspendedProcess::from_raw_handles(
+            process_info.hProcess as RawHandle,
+            process_info.hThread as RawHandle,
+            process_info.dwProcessId,
+        )
+    };
+    let process = suspended.assign_and_resume(job)?;
+    Ok((process, conpty))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_conpty_process_as_user_with_extra_flags(
+    h_token: HANDLE,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    use_private_desktop: bool,
+    logs_base_dir: Option<&Path>,
+    extra_creation_flags: u32,
+) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
     let cmdline_str = argv
         .iter()
         .map(|arg| quote_windows_arg(arg))
@@ -137,7 +193,7 @@ pub fn spawn_conpty_process_as_user(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             0,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | extra_creation_flags,
             env_block.as_ptr() as *mut c_void,
             to_wide(cwd).as_ptr(),
             &si.StartupInfo,

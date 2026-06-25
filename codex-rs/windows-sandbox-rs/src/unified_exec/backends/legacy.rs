@@ -1,13 +1,13 @@
 use super::windows_common::finish_driver_spawn;
 use crate::conpty::ConptyInstance;
-use crate::conpty::spawn_conpty_process_as_user;
+use crate::conpty::spawn_job_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
 use crate::logging::log_failure;
 use crate::logging::log_success;
 use crate::process::StderrMode;
 use crate::process::StdinMode;
 use crate::process::read_handle_loop;
-use crate::process::spawn_process_with_pipes;
+use crate::process::spawn_job_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
 use crate::spawn_prep::SpawnPrepOptions;
 use crate::spawn_prep::allow_null_device_for_workspace_write;
@@ -18,6 +18,7 @@ use crate::spawn_prep::prepare_legacy_spawn_context;
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_pty::JobProcess;
 use codex_utils_pty::ProcessDriver;
 use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
@@ -39,14 +40,12 @@ use windows_sys::Win32::System::Console::COORD;
 use windows_sys::Win32::System::Console::ResizePseudoConsole;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::INFINITE;
-use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
-use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
 struct LegacyProcessHandles {
-    process: PROCESS_INFORMATION,
+    process: JobProcess,
     output_join: std::thread::JoinHandle<()>,
     writer_handle: tokio::task::JoinHandle<()>,
     hpc: Option<HANDLE>,
@@ -69,8 +68,8 @@ fn spawn_legacy_process(
     writer_rx: mpsc::Receiver<Vec<u8>>,
     logs_base_dir: Option<&Path>,
 ) -> Result<LegacyProcessHandles> {
-    let (pi, output_join, writer_handle, hpc, conpty_owner, desktop) = if tty {
-        let (pi, mut conpty) = spawn_conpty_process_as_user(
+    let (process, output_join, writer_handle, hpc, conpty_owner, desktop) = if tty {
+        let (process, mut conpty) = spawn_job_conpty_process_as_user(
             h_token,
             command,
             cwd,
@@ -85,9 +84,9 @@ fn spawn_legacy_process(
             writer_rx,
             /*normalize_newlines*/ true,
         );
-        (pi, output_join, writer_handle, hpc, Some(conpty), None)
+        (process, output_join, writer_handle, hpc, Some(conpty), None)
     } else {
-        let pipe_handles = spawn_process_with_pipes(
+        let pipe_handles = spawn_job_process_with_pipes(
             h_token,
             command,
             cwd,
@@ -128,7 +127,7 @@ fn spawn_legacy_process(
         )
     };
     Ok(LegacyProcessHandles {
-        process: pi,
+        process,
         output_join,
         writer_handle,
         hpc,
@@ -202,38 +201,23 @@ fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 fn finalize_exit(
     exit_tx: oneshot::Sender<i32>,
-    process_handle: Arc<StdMutex<Option<HANDLE>>>,
-    thread_handle: HANDLE,
+    process: JobProcess,
     output_join: std::thread::JoinHandle<()>,
     logs_base_dir: Option<&Path>,
     command: Vec<String>,
 ) {
+    let process_handle = process.as_raw_handle() as HANDLE;
     let exit_code = {
         let mut raw_exit = 1u32;
-        if let Ok(guard) = process_handle.lock()
-            && let Some(handle) = guard.as_ref()
-        {
-            unsafe {
-                WaitForSingleObject(*handle, INFINITE);
-                GetExitCodeProcess(*handle, &mut raw_exit);
-            }
+        unsafe {
+            WaitForSingleObject(process_handle, INFINITE);
+            GetExitCodeProcess(process_handle, &mut raw_exit);
         }
         raw_exit as i32
     };
 
     let _ = output_join.join();
     let _ = exit_tx.send(exit_code);
-
-    unsafe {
-        if thread_handle != 0 && thread_handle != INVALID_HANDLE_VALUE {
-            CloseHandle(thread_handle);
-        }
-        if let Ok(mut guard) = process_handle.lock()
-            && let Some(handle) = guard.take()
-        {
-            CloseHandle(handle);
-        }
-    }
 
     if exit_code == 0 {
         log_success(&command, logs_base_dir);
@@ -345,7 +329,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
 
     let LegacyProcessHandles {
-        process: pi,
+        process,
         output_join,
         writer_handle,
         hpc,
@@ -375,22 +359,21 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     };
     let hpc_handle = hpc.map(|hpc| Arc::new(StdMutex::new(Some(hpc))));
 
-    let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
-    let wait_handle = Arc::clone(&process_handle);
+    let process_handle = process.as_raw_handle() as HANDLE;
+    let job = process.controller();
+    let terminator_job = job.clone();
     let command_for_wait = command.clone();
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;
         let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
+        let wait_res = unsafe { WaitForSingleObject(process_handle, timeout) };
         if wait_res == WAIT_TIMEOUT {
-            unsafe {
-                if let Ok(guard) = wait_handle.lock()
-                    && let Some(handle) = guard.as_ref()
-                {
-                    let _ = TerminateProcess(*handle, 1);
-                }
-            }
+            let _ = job.terminate_and_close(1);
+        } else {
+            // The shell is the session root. Closing its job here prevents descendants from
+            // outliving the session or keeping output pipes open while the readers are joined.
+            let _ = job.close();
         }
         if let Some(hpc) = hpc_for_wait
             && let Ok(mut guard) = hpc.lock()
@@ -405,26 +388,16 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         }
         finalize_exit(
             exit_tx,
-            wait_handle,
-            pi.hThread,
+            process,
             output_join,
             common.logs_base_dir.as_deref(),
             command_for_wait,
         );
     });
 
-    let terminator = {
-        let process_handle = Arc::clone(&process_handle);
-        Some(Box::new(move || {
-            if let Ok(guard) = process_handle.lock()
-                && let Some(handle) = guard.as_ref()
-            {
-                unsafe {
-                    let _ = TerminateProcess(*handle, 1);
-                }
-            }
-        }) as Box<dyn FnMut() + Send + Sync>)
-    };
+    let terminator = Some(Box::new(move || {
+        let _ = terminator_job.terminate_and_close(1);
+    }) as Box<dyn FnMut() + Send + Sync>);
 
     let driver = ProcessDriver {
         writer_tx,

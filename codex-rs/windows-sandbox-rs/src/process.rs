@@ -7,8 +7,12 @@ use crate::winutil::to_wide;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_pty::JobProcess;
+use codex_utils_pty::KillOnCloseJob;
+use codex_utils_pty::SuspendedProcess;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::os::windows::io::RawHandle;
 use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::CloseHandle;
@@ -23,6 +27,7 @@ use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
@@ -85,6 +90,29 @@ pub unsafe fn create_process_as_user(
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
     use_private_desktop: bool,
 ) -> Result<CreatedProcess> {
+    create_process_as_user_with_extra_flags(
+        h_token,
+        argv,
+        cwd,
+        env_map,
+        logs_base_dir,
+        stdio,
+        use_private_desktop,
+        /*extra_creation_flags*/ 0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn create_process_as_user_with_extra_flags(
+    h_token: HANDLE,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    logs_base_dir: Option<&Path>,
+    stdio: Option<(HANDLE, HANDLE, HANDLE)>,
+    use_private_desktop: bool,
+    extra_creation_flags: u32,
+) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
@@ -120,7 +148,8 @@ pub unsafe fn create_process_as_user(
             attrs.set_handle_list(inherited_handles)?;
             si.lpAttributeList = attrs.as_mut_ptr();
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+            let creation_flags =
+                CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | extra_creation_flags;
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -161,7 +190,7 @@ pub unsafe fn create_process_as_user(
             si.lpDesktop = desktop.startup_info_desktop();
             ensure_inheritable_stdio(&mut si)?;
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT;
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT | extra_creation_flags;
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -223,6 +252,23 @@ pub struct PipeSpawnHandles {
     pub(crate) desktop: LaunchDesktop,
 }
 
+/// Handles returned by a job-contained pipe spawn used by live Windows sessions.
+pub struct JobPipeSpawnHandles {
+    pub process: JobProcess,
+    pub stdin_write: Option<HANDLE>,
+    pub stdout_read: HANDLE,
+    pub stderr_read: Option<HANDLE>,
+    pub desktop: LaunchDesktop,
+}
+
+struct PipeSpawnHandlesInner<P> {
+    process: P,
+    stdin_write: Option<HANDLE>,
+    stdout_read: HANDLE,
+    stderr_read: Option<HANDLE>,
+    desktop: LaunchDesktop,
+}
+
 /// Spawns a process with anonymous pipes and returns the relevant handles.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_process_with_pipes(
@@ -235,6 +281,86 @@ pub fn spawn_process_with_pipes(
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<PipeSpawnHandles> {
+    let handles = spawn_process_with_pipes_inner(stdin_mode, stderr_mode, |stdio| unsafe {
+        let created = create_process_as_user(
+            h_token,
+            argv,
+            cwd,
+            env_map,
+            logs_base_dir,
+            Some(stdio),
+            use_private_desktop,
+        )?;
+        let CreatedProcess {
+            process_info,
+            _desktop: desktop,
+            ..
+        } = created;
+        Ok((process_info, desktop))
+    })?;
+    Ok(PipeSpawnHandles {
+        process: handles.process,
+        stdin_write: handles.stdin_write,
+        stdout_read: handles.stdout_read,
+        stderr_read: handles.stderr_read,
+        desktop: handles.desktop,
+    })
+}
+
+/// Spawns a suspended process, attaches it to a kill-on-close job, and then resumes it.
+///
+/// This is the pipe entry point for live Windows sessions. Capture-only callers continue to use
+/// [`spawn_process_with_pipes`], whose process-start behavior is unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_job_process_with_pipes(
+    h_token: HANDLE,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    stdin_mode: StdinMode,
+    stderr_mode: StderrMode,
+    use_private_desktop: bool,
+    logs_base_dir: Option<&Path>,
+) -> Result<JobPipeSpawnHandles> {
+    let handles = spawn_process_with_pipes_inner(stdin_mode, stderr_mode, |stdio| unsafe {
+        let job = KillOnCloseJob::new()?;
+        let created = create_process_as_user_with_extra_flags(
+            h_token,
+            argv,
+            cwd,
+            env_map,
+            logs_base_dir,
+            Some(stdio),
+            use_private_desktop,
+            CREATE_SUSPENDED,
+        )?;
+        let CreatedProcess {
+            process_info,
+            _desktop: desktop,
+            ..
+        } = created;
+        let suspended = SuspendedProcess::from_raw_handles(
+            process_info.hProcess as RawHandle,
+            process_info.hThread as RawHandle,
+            process_info.dwProcessId,
+        );
+        let process = suspended.assign_and_resume(job)?;
+        Ok((process, desktop))
+    })?;
+    Ok(JobPipeSpawnHandles {
+        process: handles.process,
+        stdin_write: handles.stdin_write,
+        stdout_read: handles.stdout_read,
+        stderr_read: handles.stderr_read,
+        desktop: handles.desktop,
+    })
+}
+
+fn spawn_process_with_pipes_inner<P>(
+    stdin_mode: StdinMode,
+    stderr_mode: StderrMode,
+    spawn: impl FnOnce((HANDLE, HANDLE, HANDLE)) -> Result<(P, LaunchDesktop)>,
+) -> Result<PipeSpawnHandlesInner<P>> {
     let mut in_r: HANDLE = 0;
     let mut in_w: HANDLE = 0;
     let mut out_r: HANDLE = 0;
@@ -266,18 +392,7 @@ pub fn spawn_process_with_pipes(
         StderrMode::Separate => err_w,
     };
 
-    let stdio = Some((in_r, out_w, stderr_handle));
-    let spawn_result = unsafe {
-        create_process_as_user(
-            h_token,
-            argv,
-            cwd,
-            env_map,
-            logs_base_dir,
-            stdio,
-            use_private_desktop,
-        )
-    };
+    let spawn_result = spawn((in_r, out_w, stderr_handle));
     let created = match spawn_result {
         Ok(v) => v,
         Err(err) => {
@@ -294,11 +409,7 @@ pub fn spawn_process_with_pipes(
             return Err(err);
         }
     };
-    let CreatedProcess {
-        process_info: pi,
-        _desktop: desktop,
-        ..
-    } = created;
+    let (process, desktop) = created;
 
     unsafe {
         CloseHandle(in_r);
@@ -311,8 +422,8 @@ pub fn spawn_process_with_pipes(
         }
     }
 
-    Ok(PipeSpawnHandles {
-        process: pi,
+    Ok(PipeSpawnHandlesInner {
+        process,
         stdin_write: match stdin_mode {
             StdinMode::Open => Some(in_w),
             StdinMode::Closed => None,

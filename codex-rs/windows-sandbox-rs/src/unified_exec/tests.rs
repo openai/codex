@@ -9,6 +9,7 @@ use crate::run_windows_sandbox_capture;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
+use job_test_support::windows_process_test_guard;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -18,8 +19,6 @@ use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -33,13 +32,12 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
-static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
-    LEGACY_PROCESS_TEST_LOCK
-        .lock()
-        .expect("legacy Windows sandbox process test lock poisoned")
-}
+#[path = "job_test_support.rs"]
+mod job_test_support;
+
+#[path = "restricted_job_tests.rs"]
+mod restricted_job_tests;
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread()
@@ -151,7 +149,7 @@ async fn collect_stdout_and_exit(
 
 #[test]
 fn legacy_non_tty_cmd_emits_output() {
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -190,7 +188,7 @@ fn legacy_non_tty_cmd_emits_output() {
 
 #[test]
 fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -232,7 +230,7 @@ fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -420,7 +418,7 @@ fn legacy_capture_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
@@ -460,7 +458,7 @@ fn legacy_capture_cancellation_is_not_reported_as_timeout() {
         eprintln!("skipping cancellation regression test: PowerShell 7 is not installed");
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-cancel");
     let permission_profile = PermissionProfile::workspace_write();
@@ -510,7 +508,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let _guard = windows_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
