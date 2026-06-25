@@ -61,7 +61,9 @@ pub(crate) fn select_handlers_for_matcher_inputs(
                         .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
                 }
             }
-            HookEventName::UserPromptSubmit | HookEventName::Stop => true,
+            HookEventName::UserInstructions
+            | HookEventName::UserPromptSubmit
+            | HookEventName::Stop => true,
         })
         .cloned()
         .collect()
@@ -141,7 +143,9 @@ pub(crate) fn completed_summary(
 
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
-        HookEventName::SessionStart | HookEventName::SubagentStart => HookScope::Thread,
+        HookEventName::SessionStart
+        | HookEventName::UserInstructions
+        | HookEventName::SubagentStart => HookScope::Thread,
         HookEventName::PreToolUse
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse

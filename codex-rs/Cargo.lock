@@ -3167,6 +3167,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "codex-utils-path-uri",
  "futures",
  "pretty_assertions",
  "regex",
