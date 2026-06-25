@@ -1294,17 +1294,8 @@ mod tests {
         persistor
             .refresh_if_needed_with_keyring_store(&store)
             .await?;
-        persistor
-            .refresh_after_unauthorized_with_keyring_store(
-                &store,
-                initial_tokens.token_response.0.access_token().clone(),
-            )
-            .await?;
         let error = persistor
-            .refresh_after_unauthorized_with_keyring_store(
-                &store,
-                AccessToken::new("updated-access-token".to_string()),
-            )
+            .refresh_after_unauthorized_with_keyring_store(&store)
             .await
             .expect_err("B cannot be refreshed by rereading durable A");
         assert!(
