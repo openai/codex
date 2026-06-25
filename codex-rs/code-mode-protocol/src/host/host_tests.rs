@@ -365,6 +365,16 @@ fn client_to_host_v1_variants_are_pinned() {
             }),
         );
     }
+
+    assert_wire_round_trip(
+        ClientToHost::CancelRequest {
+            id: request_id(/*value*/ 9),
+        },
+        json!({
+            "type": "operation/cancel",
+            "id": 9,
+        }),
+    );
 }
 
 #[test]

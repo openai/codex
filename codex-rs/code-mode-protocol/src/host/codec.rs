@@ -11,6 +11,36 @@ use tokio::io::AsyncWriteExt;
 /// Maximum JSON payload size accepted for one IPC frame.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
+/// A serialized IPC frame that has already passed the payload size limit.
+#[derive(Clone, Debug)]
+pub struct EncodedFrame {
+    payload: Vec<u8>,
+}
+
+impl EncodedFrame {
+    pub fn encode<T>(message: &T) -> io::Result<Self>
+    where
+        T: Serialize,
+    {
+        let payload = serde_json::to_vec(message).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to encode code-mode IPC frame: {err}"),
+            )
+        })?;
+        if payload.len() > MAX_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "code-mode IPC frame length {} exceeds {MAX_FRAME_BYTES} bytes",
+                    payload.len()
+                ),
+            ));
+        }
+        Ok(Self { payload })
+    }
+}
+
 /// Decodes JSON messages prefixed by a four-byte little-endian payload length.
 pub struct FramedReader<R> {
     reader: R,
@@ -72,22 +102,12 @@ where
     where
         T: Serialize,
     {
-        let payload = serde_json::to_vec(message).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to encode code-mode IPC frame: {err}"),
-            )
-        })?;
-        if payload.len() > MAX_FRAME_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "code-mode IPC frame length {} exceeds {MAX_FRAME_BYTES} bytes",
-                    payload.len()
-                ),
-            ));
-        }
-        let length = u32::try_from(payload.len()).map_err(|_| {
+        self.write_frame(&EncodedFrame::encode(message)?).await
+    }
+
+    /// Writes and flushes a frame encoded before it entered an I/O queue.
+    pub async fn write_frame(&mut self, frame: &EncodedFrame) -> io::Result<()> {
+        let length = u32::try_from(frame.payload.len()).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "code-mode IPC frame length exceeds u32",
@@ -95,7 +115,7 @@ where
         })?;
 
         self.writer.write_all(&length.to_le_bytes()).await?;
-        self.writer.write_all(&payload).await?;
+        self.writer.write_all(&frame.payload).await?;
         self.writer.flush().await
     }
 }

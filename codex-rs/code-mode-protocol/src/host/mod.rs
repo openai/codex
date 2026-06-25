@@ -11,6 +11,7 @@ mod message;
 mod payload;
 mod types;
 
+pub use codec::EncodedFrame;
 pub use codec::FramedReader;
 pub use codec::FramedWriter;
 pub use codec::MAX_FRAME_BYTES;
