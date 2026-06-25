@@ -90,6 +90,7 @@ export type { ConsumeAccountRateLimitResetCreditParams } from "./ConsumeAccountR
 export type { ConsumeAccountRateLimitResetCreditResponse } from "./ConsumeAccountRateLimitResetCreditResponse";
 export type { ContextCompactedNotification } from "./ContextCompactedNotification";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
+export type { CurrentTimeSleepNotification } from "./CurrentTimeSleepNotification";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";

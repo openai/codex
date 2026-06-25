@@ -5063,6 +5063,30 @@
       ],
       "type": "object"
     },
+    "CurrentTimeSleepNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "durationMs": {
+          "description": "Duration to wait on the external clock.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sleepId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "durationMs",
+        "sleepId",
+        "threadId"
+      ],
+      "title": "CurrentTimeSleepNotification",
+      "type": "object"
+    },
     "DeprecationNoticeNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -12792,6 +12816,27 @@
             "params"
           ],
           "title": "Thread/tokenUsage/updatedNotification",
+          "type": "object"
+        },
+        {
+          "description": "Register a sleep with an external clock owned by the client.",
+          "properties": {
+            "method": {
+              "enum": [
+                "currentTime/sleep"
+              ],
+              "title": "CurrentTime/sleepNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CurrentTimeSleepNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "CurrentTime/sleepNotification",
           "type": "object"
         },
         {

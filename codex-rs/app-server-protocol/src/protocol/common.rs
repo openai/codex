@@ -1139,6 +1139,14 @@ client_request_definitions! {
         response: v2::GetAccountResponse,
     },
 
+    #[experimental("currentTime/wake")]
+    /// Wake a pending sleep registered with an external clock.
+    CurrentTimeWake => "currentTime/wake" {
+        params: v2::CurrentTimeWakeParams,
+        serialization: None,
+        response: v2::CurrentTimeWakeResponse,
+    },
+
     /// DEPRECATED APIs below
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
@@ -1613,6 +1621,9 @@ server_notification_definitions! {
     #[experimental("thread/settings/updated")]
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
+    #[experimental("currentTime/sleep")]
+    /// Register a sleep with an external clock owned by the client.
+    CurrentTimeSleep => "currentTime/sleep" (v2::CurrentTimeSleepNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),

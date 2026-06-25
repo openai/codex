@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
+use crate::current_time::AppServerTimeProvider;
 use crate::current_time::app_server_time_provider;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
@@ -185,6 +186,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    current_time_provider: Arc<AppServerTimeProvider>,
     models_refresh_worker: ModelsRefreshWorker,
     skills_watcher: Arc<SkillsWatcher>,
     account_processor: AccountRequestProcessor,
@@ -345,6 +347,8 @@ impl MessageProcessor {
             ),
         );
         let goal_service = Arc::new(GoalService::new());
+        let current_time_provider =
+            app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -379,10 +383,7 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                Some(app_server_time_provider(
-                    outgoing.clone(),
-                    thread_state_manager.clone(),
-                )),
+                Some(current_time_provider.clone()),
             )
         });
         let models_manager = thread_manager.get_models_manager();
@@ -554,6 +555,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            current_time_provider,
             models_refresh_worker,
             skills_watcher,
             account_processor,
@@ -952,6 +954,9 @@ impl MessageProcessor {
         let result: Result<Option<ClientResponsePayload>, JSONRPCErrorError> = match codex_request {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
+            }
+            ClientRequest::CurrentTimeWake { params, .. } => {
+                Ok(Some(self.current_time_provider.wake(params).into()))
             }
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor

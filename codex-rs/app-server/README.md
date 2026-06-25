@@ -1481,6 +1481,8 @@ Desktop hosts that provide upstream attestation should set `capabilities.request
 
 When `[features.current_time_reminder]` is enabled with `clock_source = "external"`, app-server sends the client subscribed to the thread an experimental `currentTime/read` request with `{ "threadId": "thr_123" }` when a time reminder is due. The client responds with `{ "currentTimeAt": 1781717655 }`, where `currentTimeAt` is an integer Unix timestamp in seconds. A failed, canceled, timed-out, or malformed response stops the turn before the model request is sent.
 
+When the same feature enables `sleep_tool`, `clock.sleep` sends an experimental `currentTime/sleep` notification with `{ "threadId": "thr_123", "sleepId": "sleep_123", "durationMs": 30000 }`. The client later wakes the waiting tool by sending `currentTime/wake` with the same `threadId` and `sleepId`. The client should update its external clock before waking so later `currentTime/read` requests observe the completed sleep. App-server responds with `{}` and ignores wakes for sleeps that are no longer pending.
+
 ### MCP server elicitations
 
 MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.
