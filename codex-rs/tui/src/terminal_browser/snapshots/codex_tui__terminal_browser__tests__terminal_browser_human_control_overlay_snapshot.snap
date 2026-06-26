@@ -2,15 +2,15 @@
 source: tui/src/terminal_browser/tests.rs
 expression: "buffer_text(&buffer, area)"
 ---
-┌ Terminal browser - agent controlled ─────────────────────┐
+┌ Terminal browser - user controlled ──────────────────────┐
 │ running Example                                          │
 │ https://example.com                                      │
-│Code                                                      │
-│x UI                                                      │
+│User                                                      │
 │                                                          │
 │                                                          │
 │                                                          │
 │                                                          │
 │                                                          │
-│ Esc hide   /browser control take control                 │
+│                                                          │
+│ Ctrl+] return control to Codex                           │
 └──────────────────────────────────────────────────────────┘

@@ -166,7 +166,7 @@ async fn run_startup_hooks_review_app(
                     }
                 }
             }
-            TuiEvent::Paste(_) => {}
+            TuiEvent::Paste(_) | TuiEvent::Mouse(_) => {}
             TuiEvent::Draw | TuiEvent::Resize => draw_view(tui, &view)?,
         }
     }

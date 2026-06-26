@@ -5,14 +5,10 @@ use codex_app_server_protocol::DynamicToolNamespaceSpec;
 use codex_app_server_protocol::DynamicToolNamespaceTool;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_terminal_browser::BrowserToolOutput;
-use codex_terminal_browser::TerminalBrowser;
+use codex_terminal_browser::classify_browser_error;
 use serde_json::json;
 
 pub(crate) const TERMINAL_BROWSER_NAMESPACE: &str = "terminal_browser";
-
-pub(crate) fn terminal_browser_available() -> bool {
-    TerminalBrowser::discover().is_available()
-}
 
 pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
@@ -38,6 +34,101 @@ pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
                         }
                     },
                     "required": ["url"],
+                    "additionalProperties": false
+                }),
+            ),
+            tool(
+                "navigate",
+                "Navigate the current tab with a URL, browser history, or reload and wait for a bounded load state.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["goto", "back", "forward", "reload"] },
+                        "url": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "description": "Required only for goto; must use HTTP or HTTPS."
+                        },
+                        "waitUntil": {
+                            "type": "string",
+                            "enum": ["domContentLoaded", "load"],
+                            "default": "load"
+                        },
+                        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 }
+                    },
+                    "required": ["action"],
+                    "additionalProperties": false
+                }),
+            ),
+            tool(
+                "wait",
+                "Wait up to 30 seconds for a URL, load state, page text, or snapshot node condition.",
+                json!({
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "url" },
+                                "value": { "type": "string", "maxLength": 4096 },
+                                "match": { "type": "string", "enum": ["exact", "contains"], "default": "exact" },
+                                "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 }
+                            },
+                            "required": ["type", "value"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "loadState" },
+                                "state": { "type": "string", "enum": ["domContentLoaded", "load"] },
+                                "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 }
+                            },
+                            "required": ["type", "state"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "text" },
+                                "value": { "type": "string", "maxLength": 4096 },
+                                "state": { "type": "string", "enum": ["present", "absent"] },
+                                "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 }
+                            },
+                            "required": ["type", "value", "state"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "node" },
+                                "nodeId": { "type": "string", "pattern": "^d[0-9a-f]{16}n[0-9]{1,20}$" },
+                                "state": { "type": "string", "enum": ["visible", "hidden", "attached", "detached"] },
+                                "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 }
+                            },
+                            "required": ["type", "nodeId", "state"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }),
+            ),
+            tool(
+                "profile",
+                "List profiles or request a user-approved create, select, ephemeral, or forget operation.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "requestCreate", "requestSelect", "requestEphemeral", "requestForget"]
+                        },
+                        "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+                        }
+                    },
+                    "required": ["action"],
                     "additionalProperties": false
                 }),
             ),
@@ -113,7 +204,7 @@ pub(crate) fn dynamic_tool_specs() -> Vec<DynamicToolSpec> {
             ),
             tool(
                 "close",
-                "Close the terminal browser and discard its temporary browsing profile.",
+                "Close the terminal browser. Ephemeral profile data is discarded; named profiles are retained.",
                 empty_schema(),
             ),
         ],
@@ -134,10 +225,12 @@ pub(crate) fn dynamic_tool_response(
         },
         Err(err) => DynamicToolCallResponse {
             content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                text: format!("Terminal browser action failed: {err:#}")
-                    .chars()
-                    .take(/*n*/ 4_000)
-                    .collect(),
+                text: serde_json::to_string(&json!({
+                    "error": classify_browser_error(&err),
+                }))
+                .unwrap_or_else(|_| {
+                    "{\"error\":{\"code\":\"internal\",\"message\":\"the terminal-browser action failed\",\"retryable\":false}}".to_string()
+                }),
             }],
             success: false,
         },

@@ -215,6 +215,12 @@ impl App {
             let session_key = params.thread_id.clone();
             let tool = params.tool.clone();
             let arguments = params.arguments.clone();
+            if tool == "profile"
+                && let Some(command) =
+                    crate::terminal_browser::requested_profile_command(&arguments)
+            {
+                self.show_terminal_browser_profile_approval(command);
+            }
             let app_event_tx = self.app_event_tx.clone();
             tokio::spawn(async move {
                 let response =

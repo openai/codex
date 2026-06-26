@@ -1,0 +1,16 @@
+---
+source: tui/src/terminal_browser/tests.rs
+expression: "buffer_text(&buffer, area)"
+---
+
+  Approve browser profile change?
+  The model wants to permanently delete browser profile `work`
+
+› 1. Permanently delete profile  This cannot be undone
+  2. Cancel                      Do not change browser
+                                 profiles
+
+
+
+
+  Press enter to confirm or esc to go back

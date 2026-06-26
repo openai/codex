@@ -697,10 +697,83 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
-            SlashCommand::Browser => match trimmed.to_ascii_lowercase().as_str() {
-                "close" => self.app_event_tx.send(AppEvent::CloseTerminalBrowser),
-                _ => self.add_error_message("Usage: /browser [close]".to_string()),
-            },
+            SlashCommand::Browser => {
+                let parts = trimmed.split_whitespace().collect::<Vec<_>>();
+                match parts.as_slice() {
+                    [command] if command.eq_ignore_ascii_case("close") => {
+                        self.app_event_tx.send(AppEvent::CloseTerminalBrowser);
+                    }
+                    [command] if command.eq_ignore_ascii_case("doctor") => {
+                        self.app_event_tx.send(AppEvent::DoctorTerminalBrowser);
+                    }
+                    [command] if command.eq_ignore_ascii_case("control") => {
+                        self.app_event_tx
+                            .send(AppEvent::ToggleTerminalBrowserControl);
+                    }
+                    [profile, command]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("list") =>
+                    {
+                        self.app_event_tx.send(AppEvent::ManageTerminalBrowserProfile(
+                            crate::app_event::TerminalBrowserProfileCommand::List,
+                        ));
+                    }
+                    [profile, command]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("ephemeral") =>
+                    {
+                        self.app_event_tx.send(AppEvent::ManageTerminalBrowserProfile(
+                            crate::app_event::TerminalBrowserProfileCommand::Ephemeral,
+                        ));
+                    }
+                    [profile, command, name]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("create") =>
+                    {
+                        self.app_event_tx.send(AppEvent::ManageTerminalBrowserProfile(
+                            crate::app_event::TerminalBrowserProfileCommand::Create(
+                                (*name).to_string(),
+                            ),
+                        ));
+                    }
+                    [profile, command, name]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("use") =>
+                    {
+                        self.app_event_tx.send(AppEvent::ManageTerminalBrowserProfile(
+                            crate::app_event::TerminalBrowserProfileCommand::Use(
+                                (*name).to_string(),
+                            ),
+                        ));
+                    }
+                    [profile, command, name, confirm]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("forget")
+                            && *confirm == "--confirm" =>
+                    {
+                        self.app_event_tx.send(AppEvent::ManageTerminalBrowserProfile(
+                            crate::app_event::TerminalBrowserProfileCommand::Forget(
+                                (*name).to_string(),
+                            ),
+                        ));
+                    }
+                    [profile, command, name]
+                        if profile.eq_ignore_ascii_case("profile")
+                            && command.eq_ignore_ascii_case("forget") =>
+                    {
+                        self.add_info_message(
+                            format!(
+                                "Profile `{name}` was not deleted. Run `/browser profile forget {name} --confirm` to confirm permanent deletion."
+                            ),
+                            /*hint*/ None,
+                        );
+                    }
+                    _ => self.add_error_message(
+                        "Usage: /browser [close|doctor|control|profile list|profile ephemeral|profile create <name>|profile use <name>|profile forget <name> --confirm]"
+                            .to_string(),
+                    ),
+                }
+            }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),
                 "debug" => {

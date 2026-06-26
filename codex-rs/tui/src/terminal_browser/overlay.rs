@@ -51,9 +51,14 @@ impl TerminalBrowserOverlay {
 fn render_view(view: &BrowserView, area: Rect, buf: &mut Buffer) {
     let overlay = overlay_area(area);
     Clear.render(overlay, buf);
+    let title = if view.human_control {
+        " Terminal browser - user controlled "
+    } else {
+        " Terminal browser - agent controlled "
+    };
     Block::default()
         .borders(Borders::ALL)
-        .title(" Terminal browser - agent controlled ")
+        .title(title)
         .render_ref(overlay, buf);
 
     let inner = overlay.inner(ratatui::layout::Margin {
@@ -66,7 +71,7 @@ fn render_view(view: &BrowserView, area: Rect, buf: &mut Buffer) {
 
     render_header(view, header_area(inner), buf);
     render_screen_or_status(view, browser_viewport(overlay), buf);
-    render_footer(footer_area(inner), buf);
+    render_footer(view, footer_area(inner), buf);
 }
 
 pub(crate) fn overlay_area(area: Rect) -> Rect {
@@ -97,7 +102,7 @@ fn footer_area(inner: Rect) -> Rect {
     )
 }
 
-fn browser_viewport(overlay: Rect) -> Rect {
+pub(crate) fn browser_viewport(overlay: Rect) -> Rect {
     let inner = overlay.inner(ratatui::layout::Margin {
         vertical: 1,
         horizontal: 1,
@@ -131,18 +136,44 @@ fn render_header(view: &BrowserView, area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_footer(area: Rect, buf: &mut Buffer) {
+fn render_footer(view: &BrowserView, area: Rect, buf: &mut Buffer) {
     if area.height == 0 {
         return;
     }
-    Line::from(vec![
-        " Esc ".cyan(),
-        "hide".dim(),
-        "   ".into(),
-        "/browser close".cyan(),
-        " stop browser".dim(),
-    ])
-    .render_ref(area, buf);
+    if view.human_control {
+        let line = if area.width >= 31 {
+            Line::from(vec![" Ctrl+] ".cyan(), "return control to Codex".dim()])
+        } else if area.width >= 15 {
+            Line::from(vec![" Ctrl+] ".cyan(), "return".dim()])
+        } else {
+            Line::from(" Ctrl+] ".cyan())
+        };
+        line.render_ref(area, buf);
+    } else {
+        let line = if area.width >= 63 {
+            Line::from(vec![
+                " Esc ".cyan(),
+                "hide".dim(),
+                "   ".into(),
+                "/browser control".cyan(),
+                " take control".dim(),
+                "   ".into(),
+                "/browser close".cyan(),
+                " stop".dim(),
+            ])
+        } else if area.width >= 41 {
+            Line::from(vec![
+                " Esc ".cyan(),
+                "hide".dim(),
+                "   ".into(),
+                "/browser control".cyan(),
+                " take control".dim(),
+            ])
+        } else {
+            Line::from(vec![" Esc ".cyan(), "hide".dim()])
+        };
+        line.render_ref(area, buf);
+    }
 }
 
 fn render_screen_or_status(view: &BrowserView, area: Rect, buf: &mut Buffer) {

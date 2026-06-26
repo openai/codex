@@ -18,9 +18,12 @@ use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 #[cfg(not(unix))]
@@ -88,6 +91,9 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        if let Err(err) = self.set_mouse_capture(/*enabled*/ false) {
+            tracing::debug!(error = %err, "failed to disable mouse capture on TUI drop");
+        }
         if let Err(err) = self.clear_ambient_pet_image() {
             tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
         }
@@ -313,6 +319,9 @@ fn restore_common(
     }
 
     if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+        first_error.get_or_insert(err);
+    }
+    if let Err(err) = execute!(stdout(), DisableMouseCapture) {
         first_error.get_or_insert(err);
     }
     let _ = execute!(stdout(), DisableFocusChange);
@@ -572,6 +581,8 @@ pub enum TuiEvent {
     Key(KeyEvent),
     /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// A terminal mouse event emitted only while a UI surface has enabled mouse capture.
+    Mouse(MouseEvent),
     /// A terminal size notification that should be handled as resize-sensitive draw work.
     ///
     /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
@@ -603,6 +614,7 @@ pub struct Tui {
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
+    mouse_capture_active: Arc<AtomicBool>,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -705,6 +717,7 @@ impl Tui {
             notification_condition: NotificationCondition::default(),
             is_zellij,
             alt_screen_enabled: true,
+            mouse_capture_active: Arc::new(AtomicBool::new(false)),
             _stderr_guard: stderr_guard,
         }
     }
@@ -712,6 +725,19 @@ impl Tui {
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub(crate) fn set_mouse_capture(&mut self, enabled: bool) -> Result<()> {
+        if self.mouse_capture_active.load(Ordering::Relaxed) == enabled {
+            return Ok(());
+        }
+        if enabled {
+            execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+        } else {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        }
+        self.mouse_capture_active.store(enabled, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn set_notification_settings(
@@ -768,6 +794,7 @@ impl Tui {
         if let Err(err) = mode.restore() {
             tracing::warn!("failed to restore terminal modes before external program: {err}");
         }
+        self.mouse_capture_active.store(false, Ordering::Relaxed);
         if let Err(err) = terminal_stderr::pause() {
             tracing::warn!("failed to restore terminal stderr before external program: {err}");
         }
@@ -827,6 +854,7 @@ impl Tui {
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
             self.alt_screen_active.clone(),
+            self.mouse_capture_active.clone(),
         );
         #[cfg(not(unix))]
         let stream = TuiEventStream::new(

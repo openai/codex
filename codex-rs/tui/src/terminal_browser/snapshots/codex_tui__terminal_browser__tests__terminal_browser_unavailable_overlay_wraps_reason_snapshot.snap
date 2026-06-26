@@ -10,5 +10,5 @@ expression: "buffer_text(&buffer, area)"
 │                                              │
 │                                              │
 │                                              │
-│ Esc hide   /browser close stop browser       │
+│ Esc hide   /browser control take control     │
 └──────────────────────────────────────────────┘

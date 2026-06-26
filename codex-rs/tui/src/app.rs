@@ -1265,12 +1265,56 @@ See the Codex keymap documentation for supported actions and examples."
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
+            if self.terminal_browser_overlay_active()
+                && self.terminal_browser_human_control_active()
+            {
+                tui.set_mouse_capture(/*enabled*/ true)?;
+            }
         }
 
         if self.overlay.is_some() && !self.terminal_browser_overlay_active() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             if self.terminal_browser_overlay_active()
+                && self.terminal_browser_human_control_active()
+            {
+                match event {
+                    TuiEvent::Key(KeyEvent {
+                        code: KeyCode::Char(']'),
+                        modifiers,
+                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                        ..
+                    }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.app_event_tx
+                            .send(AppEvent::ToggleTerminalBrowserControl);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    TuiEvent::Key(key_event) => {
+                        self.forward_terminal_browser_key(key_event);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    TuiEvent::Paste(pasted) => {
+                        self.forward_terminal_browser_text(&pasted);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    TuiEvent::Mouse(mouse_event) => {
+                        let terminal_size = tui.terminal.size()?;
+                        self.forward_terminal_browser_mouse(
+                            Rect::new(
+                                /*x*/ 0,
+                                /*y*/ 0,
+                                terminal_size.width,
+                                terminal_size.height,
+                            ),
+                            mouse_event,
+                        );
+                        return Ok(AppRunControl::Continue);
+                    }
+                    TuiEvent::Draw | TuiEvent::Resize => {}
+                }
+            }
+            if self.terminal_browser_overlay_active()
+                && !self.terminal_browser_human_control_active()
                 && matches!(
                     &event,
                     TuiEvent::Key(KeyEvent {
@@ -1295,6 +1339,7 @@ See the Codex keymap documentation for supported actions and examples."
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.rebuild_transcript_after_backtrack(tui)?;

@@ -416,6 +416,42 @@ impl App {
             AppEvent::CloseTerminalBrowser => {
                 self.close_terminal_browser();
             }
+            AppEvent::DoctorTerminalBrowser => {
+                self.doctor_terminal_browser();
+            }
+            AppEvent::TerminalBrowserDoctorCompleted { healthy, summary } => {
+                if healthy {
+                    self.chat_widget.add_info_message(summary, /*hint*/ None);
+                } else {
+                    self.chat_widget.add_error_message(summary);
+                }
+            }
+            AppEvent::ManageTerminalBrowserProfile(command) => {
+                self.manage_terminal_browser_profile(command).await;
+            }
+            AppEvent::ToggleTerminalBrowserControl => {
+                self.toggle_terminal_browser_control();
+            }
+            AppEvent::TerminalBrowserControlCompleted { active, error } => {
+                if let Err(error) = tui.set_mouse_capture(active) {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update terminal mouse capture: {error}"
+                    ));
+                }
+                if let Some(error) = error {
+                    self.chat_widget
+                        .add_error_message(format!("Browser control failed: {error}"));
+                } else {
+                    let message = if active {
+                        "You control the browser now. Press Ctrl+] to return control to Codex."
+                    } else {
+                        "Browser control returned to Codex; previous node handles were invalidated."
+                    };
+                    self.chat_widget
+                        .add_info_message(message.to_string(), /*hint*/ None);
+                }
+                self.sync_terminal_browser_overlay(tui);
+            }
             AppEvent::TerminalBrowserClosed => {
                 self.sync_terminal_browser_overlay(tui);
             }

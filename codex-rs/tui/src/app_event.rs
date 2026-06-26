@@ -53,6 +53,15 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalBrowserProfileCommand {
+    List,
+    Create(String),
+    Use(String),
+    Ephemeral,
+    Forget(String),
+}
+
 use crate::history_cell::HistoryCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +272,27 @@ pub(crate) enum AppEvent {
 
     /// Close the terminal browser process and discard its browsing profile.
     CloseTerminalBrowser,
+
+    /// Validate the configured Carbonyl executable and report its compatibility.
+    DoctorTerminalBrowser,
+
+    /// The asynchronous Carbonyl validation probe completed.
+    TerminalBrowserDoctorCompleted {
+        healthy: bool,
+        summary: String,
+    },
+
+    /// Apply a user-entered named-profile command.
+    ManageTerminalBrowserProfile(TerminalBrowserProfileCommand),
+
+    /// Enter or leave exclusive keyboard-and-mouse browser control.
+    ToggleTerminalBrowserControl,
+
+    /// A human-control transition completed.
+    TerminalBrowserControlCompleted {
+        active: bool,
+        error: Option<String>,
+    },
 
     /// The terminal browser process finished closing.
     TerminalBrowserClosed,
