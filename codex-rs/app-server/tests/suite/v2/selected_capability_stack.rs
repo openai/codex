@@ -209,7 +209,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await?;
     let requests = response_mock.requests();
     assert_eq!(5, requests.len());
-    assert_selected_capabilities_absent(&requests[4]);
+    assert_selected_plugin_tools_absent(&requests[4]);
     assert!(
         requests[4]
             .message_input_texts("developer")
@@ -537,6 +537,10 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
             .into_iter()
             .all(|text| !text.contains(SKILL_DESCRIPTION))
     );
+    assert_selected_plugin_tools_absent(request);
+}
+
+fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {
     assert!(
         request
             .tool_by_name(&format!("mcp__{MCP_SERVER_NAME}"), "echo")
