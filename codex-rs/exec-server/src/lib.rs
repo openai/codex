@@ -1,3 +1,4 @@
+mod bash_env_cache;
 mod client;
 mod client_api;
 mod client_transport;

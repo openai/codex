@@ -581,6 +581,7 @@ impl ExecutorStdioServerLauncher {
             exclude: Vec::new(),
             r#set: HashMap::new(),
             include_only,
+            bash_env_cache_scope: None,
         }
     }
 }
