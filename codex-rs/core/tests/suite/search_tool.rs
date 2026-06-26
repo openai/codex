@@ -545,6 +545,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         unreachable!("event guard guarantees McpToolCallBegin");
     };
     assert_eq!(begin.call_id, "calendar-call-1");
+    assert_eq!(begin.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(begin.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         begin.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
@@ -559,6 +561,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     };
     assert_eq!(end.call_id, "calendar-call-1");
     assert_eq!(end.connector_id.as_deref(), Some("calendar"));
+    assert_eq!(end.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(end.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         end.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)

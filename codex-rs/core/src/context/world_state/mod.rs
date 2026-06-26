@@ -23,6 +23,10 @@ trait ErasedWorldStateSection: Send + Sync {
 
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool;
 
+    fn has_retained_fragment_matcher(&self) -> bool;
+
+    fn matches_retained_fragment(&self, role: &str, text: &str) -> bool;
+
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Value>,
@@ -55,6 +59,14 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
 
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
         S::matches_legacy_fragment(role, text)
+    }
+
+    fn has_retained_fragment_matcher(&self) -> bool {
+        false
+    }
+
+    fn matches_retained_fragment(&self, _role: &str, _text: &str) -> bool {
+        false
     }
 
     fn render_diff(
@@ -97,6 +109,14 @@ impl ErasedWorldStateSection for ExtensionWorldStateSection {
 
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
         self.0.matches_legacy_fragment(role, text)
+    }
+
+    fn has_retained_fragment_matcher(&self) -> bool {
+        self.0.has_retained_fragment_matcher()
+    }
+
+    fn matches_retained_fragment(&self, role: &str, text: &str) -> bool {
+        self.0.matches_retained_fragment(role, text)
     }
 
     fn render_diff(
@@ -268,7 +288,12 @@ impl WorldState {
     ) -> Vec<Box<dyn ContextualUserFragment>> {
         self.render_with(|id, section| {
             if let Some(previous) = previous.and_then(|previous| previous.sections.get(id)) {
-                PreviousSectionState::Known(previous)
+                if section.has_retained_fragment_matcher() && !has_retained_fragment(items, section)
+                {
+                    PreviousSectionState::Absent
+                } else {
+                    PreviousSectionState::Known(previous)
+                }
             } else if has_legacy_fragment(items, section) {
                 PreviousSectionState::Unknown
             } else {
@@ -286,6 +311,22 @@ impl WorldState {
             .filter_map(|(id, section)| section.render_diff(previous(id, section.as_ref())))
             .collect()
     }
+}
+
+fn has_retained_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateSection) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if content.iter().any(|content| {
+                    matches!(
+                        content,
+                        ContentItem::InputText { text }
+                            if section.matches_retained_fragment(role, text)
+                    )
+                })
+        )
+    })
 }
 
 fn has_legacy_fragment(items: &[ResponseItem], section: &dyn ErasedWorldStateSection) -> bool {

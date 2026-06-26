@@ -3,6 +3,7 @@ use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheContext;
 use crate::declared_openai_file_input_param_names;
 use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::elicitation_is_rejected_by_policy;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::ManagedClient;
@@ -275,6 +276,7 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
         AskForApproval::Never,
         PermissionProfile::Disabled,
         /*reviewer*/ None,
+        ElicitationRequestRouter::default(),
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
@@ -310,6 +312,7 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
         AskForApproval::Never,
         PermissionProfile::Disabled,
         /*reviewer*/ None,
+        ElicitationRequestRouter::default(),
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender("server".to_string(), tx_event);
@@ -340,6 +343,100 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
             content: None,
             meta: None,
         }
+    );
+}
+
+#[tokio::test]
+async fn shared_elicitation_router_targets_the_exact_pending_request() {
+    let router = ElicitationRequestRouter::default();
+    let manager_a = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        PermissionProfile::default(),
+        /*reviewer*/ None,
+        router.clone(),
+    );
+    let manager_b = ElicitationRequestManager::new(
+        AskForApproval::OnRequest,
+        PermissionProfile::default(),
+        /*reviewer*/ None,
+        router,
+    );
+    let (tx_event, rx_event) = async_channel::bounded(2);
+    let sender_a = manager_a.make_sender("server".to_string(), tx_event.clone());
+    let sender_b = manager_b.make_sender("server".to_string(), tx_event);
+    let elicitation = codex_rmcp_client::Elicitation::Mcp(
+        CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Which runtime?".to_string(),
+            requested_schema: rmcp::model::ElicitationSchema::builder()
+                .required_property(
+                    "runtime",
+                    rmcp::model::PrimitiveSchema::String(rmcp::model::StringSchema::new()),
+                )
+                .build()
+                .expect("schema should build"),
+        },
+    );
+
+    let pending_a = tokio::spawn(sender_a(NumberOrString::Number(1), elicitation.clone()));
+    let EventMsg::ElicitationRequest(request_a) = rx_event.recv().await.expect("request A").msg
+    else {
+        panic!("expected elicitation request");
+    };
+    let pending_b = tokio::spawn(sender_b(NumberOrString::Number(1), elicitation));
+    let EventMsg::ElicitationRequest(request_b) = rx_event.recv().await.expect("request B").msg
+    else {
+        panic!("expected elicitation request");
+    };
+    let (
+        codex_protocol::mcp::RequestId::String(request_a_id),
+        codex_protocol::mcp::RequestId::String(request_b_id),
+    ) = (request_a.id, request_b.id)
+    else {
+        panic!("expected Codex-owned string request IDs");
+    };
+    assert_ne!(request_a_id, request_b_id);
+
+    let response_a = ElicitationResponse {
+        action: ElicitationAction::Accept,
+        content: Some(serde_json::json!({"runtime": "a"})),
+        meta: None,
+    };
+    manager_b
+        .resolve(
+            "server".to_string(),
+            NumberOrString::String(request_a_id.into()),
+            response_a.clone(),
+        )
+        .await
+        .expect("runtime B should route a response to runtime A");
+    let response_b = ElicitationResponse {
+        action: ElicitationAction::Accept,
+        content: Some(serde_json::json!({"runtime": "b"})),
+        meta: None,
+    };
+    manager_a
+        .resolve(
+            "server".to_string(),
+            NumberOrString::String(request_b_id.into()),
+            response_b.clone(),
+        )
+        .await
+        .expect("runtime A should route a response to runtime B");
+
+    assert_eq!(
+        pending_a
+            .await
+            .expect("request A task")
+            .expect("request A response"),
+        response_a
+    );
+    assert_eq!(
+        pending_b
+            .await
+            .expect("request B task")
+            .expect("request B response"),
+        response_b
     );
 }
 
@@ -1162,6 +1259,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ToolPluginProvenance::default(),
         /*auth*/ None,
         /*elicitation_reviewer*/ None,
+        ElicitationRequestRouter::default(),
     )
     .await;
 

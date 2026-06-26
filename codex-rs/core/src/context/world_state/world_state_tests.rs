@@ -150,6 +150,52 @@ fn extension_owned_section_uses_its_snapshot_and_renderer() {
 }
 
 #[test]
+fn missing_retained_fragment_is_rendered_again() {
+    let mut world_state = WorldState::default();
+    world_state.add_extension_section(
+        WorldStateSectionContribution::new(
+            "extension_test",
+            json!({"body": "current catalog"}),
+            |previous| match previous {
+                PreviousWorldStateSection::Absent => Some(RenderedWorldStateFragment::new(
+                    "developer",
+                    ("<extension_test>", "</extension_test>"),
+                    "current catalog",
+                )),
+                PreviousWorldStateSection::Unknown | PreviousWorldStateSection::Known(_) => None,
+            },
+        )
+        .with_retained_fragment_matcher(|role, text| {
+            role == "developer" && text.contains("current catalog")
+        }),
+    );
+    let previous = world_state.snapshot();
+    let retained = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "<extension_test>current catalog</extension_test>".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert_eq!(
+        world_state
+            .render_history_diff(Some(&previous), &[])
+            .into_iter()
+            .map(|fragment| fragment.body())
+            .collect::<Vec<_>>(),
+        vec!["current catalog"]
+    );
+    assert!(
+        world_state
+            .render_history_diff(Some(&previous), &[retained])
+            .is_empty()
+    );
+}
+
+#[test]
 fn unreadable_section_snapshot_is_treated_as_unknown() {
     let mut current = WorldState::default();
     current.add_section(TestSection {

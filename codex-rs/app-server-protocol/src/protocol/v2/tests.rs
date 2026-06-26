@@ -2677,6 +2677,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         connector_id: Some("calendar".to_string()),
         mcp_app_resource_uri: Some("app://connector".to_string()),
         link_id: Some("link_calendar".to_string()),
+        app_name: Some("Calendar".to_string()),
+        template_id: Some("calendar_template".to_string()),
+        action_name: Some("create_event".to_string()),
         plugin_id: Some("sample@test".to_string()),
         status: CoreMcpToolCallStatus::InProgress,
         result: None,
@@ -2696,6 +2699,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 connector_id: "calendar".to_string(),
                 link_id: Some("link_calendar".to_string()),
                 resource_uri: Some("app://connector".to_string()),
+                app_name: Some("Calendar".to_string()),
+                template_id: Some("calendar_template".to_string()),
+                action_name: Some("create_event".to_string()),
             }),
             mcp_app_resource_uri: Some("app://connector".to_string()),
             plugin_id: Some("sample@test".to_string()),
@@ -2713,6 +2719,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         connector_id: None,
         mcp_app_resource_uri: None,
         link_id: None,
+        app_name: None,
+        template_id: None,
+        action_name: None,
         plugin_id: None,
         status: CoreMcpToolCallStatus::Completed,
         result: Some(CallToolResult {
@@ -2759,6 +2768,9 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
             resource_uri: Some("app://connector".to_string()),
+            app_name: Some("Calendar".to_string()),
+            template_id: Some("calendar_template".to_string()),
+            action_name: Some("create_event".to_string()),
         }),
         mcp_app_resource_uri: Some("app://connector".to_string()),
         plugin_id: None,
@@ -2780,12 +2792,38 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
                 "connectorId": "calendar",
                 "linkId": "link_calendar",
                 "resourceUri": "app://connector",
+                "appName": "Calendar",
+                "templateId": "calendar_template",
+                "actionName": "create_event",
             },
             "mcpAppResourceUri": "app://connector",
             "pluginId": null,
             "result": null,
             "error": null,
             "durationMs": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null() {
+    assert_eq!(
+        serde_json::to_value(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: None,
+            resource_uri: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+        })
+        .expect("MCP tool call app context should serialize"),
+        json!({
+            "connectorId": "calendar",
+            "linkId": null,
+            "resourceUri": null,
+            "appName": null,
+            "templateId": null,
+            "actionName": null,
         })
     );
 }
