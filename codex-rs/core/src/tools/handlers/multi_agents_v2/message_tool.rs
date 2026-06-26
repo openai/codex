@@ -6,6 +6,7 @@
 use super::*;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,6 +89,28 @@ pub(crate) async fn handle_message_string_tool(
     let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
+    let author = turn
+        .session_source
+        .get_agent_path()
+        .unwrap_or_else(AgentPath::root);
+    let mut communication =
+        communication_from_tool_message(author, receiver_agent_path.clone(), message);
+    let communication_kind = match mode {
+        MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
+        MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
+    };
+    communication.agent_communication_metadata = Some(
+        crate::agent_communication::new_agent_communication_metadata(
+            communication_kind,
+            session.thread_id,
+            Some(call_id.as_str()),
+        ),
+    );
+    crate::agent_communication::emit_agent_communication_created(
+        &communication,
+        receiver_thread_id,
+    );
+
     let resume_config = build_agent_resume_config(turn.as_ref())?;
     session
         .services
@@ -95,12 +118,6 @@ pub(crate) async fn handle_message_string_tool(
         .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-    let author = turn
-        .session_source
-        .get_agent_path()
-        .unwrap_or_else(AgentPath::root);
-    let communication =
-        communication_from_tool_message(author, receiver_agent_path.clone(), message);
     let result = session
         .services
         .agent_control

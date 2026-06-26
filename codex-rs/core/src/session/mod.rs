@@ -111,6 +111,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -1860,12 +1861,23 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
-        let communication = InterAgentCommunication::new(
+        let mut communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
             /*trigger_turn*/ false,
+        );
+        communication.agent_communication_metadata = Some(
+            crate::agent_communication::new_agent_communication_metadata(
+                AgentCommunicationKind::Result,
+                self.thread_id,
+                /*source_call_id*/ None,
+            ),
+        );
+        crate::agent_communication::emit_agent_communication_created(
+            &communication,
+            parent_thread_id,
         );
         if let Err(err) = self
             .services

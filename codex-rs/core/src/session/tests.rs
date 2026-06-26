@@ -9782,6 +9782,72 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
 }
 
 #[tokio::test]
+async fn mailbox_enqueue_emits_enqueued_communication_with_same_id() {
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::filter::Targets;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_test::internal::MockWriter;
+
+    let output: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            Targets::new()
+                .with_default(LevelFilter::OFF)
+                .with_target("codex_core::agent_communication", LevelFilter::TRACE),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_writer(MockWriter::new(output)),
+        );
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let (session, _) = make_session_and_context().await;
+    let sender_thread_id = ThreadId::new();
+    let id = Uuid::new_v4().to_string();
+    let mut communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root(),
+        Vec::new(),
+        "mail".to_string(),
+        /*trigger_turn*/ false,
+    );
+    communication.agent_communication_metadata =
+        Some(codex_protocol::protocol::AgentCommunicationMetadata {
+            id: id.clone(),
+            kind: codex_protocol::protocol::AgentCommunicationKind::Message,
+            sender_thread_id,
+            source_call_id: Some("call-1".to_string()),
+        });
+
+    super::handlers::inter_agent_communication(
+        &Arc::new(session),
+        "turn-1".to_string(),
+        communication,
+    )
+    .await;
+
+    let events = String::from_utf8(output.lock().expect("buffer lock").clone())
+        .expect("JSON logs should be UTF-8")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON log event"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0]["fields"],
+        serde_json::json!({
+            "message": "agent communication updated",
+            "event.name": "codex.agent_communication",
+            "communication_id": id,
+            "state": "enqueued",
+        })
+    );
+}
+
+#[tokio::test]
 async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
     struct ThreadIdleRecorder {
         calls: Arc<std::sync::atomic::AtomicUsize>,

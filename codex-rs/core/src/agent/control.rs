@@ -24,6 +24,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -473,12 +474,23 @@ impl AgentControl {
                 ) else {
                     return;
                 };
-                let communication = InterAgentCommunication::new(
+                let mut communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
                     /*trigger_turn*/ false,
+                );
+                communication.agent_communication_metadata = Some(
+                    crate::agent_communication::new_agent_communication_metadata(
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                        /*source_call_id*/ None,
+                    ),
+                );
+                crate::agent_communication::emit_agent_communication_created(
+                    &communication,
+                    parent_thread_id,
                 );
                 let _ = control
                     .send_inter_agent_communication(parent_thread_id, communication)

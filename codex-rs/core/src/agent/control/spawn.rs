@@ -356,6 +356,15 @@ impl AgentControl {
         )
         .await;
 
+        if multi_agent_version == MultiAgentVersion::V2
+            && let Op::InterAgentCommunication { communication } = &initial_operation
+        {
+            crate::agent_communication::emit_agent_communication_created(
+                communication,
+                new_thread.thread_id,
+            );
+        }
+
         self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
             .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
