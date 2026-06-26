@@ -14,7 +14,9 @@ use codex_external_agent_sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::is_persisted_rollout_item;
 use codex_thread_store::AppendThreadItemsParams;
@@ -202,7 +204,6 @@ impl ExternalAgentSessionImporter {
         } else {
             ThreadMemoryMode::Disabled
         };
-        let now = Utc::now();
         let create_params = CreateThreadParams {
             session_id: thread_id.into(),
             thread_id,
@@ -229,6 +230,10 @@ impl ExternalAgentSessionImporter {
             },
         };
         rollout_items.retain(is_persisted_rollout_item);
+        let (created_at, updated_at) = source_chronology(&rollout_items).unwrap_or_else(|| {
+            let now = Utc::now();
+            (now, now)
+        });
         let title = title
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
@@ -236,8 +241,9 @@ impl ExternalAgentSessionImporter {
             title,
             preview: first_user_message.clone(),
             model_provider: Some(model_provider),
-            created_at: Some(now),
-            updated_at: Some(now),
+            created_at: Some(created_at),
+            updated_at: Some(updated_at),
+            advance_recency_at: Some(updated_at),
             source: Some(source.clone()),
             thread_source: Some(None),
             agent_nickname: Some(source.get_nickname()),
@@ -285,6 +291,25 @@ impl ExternalAgentSessionImporter {
             .map_err(|err| format!("failed to shutdown imported session: {err}"))?;
         Ok(thread_id)
     }
+}
+
+fn source_chronology(
+    rollout_items: &[RolloutItem],
+) -> Option<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
+    let mut timestamps = rollout_items.iter().filter_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => event.started_at,
+        RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => event.completed_at,
+        _ => None,
+    });
+    let first = timestamps.next()?;
+    let (created_at, updated_at) = timestamps
+        .fold((first, first), |(created_at, updated_at), value| {
+            (created_at.min(value), updated_at.max(value))
+        });
+    Some((
+        chrono::DateTime::from_timestamp(created_at, 0)?,
+        chrono::DateTime::from_timestamp(updated_at, 0)?,
+    ))
 }
 
 struct SessionImportFailure {
