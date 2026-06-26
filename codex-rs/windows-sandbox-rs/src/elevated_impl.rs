@@ -24,6 +24,7 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
 
 mod windows_impl {
     use super::ElevatedSandboxProfileCaptureRequest;
+    use crate::env::inherit_path_env;
     use crate::identity::refresh_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
@@ -35,7 +36,6 @@ mod windows_impl {
     use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
     use crate::logging::log_success;
-    use crate::process::WindowsProcessLaunch;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::runner_client::retry_runner_spawn_once;
     use crate::runner_client::spawn_runner_transport;
@@ -118,15 +118,13 @@ mod windows_impl {
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
             .collect::<Vec<_>>();
+        inherit_path_env(&mut env_map);
         let elevated = prepare_elevated_spawn_context_for_permissions(
             permissions.clone(),
             codex_home,
             cwd,
             &mut env_map,
-            WindowsProcessLaunch {
-                application_path: None,
-                command: command.clone(),
-            },
+            command.clone(),
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,

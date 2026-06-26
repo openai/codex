@@ -5,7 +5,7 @@ use crate::identity::SandboxCreds;
 use crate::ipc_framed::ErrorPayload;
 use crate::ipc_framed::ErrorStage;
 use crate::ipc_framed::SpawnRequest;
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::RunnerStartupError;
 use codex_protocol::models::PermissionProfile;
@@ -69,8 +69,8 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
         env_map: env_map.clone(),
         logs_base_dir: Some(PathBuf::from(r"C:\Users\codex\.sandbox")),
         spawn_request: SpawnRequest {
-            launch: WindowsProcessLaunch {
-                application_path: Some(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe")),
+            launch: ResolvedWindowsProcessLaunch {
+                application_path: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
                 command: vec!["pwsh.exe".to_string(), "-NoProfile".to_string()],
             },
             cwd: PathBuf::from(r"C:\workspace"),

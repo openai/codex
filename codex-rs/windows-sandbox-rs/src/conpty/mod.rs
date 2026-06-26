@@ -8,7 +8,7 @@
 
 use crate::desktop::LaunchDesktop;
 use crate::proc_thread_attr::ProcThreadAttributeList;
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
@@ -92,7 +92,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
 #[doc(hidden)]
 pub fn spawn_conpty_process_as_user(
     h_token: HANDLE,
-    launch: &WindowsProcessLaunch,
+    launch: &ResolvedWindowsProcessLaunch,
     cwd: &Path,
     env_map: &HashMap<String, String>,
     use_private_desktop: bool,
@@ -105,10 +105,7 @@ pub fn spawn_conpty_process_as_user(
         .collect::<Vec<_>>()
         .join(" ");
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
-    let application_name = launch.application_path.as_deref().map(to_wide);
-    let application_name_ptr = application_name
-        .as_ref()
-        .map_or(std::ptr::null(), Vec::as_ptr);
+    let application_name = to_wide(&launch.application_path);
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -136,7 +133,7 @@ pub fn spawn_conpty_process_as_user(
     let ok = unsafe {
         CreateProcessAsUserW(
             h_token,
-            application_name_ptr,
+            application_name.as_ptr(),
             cmdline.as_mut_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),

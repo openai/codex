@@ -10,7 +10,6 @@ use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
-use crate::process::WindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::RunnerTransport;
 use crate::runner_client::retry_runner_spawn_once;
@@ -113,7 +112,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    launch: WindowsProcessLaunch,
+    command: Vec<String>,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     proxy_enforced: bool,
@@ -146,7 +145,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         codex_home,
         cwd,
         &mut env_map,
-        launch,
+        command,
         read_roots_override,
         read_roots_include_platform_defaults,
         write_roots_override,

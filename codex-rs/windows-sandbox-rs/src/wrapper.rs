@@ -177,10 +177,7 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
             permission_profile: &request.permission_profile,
             workspace_roots: request.workspace_roots.as_slice(),
             codex_home: request.codex_home.as_path(),
-            launch: crate::WindowsProcessLaunch {
-                application_path: None,
-                command: request.command,
-            },
+            command: request.command,
             cwd: request.command_cwd.as_path(),
             env_map: request.env_map,
             windows_sandbox_level: request.windows_sandbox_level,

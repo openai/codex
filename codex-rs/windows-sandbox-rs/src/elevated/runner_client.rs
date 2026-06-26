@@ -7,7 +7,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::ipc_framed::read_frame;
 use crate::ipc_framed::write_frame;
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use crate::runner_pipe::PIPE_ACCESS_INBOUND;
 use crate::runner_pipe::PIPE_ACCESS_OUTBOUND;
 use crate::runner_pipe::connect_pipe;
@@ -103,24 +103,18 @@ fn is_refreshable_windows_error(code: u32) -> bool {
     matches!(code, ERROR_LOGON_FAILURE | ERROR_NO_SUCH_LOGON_SESSION)
 }
 
-fn command_targets_windows_apps(launch: &WindowsProcessLaunch) -> bool {
-    launch
-        .application_path
-        .as_deref()
-        .or_else(|| launch.command.first().map(Path::new))
-        .is_some_and(|program| {
-            program.components().any(|component| {
-                component
-                    .as_os_str()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case("WindowsApps")
-            })
-        })
+fn command_targets_windows_apps(launch: &ResolvedWindowsProcessLaunch) -> bool {
+    launch.application_path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 pub(crate) fn is_refreshable_sandbox_creds_error(
     err: &anyhow::Error,
-    launch: &WindowsProcessLaunch,
+    launch: &ResolvedWindowsProcessLaunch,
 ) -> bool {
     if err
         .downcast_ref::<RunnerLogonError>()
@@ -143,7 +137,7 @@ pub(crate) fn is_refreshable_sandbox_creds_error(
 
 pub(crate) fn retry_runner_spawn_once<T>(
     sandbox_creds: SandboxCreds,
-    launch: &WindowsProcessLaunch,
+    launch: &ResolvedWindowsProcessLaunch,
     mut spawn: impl FnMut(SandboxCreds) -> Result<T>,
     refresh: impl FnOnce() -> Result<SandboxCreds>,
 ) -> Result<T> {
@@ -501,7 +495,7 @@ mod tests {
     use super::is_refreshable_sandbox_creds_error;
     use crate::ipc_framed::ErrorPayload;
     use crate::ipc_framed::ErrorStage;
-    use crate::process::WindowsProcessLaunch;
+    use crate::process::ResolvedWindowsProcessLaunch;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
@@ -510,8 +504,8 @@ mod tests {
 
     #[test]
     fn refreshable_sandbox_creds_error_recognizes_credential_and_child_start_failures() {
-        let launch = WindowsProcessLaunch {
-            application_path: None,
+        let launch = ResolvedWindowsProcessLaunch {
+            application_path: PathBuf::from(r"C:\Windows\System32\cmd.exe"),
             command: vec!["cmd.exe".to_string()],
         };
         assert_eq!(
@@ -546,16 +540,16 @@ mod tests {
         );
 
         let windows_apps_launches = [
-            WindowsProcessLaunch {
-                application_path: Some(PathBuf::from(
+            ResolvedWindowsProcessLaunch {
+                application_path: PathBuf::from(
                     r"C:\Users\user\AppData\Local\Microsoft\WindowsApps\pwsh.exe",
-                )),
+                ),
                 command: vec!["pwsh.exe".to_string()],
             },
-            WindowsProcessLaunch {
-                application_path: Some(PathBuf::from(
+            ResolvedWindowsProcessLaunch {
+                application_path: PathBuf::from(
                     r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.3.0_x64__8wekyb3d8bbwe\pwsh.exe",
-                )),
+                ),
                 command: vec!["pwsh.exe".to_string()],
             },
         ];

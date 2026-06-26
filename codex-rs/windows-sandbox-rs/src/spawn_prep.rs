@@ -12,13 +12,12 @@ use crate::command_resolution::resolve_windows_launch;
 use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
-use crate::env::inherit_path_env;
 use crate::env::normalize_null_device_env;
 use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
 use crate::logging::log_start;
 use crate::path_normalization::canonicalize_path;
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::sandbox_utils::ensure_codex_home_exists;
 use crate::sandbox_utils::inject_git_safe_directory;
@@ -55,7 +54,7 @@ pub(crate) struct ElevatedSpawnContext {
     pub(crate) logs_base_dir: Option<PathBuf>,
     pub(crate) sandbox_creds: SandboxCreds,
     pub(crate) cap_sids: Vec<String>,
-    pub(crate) launch: WindowsProcessLaunch,
+    pub(crate) launch: ResolvedWindowsProcessLaunch,
     pub(crate) read_roots_override: Vec<PathBuf>,
 }
 
@@ -355,7 +354,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     codex_home: &Path,
     cwd: &Path,
     env_map: &mut HashMap<String, String>,
-    launch: WindowsProcessLaunch,
+    command: Vec<String>,
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
@@ -366,9 +365,8 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
 ) -> Result<ElevatedSpawnContext> {
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
-    inherit_path_env(env_map);
     inject_git_safe_directory(env_map, cwd);
-    let launch = resolve_windows_launch(launch, cwd, env_map)?;
+    let launch = resolve_windows_launch(command, cwd, env_map)?;
 
     // Use a temp-based log dir that the sandbox user can write.
     let sandbox_base = codex_home.join(".sandbox");
@@ -407,10 +405,7 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     let mut resolved_read_roots = read_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_read_roots(cwd, &permissions, env_map, codex_home));
-    let application_path = launch
-        .application_path
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("resolved Windows launch is missing an application path"))?;
+    let application_path = &launch.application_path;
     if !resolved_read_roots.contains(application_path) {
         resolved_read_roots.push(application_path.clone());
     }

@@ -1,4 +1,5 @@
-use crate::process::WindowsProcessLaunch;
+use crate::env::windows_env_value;
+use crate::process::ResolvedWindowsProcessLaunch;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -88,14 +89,15 @@ pub fn resolve_windows_executable(
 }
 
 pub(crate) fn resolve_windows_launch(
-    mut launch: WindowsProcessLaunch,
+    command: Vec<String>,
     cwd: &Path,
     env_map: &HashMap<String, String>,
-) -> Result<WindowsProcessLaunch> {
-    if launch.application_path.is_none() {
-        launch.application_path = Some(resolve_windows_executable(&launch.command, cwd, env_map)?);
-    }
-    Ok(launch)
+) -> Result<ResolvedWindowsProcessLaunch> {
+    let application_path = resolve_windows_executable(&command, cwd, env_map)?;
+    Ok(ResolvedWindowsProcessLaunch {
+        application_path,
+        command,
+    })
 }
 
 fn windows_search_dirs(cwd: &Path, env_map: &HashMap<String, String>) -> Vec<PathBuf> {
@@ -159,18 +161,6 @@ fn is_drive_relative(path: &Path) -> bool {
             path.components().next(),
             Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
         )
-}
-
-fn windows_env_value<'a>(env_map: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
-    env_map
-        .get(key)
-        .or_else(|| {
-            env_map
-                .iter()
-                .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
-                .map(|(_, value)| value)
-        })
-        .map(String::as_str)
 }
 
 #[cfg(test)]

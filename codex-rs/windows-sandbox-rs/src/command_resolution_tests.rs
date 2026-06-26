@@ -1,18 +1,11 @@
 use super::resolve_windows_executable;
 use super::resolve_windows_launch;
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
-
-fn unresolved(program: &str) -> WindowsProcessLaunch {
-    WindowsProcessLaunch {
-        application_path: None,
-        command: vec![program.to_string(), "argument".to_string()],
-    }
-}
 
 #[test]
 fn resolves_with_case_insensitive_child_path_and_pathext() {
@@ -28,13 +21,17 @@ fn resolves_with_case_insensitive_child_path_and_pathext() {
         ("PathExt".to_string(), ".BIN".to_string()),
     ]);
 
-    let launch = resolve_windows_launch(unresolved("child-only"), &cwd, &env)
-        .expect("resolve from child environment");
+    let launch = resolve_windows_launch(
+        vec!["child-only".to_string(), "argument".to_string()],
+        &cwd,
+        &env,
+    )
+    .expect("resolve from child environment");
 
     assert_eq!(
         launch,
-        WindowsProcessLaunch {
-            application_path: Some(executable),
+        ResolvedWindowsProcessLaunch {
+            application_path: executable,
             command: vec!["child-only".to_string(), "argument".to_string()],
         }
     );

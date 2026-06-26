@@ -995,10 +995,7 @@ impl UnifiedExecProcessManager {
                     permission_profile: &request.permission_profile,
                     workspace_roots: request.windows_sandbox_workspace_roots.as_slice(),
                     codex_home: codex_home.as_ref(),
-                    launch: codex_windows_sandbox::WindowsProcessLaunch {
-                        application_path: None,
-                        command: request.command.clone(),
-                    },
+                    command: request.command.clone(),
                     cwd: native_cwd.as_path(),
                     env_map: request.env.clone(),
                     windows_sandbox_level: request.windows_sandbox_level,

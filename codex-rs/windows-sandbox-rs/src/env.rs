@@ -31,7 +31,7 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
     env_map.entry("LESS".into()).or_insert_with(|| "".into());
 }
 
-// Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
+// Capture APIs accept partial environments, so keep PATH and PATHEXT stable for those callers.
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     if windows_env_value(env_map, "PATH").is_none()
         && let Ok(path) = env::var("PATH")
@@ -47,7 +47,7 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
 
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
     let existing = windows_env_value(env_map, "PATH")
-        .cloned()
+        .map(ToOwned::to_owned)
         .unwrap_or_default();
     let parts: Vec<String> = existing.split(';').map(ToString::to_string).collect();
     if parts
@@ -68,7 +68,7 @@ fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
 
 fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
     let default = windows_env_value(env_map, "PATHEXT")
-        .cloned()
+        .map(ToOwned::to_owned)
         .unwrap_or(".COM;.EXE;.BAT;.CMD".to_string());
     let exts: Vec<String> = default
         .split(';')
@@ -98,13 +98,19 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
     set_windows_env_value(env_map, "PATHEXT", combined.join(";"));
 }
 
-fn windows_env_value<'a>(env_map: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
-    env_map.get(key).or_else(|| {
-        env_map
-            .iter()
-            .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
-            .map(|(_, value)| value)
-    })
+pub(crate) fn windows_env_value<'a>(
+    env_map: &'a HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    env_map
+        .get(key)
+        .or_else(|| {
+            env_map
+                .iter()
+                .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+                .map(|(_, value)| value)
+        })
+        .map(String::as_str)
 }
 
 fn set_windows_env_value(env_map: &mut HashMap<String, String>, key: &str, value: String) {

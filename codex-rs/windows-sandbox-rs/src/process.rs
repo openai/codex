@@ -39,14 +39,11 @@ pub struct CreatedProcess {
     _desktop: LaunchDesktop,
 }
 
-/// The command line and optional executable path supplied to a Windows process launch.
-///
-/// Callers that have already resolved an executable can set `application_path` so it is passed as
-/// `lpApplicationName`. A value of `None` preserves Windows' command-line lookup behavior.
+/// A Windows process launch whose executable was resolved from the final child environment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[doc(hidden)]
-pub struct WindowsProcessLaunch {
-    pub application_path: Option<PathBuf>,
+pub struct ResolvedWindowsProcessLaunch {
+    pub application_path: PathBuf,
     pub command: Vec<String>,
 }
 
@@ -87,7 +84,7 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
 }
 
 pub(crate) struct CreateProcessAsUserRequest<'a> {
-    pub(crate) launch: &'a WindowsProcessLaunch,
+    pub(crate) launch: &'a ResolvedWindowsProcessLaunch,
     pub(crate) cwd: &'a Path,
     pub(crate) env_map: &'a HashMap<String, String>,
     pub(crate) logs_base_dir: Option<&'a Path>,
@@ -112,8 +109,7 @@ pub(crate) unsafe fn create_process_as_user(
     } = request;
     let cmdline_str = argv_to_command_line(&launch.command);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
-    let application_name = launch.application_path.as_deref().map(to_wide);
-    let application_name_ptr = application_name.as_ref().map_or(ptr::null(), Vec::as_ptr);
+    let application_name = to_wide(&launch.application_path);
     let env_block = make_env_block(env_map);
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
@@ -150,7 +146,7 @@ pub(crate) unsafe fn create_process_as_user(
             let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
             let ok = CreateProcessAsUserW(
                 h_token,
-                application_name_ptr,
+                application_name.as_ptr(),
                 cmdline.as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -190,7 +186,7 @@ pub(crate) unsafe fn create_process_as_user(
             let creation_flags = CREATE_UNICODE_ENVIRONMENT;
             let ok = CreateProcessAsUserW(
                 h_token,
-                application_name_ptr,
+                application_name.as_ptr(),
                 cmdline.as_mut_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -253,7 +249,7 @@ pub struct PipeSpawnHandles {
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_process_with_pipes(
     h_token: HANDLE,
-    launch: &WindowsProcessLaunch,
+    launch: &ResolvedWindowsProcessLaunch,
     cwd: &Path,
     env_map: &HashMap<String, String>,
     stdin_mode: StdinMode,

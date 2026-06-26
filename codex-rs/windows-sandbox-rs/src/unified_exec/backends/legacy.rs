@@ -5,9 +5,9 @@ use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
 use crate::logging::log_failure;
 use crate::logging::log_success;
+use crate::process::ResolvedWindowsProcessLaunch;
 use crate::process::StderrMode;
 use crate::process::StdinMode;
-use crate::process::WindowsProcessLaunch;
 use crate::process::read_handle_loop;
 use crate::process::spawn_process_with_pipes;
 use crate::spawn_prep::LegacyAclSids;
@@ -60,7 +60,7 @@ struct LegacyProcessHandles {
 #[allow(clippy::too_many_arguments)]
 fn spawn_legacy_process(
     h_token: HANDLE,
-    launch: &WindowsProcessLaunch,
+    launch: &ResolvedWindowsProcessLaunch,
     cwd: &Path,
     env_map: &HashMap<String, String>,
     use_private_desktop: bool,
@@ -275,7 +275,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    launch: WindowsProcessLaunch,
+    command: Vec<String>,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
@@ -291,13 +291,13 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         codex_home,
         cwd,
         &mut env_map,
-        &launch.command,
+        &command,
         SpawnPrepOptions {
             inherit_path: false,
             add_git_safe_directory: false,
         },
     )?;
-    let launch = resolve_windows_launch(launch, cwd, &env_map)?;
+    let launch = resolve_windows_launch(command, cwd, &env_map)?;
     if !common.permissions.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
     }

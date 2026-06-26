@@ -241,12 +241,12 @@ pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
 pub use process::PipeSpawnHandles;
 #[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use process::ResolvedWindowsProcessLaunch;
+#[cfg(target_os = "windows")]
 pub use process::StderrMode;
 #[cfg(target_os = "windows")]
 pub use process::StdinMode;
-#[cfg(target_os = "windows")]
-#[doc(hidden)]
-pub use process::WindowsProcessLaunch;
 #[cfg(target_os = "windows")]
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
@@ -351,10 +351,10 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::WindowsSandboxCancellationToken;
+    use super::command_resolution::resolve_windows_launch;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::process::CreateProcessAsUserRequest;
-    use super::process::WindowsProcessLaunch;
     use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
@@ -564,10 +564,7 @@ mod windows_impl {
         )?;
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
-        let launch = WindowsProcessLaunch {
-            application_path: None,
-            command: command.clone(),
-        };
+        let launch = resolve_windows_launch(command.clone(), cwd, &env_map)?;
         let spawn_res = unsafe {
             create_process_as_user(
                 security.h_token,

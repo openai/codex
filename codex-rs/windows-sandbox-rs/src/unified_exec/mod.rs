@@ -9,7 +9,6 @@
 
 mod backends;
 
-use crate::process::WindowsProcessLaunch;
 use anyhow::Result;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -19,7 +18,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Fully resolved Windows sandbox session launch request.
+/// Windows sandbox session launch request.
 ///
 /// Callers should parse their own input shape first, then use this request to
 /// share the elevated-vs-legacy backend selection and session launch path.
@@ -27,7 +26,7 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
     pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
-    pub launch: WindowsProcessLaunch,
+    pub command: Vec<String>,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -54,7 +53,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.launch,
+            request.command,
             request.cwd,
             request.env_map,
             request.proxy_enforced,
@@ -75,7 +74,7 @@ pub async fn spawn_windows_sandbox_session_for_level(
             request.permission_profile,
             request.workspace_roots,
             request.codex_home,
-            request.launch,
+            request.command,
             request.cwd,
             request.env_map,
             request.timeout_ms,

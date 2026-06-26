@@ -7,7 +7,7 @@
 //! not use this protocol, and non‑unified exec capture uses it only when running
 //! through the elevated runner.
 
-use crate::process::WindowsProcessLaunch;
+use crate::process::ResolvedWindowsProcessLaunch;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -58,7 +58,7 @@ pub enum Message {
 /// Spawn parameters sent from parent to runner.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SpawnRequest {
-    pub launch: WindowsProcessLaunch,
+    pub launch: ResolvedWindowsProcessLaunch,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub permission_profile: PermissionProfile,
@@ -213,8 +213,8 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(PathBuf::from(r"C:\workspace"))
                 .expect("absolute workspace root"),
         ];
-        let launch = WindowsProcessLaunch {
-            application_path: Some(PathBuf::from(r"C:\Windows\System32\cmd.exe")),
+        let launch = ResolvedWindowsProcessLaunch {
+            application_path: PathBuf::from(r"C:\Windows\System32\cmd.exe"),
             command: vec!["cmd.exe".to_string(), "/c".to_string(), "ver".to_string()],
         };
         let msg = FramedMessage {
