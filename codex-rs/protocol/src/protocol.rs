@@ -2362,7 +2362,7 @@ pub struct McpToolCallBeginEvent {
     pub app_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub template_id: Option<String>,
+    pub action_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -2387,7 +2387,7 @@ pub struct McpToolCallEndEvent {
     pub app_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub template_id: Option<String>,
+    pub action_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugin_id: Option<String>,
@@ -5112,7 +5112,7 @@ mod tests {
                 mcp_app_resource_uri: Some("app://connector".into()),
                 link_id: Some("link_123".into()),
                 app_name: Some("Calendar".into()),
-                template_id: Some("calendar_template".into()),
+                action_name: Some("create_event".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::InProgress,
                 result: None,
@@ -5135,7 +5135,7 @@ mod tests {
                 );
                 assert_eq!(event.link_id.as_deref(), Some("link_123"));
                 assert_eq!(event.app_name.as_deref(), Some("Calendar"));
-                assert_eq!(event.template_id.as_deref(), Some("calendar_template"));
+                assert_eq!(event.action_name.as_deref(), Some("create_event"));
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
             }
             _ => panic!("expected McpToolCallBegin event"),
@@ -5227,7 +5227,7 @@ mod tests {
                 mcp_app_resource_uri: Some("app://connector".into()),
                 link_id: Some("link_123".into()),
                 app_name: Some("Calendar".into()),
-                template_id: Some("calendar_template".into()),
+                action_name: Some("create_event".into()),
                 plugin_id: Some("sample@test".into()),
                 status: McpToolCallStatus::Completed,
                 result: Some(CallToolResult {
@@ -5255,7 +5255,7 @@ mod tests {
                 );
                 assert_eq!(event.link_id.as_deref(), Some("link_123"));
                 assert_eq!(event.app_name.as_deref(), Some("Calendar"));
-                assert_eq!(event.template_id.as_deref(), Some("calendar_template"));
+                assert_eq!(event.action_name.as_deref(), Some("create_event"));
                 assert_eq!(event.plugin_id.as_deref(), Some("sample@test"));
                 assert_eq!(event.duration, Duration::from_millis(42));
                 assert!(event.is_success());
