@@ -21,13 +21,14 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::ToolName;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
+use codex_rmcp_client::InProcessTransportFactory;
 use codex_rmcp_client::RmcpClient;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationAction;
@@ -37,8 +38,10 @@ use rmcp::model::Meta;
 use rmcp::model::NumberOrString;
 use rmcp::model::Tool;
 use std::collections::HashSet;
+use std::io;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tokio::io::DuplexStream;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     ToolInfo {
@@ -85,23 +88,25 @@ fn create_test_server_info(title: &str) -> McpServerInfo {
     }
 }
 
+struct TestInProcessTransportFactory;
+
+impl InProcessTransportFactory for TestInProcessTransportFactory {
+    fn open(&self) -> BoxFuture<'static, io::Result<DuplexStream>> {
+        async {
+            let (client_stream, _server_stream) = tokio::io::duplex(1);
+            Ok(client_stream)
+        }
+        .boxed()
+    }
+}
+
 async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> AsyncManagedClient {
     let tool_filter = ToolFilter::default();
     let managed_client = ManagedClient {
         client: Arc::new(
-            RmcpClient::new_streamable_http_client(
-                "test",
-                "http://127.0.0.1:1",
-                Some("test-token".to_string()),
-                /*http_headers*/ None,
-                /*env_http_headers*/ None,
-                OAuthCredentialsStoreMode::default(),
-                AuthKeyringBackendKind::default(),
-                Arc::new(ReqwestHttpClient),
-                /*auth_provider*/ None,
-            )
-            .await
-            .expect("create streamable HTTP RMCP client"),
+            RmcpClient::new_in_process_client(Arc::new(TestInProcessTransportFactory))
+                .await
+                .expect("create in-process RMCP client"),
         ),
         server_info: create_test_server_info("Ready"),
         tools,

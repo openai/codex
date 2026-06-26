@@ -33,7 +33,7 @@ impl RmcpClient {
         Option<OAuthPersistor>,
     )> {
         let should_retry = match &initial_transport {
-            PendingTransport::Stdio { .. } => false,
+            PendingTransport::InProcess { .. } | PendingTransport::Stdio { .. } => false,
             PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
