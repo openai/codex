@@ -9,8 +9,6 @@ use codex_code_mode_protocol::host::WireWaitRequest;
 
 use super::RemoteSession;
 
-const MAX_REMOTE_WAIT_MS: u64 = 300_000;
-
 pub(super) fn public_cell_id(generation: u64, cell_id: &WireCellId) -> CellId {
     if generation == 1 {
         CellId::new(cell_id.as_str().to_string())
@@ -48,12 +46,6 @@ pub(super) fn remote_wait_request(
     session: &RemoteSession,
     request: WaitRequest,
 ) -> Result<WireWaitRequest, String> {
-    if request.yield_time_ms > MAX_REMOTE_WAIT_MS {
-        return Err(format!(
-            "code-mode wait duration {}ms exceeds the {MAX_REMOTE_WAIT_MS}ms limit",
-            request.yield_time_ms
-        ));
-    }
     Ok(WireWaitRequest {
         cell_id: remote_cell_id(session, &request.cell_id)?,
         yield_time_ms: request.yield_time_ms,

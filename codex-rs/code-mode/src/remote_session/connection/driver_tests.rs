@@ -28,9 +28,11 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use super::ConnectionCleanup;
 use super::ConnectionDriver;
 use super::DriverCommand;
 use super::DriverEvent;
+use super::DriverLifecycle;
 use super::RemoteSession;
 
 struct DriverHarness {
@@ -39,6 +41,7 @@ struct DriverHarness {
     execute_claim_tx: mpsc::UnboundedSender<RequestId>,
     outgoing_rx: mpsc::Receiver<codex_code_mode_protocol::host::EncodedFrame>,
     cancellation: CancellationToken,
+    cleanup: ConnectionCleanup,
     alive: Arc<AtomicBool>,
     driver_task: tokio::task::JoinHandle<()>,
 }
@@ -49,15 +52,19 @@ impl DriverHarness {
         let (event_tx, event_rx) = mpsc::channel(/*max_capacity*/ 16);
         let (outgoing_tx, outgoing_rx) = mpsc::channel(/*max_capacity*/ 16);
         let cancellation = CancellationToken::new();
+        let cleanup = ConnectionCleanup::new();
         let alive = Arc::new(AtomicBool::new(true));
         let (driver, execute_claim_tx) = ConnectionDriver::new(
             command_rx,
             event_rx,
             event_tx.clone(),
             outgoing_tx,
-            Arc::clone(&alive),
-            Arc::new(StdMutex::new(None)),
-            cancellation.clone(),
+            DriverLifecycle {
+                alive: Arc::clone(&alive),
+                failure: Arc::new(StdMutex::new(None)),
+                cancellation: cancellation.clone(),
+                cleanup: cleanup.clone(),
+            },
         );
         let driver_task = tokio::spawn(driver.run());
         Self {
@@ -66,6 +73,7 @@ impl DriverHarness {
             execute_claim_tx,
             outgoing_rx,
             cancellation,
+            cleanup,
             alive,
             driver_task,
         }
@@ -143,6 +151,25 @@ impl DriverHarness {
             .expect("claim execute");
         delivered.started
     }
+
+    async fn start_tool_delegate(&self, session: &RemoteSession, id: DelegateRequestId) {
+        self.event_tx
+            .send(DriverEvent::HostMessage(HostToClient::DelegateRequest {
+                id,
+                session_id: session.id.clone(),
+                request: DelegateRequest::InvokeTool {
+                    invocation: WireNestedToolCall {
+                        cell_id: CellId::new("1".to_string()).into(),
+                        runtime_tool_call_id: "tool-1".to_string(),
+                        tool_name: ToolName::plain("slow").into(),
+                        tool_kind: codex_code_mode_protocol::CodeModeToolKind::Function.into(),
+                        input: None,
+                    },
+                },
+            }))
+            .await
+            .expect("delegate request");
+    }
 }
 
 impl Drop for DriverHarness {
@@ -159,6 +186,73 @@ struct RecordingDelegate {
 }
 
 struct PanickingDelegate;
+
+#[derive(Debug, Eq, PartialEq)]
+enum HeldDelegateEvent {
+    Started,
+    Cancelled,
+    Finished,
+    CellClosed(CellId),
+}
+
+struct HeldDelegate {
+    events_tx: mpsc::UnboundedSender<HeldDelegateEvent>,
+    release: CancellationToken,
+}
+
+impl HeldDelegate {
+    fn new() -> (
+        Arc<Self>,
+        mpsc::UnboundedReceiver<HeldDelegateEvent>,
+        CancellationToken,
+    ) {
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let release = CancellationToken::new();
+        (
+            Arc::new(Self {
+                events_tx,
+                release: release.clone(),
+            }),
+            events_rx,
+            release,
+        )
+    }
+}
+
+impl CodeModeSessionDelegate for HeldDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        let events_tx = self.events_tx.clone();
+        let release = self.release.clone();
+        Box::pin(async move {
+            let _ = events_tx.send(HeldDelegateEvent::Started);
+            cancellation_token.cancelled().await;
+            let _ = events_tx.send(HeldDelegateEvent::Cancelled);
+            release.cancelled().await;
+            let _ = events_tx.send(HeldDelegateEvent::Finished);
+            Err("cancelled".to_string())
+        })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, cell_id: &CellId) {
+        let _ = self
+            .events_tx
+            .send(HeldDelegateEvent::CellClosed(cell_id.clone()));
+    }
+}
 
 impl CodeModeSessionDelegate for PanickingDelegate {
     fn invoke_tool<'a>(
@@ -219,6 +313,15 @@ fn remote_session() -> RemoteSession {
         id: SessionId::new("session-1").expect("session ID"),
         generation: 1,
     }
+}
+
+async fn next_held_delegate_event(
+    events_rx: &mut mpsc::UnboundedReceiver<HeldDelegateEvent>,
+) -> HeldDelegateEvent {
+    tokio::time::timeout(Duration::from_secs(1), events_rx.recv())
+        .await
+        .expect("delegate event timeout")
+        .expect("delegate event stream")
 }
 
 #[tokio::test]
@@ -352,6 +455,181 @@ async fn delegate_cancel_is_best_effort_and_sends_no_late_response() {
     assert!(!harness.alive.load(Ordering::Acquire));
     assert_eq!(delegate.invocations.load(Ordering::Relaxed), 1);
     assert_eq!(delegate.notifications.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn terminate_returns_before_delegate_cleanup_but_cell_closed_waits() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let (delegate, mut events_rx, release) = HeldDelegate::new();
+    harness.open(session.clone(), delegate).await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+    let delegate_id = DelegateRequestId::new(/*value*/ 7);
+    harness.start_tool_delegate(&session, delegate_id).await;
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Started
+    );
+
+    let (response_tx, response_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::Terminate {
+            session: session.clone(),
+            cell_id: CellId::new("1".to_string()),
+            response_tx,
+        })
+        .await
+        .expect("terminate command");
+    harness.outgoing_rx.recv().await.expect("terminate frame");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(
+            HostToClient::CancelDelegateRequest { id: delegate_id },
+        ))
+        .await
+        .expect("delegate cancel");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::CellClosed {
+            session_id: session.id,
+            cell_id: CellId::new("1".to_string()).into(),
+        }))
+        .await
+        .expect("cell close");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::WaitCompleted {
+                    outcome: WireWaitOutcome::LiveCell(WireRuntimeResponse::Terminated {
+                        cell_id: CellId::new("1".to_string()).into(),
+                        content_items: Vec::new(),
+                    }),
+                },
+            },
+        }))
+        .await
+        .expect("terminate response");
+
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Cancelled
+    );
+    assert_eq!(
+        response_rx.await.expect("terminate reply"),
+        Ok(codex_code_mode_protocol::WaitOutcome::LiveCell(
+            codex_code_mode_protocol::RuntimeResponse::Terminated {
+                cell_id: CellId::new("1".to_string()),
+                content_items: Vec::new(),
+            }
+        ))
+    );
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    release.cancel();
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Finished
+    );
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
+    );
+    assert!(matches!(
+        harness.outgoing_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_cancelled_delegate_cleanup_and_cell_closed() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let (delegate, mut events_rx, release) = HeldDelegate::new();
+    harness.open(session.clone(), delegate).await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+    let delegate_id = DelegateRequestId::new(/*value*/ 7);
+    harness.start_tool_delegate(&session, delegate_id).await;
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Started
+    );
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::ShutdownSession {
+            session: session.clone(),
+            response_tx,
+        })
+        .await
+        .expect("shutdown command");
+    harness.outgoing_rx.recv().await.expect("shutdown frame");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(
+            HostToClient::CancelDelegateRequest { id: delegate_id },
+        ))
+        .await
+        .expect("delegate cancel");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::CellClosed {
+            session_id: session.id.clone(),
+            cell_id: CellId::new("1".to_string()).into(),
+        }))
+        .await
+        .expect("cell close");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::SessionClosed {
+                    session_id: session.id,
+                },
+            },
+        }))
+        .await
+        .expect("shutdown response");
+
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Cancelled
+    );
+    tokio::task::yield_now().await;
+    assert!(matches!(
+        response_rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    release.cancel();
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Finished
+    );
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
+    );
+    assert_eq!(response_rx.await.expect("shutdown reply"), Ok(()));
+    assert!(matches!(
+        harness.outgoing_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
 }
 
 #[tokio::test]
@@ -625,6 +903,61 @@ async fn mismatched_terminate_response_fails_connection() {
     assert_eq!(
         *delegate.closed_cells.lock().expect("closed cells lock"),
         vec![CellId::new("1".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn remote_wait_accepts_durations_longer_than_five_minutes() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    harness
+        .open(session.clone(), Arc::new(RecordingDelegate::default()))
+        .await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+    let (response_tx, response_rx) = oneshot::channel();
+    harness
+        .command_tx
+        .send(DriverCommand::Wait {
+            session,
+            request: WaitRequest {
+                cell_id: CellId::new("1".to_string()),
+                yield_time_ms: 300_001,
+            },
+            caller_cancellation: CancellationToken::new(),
+            response_tx,
+        })
+        .await
+        .expect("wait command");
+    tokio::time::timeout(Duration::from_secs(1), harness.outgoing_rx.recv())
+        .await
+        .expect("wait frame timeout")
+        .expect("wait frame");
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::WaitCompleted {
+                    outcome: WireWaitOutcome::LiveCell(WireRuntimeResponse::Yielded {
+                        cell_id: CellId::new("1".to_string()).into(),
+                        content_items: Vec::new(),
+                    }),
+                },
+            },
+        }))
+        .await
+        .expect("wait response");
+
+    assert_eq!(
+        response_rx.await.expect("wait reply"),
+        Ok(codex_code_mode_protocol::WaitOutcome::LiveCell(
+            codex_code_mode_protocol::RuntimeResponse::Yielded {
+                cell_id: CellId::new("1".to_string()),
+                content_items: Vec::new(),
+            }
+        ))
     );
 }
 
@@ -1014,11 +1347,63 @@ async fn connection_failure_closes_every_live_cell_once() {
         .send(DriverEvent::Failed("host crashed".to_string()))
         .await
         .expect("failure event");
-    tokio::task::yield_now().await;
+    tokio::time::timeout(Duration::from_secs(1), harness.cleanup.wait())
+        .await
+        .expect("connection cleanup timeout");
     assert_eq!(
         *delegate.closed_cells.lock().expect("closed cells lock"),
         vec![CellId::new("1".to_string())]
     );
+}
+
+#[tokio::test]
+async fn connection_cleanup_completes_after_delegate_and_cell_closed() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let (delegate, mut events_rx, release) = HeldDelegate::new();
+    harness.open(session.clone(), delegate).await;
+    let _started = harness
+        .start_cell(session.clone(), /*request_id*/ 2, "1")
+        .await;
+    harness
+        .start_tool_delegate(&session, DelegateRequestId::new(/*value*/ 7))
+        .await;
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Started
+    );
+
+    harness
+        .event_tx
+        .send(DriverEvent::Failed("host crashed".to_string()))
+        .await
+        .expect("failure event");
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Cancelled
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), harness.cleanup.wait())
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    release.cancel();
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::Finished
+    );
+    assert_eq!(
+        next_held_delegate_event(&mut events_rx).await,
+        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
+    );
+    tokio::time::timeout(Duration::from_secs(1), harness.cleanup.wait())
+        .await
+        .expect("connection cleanup timeout");
 }
 
 #[tokio::test]

@@ -158,6 +158,7 @@ struct SessionInner {
     next_generation: AtomicU64,
     shutdown_requested: AtomicBool,
     shutdown_result: StdMutex<Option<ShutdownResultReceiver>>,
+    retired_connections: StdMutex<Vec<Arc<Connection>>>,
 }
 
 /// A logical code-mode session assigned to a process-owned host.
@@ -185,6 +186,7 @@ impl ProcessOwnedCodeModeSession {
                 next_generation: AtomicU64::new(1),
                 shutdown_requested: AtomicBool::new(false),
                 shutdown_result: StdMutex::new(None),
+                retired_connections: StdMutex::new(Vec::new()),
             }),
         }
     }
@@ -242,7 +244,8 @@ impl SessionInner {
                     SessionState::Open(binding) if binding.connection.is_alive() => {
                         return Ok(binding.clone());
                     }
-                    SessionState::Open(_) => {
+                    SessionState::Open(binding) => {
+                        self.retain_connection_for_cleanup(Arc::clone(&binding.connection));
                         *state = SessionState::New;
                         continue;
                     }
@@ -326,14 +329,15 @@ impl SessionInner {
                 match &*state {
                     SessionState::New => {
                         *state = SessionState::Closed;
-                        return Ok(());
+                        ShutdownAction::Finish
                     }
                     SessionState::Opening { result_rx, .. } => {
                         ShutdownAction::WaitForOpen(result_rx.clone())
                     }
                     SessionState::Open(binding) if !binding.connection.is_alive() => {
-                        *state = SessionState::Closed;
-                        return Ok(());
+                        let connection = Arc::clone(&binding.connection);
+                        *state = SessionState::Closing;
+                        ShutdownAction::WaitForConnectionCleanup(connection)
                     }
                     SessionState::Open(binding) => {
                         let binding = binding.clone();
@@ -350,8 +354,25 @@ impl SessionInner {
                 ShutdownAction::WaitForOpen(result_rx) => {
                     let _ = wait_for_watch(result_rx).await;
                 }
+                ShutdownAction::Finish => {
+                    self.wait_for_retired_cleanup().await;
+                    return Ok(());
+                }
+                ShutdownAction::WaitForConnectionCleanup(connection) => {
+                    connection.wait_for_cleanup().await;
+                    self.wait_for_retired_cleanup().await;
+                    *self
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = SessionState::Closed;
+                    return Ok(());
+                }
                 ShutdownAction::Close(binding) => {
                     let result = binding.connection.shutdown_session(binding.remote).await;
+                    if result.is_err() && !binding.connection.is_alive() {
+                        binding.connection.wait_for_cleanup().await;
+                    }
+                    self.wait_for_retired_cleanup().await;
                     *self
                         .state
                         .lock()
@@ -361,10 +382,35 @@ impl SessionInner {
             }
         }
     }
+
+    fn retain_connection_for_cleanup(&self, connection: Arc<Connection>) {
+        let mut retired = self
+            .retired_connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retired.retain(|connection| !connection.cleanup_is_complete());
+        if !connection.cleanup_is_complete() {
+            retired.push(connection);
+        }
+    }
+
+    async fn wait_for_retired_cleanup(&self) {
+        let retired = std::mem::take(
+            &mut *self
+                .retired_connections
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for connection in retired {
+            connection.wait_for_cleanup().await;
+        }
+    }
 }
 
 enum ShutdownAction {
     WaitForOpen(watch::Receiver<Option<Result<SessionBinding, String>>>),
+    Finish,
+    WaitForConnectionCleanup(Arc<Connection>),
     Close(SessionBinding),
 }
 

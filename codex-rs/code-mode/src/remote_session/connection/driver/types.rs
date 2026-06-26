@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_code_mode_protocol::CellId;
-use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::RuntimeResponse;
@@ -168,6 +166,11 @@ pub(super) struct DeferredWait {
     pub(super) response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
 }
 
+pub(super) struct DeferredShutdown {
+    pub(super) session_id: SessionId,
+    pub(super) response_tx: oneshot::Sender<Result<(), String>>,
+}
+
 impl PendingRequest {
     pub(super) fn cancellation_mut(&mut self) -> Option<&mut CancellableRequest> {
         match self {
@@ -191,32 +194,4 @@ impl PendingRequest {
             }
         }
     }
-}
-
-pub(super) struct SessionRecord {
-    pub(super) remote: RemoteSession,
-    pub(super) delegate: Arc<dyn CodeModeSessionDelegate>,
-    pub(super) phase: SessionPhase,
-    pub(super) cells: HashMap<WireCellId, CellId>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum SessionPhase {
-    Ready,
-    Closing,
-}
-
-pub(super) struct DelegateCall {
-    pub(super) session_id: SessionId,
-    pub(super) cell_id: CellId,
-    pub(super) cancellation: CancellationToken,
-}
-
-pub(super) enum DelegateTask {
-    InvokeTool(CodeModeNestedToolCall),
-    Notify {
-        call_id: String,
-        cell_id: CellId,
-        text: String,
-    },
 }

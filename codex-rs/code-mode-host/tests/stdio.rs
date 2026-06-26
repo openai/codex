@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -48,6 +50,8 @@ struct CancellationDelegate {
     events_tx: mpsc::UnboundedSender<CallbackEvent>,
     fast_tool_release: Semaphore,
     slow_tool_started: Semaphore,
+    hold_slow_cleanup: AtomicBool,
+    slow_cleanup_release: Semaphore,
 }
 
 struct OversizedResultDelegate;
@@ -82,9 +86,19 @@ impl CancellationDelegate {
                 events_tx,
                 fast_tool_release: Semaphore::new(/*permits*/ 0),
                 slow_tool_started: Semaphore::new(/*permits*/ 0),
+                hold_slow_cleanup: AtomicBool::new(false),
+                slow_cleanup_release: Semaphore::new(/*permits*/ 0),
             }),
             events_rx,
         )
+    }
+
+    fn hold_slow_cleanup(&self) {
+        self.hold_slow_cleanup.store(true, Ordering::Release);
+    }
+
+    fn release_slow_cleanup(&self) {
+        self.slow_cleanup_release.add_permits(1);
     }
 }
 
@@ -112,6 +126,14 @@ impl CodeModeSessionDelegate for CancellationDelegate {
                 self.slow_tool_started.add_permits(1);
                 cancellation_token.cancelled().await;
                 let _ = self.events_tx.send(CallbackEvent::Cancelled(tool_name));
+                if self.hold_slow_cleanup.load(Ordering::Acquire) {
+                    let permit = self
+                        .slow_cleanup_release
+                        .acquire()
+                        .await
+                        .map_err(|_| "slow tool cleanup release closed".to_string())?;
+                    permit.forget();
+                }
                 return Err("slow tool cancelled".to_string());
             }
             let permit = self
@@ -676,9 +698,10 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
 
     let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(proxy_program);
     let (delegate_a, mut events_a) = CancellationDelegate::new();
+    delegate_a.hold_slow_cleanup();
     let delegate_b = Arc::new(RecordingDelegate::default());
     let session_a = provider
-        .create_session(delegate_a)
+        .create_session(delegate_a.clone())
         .await
         .expect("create first remote session");
     let session_b = provider
@@ -788,23 +811,13 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
             .expect("second wait task")
             .is_err()
     );
-    let callback_events = [
-        next_callback_event(&mut events_a).await,
-        next_callback_event(&mut events_a).await,
-    ];
-    assert!(callback_events.contains(&CallbackEvent::Cancelled("tool_call_slow".to_string())));
-    assert!(callback_events.contains(&CallbackEvent::CellClosed(cell_a.clone())));
     assert_eq!(
-        *delegate_b.closed_cells.lock().expect("closed cells lock"),
-        vec![cell_b]
+        next_callback_event(&mut events_a).await,
+        CallbackEvent::Cancelled("tool_call_slow".to_string())
     );
-    assert!(matches!(
-        events_a.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
-    ));
 
     assert_eq!(
-        execute(&session_a, execute_request(r#"text("replacement");"#)).await,
+        execute(&session_b, execute_request(r#"text("replacement");"#)).await,
         RuntimeResponse::Result {
             cell_id: cell_id("g2:1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
@@ -813,19 +826,54 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
             error_text: None,
         }
     );
-    let stale_error = session_a
+    let stale_error = session_b
         .wait(WaitRequest {
-            cell_id: cell_a,
+            cell_id: cell_b.clone(),
             yield_time_ms: 1,
         })
         .await
         .expect_err("stale cell should be rejected");
     assert!(stale_error.contains("stale code-mode host generation"));
 
-    session_a
-        .shutdown()
+    let shutdown_session_a = Arc::clone(&session_a);
+    let mut shutdown_a = tokio::spawn(async move { shutdown_session_a.shutdown().await });
+    let shutdown_session_b = Arc::clone(&session_b);
+    let mut shutdown_b = tokio::spawn(async move { shutdown_session_b.shutdown().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut shutdown_a)
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut shutdown_b)
+            .await
+            .is_err()
+    );
+
+    delegate_a.release_slow_cleanup();
+    assert_eq!(
+        next_callback_event(&mut events_a).await,
+        CallbackEvent::CellClosed(cell_a.clone())
+    );
+    shutdown_a
         .await
+        .expect("shutdown task")
+        .expect("shutdown failed session after cleanup");
+    shutdown_b
+        .await
+        .expect("replacement shutdown task")
         .expect("shutdown replacement session");
-    session_b.shutdown().await.expect("shutdown failed session");
+    assert!(
+        delegate_b
+            .closed_cells
+            .lock()
+            .expect("closed cells lock")
+            .contains(&cell_b)
+    );
+    assert!(matches!(
+        events_a.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
     std::fs::remove_dir_all(proxy_dir).expect("remove host proxy directory");
 }
