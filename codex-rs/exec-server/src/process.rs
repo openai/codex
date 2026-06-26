@@ -31,7 +31,7 @@ pub struct StartedExecProcess {
 pub enum ExecProcessEvent {
     Output(ProcessOutputChunk),
     Exited { seq: u64, exit_code: i32 },
-    Closed { seq: u64 },
+    Closed { seq: u64, sandbox_denied: bool },
     Failed(String),
 }
 
@@ -67,7 +67,9 @@ impl ExecProcessEvent {
     pub(crate) fn seq(&self) -> Option<u64> {
         match self {
             ExecProcessEvent::Output(chunk) => Some(chunk.seq),
-            ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq } => Some(*seq),
+            ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq, .. } => {
+                Some(*seq)
+            }
             ExecProcessEvent::Failed(_) => None,
         }
     }
@@ -125,13 +127,18 @@ impl ExecProcessEventLog {
         let live_rx = self.inner.live_tx.subscribe();
         let replay = history.events.iter().cloned().collect();
 
-        ExecProcessEventReceiver { replay, live_rx }
+        ExecProcessEventReceiver {
+            replay,
+            live_rx,
+            _keepalive: None,
+        }
     }
 }
 
 pub struct ExecProcessEventReceiver {
     replay: VecDeque<ExecProcessEvent>,
     live_rx: broadcast::Receiver<ExecProcessEvent>,
+    _keepalive: Option<broadcast::Sender<ExecProcessEvent>>,
 }
 
 impl ExecProcessEventReceiver {
@@ -140,6 +147,17 @@ impl ExecProcessEventReceiver {
         Self {
             replay: VecDeque::new(),
             live_rx,
+            _keepalive: None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn from_events(events: Vec<ExecProcessEvent>) -> Self {
+        let (live_tx, live_rx) = broadcast::channel(1);
+        Self {
+            replay: events.into(),
+            live_rx,
+            _keepalive: Some(live_tx),
         }
     }
 
@@ -218,7 +236,10 @@ mod tests {
             seq: 2,
             exit_code: 0,
         });
-        log.publish(ExecProcessEvent::Closed { seq: 3 });
+        log.publish(ExecProcessEvent::Closed {
+            seq: 3,
+            sandbox_denied: false,
+        });
 
         let mut events = log.subscribe();
         let replay = vec![
@@ -239,7 +260,10 @@ mod tests {
                     seq: 2,
                     exit_code: 0,
                 },
-                ExecProcessEvent::Closed { seq: 3 },
+                ExecProcessEvent::Closed {
+                    seq: 3,
+                    sandbox_denied: false,
+                },
             ]
         );
     }

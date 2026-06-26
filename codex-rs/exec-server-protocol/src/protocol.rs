@@ -534,6 +534,8 @@ pub struct ExecExitedNotification {
 pub struct ExecClosedNotification {
     pub process_id: ProcessId,
     pub seq: u64,
+    #[serde(default)]
+    pub sandbox_denied: bool,
 }
 
 mod base64_bytes {
@@ -564,6 +566,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecClosedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -707,5 +710,16 @@ mod tests {
             ),
             ("req-explicit-timeout", Some(1234))
         );
+    }
+
+    #[test]
+    fn closed_notification_accepts_legacy_payload_without_sandbox_denied() {
+        let notification: ExecClosedNotification = serde_json::from_value(serde_json::json!({
+            "processId": "proc-1",
+            "seq": 3,
+        }))
+        .expect("legacy closed notification should deserialize");
+
+        assert!(!notification.sandbox_denied);
     }
 }

@@ -11,6 +11,8 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 
 use super::ExecServerClient;
+use super::rendezvous_cluster;
+use super::rendezvous_route_id;
 use crate::ExecServerError;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
@@ -20,6 +22,17 @@ use crate::NoiseRendezvousConnectProvider;
 struct SequenceNoiseConnectProvider {
     bundles: Mutex<VecDeque<NoiseRendezvousConnectBundle>>,
     returned_urls: Mutex<Vec<String>>,
+}
+
+#[test]
+fn rendezvous_span_dimensions_exclude_signed_url_data() {
+    let url = "wss://codex-cloud-rendezvous.gateway.unified-2s.internal.api.openai.org/cloud-agent/c2-u2s/ws/environment/env-1?role=harness&sig=secret";
+
+    assert_eq!(rendezvous_cluster(url), Some("unified-2s"));
+    assert_eq!(rendezvous_route_id(url), Some("c2-u2s"));
+
+    let custom_url = "wss://customer.example/cloud-agent/unbounded/ws/environment/env-1?sig=secret";
+    assert_eq!(rendezvous_cluster(custom_url), None);
 }
 
 impl SequenceNoiseConnectProvider {

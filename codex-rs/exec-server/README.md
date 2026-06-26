@@ -334,9 +334,34 @@ Params:
 
 ```json
 {
-  "processId": "proc-1"
+  "processId": "proc-1",
+  "seq": 3,
+  "sandboxDenied": false
 }
 ```
+
+`sandboxDenied` lets streaming clients preserve executor-side sandbox denial
+detection without issuing a final `process/read` request. Older servers omit
+the field, which clients interpret as `false`.
+
+## Remote latency benchmark
+
+Run the repeatable benchmark against an already registered remote exec-server:
+
+```bash
+CODEX_EXEC_SERVER_NOISE_REGISTRY_URL="$REGISTRY_URL" \
+CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID="$ENVIRONMENT_ID" \
+CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN="$AUTH_TOKEN" \
+cargo run -p codex-exec-server --example remote_latency
+```
+
+It performs 5 warmups and 30 measured filesystem and process operations by
+default, then prints connection timing, p50/p95 samples, per-RPC phase timing,
+and bounded Rendezvous route dimensions. Set
+`EXEC_SERVER_LATENCY_WARMUP_ITERATIONS` or `EXEC_SERVER_LATENCY_ITERATIONS` to
+change sample counts. Process completion uses pushed events; set
+`EXEC_SERVER_LATENCY_PROCESS_COMPLETION=read` to measure the legacy extra
+`process/read` round trip as a control.
 
 ## Filesystem RPCs
 
@@ -432,5 +457,5 @@ Terminate it:
 {"id":4,"method":"process/terminate","params":{"processId":"proc-1"}}
 {"id":4,"result":{"running":true}}
 {"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0}}
-{"method":"process/closed","params":{"processId":"proc-1"}}
+{"method":"process/closed","params":{"processId":"proc-1","seq":4,"sandboxDenied":false}}
 ```

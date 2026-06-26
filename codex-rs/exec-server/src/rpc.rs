@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCErrorError;
@@ -333,65 +334,128 @@ impl RpcClient {
         drain_pending(&self.pending).await;
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.rpc.client_call",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.rpc.client_call",
+            rpc.method = method,
+            result = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+            pending_registration_ms = tracing::field::Empty,
+            serialize_ms = tracing::field::Empty,
+            enqueue_ms = tracing::field::Empty,
+            response_wait_ms = tracing::field::Empty,
+            deserialize_ms = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
     where
         P: Serialize,
         T: DeserializeOwned,
     {
-        let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
-        let (response_tx, response_rx) = oneshot::channel();
-        {
-            let mut pending = self.pending.lock().await;
-            // Registering the pending request and checking disconnect must be
-            // atomic with the reader's drain_pending path. Otherwise a call
-            // can sneak in after the drain and wait forever.
-            if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+        let started_at = Instant::now();
+        let span = tracing::Span::current();
+        let result = async {
+            let request_id =
+                RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
+            let (response_tx, response_rx) = oneshot::channel();
+            let pending_registration_started_at = Instant::now();
+            {
+                let mut pending = self.pending.lock().await;
+                // Registering the pending request and checking disconnect must be
+                // atomic with the reader's drain_pending path. Otherwise a call
+                // can sneak in after the drain and wait forever.
+                if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
+                    span.record(
+                        "pending_registration_ms",
+                        elapsed_ms(pending_registration_started_at),
+                    );
+                    return Err(RpcCallError::Closed);
+                }
+                pending.insert(request_id.clone(), response_tx);
+            }
+            span.record(
+                "pending_registration_ms",
+                elapsed_ms(pending_registration_started_at),
+            );
+
+            let serialize_started_at = Instant::now();
+            let params = match serde_json::to_value(params) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.pending.lock().await.remove(&request_id);
+                    span.record("serialize_ms", elapsed_ms(serialize_started_at));
+                    return Err(RpcCallError::Json(err));
+                }
+            };
+            span.record("serialize_ms", elapsed_ms(serialize_started_at));
+
+            let enqueue_started_at = Instant::now();
+            if self
+                .write_tx
+                .send(JSONRPCMessage::Request(JSONRPCRequest {
+                    id: request_id.clone(),
+                    method: method.to_string(),
+                    params: Some(params),
+                    trace: codex_otel::current_span_w3c_trace_context(),
+                }))
+                .await
+                .is_err()
+            {
+                self.pending.lock().await.remove(&request_id);
+                span.record("enqueue_ms", elapsed_ms(enqueue_started_at));
                 return Err(RpcCallError::Closed);
             }
-            pending.insert(request_id.clone(), response_tx);
-        }
+            span.record("enqueue_ms", elapsed_ms(enqueue_started_at));
 
-        let params = match serde_json::to_value(params) {
-            Ok(params) => params,
-            Err(err) => {
-                self.pending.lock().await.remove(&request_id);
-                return Err(RpcCallError::Json(err));
-            }
-        };
-        if self
-            .write_tx
-            .send(JSONRPCMessage::Request(JSONRPCRequest {
-                id: request_id.clone(),
-                method: method.to_string(),
-                params: Some(params),
-                trace: codex_otel::current_span_w3c_trace_context(),
-            }))
-            .await
-            .is_err()
-        {
-            self.pending.lock().await.remove(&request_id);
-            return Err(RpcCallError::Closed);
-        }
+            // Do not race in-flight requests directly against the transport-close
+            // watch value. The connection reader receives JSON-RPC messages and
+            // the terminal disconnect event on one ordered queue, then drains any
+            // still-pending requests. Awaiting this receiver preserves that order:
+            // responses already read before EOF still win, and truly pending calls
+            // are failed once the reader observes the disconnect.
+            let response_wait_started_at = Instant::now();
+            let response = match response_rx.await {
+                Ok(response) => response,
+                Err(_) => {
+                    span.record("response_wait_ms", elapsed_ms(response_wait_started_at));
+                    return Err(RpcCallError::Closed);
+                }
+            };
+            span.record("response_wait_ms", elapsed_ms(response_wait_started_at));
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => return Err(error),
+            };
 
-        // Do not race in-flight requests directly against the transport-close
-        // watch value. The connection reader receives JSON-RPC messages and
-        // the terminal disconnect event on one ordered queue, then drains any
-        // still-pending requests. Awaiting this receiver preserves that order:
-        // responses already read before EOF still win, and truly pending calls
-        // are failed once the reader observes the disconnect.
-        let result: Result<Value, RpcCallError> =
-            response_rx.await.map_err(|_| RpcCallError::Closed)?;
-        let response = match result {
-            Ok(response) => response,
-            Err(error) => return Err(error),
+            let deserialize_started_at = Instant::now();
+            let response = serde_json::from_value(response).map_err(RpcCallError::Json);
+            span.record("deserialize_ms", elapsed_ms(deserialize_started_at));
+            response
+        }
+        .await;
+
+        let result_name = match &result {
+            Ok(_) => "success",
+            Err(RpcCallError::Closed) => "closed",
+            Err(RpcCallError::Json(_)) => "json_error",
+            Err(RpcCallError::Server(_)) => "server_error",
         };
-        serde_json::from_value(response).map_err(RpcCallError::Json)
+        span.record("result", result_name);
+        span.record("duration_ms", elapsed_ms(started_at));
+        result
     }
 
     #[cfg(test)]
     pub(crate) async fn pending_request_count(&self) -> usize {
         self.pending.lock().await.len()
     }
+}
+
+fn elapsed_ms(started_at: Instant) -> f64 {
+    started_at.elapsed().as_secs_f64() * 1_000.0
 }
 
 impl Drop for RpcClient {
@@ -552,10 +616,12 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     use codex_exec_server_protocol::JSONRPCMessage;
     use codex_exec_server_protocol::JSONRPCResponse;
+    use opentelemetry::Value;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -677,7 +743,7 @@ mod tests {
     async fn rpc_client_propagates_current_trace_context() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
-            .with_simple_exporter(span_exporter)
+            .with_simple_exporter(span_exporter.clone())
             .build();
         let tracer = tracer_provider.tracer("exec-server-test");
         let subscriber = tracing_subscriber::registry().with(
@@ -721,6 +787,51 @@ mod tests {
             .expect("RPC response");
         assert_eq!(response, serde_json::json!({}));
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let rpc_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == "codex.exec_server.rpc.client_call")
+            .unwrap_or_else(|| panic!("RPC client span missing: {spans:?}"));
+        let attributes = rpc_span
+            .attributes
+            .iter()
+            .map(|attribute| (attribute.key.as_str().to_string(), attribute.value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            attributes.get("rpc.method"),
+            Some(&Value::String("traced".into()))
+        );
+        assert_eq!(
+            attributes.get("result"),
+            Some(&Value::String("success".into()))
+        );
+        let parent_traceparent = expected_trace
+            .traceparent
+            .as_deref()
+            .expect("parent traceparent");
+        let request_traceparent = trace.traceparent.as_deref().expect("request traceparent");
+        let parent_parts = parent_traceparent.split('-').collect::<Vec<_>>();
+        let request_parts = request_traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(request_parts[1], parent_parts[1]);
+        assert_eq!(
+            request_parts[2],
+            rpc_span.span_context.span_id().to_string()
+        );
+        assert_eq!(rpc_span.parent_span_id.to_string(), parent_parts[2]);
+        for field in [
+            "duration_ms",
+            "pending_registration_ms",
+            "serialize_ms",
+            "enqueue_ms",
+            "response_wait_ms",
+            "deserialize_ms",
+        ] {
+            match attributes.get(field) {
+                Some(Value::F64(value)) if *value >= 0.0 => {}
+                value => panic!("expected non-negative {field}, got {value:?}"),
+            }
+        }
     }
 }

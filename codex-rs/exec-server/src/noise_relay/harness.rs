@@ -39,6 +39,8 @@ use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
+use crate::telemetry::REMOTE_PHASE_HARNESS_NOISE_HANDSHAKE;
+use crate::telemetry::RemotePhaseGuard;
 
 /// Values that bind one harness websocket to the intended executor registration.
 ///
@@ -52,6 +54,7 @@ pub(crate) struct NoiseHarnessConnectionArgs {
     pub(crate) identity: NoiseChannelIdentity,
     pub(crate) responder_public_key: NoiseChannelPublicKey,
     pub(crate) harness_key_authorization: String,
+    pub(crate) ready_span: tracing::Span,
 }
 
 // Reset frames are cleartext relay control and are not authenticated by Noise.
@@ -81,12 +84,22 @@ where
         identity,
         responder_public_key,
         harness_key_authorization,
+        ready_span,
     } = args;
     let stream_id = Uuid::new_v4().to_string();
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
-    let stream_span = tracing::debug_span!("noise_relay.stream", noise_side = "harness",);
+    let stream_span =
+        tracing::debug_span!(parent: &ready_span, "noise_relay.stream", noise_side = "harness",);
+    let handshake_span = tracing::info_span!(
+        parent: &ready_span,
+        "codex.exec_server.remote.harness.noise_handshake",
+        otel.kind = "client",
+        otel.name = "codex.exec_server.remote.harness.noise_handshake",
+        result = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    );
     debug!(
         environment_id,
         executor_registration_id, stream_id, "Noise harness relay details"
@@ -94,6 +107,11 @@ where
 
     let websocket_task = tokio::spawn(async move {
         let mut websocket = stream;
+        let handshake_phase = RemotePhaseGuard::new(
+            handshake_span,
+            REMOTE_PHASE_HARNESS_NOISE_HANDSHAKE,
+            "cancelled",
+        );
 
         // Bind the Noise transcript to the exact environment registration and
         // virtual relay stream before emitting any handshake bytes. A captured
@@ -114,6 +132,7 @@ where
                     format!("failed to start Noise relay handshake: {error}"),
                 )
                 .await;
+                handshake_phase.finish("error");
                 return;
             }
         };
@@ -135,6 +154,7 @@ where
                 .is_err()
         {
             let _ = disconnected_tx.send(true);
+            handshake_phase.finish("error");
             return;
         }
 
@@ -149,6 +169,7 @@ where
                     "Noise relay websocket ended during handshake".to_string(),
                 )
                 .await;
+                handshake_phase.finish("error");
                 return;
             };
             let message = match incoming_message {
@@ -160,6 +181,7 @@ where
                         "Noise relay websocket received close frame during handshake".to_string(),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
                 Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => continue,
@@ -170,6 +192,7 @@ where
                         "Noise relay transport expects binary protobuf frames".to_string(),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
                 Err(error) => {
@@ -181,6 +204,7 @@ where
                         ),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
             };
@@ -193,6 +217,7 @@ where
                         format!("failed to parse Noise relay frame: {error}"),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
             };
@@ -211,18 +236,12 @@ where
                                 format!("invalid Noise relay handshake response: {error}"),
                             )
                             .await;
+                            handshake_phase.finish("error");
                             return;
                         }
                     };
                     match initiator_handshake.finish(&response) {
-                        Ok(transport) => {
-                            info!(
-                                noise_event = "handshake",
-                                noise_outcome = "ok",
-                                "Noise harness handshake completed"
-                            );
-                            break transport;
-                        }
+                        Ok(transport) => break transport,
                         Err(error) => {
                             send_disconnected(
                                 &incoming_tx,
@@ -230,6 +249,7 @@ where
                                 format!("Noise relay handshake failed: {error}"),
                             )
                             .await;
+                            handshake_phase.finish("error");
                             return;
                         }
                     }
@@ -241,6 +261,7 @@ where
                         NOISE_RELAY_RESET_DISCONNECT_REASON.to_string(),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
                 Ok(
@@ -255,10 +276,17 @@ where
                         "Noise relay received data before handshake completion".to_string(),
                     )
                     .await;
+                    handshake_phase.finish("error");
                     return;
                 }
             }
         };
+        handshake_phase.finish("success");
+        info!(
+            noise_event = "handshake",
+            noise_outcome = "ok",
+            "Noise harness handshake completed"
+        );
 
         // After the handshake, each relay sequence maps to exactly one Noise
         // transport record. Outbound records are encrypted once; inbound

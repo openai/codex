@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use codex_exec_server_protocol::JSONRPCNotification;
@@ -103,6 +104,9 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
+use crate::telemetry::REMOTE_PHASE_HARNESS_INITIALIZE;
+use crate::telemetry::RemotePhaseGuard;
+use crate::telemetry::record_remote_phase;
 
 pub(crate) mod http_client;
 #[path = "client_recovery.rs"]
@@ -505,6 +509,58 @@ impl ExecServerClient {
         })?
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.harness.initialize",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.harness.initialize",
+            result = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        )
+    )]
+    async fn initialize_noise_rpc(
+        &self,
+        rpc_client: &RpcClient,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<InitializeResponse, ExecServerError> {
+        let started_at = Instant::now();
+        let result = self.initialize_rpc(rpc_client, options).await;
+        let result_name = match &result {
+            Ok(_) => "success",
+            Err(ExecServerError::InitializeTimedOut { .. }) => "timeout",
+            Err(_) => "error",
+        };
+        record_remote_phase(
+            &tracing::Span::current(),
+            REMOTE_PHASE_HARNESS_INITIALIZE,
+            result_name,
+            started_at.elapsed(),
+        );
+        result
+    }
+
+    async fn initialize_with_ready_phase(
+        &self,
+        rpc_client: &RpcClient,
+        options: ExecServerClientConnectOptions,
+        ready_phase: Option<RemotePhaseGuard>,
+    ) -> Result<InitializeResponse, ExecServerError> {
+        let Some(ready_phase) = ready_phase else {
+            return self.initialize_rpc(rpc_client, options).await;
+        };
+        let result = self
+            .initialize_noise_rpc(rpc_client, options)
+            .instrument(ready_phase.span().clone())
+            .await;
+        ready_phase.finish(match &result {
+            Ok(_) => "success",
+            Err(ExecServerError::InitializeTimedOut { .. }) => "timeout",
+            Err(_) => "error",
+        });
+        result
+    }
+
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
         self.call(EXEC_METHOD, &params).await
     }
@@ -725,13 +781,17 @@ impl ExecServerClient {
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        Self::connect_with_recovery(connection, options, /*reconnect_strategy*/ None).await
+        Self::connect_with_recovery(
+            connection, options, /*reconnect_strategy*/ None, /*ready_phase*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn connect_with_recovery(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
         reconnect_strategy: Option<ExecServerReconnectStrategy>,
+        ready_phase: Option<RemotePhaseGuard>,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let rpc_client = Arc::new(rpc_client);
@@ -757,7 +817,9 @@ impl ExecServerClient {
         // before initialize returns. Drain them immediately so a burst cannot
         // fill the bounded event channel and block the initialize response.
         client.spawn_rpc_reader(&rpc_client, events_rx);
-        client.initialize_rpc(&rpc_client, options).await?;
+        client
+            .initialize_with_ready_phase(&rpc_client, options, ready_phase)
+            .await?;
         Ok(client)
     }
 
@@ -1175,8 +1237,10 @@ async fn handle_server_notification(
                 // Closed is terminal, but it can arrive before tail output or
                 // exited. Keep routing this process until the ordered publisher
                 // says Closed has actually been delivered.
-                let published_closed =
-                    session.publish_ordered_event(ExecProcessEvent::Closed { seq: params.seq });
+                let published_closed = session.publish_ordered_event(ExecProcessEvent::Closed {
+                    seq: params.seq,
+                    sandbox_denied: params.sandbox_denied,
+                });
                 if published_closed {
                     inner.remove_session_if(&params.process_id, &session);
                 }
@@ -1385,7 +1449,19 @@ mod tests {
 
         assert_eq!(session.process_id(), &process_id);
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+        let expected_traceparent = expected_trace
+            .traceparent
+            .as_deref()
+            .expect("parent traceparent");
+        let actual_traceparent = trace.traceparent.as_deref().expect("request traceparent");
+        assert_eq!(
+            actual_traceparent.split('-').nth(1),
+            expected_traceparent.split('-').nth(1),
+        );
+        assert_ne!(
+            actual_traceparent.split('-').nth(2),
+            expected_traceparent.split('-').nth(2),
+        );
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
@@ -1714,6 +1790,7 @@ mod tests {
                     serde_json::to_value(ExecClosedNotification {
                         process_id: process_id.clone(),
                         seq: 4,
+                        sandbox_denied: true,
                     })
                     .expect("closed notification should serialize"),
                 ),
@@ -1787,7 +1864,10 @@ mod tests {
                     seq: 3,
                     exit_code: 0,
                 },
-                ExecProcessEvent::Closed { seq: 4 },
+                ExecProcessEvent::Closed {
+                    seq: 4,
+                    sandbox_denied: true,
+                },
             ]
         );
 

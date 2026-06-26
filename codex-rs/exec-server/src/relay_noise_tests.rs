@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use super::HarnessKeyValidator;
 use super::MAX_FAILED_NOISE_HANDSHAKES;
 use super::MAX_HARNESS_KEY_AUTHORIZATION_BYTES;
 use super::run_multiplexed_environment;
+use super::validate_harness_key_with_timeout;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::noise_channel::InitiatorHandshake;
@@ -53,6 +55,53 @@ impl HarnessKeyValidator for BlockingValidator {
             Ok(())
         }
     }
+}
+
+#[derive(Clone, Default)]
+struct TimeoutObservingValidator {
+    outcomes: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl HarnessKeyValidator for TimeoutObservingValidator {
+    async fn validate_harness_key(
+        &self,
+        _harness_public_key: &NoiseChannelPublicKey,
+        _authorization: &str,
+    ) -> Result<(), ExecServerError> {
+        std::future::pending().await
+    }
+
+    fn validation_completed(&self, result: &'static str, _duration: Duration) {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(result);
+    }
+}
+
+#[tokio::test]
+async fn harness_key_validation_records_timeout_at_timeout_boundary() -> Result<()> {
+    let validator = TimeoutObservingValidator::default();
+    let harness_public_key = NoiseChannelIdentity::generate()?.public_key();
+
+    let error = validate_harness_key_with_timeout(
+        &validator,
+        &harness_public_key,
+        "authorization",
+        Duration::from_millis(1),
+    )
+    .await
+    .expect_err("validation should time out");
+
+    assert!(error.to_string().contains("timed out validating"));
+    assert_eq!(
+        *validator
+            .outcomes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec!["timeout"]
+    );
+    Ok(())
 }
 
 #[tokio::test]

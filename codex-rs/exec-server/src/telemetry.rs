@@ -33,8 +33,21 @@ const REMOTE_RENDEZVOUS_METRICS: OperationMetrics = OperationMetrics {
     duration_name: "exec_server_remote_rendezvous_connect_duration_seconds",
     duration_description: "Duration of remote exec-server rendezvous connection attempts in seconds.",
 };
+const REMOTE_EXECUTOR_AUTHORIZATION_METRICS: OperationMetrics = OperationMetrics {
+    total_name: "exec_server_remote_executor_authorization_total",
+    total_description: "Total number of remote exec-server executor authorization attempts.",
+    duration_name: "exec_server_remote_executor_authorization_duration_seconds",
+    duration_description: "Duration of remote exec-server executor authorization attempts in seconds.",
+};
 const REMOTE_RECONNECTS_TOTAL_METRIC: &str = "exec_server_remote_reconnects_total";
 const REMOTE_RECONNECTS_TOTAL_DESCRIPTION: &str = "Total number of remote exec-server reconnects.";
+
+pub(crate) const REMOTE_PHASE_EXECUTOR_AUTHORIZATION: &str = "executor_authorization";
+pub(crate) const REMOTE_PHASE_HARNESS_INITIALIZE: &str = "harness_initialize";
+pub(crate) const REMOTE_PHASE_HARNESS_NOISE_HANDSHAKE: &str = "harness_noise_handshake";
+pub(crate) const REMOTE_PHASE_HARNESS_READY: &str = "harness_ready";
+pub(crate) const REMOTE_PHASE_HARNESS_WEBSOCKET: &str = "harness_websocket";
+pub(crate) const REMOTE_PHASE_REGISTRY_CONNECT_BUNDLE: &str = "registry_connect_bundle";
 
 #[derive(Clone, Copy)]
 struct OperationMetrics {
@@ -153,6 +166,14 @@ impl ExecServerTelemetry {
         self.record_operation(REMOTE_RENDEZVOUS_METRICS, result, duration);
     }
 
+    pub(crate) fn remote_executor_authorization_completed(
+        &self,
+        result: &'static str,
+        duration: Duration,
+    ) {
+        self.record_operation(REMOTE_EXECUTOR_AUTHORIZATION_METRICS, result, duration);
+    }
+
     pub(crate) fn remote_reconnect(&self, reason: &'static str) {
         self.with_inner(|inner| {
             inner.counter(
@@ -219,6 +240,65 @@ impl ExecServerTelemetry {
                 &tags,
             );
         });
+    }
+}
+
+pub(crate) fn record_remote_phase(
+    span: &tracing::Span,
+    phase: &'static str,
+    result: &'static str,
+    duration: Duration,
+) {
+    let duration_ms = duration.as_secs_f64() * 1_000.0;
+    span.record("result", result);
+    span.record("duration_ms", duration_ms);
+    tracing::info!(
+        parent: span,
+        remote_phase = phase,
+        result,
+        duration_ms,
+        "Remote exec-server phase completed"
+    );
+}
+
+pub(crate) struct RemotePhaseGuard {
+    span: tracing::Span,
+    phase: &'static str,
+    started_at: Instant,
+    result: &'static str,
+}
+
+impl RemotePhaseGuard {
+    pub(crate) fn new(
+        span: tracing::Span,
+        phase: &'static str,
+        default_result: &'static str,
+    ) -> Self {
+        Self {
+            span,
+            phase,
+            started_at: Instant::now(),
+            result: default_result,
+        }
+    }
+
+    pub(crate) fn span(&self) -> &tracing::Span {
+        &self.span
+    }
+
+    pub(crate) fn finish(mut self, result: &'static str) {
+        self.result = result;
+    }
+}
+
+impl Drop for RemotePhaseGuard {
+    fn drop(&mut self) {
+        record_remote_phase(
+            &self.span,
+            self.phase,
+            self.result,
+            self.started_at.elapsed(),
+        );
     }
 }
 
@@ -336,5 +416,61 @@ fn register_active_gauge(
         .is_err()
     {
         warn!(metric = name, "failed to register exec-server gauge");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use codex_otel::MetricsConfig;
+    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::MetricData;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn executor_authorization_duration_uses_only_bounded_result_tag() {
+        let exporter = InMemoryMetricExporter::default();
+        let metrics = MetricsClient::new(
+            MetricsConfig::in_memory(
+                "test",
+                "codex-exec-server",
+                env!("CARGO_PKG_VERSION"),
+                exporter,
+            )
+            .with_runtime_reader(),
+        )
+        .expect("metrics");
+        let telemetry = ExecServerTelemetry::new(metrics.clone());
+
+        telemetry.remote_executor_authorization_completed("timeout", Duration::from_millis(25));
+
+        let snapshot = metrics.snapshot().expect("metrics snapshot");
+        let metric = snapshot
+            .scope_metrics()
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .find(|metric| metric.name() == REMOTE_EXECUTOR_AUTHORIZATION_METRICS.duration_name)
+            .expect("executor authorization duration metric");
+        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+            panic!("executor authorization duration should be an f64 histogram");
+        };
+        let point = histogram.data_points().next().expect("histogram point");
+        let attributes = point
+            .attributes()
+            .map(|attribute| {
+                (
+                    attribute.key.as_str().to_string(),
+                    attribute.value.as_str().into_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            attributes,
+            BTreeMap::from([("result".to_string(), "timeout".to_string())])
+        );
     }
 }

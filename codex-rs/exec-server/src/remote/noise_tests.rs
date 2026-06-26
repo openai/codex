@@ -6,16 +6,21 @@ use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use http::HeaderMap;
 use http::HeaderValue;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 use tokio_tungstenite::accept_async;
+use tracing::Instrument;
+use tracing_subscriber::prelude::*;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::header;
+use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -92,8 +97,14 @@ async fn reconnect_reuses_registration_until_url_is_rejected() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn validate_harness_key_requires_explicit_valid_response() {
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("exec-server-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let _guard = subscriber.set_default();
+    tracing::callsite::rebuild_interest_cache();
     let server = MockServer::start().await;
     let harness_public_key = NoiseChannelIdentity::generate()
         .expect("identity")
@@ -101,6 +112,10 @@ async fn validate_harness_key_requires_explicit_valid_response() {
     Mock::given(method("POST"))
         .and(path("/cloud/environment/environment-requested/validate"))
         .and(header("authorization", "Bearer registry-token"))
+        .and(header_regex(
+            "traceparent",
+            "^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
+        ))
         .and(body_partial_json(serde_json::json!({
             "executor_registration_id": "registration-1",
             "harness_public_key": harness_public_key.clone(),
@@ -120,6 +135,7 @@ async fn validate_harness_key_requires_explicit_valid_response() {
         executor_registration_id: "registration-1".to_string(),
     }
     .validate_harness_key(&harness_public_key, HARNESS_KEY_AUTHORIZATION)
+    .instrument(tracing::info_span!("remote-operation"))
     .await
     .expect_err("a false validation response must fail closed");
 

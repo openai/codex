@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec::is_likely_sandbox_denied;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessSignal as ExecServerProcessSignal;
 use codex_exec_server::ReadResponse as ExecReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -425,15 +426,70 @@ impl UnifiedExecProcess {
             cancellation_token,
         } = output_handles;
         let process = started.process;
-        let mut wake_rx = process.subscribe_wake();
+        let mut events = process.subscribe_events();
         tokio::spawn(async move {
-            let mut after_seq = None;
+            let mut last_seq = 0;
             loop {
-                match process
-                    .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
-                    .await
-                {
-                    Ok(response) => {
+                match events.recv().await {
+                    Ok(ExecProcessEvent::Output(chunk)) => {
+                        if chunk.seq > last_seq {
+                            last_seq = chunk.seq;
+                            let bytes = chunk.chunk.into_inner();
+                            let mut guard = output_buffer.lock().await;
+                            guard.push_chunk(bytes.clone());
+                            drop(guard);
+                            let _ = output_tx.send(bytes);
+                            output_notify.notify_waiters();
+                        }
+                    }
+                    Ok(ExecProcessEvent::Exited { seq, exit_code }) => {
+                        if seq > last_seq {
+                            last_seq = seq;
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx.send_replace(state.exited(Some(exit_code)));
+                        }
+                    }
+                    Ok(ExecProcessEvent::Closed {
+                        seq: _,
+                        sandbox_denied,
+                    }) => {
+                        if sandbox_denied {
+                            let mut state = state_tx.borrow().clone();
+                            state.sandbox_denied = true;
+                            let _ = state_tx.send_replace(state);
+                        }
+                        output_closed.store(true, Ordering::Release);
+                        output_closed_notify.notify_waiters();
+                        cancellation_token.cancel();
+                        break;
+                    }
+                    Ok(ExecProcessEvent::Failed(message)) => {
+                        let state = state_tx.borrow().clone();
+                        let _ = state_tx.send_replace(state.failed(message));
+                        output_closed.store(true, Ordering::Release);
+                        output_closed_notify.notify_waiters();
+                        cancellation_token.cancel();
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let response = match process
+                            .read(
+                                Some(last_seq),
+                                /*max_bytes*/ None,
+                                /*wait_ms*/ Some(0),
+                            )
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(err) => {
+                                let state = state_tx.borrow().clone();
+                                let _ = state_tx.send_replace(state.failed(err.to_string()));
+                                output_closed.store(true, Ordering::Release);
+                                output_closed_notify.notify_waiters();
+                                cancellation_token.cancel();
+                                break;
+                            }
+                        };
                         let ExecReadResponse {
                             chunks,
                             next_seq,
@@ -443,8 +499,7 @@ impl UnifiedExecProcess {
                             failure,
                             sandbox_denied,
                         } = response;
-
-                        for chunk in chunks {
+                        for chunk in chunks.into_iter().filter(|chunk| chunk.seq > last_seq) {
                             let bytes = chunk.chunk.into_inner();
                             let mut guard = output_buffer.lock().await;
                             guard.push_chunk(bytes.clone());
@@ -452,7 +507,7 @@ impl UnifiedExecProcess {
                             let _ = output_tx.send(bytes);
                             output_notify.notify_waiters();
                         }
-
+                        last_seq = last_seq.max(next_seq.saturating_sub(1));
                         if let Some(message) = failure {
                             let state = state_tx.borrow().clone();
                             let _ = state_tx.send_replace(state.failed(message));
@@ -461,7 +516,6 @@ impl UnifiedExecProcess {
                             cancellation_token.cancel();
                             break;
                         }
-
                         if sandbox_denied {
                             let mut state = state_tx.borrow().clone();
                             state.sandbox_denied = true;
@@ -472,36 +526,23 @@ impl UnifiedExecProcess {
                             let state = state_tx.borrow().clone();
                             let _ = state_tx.send_replace(state.exited(exit_code));
                         }
-
                         if closed {
                             output_closed.store(true, Ordering::Release);
                             output_closed_notify.notify_waiters();
                             cancellation_token.cancel();
-                        }
-
-                        after_seq = next_seq.checked_sub(1);
-                        if output_closed.load(Ordering::Acquire) {
                             break;
                         }
                     }
-                    Err(err) => {
+                    Err(broadcast::error::RecvError::Closed) => {
                         let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.failed(err.to_string()));
+                        let _ = state_tx.send_replace(
+                            state.failed("exec-server process event stream closed".to_string()),
+                        );
                         output_closed.store(true, Ordering::Release);
                         output_closed_notify.notify_waiters();
                         cancellation_token.cancel();
                         break;
                     }
-                }
-
-                if wake_rx.changed().await.is_err() {
-                    let state = state_tx.borrow().clone();
-                    let _ = state_tx
-                        .send_replace(state.failed("exec-server wake channel closed".to_string()));
-                    output_closed.store(true, Ordering::Release);
-                    output_closed_notify.notify_waiters();
-                    cancellation_token.cancel();
-                    break;
                 }
             }
         })

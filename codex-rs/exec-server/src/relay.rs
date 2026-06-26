@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCMessage;
 use futures::Sink;
@@ -15,6 +16,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -41,6 +43,8 @@ use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
+use crate::telemetry::REMOTE_PHASE_EXECUTOR_AUTHORIZATION;
+use crate::telemetry::record_remote_phase;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
@@ -434,6 +438,41 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
         harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
     ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send;
+
+    fn validation_completed(&self, _result: &'static str, _duration: Duration) {}
+}
+
+async fn validate_harness_key_with_timeout<V: HarnessKeyValidator>(
+    validator: &V,
+    harness_public_key: &NoiseChannelPublicKey,
+    authorization: &str,
+    validation_timeout: Duration,
+) -> Result<(), ExecServerError> {
+    let started_at = Instant::now();
+    let (result, result_name) = match timeout(
+        validation_timeout,
+        validator.validate_harness_key(harness_public_key, authorization),
+    )
+    .await
+    {
+        Ok(Ok(())) => (Ok(()), "success"),
+        Ok(Err(error)) => (Err(error), "error"),
+        Err(_) => (
+            Err(ExecServerError::Protocol(
+                "timed out validating Noise relay harness key".to_string(),
+            )),
+            "timeout",
+        ),
+    };
+    let duration = started_at.elapsed();
+    validator.validation_completed(result_name, duration);
+    record_remote_phase(
+        &tracing::Span::current(),
+        REMOTE_PHASE_EXECUTOR_AUTHORIZATION,
+        result_name,
+        duration,
+    );
+    result
 }
 
 /// Serve authenticated virtual JSON-RPC streams over one executor websocket.
@@ -730,21 +769,25 @@ pub(crate) async fn run_multiplexed_environment<S, V>(
                     },
                 );
                 let validator = validator.clone();
+                let validation_span = tracing::info_span!(
+                    "codex.exec_server.remote.executor.authorization",
+                    otel.kind = "client",
+                    otel.name = "codex.exec_server.remote.executor.authorization",
+                    result = tracing::field::Empty,
+                    duration_ms = tracing::field::Empty,
+                );
 
                 // Failed validation leaves no transport state and sends only a
                 // generic reset.
                 validation_tasks.spawn(async move {
-                    let result = match timeout(
+                    let result = validate_harness_key_with_timeout(
+                        &validator,
+                        &harness_public_key,
+                        &authorization,
                         HARNESS_KEY_VALIDATION_TIMEOUT,
-                        validator.validate_harness_key(&harness_public_key, &authorization),
                     )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => Err(ExecServerError::Protocol(
-                            "timed out validating Noise relay harness key".to_string(),
-                        )),
-                    };
+                    .instrument(validation_span)
+                    .await;
                     HarnessKeyValidationResult {
                         stream_id,
                         validation_id,

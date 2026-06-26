@@ -1,6 +1,7 @@
 use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
 use codex_exec_server::ExecServerError;
@@ -15,7 +16,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
-use tokio::time::Duration;
 
 struct MockExecProcess {
     process_id: ProcessId,
@@ -23,6 +23,7 @@ struct MockExecProcess {
     read_responses: Mutex<VecDeque<ReadResponse>>,
     terminate_error: Option<String>,
     wake_tx: watch::Sender<u64>,
+    events: Vec<ExecProcessEvent>,
 }
 
 impl MockExecProcess {
@@ -61,7 +62,7 @@ impl ExecProcess for MockExecProcess {
     }
 
     fn subscribe_events(&self) -> ExecProcessEventReceiver {
-        ExecProcessEventReceiver::empty()
+        ExecProcessEventReceiver::from_events(self.events.clone())
     }
 
     fn read(
@@ -100,6 +101,7 @@ async fn remote_process(
             read_responses: Mutex::new(VecDeque::new()),
             terminate_error,
             wake_tx,
+            events: Vec::new(),
         }),
     };
 
@@ -183,24 +185,21 @@ async fn remote_process_waits_for_early_exit_event() {
             write_response: WriteResponse {
                 status: WriteStatus::Accepted,
             },
-            read_responses: Mutex::new(VecDeque::from([ReadResponse {
-                chunks: Vec::new(),
-                next_seq: 2,
-                exited: true,
-                exit_code: Some(17),
-                closed: true,
-                failure: None,
-                sandbox_denied: false,
-            }])),
+            read_responses: Mutex::new(VecDeque::new()),
             terminate_error: None,
-            wake_tx: wake_tx.clone(),
+            wake_tx,
+            events: vec![
+                ExecProcessEvent::Exited {
+                    seq: 1,
+                    exit_code: 17,
+                },
+                ExecProcessEvent::Closed {
+                    seq: 2,
+                    sandbox_denied: false,
+                },
+            ],
         }),
     };
-
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let _ = wake_tx.send(1);
-    });
 
     let process = UnifiedExecProcess::from_exec_server_started(started)
         .await
@@ -208,4 +207,36 @@ async fn remote_process_waits_for_early_exit_event() {
 
     assert!(process.has_exited());
     assert_eq!(process.exit_code(), Some(17));
+}
+
+#[tokio::test]
+async fn remote_process_preserves_streamed_sandbox_denial() {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let started = StartedExecProcess {
+        process: Arc::new(MockExecProcess {
+            process_id: "sandbox-denied".to_string().into(),
+            write_response: WriteResponse {
+                status: WriteStatus::Accepted,
+            },
+            read_responses: Mutex::new(VecDeque::new()),
+            terminate_error: None,
+            wake_tx,
+            events: vec![
+                ExecProcessEvent::Exited {
+                    seq: 1,
+                    exit_code: 1,
+                },
+                ExecProcessEvent::Closed {
+                    seq: 2,
+                    sandbox_denied: true,
+                },
+            ],
+        }),
+    };
+
+    let error = UnifiedExecProcess::from_exec_server_started(started)
+        .await
+        .expect_err("sandbox denial should be preserved");
+
+    assert!(matches!(error, UnifiedExecError::SandboxDenied { .. }));
 }

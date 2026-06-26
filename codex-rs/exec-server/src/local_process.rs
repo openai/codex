@@ -930,11 +930,15 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         let seq = process.next_seq;
         process.next_seq += 1;
         let _ = process.wake_tx.send(seq);
-        process.events.publish(ExecProcessEvent::Closed { seq });
+        process.events.publish(ExecProcessEvent::Closed {
+            seq,
+            sandbox_denied: process.sandbox_denied,
+        });
         (
             ExecClosedNotification {
                 process_id: process_id.clone(),
                 seq,
+                sandbox_denied: process.sandbox_denied,
             },
             Arc::clone(&process.output_notify),
         )

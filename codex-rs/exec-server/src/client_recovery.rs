@@ -58,7 +58,7 @@ impl SessionState {
             exit_code,
             closed,
             failure,
-            sandbox_denied: _,
+            sandbox_denied,
         } = response;
         if let Some(message) = failure {
             return Err(ExecServerError::Protocol(format!(
@@ -87,17 +87,26 @@ impl SessionState {
                 }
             }
             if closed {
-                match ordered_events.pending.get(&target_seq) {
-                    Some(ExecProcessEvent::Closed { .. }) => {}
+                match ordered_events.pending.get_mut(&target_seq) {
+                    Some(ExecProcessEvent::Closed {
+                        sandbox_denied: pending_sandbox_denied,
+                        ..
+                    }) => {
+                        *pending_sandbox_denied |= sandbox_denied;
+                    }
                     Some(_) => {
                         return Err(ExecServerError::Protocol(format!(
                             "process close sequence {target_seq} conflicts with recovered output"
                         )));
                     }
                     None => {
-                        ordered_events
-                            .pending
-                            .insert(target_seq, ExecProcessEvent::Closed { seq: target_seq });
+                        ordered_events.pending.insert(
+                            target_seq,
+                            ExecProcessEvent::Closed {
+                                seq: target_seq,
+                                sandbox_denied,
+                            },
+                        );
                     }
                 }
             }
@@ -382,7 +391,7 @@ impl Inner {
             .reconnect_strategy
             .as_ref()
             .ok_or_else(|| ExecServerError::Protocol("missing reconnect strategy".to_string()))?;
-        let (connection, options) = reconnect_strategy.resume(session_id).await?;
+        let (connection, options, ready_phase) = reconnect_strategy.resume(session_id).await?;
         let (rpc_client, events_rx) = RpcClient::new(connection);
         let rpc_client = Arc::new(rpc_client);
         let client = ExecServerClient {
@@ -393,7 +402,9 @@ impl Inner {
         // burst cannot fill the bounded event channel and block the initialize
         // response behind it.
         client.spawn_rpc_reader(&rpc_client, events_rx);
-        client.initialize_rpc(&rpc_client, options).await?;
+        client
+            .initialize_with_ready_phase(&rpc_client, options, ready_phase)
+            .await?;
 
         self.recover_processes(&rpc_client).await?;
         Ok(rpc_client)

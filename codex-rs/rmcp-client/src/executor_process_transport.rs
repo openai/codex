@@ -226,7 +226,7 @@ impl ExecutorProcessTransport {
                     // output flushed during process shutdown can still be
                     // decoded into JSON-RPC messages.
                 }
-                Ok(ExecProcessEvent::Closed { seq }) => {
+                Ok(ExecProcessEvent::Closed { seq, .. }) => {
                     self.note_seq(seq);
                     self.closed = true;
                 }

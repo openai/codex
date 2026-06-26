@@ -171,6 +171,7 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/connect"),
             ))
             .headers(self.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryConnectRequest { harness_public_key })
             .timeout(self.connect_timeout)
             .send()
@@ -251,6 +252,7 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
                 &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.client.auth_provider.to_auth_headers())
+            .headers(current_trace_context_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
                 executor_registration_id: self.executor_registration_id.clone(),
                 harness_public_key: harness_public_key.clone(),
@@ -282,6 +284,12 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
             ));
         }
         Ok(())
+    }
+
+    fn validation_completed(&self, result: &'static str, duration: Duration) {
+        self.client
+            .telemetry
+            .remote_executor_authorization_completed(result, duration);
     }
 }
 
@@ -561,7 +569,7 @@ async fn connect_rendezvous(
         connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
-            /*disable_nagle*/ false,
+            /*disable_nagle*/ true,
         )
         .await
         .map(|(websocket, _)| websocket)
@@ -752,8 +760,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn noise_connect_provider_requests_and_validates_a_full_bundle() {
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("exec-server-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+        tracing::callsite::rebuild_interest_cache();
         let server = MockServer::start().await;
         let harness_public_key = NoiseChannelIdentity::generate()
             .expect("identity")
@@ -765,6 +779,10 @@ mod tests {
             .and(path("/cloud/environment/environment-requested/connect"))
             .and(header("authorization", "Bearer registry-token"))
             .and(header("chatgpt-account-id", "workspace-123"))
+            .and(header_regex(
+                "traceparent",
+                "^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
+            ))
             .and(body_partial_json(serde_json::json!({
                 "harness_public_key": harness_public_key.clone(),
             })))
@@ -789,6 +807,7 @@ mod tests {
         let bundle = config
             .connect_provider()
             .connect_bundle(harness_public_key)
+            .instrument(tracing::info_span!("remote-operation"))
             .await
             .expect("Noise connect bundle");
 

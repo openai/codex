@@ -1,6 +1,7 @@
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -31,6 +32,11 @@ use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
+use crate::telemetry::REMOTE_PHASE_HARNESS_READY;
+use crate::telemetry::REMOTE_PHASE_HARNESS_WEBSOCKET;
+use crate::telemetry::REMOTE_PHASE_REGISTRY_CONNECT_BUNDLE;
+use crate::telemetry::RemotePhaseGuard;
+use crate::telemetry::record_remote_phase;
 use crate::trace_context::current_trace_context_headers;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
@@ -56,13 +62,20 @@ impl ExecServerReconnectStrategy {
     pub(crate) async fn resume(
         &self,
         session_id: &str,
-    ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
+    ) -> Result<
+        (
+            JsonRpcConnection,
+            ExecServerClientConnectOptions,
+            Option<RemotePhaseGuard>,
+        ),
+        ExecServerError,
+    > {
         match self {
             Self::WebSocket(args) => {
                 let mut args = args.clone();
                 args.resume_session_id = Some(session_id.to_string());
                 let connection = ExecServerClient::open_websocket_connection(&args).await?;
-                Ok((connection, args.into()))
+                Ok((connection, args.into(), None))
             }
             Self::NoiseRendezvous {
                 provider,
@@ -71,16 +84,20 @@ impl ExecServerReconnectStrategy {
                 connect_timeout,
                 initialize_timeout,
             } => {
-                let bundle = provider.connect_bundle(identity.public_key()).await?;
-                ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
-                    bundle,
-                    harness_identity: identity.clone(),
-                    client_name: client_name.clone(),
-                    connect_timeout: *connect_timeout,
-                    initialize_timeout: *initialize_timeout,
-                    resume_session_id: Some(session_id.to_string()),
-                })
-                .await
+                let bundle = request_noise_connect_bundle(provider, identity.public_key()).await?;
+                let (connection, options, ready_phase) =
+                    ExecServerClient::open_noise_rendezvous_connection(
+                        NoiseRendezvousConnectArgs {
+                            bundle,
+                            harness_identity: identity.clone(),
+                            client_name: client_name.clone(),
+                            connect_timeout: *connect_timeout,
+                            initialize_timeout: *initialize_timeout,
+                            resume_session_id: Some(session_id.to_string()),
+                        },
+                    )
+                    .await?;
+                Ok((connection, options, Some(ready_phase)))
             }
         }
     }
@@ -119,9 +136,15 @@ impl ExecServerClient {
                     connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
                     initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
                 };
-                let (connection, options) =
+                let (connection, options, ready_phase) =
                     Self::open_initial_noise_rendezvous_connection(&provider, &identity).await?;
-                Self::connect_with_recovery(connection, options, Some(reconnect_strategy)).await
+                Self::connect_with_recovery(
+                    connection,
+                    options,
+                    Some(reconnect_strategy),
+                    Some(ready_phase),
+                )
+                .await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
@@ -141,7 +164,14 @@ impl ExecServerClient {
     async fn open_initial_noise_rendezvous_connection(
         provider: &Arc<dyn NoiseRendezvousConnectProvider>,
         identity: &NoiseChannelIdentity,
-    ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
+    ) -> Result<
+        (
+            JsonRpcConnection,
+            ExecServerClientConnectOptions,
+            RemotePhaseGuard,
+        ),
+        ExecServerError,
+    > {
         let open_connection = |bundle: NoiseRendezvousConnectBundle| {
             Self::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
                 bundle,
@@ -152,7 +182,7 @@ impl ExecServerClient {
                 resume_session_id: None,
             })
         };
-        let bundle = provider.connect_bundle(identity.public_key()).await?;
+        let bundle = request_noise_connect_bundle(provider, identity.public_key()).await?;
         match open_connection(bundle).await {
             Err(error)
                 if matches!(
@@ -165,7 +195,7 @@ impl ExecServerClient {
                         )
                 ) =>
             {
-                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                let bundle = request_noise_connect_bundle(provider, identity.public_key()).await?;
                 open_connection(bundle).await
             }
             result => result,
@@ -181,6 +211,7 @@ impl ExecServerClient {
             connection,
             options,
             Some(ExecServerReconnectStrategy::WebSocket(args)),
+            /*ready_phase*/ None,
         )
         .await
     }
@@ -229,13 +260,37 @@ impl ExecServerClient {
     pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
-        let (connection, options) = Self::open_noise_rendezvous_connection(args).await?;
-        Self::connect(connection, options).await
+        let (connection, options, ready_phase) =
+            Self::open_noise_rendezvous_connection(args).await?;
+        Self::connect_with_recovery(
+            connection,
+            options,
+            /*reconnect_strategy*/ None,
+            Some(ready_phase),
+        )
+        .await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.remote.harness.websocket",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.harness.websocket",
+            result = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn open_noise_rendezvous_connection(
         args: NoiseRendezvousConnectArgs,
-    ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
+    ) -> Result<
+        (
+            JsonRpcConnection,
+            ExecServerClientConnectOptions,
+            RemotePhaseGuard,
+        ),
+        ExecServerError,
+    > {
         ensure_rustls_crypto_provider();
         // Keep the registry-issued URL, key, and authorization together for this
         // connection attempt.
@@ -259,34 +314,59 @@ impl ExecServerClient {
             .next()
             .unwrap_or(websocket_url.as_str())
             .to_string();
-        let mut request = websocket_url
-            .as_str()
-            .into_client_request()
+        let started_at = Instant::now();
+        let websocket = async {
+            let mut request = websocket_url
+                .as_str()
+                .into_client_request()
+                .map_err(|source| ExecServerError::WebSocketConnect {
+                    url: diagnostic_url.clone(),
+                    source,
+                })?;
+            request
+                .headers_mut()
+                .extend(current_trace_context_headers());
+            timeout(
+                connect_timeout,
+                connect_async_with_config(
+                    request,
+                    Some(noise_relay_websocket_config()),
+                    /*disable_nagle*/ true,
+                ),
+            )
+            .await
+            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+                url: diagnostic_url.clone(),
+                timeout: connect_timeout,
+            })?
             .map_err(|source| ExecServerError::WebSocketConnect {
                 url: diagnostic_url.clone(),
                 source,
-            })?;
-        request
-            .headers_mut()
-            .extend(current_trace_context_headers());
-        let (stream, _) = timeout(
-            connect_timeout,
-            connect_async_with_config(
-                request,
-                Some(noise_relay_websocket_config()),
-                /*disable_nagle*/ false,
-            ),
-        )
-        .await
-        .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-            url: diagnostic_url.clone(),
-            timeout: connect_timeout,
-        })?
-        .map_err(|source| ExecServerError::WebSocketConnect {
-            url: diagnostic_url.clone(),
-            source,
-        })?;
+            })
+        }
+        .await;
+        let duration = started_at.elapsed();
+        record_remote_phase(
+            &tracing::Span::current(),
+            REMOTE_PHASE_HARNESS_WEBSOCKET,
+            remote_phase_result(&websocket),
+            duration,
+        );
+        let (stream, _) = websocket?;
 
+        // This is the inclusive post-WebSocket critical-path interval: add it to
+        // bundle + WebSocket, but do not also add its Noise-handshake child.
+        // The ready and handshake completion events retain the timestamps needed
+        // to derive post-handshake initialize as ready_end - handshake_end.
+        let ready_span = tracing::info_span!(
+            "codex.exec_server.remote.harness.ready",
+            otel.kind = "client",
+            otel.name = "codex.exec_server.remote.harness.ready",
+            result = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        );
+        let ready_phase =
+            RemotePhaseGuard::new(ready_span.clone(), REMOTE_PHASE_HARNESS_READY, "cancelled");
         let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
         let connection = noise_harness_connection_from_websocket(
             stream,
@@ -297,6 +377,7 @@ impl ExecServerClient {
                 identity: harness_identity,
                 responder_public_key: executor_public_key,
                 harness_key_authorization,
+                ready_span,
             },
         );
         Ok((
@@ -306,6 +387,7 @@ impl ExecServerClient {
                 initialize_timeout,
                 resume_session_id,
             },
+            ready_phase,
         ))
     }
 
@@ -347,6 +429,74 @@ impl ExecServerClient {
             args.into(),
         )
         .await
+    }
+}
+
+#[tracing::instrument(
+    name = "codex.exec_server.remote.harness.registry_connect_bundle",
+    skip_all,
+    fields(
+        otel.kind = "client",
+        otel.name = "codex.exec_server.remote.harness.registry_connect_bundle",
+        rendezvous.cluster = tracing::field::Empty,
+        rendezvous.route_id = tracing::field::Empty,
+        result = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    )
+)]
+async fn request_noise_connect_bundle(
+    provider: &Arc<dyn NoiseRendezvousConnectProvider>,
+    harness_public_key: crate::NoiseChannelPublicKey,
+) -> Result<NoiseRendezvousConnectBundle, ExecServerError> {
+    let started_at = Instant::now();
+    let result = provider.connect_bundle(harness_public_key).await;
+    if let Ok(bundle) = &result {
+        let span = tracing::Span::current();
+        if let Some(cluster) = rendezvous_cluster(&bundle.websocket_url) {
+            span.record("rendezvous.cluster", cluster);
+            if let Some(route_id) = rendezvous_route_id(&bundle.websocket_url) {
+                span.record("rendezvous.route_id", route_id);
+            }
+        }
+    }
+    record_remote_phase(
+        &tracing::Span::current(),
+        REMOTE_PHASE_REGISTRY_CONNECT_BUNDLE,
+        remote_phase_result(&result),
+        started_at.elapsed(),
+    );
+    result
+}
+
+fn rendezvous_cluster(websocket_url: &str) -> Option<&str> {
+    let authority = websocket_url
+        .split_once("://")?
+        .1
+        .split(['/', '?'])
+        .next()?;
+    authority
+        .strip_prefix("codex-cloud-rendezvous.gateway.")?
+        .strip_suffix(".internal.api.openai.org")
+        .filter(|cluster| !cluster.is_empty())
+}
+
+fn rendezvous_route_id(websocket_url: &str) -> Option<&str> {
+    let path = websocket_url.split_once("://")?.1.split('?').next()?;
+    let mut segments = path.split('/');
+    while let Some(segment) = segments.next() {
+        if segment == "cloud-agent" {
+            return segments.next().filter(|route_id| !route_id.is_empty());
+        }
+    }
+    None
+}
+
+fn remote_phase_result<T>(result: &Result<T, ExecServerError>) -> &'static str {
+    match result {
+        Ok(_) => "success",
+        Err(ExecServerError::EnvironmentRegistryRequest(error)) if error.is_timeout() => "timeout",
+        Err(ExecServerError::WebSocketConnectTimeout { .. }) => "timeout",
+        Err(_) => "error",
     }
 }
 
