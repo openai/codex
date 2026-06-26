@@ -1,7 +1,9 @@
 use std::fs;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_core_skills::loader::EnvironmentSkillMetadata;
 use codex_core_skills::loader::load_environment_skills_from_root;
@@ -20,12 +22,22 @@ use codex_exec_server::WalkOutcome;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tokio::sync::Notify;
+
+#[derive(Clone, Copy)]
+enum ManifestMetadataBehavior {
+    Immediate,
+    WaitForSkillRead,
+}
 
 struct RecordingFileSystem<'a> {
     inner: &'a dyn ExecutorFileSystem,
     read_files: Mutex<Vec<PathUri>>,
     metadata_files: Mutex<Vec<PathUri>>,
     walks: AtomicUsize,
+    manifest_metadata_behavior: ManifestMetadataBehavior,
+    skill_read_started: AtomicBool,
+    skill_read_started_notify: Notify,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,12 +48,18 @@ struct FileSystemCalls {
 }
 
 impl<'a> RecordingFileSystem<'a> {
-    fn new(inner: &'a dyn ExecutorFileSystem) -> Self {
+    fn new(
+        inner: &'a dyn ExecutorFileSystem,
+        manifest_metadata_behavior: ManifestMetadataBehavior,
+    ) -> Self {
         Self {
             inner,
             read_files: Mutex::new(Vec::new()),
             metadata_files: Mutex::new(Vec::new()),
             walks: AtomicUsize::new(0),
+            manifest_metadata_behavior,
+            skill_read_started: AtomicBool::new(false),
+            skill_read_started_notify: Notify::new(),
         }
     }
 
@@ -84,6 +102,10 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(path.clone());
+        if path.basename().as_deref() == Some("SKILL.md") {
+            self.skill_read_started.store(true, Ordering::Release);
+            self.skill_read_started_notify.notify_waiters();
+        }
         self.inner.read_file(path, sandbox)
     }
 
@@ -122,6 +144,22 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(path.clone());
+        if matches!(
+            self.manifest_metadata_behavior,
+            ManifestMetadataBehavior::WaitForSkillRead
+        ) && path.basename().as_deref() == Some("plugin.json")
+        {
+            return Box::pin(async move {
+                loop {
+                    let notified = self.skill_read_started_notify.notified();
+                    if self.skill_read_started.load(Ordering::Acquire) {
+                        break;
+                    }
+                    notified.await;
+                }
+                self.inner.get_metadata(path, sandbox).await
+            });
+        }
         self.inner.get_metadata(path, sandbox)
     }
 
@@ -201,7 +239,8 @@ async fn loads_nearest_plugin_namespaces_without_reading_unused_sibling_manifest
         .expect("skill");
     }
 
-    let file_system = RecordingFileSystem::new(LOCAL_FS.as_ref());
+    let file_system =
+        RecordingFileSystem::new(LOCAL_FS.as_ref(), ManifestMetadataBehavior::Immediate);
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let outcome = load_environment_skills_from_root(
         &file_system,
@@ -280,7 +319,8 @@ async fn reuses_walk_inventory_for_missing_skill_metadata() {
         skill_paths.push(skill_path);
     }
 
-    let file_system = RecordingFileSystem::new(LOCAL_FS.as_ref());
+    let file_system =
+        RecordingFileSystem::new(LOCAL_FS.as_ref(), ManifestMetadataBehavior::Immediate);
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let outcome = load_environment_skills_from_root(
         &file_system,
@@ -325,5 +365,49 @@ async fn reuses_walk_inventory_for_missing_skill_metadata() {
             read_files: expected_read_files,
             metadata_files: vec![manifest_uri],
         }
+    );
+}
+
+#[tokio::test]
+async fn reads_skill_files_while_resolving_plugin_namespaces() {
+    let root = tempdir().expect("tempdir");
+    let manifest_path = root.path().join(".codex-plugin/plugin.json");
+    fs::create_dir_all(manifest_path.parent().expect("manifest parent")).expect("manifest dir");
+    fs::write(&manifest_path, r#"{"name":"parallel"}"#).expect("manifest");
+    let skill_path = root.path().join("demo/SKILL.md");
+    fs::create_dir_all(skill_path.parent().expect("skill parent")).expect("skill dir");
+    fs::write(
+        &skill_path,
+        "---\nname: demo\ndescription: demo skill.\n---\n",
+    )
+    .expect("skill");
+
+    let file_system = RecordingFileSystem::new(
+        LOCAL_FS.as_ref(),
+        ManifestMetadataBehavior::WaitForSkillRead,
+    );
+    let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        load_environment_skills_from_root(
+            &file_system,
+            &root_uri,
+            /*restriction_product*/ None,
+        ),
+    )
+    .await
+    .expect("skill reads should start before namespace resolution finishes");
+
+    assert_eq!(outcome.warnings, Vec::<String>::new());
+    assert_eq!(
+        outcome.skills,
+        vec![EnvironmentSkillMetadata {
+            path_to_skills_md: PathUri::from_host_native_path(skill_path).unwrap(),
+            name: "parallel:demo".to_string(),
+            description: "demo skill.".to_string(),
+            short_description: None,
+            dependencies: None,
+            policy: None,
+        }]
     );
 }
