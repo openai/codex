@@ -24,4 +24,7 @@ tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sy
 tokio-util = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
+codex-protocol = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
