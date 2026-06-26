@@ -78,6 +78,7 @@ pub(crate) struct LiveAgent {
 pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
     pub(crate) agent_status: AgentStatus,
+    pub(crate) last_task_message: Option<String>,
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -344,6 +345,7 @@ impl AgentControl {
             agents.push(ListedAgent {
                 agent_name: root_path.to_string(),
                 agent_status: root_thread.agent_status().await,
+                last_task_message: None,
             });
         }
 
@@ -369,6 +371,7 @@ impl AgentControl {
             agents.push(ListedAgent {
                 agent_name,
                 agent_status: thread.agent_status().await,
+                last_task_message: None,
             });
         }
 
