@@ -52,10 +52,11 @@ impl EnvironmentRequestProcessor {
         environment_id: String,
         environment: Arc<Environment>,
     ) {
+        let startup = environment.observe_startup();
         let thread_manager = Arc::clone(&self.thread_manager);
         let outgoing = Arc::clone(&self.outgoing);
         tokio::spawn(async move {
-            if environment.wait_until_ready().await.is_err() {
+            if startup.await.is_err() {
                 return;
             }
             for thread_id in thread_manager.list_thread_ids().await {
