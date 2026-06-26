@@ -17,7 +17,7 @@ use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::error::reject_paginated_history_mode;
-use crate::types::history_mode_from_rollout_items;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 const ROLLOUT_SIZE_BYTES_METRIC: &str = "codex.rollout.size_bytes";
 
@@ -37,7 +37,7 @@ pub(super) async fn resume_thread(
 ) -> ThreadStoreResult<()> {
     store.ensure_live_recorder_absent(params.thread_id).await?;
     let history_mode = if let Some(history) = params.history.as_deref() {
-        history_mode_from_rollout_items(history)
+        canonical_history_mode_from_rollout_items(history)
     } else if let Some(rollout_path) = params.rollout_path.as_ref() {
         super::read_thread::read_thread_by_rollout_path(
             store,

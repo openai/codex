@@ -958,7 +958,12 @@ impl RolloutRecorder {
                     items.push(item);
                 }
                 Err(e) => {
-                    reject_unknown_thread_history_mode(&v)?;
+                    if thread_id.is_none() {
+                        // The first SessionMeta belongs to this rollout. Later SessionMeta lines
+                        // can be copied from fork history, so only validate unknown history modes
+                        // before we have parsed the rollout's own SessionMeta.
+                        reject_unknown_thread_history_mode(&v)?;
+                    }
                     trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
@@ -1022,7 +1027,7 @@ impl RolloutRecorder {
     }
 }
 
-fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
+pub(crate) fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
     if value.get("type").and_then(Value::as_str) != Some("session_meta") {
         return Ok(());
     }

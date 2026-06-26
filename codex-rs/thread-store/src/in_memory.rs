@@ -38,7 +38,7 @@ use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::error::reject_paginated_history_mode;
-use crate::types::history_mode_from_rollout_items;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 static IN_MEMORY_THREAD_STORES: OnceLock<Mutex<HashMap<String, Arc<InMemoryThreadStore>>>> =
     OnceLock::new();
@@ -460,7 +460,7 @@ impl InMemoryThreadStore {
             .history
             .as_deref()
             .map(Vec::as_slice)
-            .map(history_mode_from_rollout_items)
+            .map(canonical_history_mode_from_rollout_items)
             .unwrap_or_else(|| history_mode_from_state(&state, params.thread_id));
         reject_paginated_history_mode(history_mode)?;
         if let Some(history) = params.history {

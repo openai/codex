@@ -27,6 +27,7 @@ use crate::ThreadMetadataPatch;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
+use crate::error::reject_paginated_history_mode;
 use crate::local::read_thread;
 
 struct ResolvedRolloutPath {
@@ -53,6 +54,20 @@ pub(super) async fn update_thread_metadata(
     }
 
     let needs_rollout_compat = needs_rollout_compatibility_update(&patch);
+    if needs_rollout_compat {
+        // These explicit patches still write legacy rollout/name-index state after the
+        // SQLite update. Paginated threads must fail before either side is mutated.
+        let thread = read_thread::read_thread(
+            store,
+            ReadThreadParams {
+                thread_id,
+                include_archived: params.include_archived,
+                include_history: false,
+            },
+        )
+        .await?;
+        reject_paginated_history_mode(thread.history_mode)?;
+    }
     let require_sqlite_write = sqlite_write_failure_should_block(&patch);
     let updated = apply_metadata_update(
         store,
@@ -637,6 +652,7 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
@@ -656,6 +672,7 @@ mod tests {
     use crate::local::test_support::test_config;
     use crate::local::test_support::write_archived_session_file;
     use crate::local::test_support::write_session_file;
+    use crate::local::test_support::write_session_file_with_history_mode;
 
     #[tokio::test]
     async fn update_thread_metadata_sets_name_on_active_rollout_and_indexes_name() {
@@ -722,6 +739,55 @@ mod tests {
             .await
             .expect("thread memory mode should be readable");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_rejects_paginated_rollout_compatibility_writes() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(303);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T14-35-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+
+        assert!(matches!(
+            store
+                .update_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id,
+                    patch: ThreadMetadataPatch {
+                        memory_mode: Some(ThreadMemoryMode::Disabled),
+                        ..Default::default()
+                    },
+                    include_archived: false,
+                })
+                .await
+                .expect_err("paginated rollout compatibility write should fail"),
+            ThreadStoreError::Unsupported {
+                operation: "paginated_threads"
+            }
+        ));
+
+        assert_eq!(last_rollout_item(path.as_path())["type"], "event_msg");
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(thread_id)
+                .await
+                .expect("thread memory mode should be readable")
+                .as_deref(),
+            Some("enabled")
+        );
     }
 
     #[tokio::test]

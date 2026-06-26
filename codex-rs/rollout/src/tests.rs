@@ -130,6 +130,41 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
 }
 
 #[tokio::test]
+async fn read_thread_item_from_rollout_rejects_unknown_canonical_history_mode() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+    let uuid = Uuid::from_u128(303);
+    let ts = "2025-01-03T12-00-00";
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    let path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
+    let contents = fs::read_to_string(&path).unwrap();
+    let mut lines = contents.lines();
+    let mut canonical_meta: serde_json::Value =
+        serde_json::from_str(lines.next().expect("canonical session meta")).unwrap();
+    canonical_meta["payload"]["history_mode"] = serde_json::json!("future");
+    let user_event = lines.next().expect("user event");
+    let mut source_meta = canonical_meta.clone();
+    let source_uuid = Uuid::from_u128(304);
+    source_meta["payload"]["session_id"] = serde_json::json!(source_uuid);
+    source_meta["payload"]["id"] = serde_json::json!(source_uuid);
+    source_meta["payload"]["history_mode"] = serde_json::json!("legacy");
+    fs::write(
+        &path,
+        format!("{canonical_meta}\n{user_event}\n{source_meta}\n"),
+    )
+    .unwrap();
+
+    assert_eq!(crate::list::read_thread_item_from_rollout(path).await, None);
+}
+
+#[tokio::test]
 async fn find_thread_path_falls_back_when_db_path_points_to_another_thread() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();

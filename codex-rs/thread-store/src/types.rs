@@ -115,10 +115,13 @@ pub struct ResumeThreadParams {
     pub metadata: ThreadPersistenceMetadata,
 }
 
-pub(crate) fn history_mode_from_rollout_items(items: &[RolloutItem]) -> ThreadHistoryMode {
+pub(crate) fn canonical_history_mode_from_rollout_items(
+    items: &[RolloutItem],
+) -> ThreadHistoryMode {
+    // Forked rollouts keep copied source SessionMeta items after the new thread's
+    // canonical SessionMeta, so the thread contract comes from the first one.
     items
         .iter()
-        .rev()
         .find_map(|item| match item {
             RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.history_mode),
             _ => None,
@@ -808,6 +811,17 @@ mod tests {
     }
 
     #[test]
+    fn canonical_history_mode_uses_first_session_meta() {
+        assert_eq!(
+            canonical_history_mode_from_rollout_items(&[
+                session_meta(ThreadHistoryMode::Legacy),
+                session_meta(ThreadHistoryMode::Paginated),
+            ]),
+            ThreadHistoryMode::Legacy
+        );
+    }
+
+    #[test]
     fn thread_metadata_patch_merge_uses_presence_semantics() {
         let mut current = ThreadMetadataPatch {
             name: Some(Some("old name".to_string())),
@@ -843,5 +857,15 @@ mod tests {
                 origin_url: Some(None),
             })
         );
+    }
+
+    fn session_meta(history_mode: ThreadHistoryMode) -> RolloutItem {
+        RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
+            meta: codex_protocol::protocol::SessionMeta {
+                history_mode,
+                ..Default::default()
+            },
+            git: None,
+        })
     }
 }

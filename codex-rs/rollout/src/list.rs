@@ -28,6 +28,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use serde_json::Value;
 
 /// Returned page of thread (thread) summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -1123,7 +1124,20 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
         lines_scanned += 1;
 
         let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else { continue };
+        let rollout_line = match parsed {
+            Ok(rollout_line) => rollout_line,
+            Err(_) => {
+                if !summary.saw_session_meta
+                    && let Ok(value) = serde_json::from_str::<Value>(trimmed)
+                {
+                    // The first SessionMeta belongs to this rollout. Later SessionMeta lines can
+                    // be copied from fork history, so only an unknown mode before the first parsed
+                    // SessionMeta should make this thread unreadable.
+                    crate::recorder::reject_unknown_thread_history_mode(&value)?;
+                }
+                continue;
+            }
+        };
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
