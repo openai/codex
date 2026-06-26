@@ -93,10 +93,12 @@ impl CancellationDelegate {
         )
     }
 
+    #[cfg(unix)]
     fn hold_slow_cleanup(&self) {
         self.hold_slow_cleanup.store(true, Ordering::Release);
     }
 
+    #[cfg(unix)]
     fn release_slow_cleanup(&self) {
         self.slow_cleanup_release.add_permits(1);
     }
