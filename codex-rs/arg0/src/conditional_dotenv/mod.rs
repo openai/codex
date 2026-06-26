@@ -14,13 +14,11 @@
 //! second overlay to unset proxy variables when the endpoint is unreachable.
 
 use crate::is_reserved_env_var;
+use hickory_resolver::Resolver;
 use serde::Deserialize;
-use std::net::TcpStream;
-use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::time::Instant;
 use url::Url;
 
 const CONDITIONAL_DOTENV_PREFIX: &str = ".env.";
@@ -303,23 +301,34 @@ fn parse_endpoint(value: &str) -> Option<(String, u16)> {
 }
 
 fn system_tcp_connect(host: &str, port: u16, timeout: Duration) -> bool {
-    let Ok(addresses) = (host, port).to_socket_addrs() else {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
         return false;
     };
-    let started = Instant::now();
 
-    for address in addresses {
-        let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-            return false;
-        };
-        if remaining.is_zero() {
-            return false;
-        }
-        if TcpStream::connect_timeout(&address, remaining).is_ok() {
-            return true;
-        }
-    }
-    false
+    runtime
+        .block_on(tokio::time::timeout(timeout, async {
+            let Ok(resolver_builder) = Resolver::builder_tokio() else {
+                return false;
+            };
+            let resolver = resolver_builder.build();
+            let Ok(addresses) = resolver.lookup_ip(host).await else {
+                return false;
+            };
+
+            for address in addresses {
+                if tokio::net::TcpStream::connect((address, port))
+                    .await
+                    .is_ok()
+                {
+                    return true;
+                }
+            }
+            false
+        }))
+        .unwrap_or(false)
 }
 
 fn is_valid_env_var_name(key: &str) -> bool {
