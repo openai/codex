@@ -856,6 +856,11 @@ impl McpConnectionManager {
         server_infos
     }
 
+    /// Returns available presentation metadata for one server.
+    pub async fn server_info(&self, server: &str) -> Option<McpServerInfo> {
+        self.list_available_server_infos().await.remove(server)
+    }
+
     fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
         let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
             tool.supports_parallel_tool_calls = false;

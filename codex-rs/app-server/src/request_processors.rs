@@ -508,6 +508,7 @@ mod git_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
+mod mcp_resource_read;
 mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;

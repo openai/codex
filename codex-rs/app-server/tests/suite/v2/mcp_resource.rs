@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -84,9 +85,9 @@ const SKILLS_READ_CALL_ID: &str = "skills-read";
 const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
+async fn mcp_resource_read_without_origin_uses_resources_read() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+    let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
@@ -110,6 +111,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             thread_id: Some(thread.id),
             server: "codex_apps".to_string(),
             uri: TEST_RESOURCE_URI.to_string(),
+            origin_call_id: None,
         })
         .await?;
     let read_response: JSONRPCResponse = timeout(
@@ -121,6 +123,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
     );
+    assert_eq!(apps_server_calls.resource_read_metas(), vec![Meta::new()]);
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -526,8 +529,8 @@ enabled = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<()> {
-    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+async fn mcp_resource_read_without_thread_uses_resources_read() -> Result<()> {
+    let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
 
     let codex_home = TempDir::new()?;
@@ -560,6 +563,7 @@ apps = true
             thread_id: None,
             server: "codex_apps".to_string(),
             uri: TEST_RESOURCE_URI.to_string(),
+            origin_call_id: None,
         })
         .await?;
     let read_response: JSONRPCResponse = timeout(
@@ -572,6 +576,7 @@ apps = true
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
     );
+    assert_eq!(apps_server_calls.resource_read_metas(), vec![Meta::new()]);
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -624,6 +629,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 thread_id: Some("00000000-0000-4000-8000-000000000000".to_string()),
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
+                origin_call_id: None,
             },
         })
         .await;
@@ -746,6 +752,7 @@ struct ResourceAppsMcpCalls {
     list_resources: AtomicUsize,
     main_prompt_reads: AtomicUsize,
     reference_reads: AtomicUsize,
+    resource_read_metas: Mutex<Vec<Meta>>,
 }
 
 impl ResourceAppsMcpCalls {
@@ -755,6 +762,13 @@ impl ResourceAppsMcpCalls {
             main_prompt_reads: self.main_prompt_reads.load(Ordering::Relaxed),
             reference_reads: self.reference_reads.load(Ordering::Relaxed),
         }
+    }
+
+    fn resource_read_metas(&self) -> Vec<Meta> {
+        self.resource_read_metas
+            .lock()
+            .expect("resource read metadata lock poisoned")
+            .clone()
     }
 }
 
@@ -827,8 +841,17 @@ impl ServerHandler for ResourceAppsMcpServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        let mut meta = context.meta;
+        // rmcp adds a transport progress token to outgoing requests. Capture
+        // only the client-supplied metadata that this test is exercising.
+        meta.0.remove("progressToken");
+        self.calls
+            .resource_read_metas
+            .lock()
+            .expect("resource read metadata lock poisoned")
+            .push(meta);
         let uri = request.uri;
         if uri == SKILL_MAIN_PROMPT_URI {
             self.calls.main_prompt_reads.fetch_add(1, Ordering::Relaxed);
