@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn connection_limiter_waits_for_available_slot() {
-        let connection_limiter = Arc::new(ConnectionLimiter::new(1));
+        let connection_limiter = Arc::new(ConnectionLimiter::new(/*max_connections*/ 1));
         let first_connection = connection_limiter.acquire();
         let (acquired_tx, acquired_rx) = mpsc::channel();
         let waiting_limiter = Arc::clone(&connection_limiter);
