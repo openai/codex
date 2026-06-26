@@ -371,6 +371,11 @@ impl ResolvedMcpCatalog {
             .collect()
     }
 
+    /// Returns whether both catalogs resolve to the same winning servers and sources.
+    pub fn has_same_servers(&self, other: &Self) -> bool {
+        self.servers == other.servers
+    }
+
     /// Replaces the resolved server set while preserving known server sources.
     ///
     /// Names not present in the existing catalog are treated as config-owned.

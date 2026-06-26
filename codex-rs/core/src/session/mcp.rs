@@ -133,6 +133,36 @@ impl Session {
                 &available_environment_ids,
             )
             .await;
+        let changed_environment_is_used_by_mcp = mcp_config
+            .mcp_server_catalog
+            .configured_servers()
+            .values()
+            .any(|server| {
+                let was_available = current
+                    .available_environment_ids()
+                    .contains(&server.environment_id);
+                let is_available = available_environment_ids.contains(&server.environment_id);
+                server.enabled && was_available != is_available
+            });
+        if !changed_environment_is_used_by_mcp
+            && current
+                .config()
+                .mcp_server_catalog
+                .has_same_servers(&mcp_config.mcp_server_catalog)
+            && current.config().connector_snapshot == mcp_config.connector_snapshot
+        {
+            // Availability is only an input to the MCP projection. When that input changes but
+            // the projected servers and connectors do not, advance the input key without
+            // replacing the live manager and restarting its processes.
+            let runtime = Arc::new(McpRuntimeSnapshot::new(
+                Arc::new(current.config().clone()),
+                current.manager_arc(),
+                current.runtime_context().clone(),
+                available_environment_ids,
+            ));
+            self.services.mcp_runtime.store(Some(Arc::clone(&runtime)));
+            return runtime;
+        }
         self.refresh_mcp_servers_inner(
             turn_context,
             mcp_config,
