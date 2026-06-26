@@ -4,6 +4,7 @@ use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
+use codex_protocol::items::CollabAgentToolCallItem;
 use codex_tools::ToolSpec;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -96,19 +97,18 @@ impl Handler {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.thread_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
-                    receiver_agents: receiver_agents.clone(),
-                    call_id: call_id.clone(),
-                }
-                .into(),
-            )
-            .await;
+        emit_collab_tool_call_started(
+            &session,
+            &turn,
+            CollabAgentToolCallItem::from_collab_waiting_begin_event(CollabWaitingBeginEvent {
+                started_at_ms: now_unix_timestamp_ms(),
+                sender_thread_id: session.thread_id,
+                receiver_thread_ids: receiver_thread_ids.clone(),
+                receiver_agents: receiver_agents.clone(),
+                call_id: call_id.clone(),
+            }),
+        )
+        .await;
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
@@ -127,9 +127,10 @@ impl Handler {
                 Err(err) => {
                     let mut statuses = HashMap::with_capacity(1);
                     statuses.insert(*id, session.services.agent_control.get_status(*id).await);
-                    session
-                        .send_event(
-                            &turn,
+                    emit_collab_tool_call_completed(
+                        &session,
+                        &turn,
+                        CollabAgentToolCallItem::from_collab_waiting_end_event(
                             CollabWaitingEndEvent {
                                 sender_thread_id: session.thread_id,
                                 call_id: call_id.clone(),
@@ -139,10 +140,10 @@ impl Handler {
                                     &receiver_agents,
                                 ),
                                 statuses,
-                            }
-                            .into(),
-                        )
-                        .await;
+                            },
+                        ),
+                    )
+                    .await;
                     return Err(collab_agent_error(*id, err));
                 }
             }
@@ -196,19 +197,18 @@ impl Handler {
             timed_out,
         };
 
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.thread_id,
-                    call_id,
-                    completed_at_ms: now_unix_timestamp_ms(),
-                    agent_statuses,
-                    statuses: statuses_by_id,
-                }
-                .into(),
-            )
-            .await;
+        emit_collab_tool_call_completed(
+            &session,
+            &turn,
+            CollabAgentToolCallItem::from_collab_waiting_end_event(CollabWaitingEndEvent {
+                sender_thread_id: session.thread_id,
+                call_id,
+                completed_at_ms: now_unix_timestamp_ms(),
+                agent_statuses,
+                statuses: statuses_by_id,
+            }),
+        )
+        .await;
 
         Ok(boxed_tool_output(result))
     }

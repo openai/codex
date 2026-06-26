@@ -14,9 +14,10 @@ use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::items::DynamicToolCallItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
-use codex_protocol::protocol::EventMsg;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -197,19 +198,24 @@ async fn request_dynamic_tool(
 
     let started_at = Instant::now();
     let started_at_ms = now_unix_timestamp_ms();
-    let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+    let event = DynamicToolCallRequest {
         call_id: call_id.clone(),
         turn_id: turn_id.clone(),
         started_at_ms,
         namespace: namespace.clone(),
         tool: tool.clone(),
         arguments: arguments.clone(),
-    });
-    session.send_event(turn_context, event).await;
+    };
+    session
+        .emit_turn_item_started(
+            turn_context,
+            &TurnItem::DynamicToolCall(DynamicToolCallItem::from_dynamic_tool_call_request(event)),
+        )
+        .await;
     let response = rx_response.await.ok();
 
     let response_event = match &response {
-        Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+        Some(response) => DynamicToolCallResponseEvent {
             call_id,
             turn_id,
             completed_at_ms: now_unix_timestamp_ms(),
@@ -220,8 +226,8 @@ async fn request_dynamic_tool(
             success: response.success,
             error: None,
             duration: started_at.elapsed(),
-        }),
-        None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+        },
+        None => DynamicToolCallResponseEvent {
             call_id,
             turn_id,
             completed_at_ms: now_unix_timestamp_ms(),
@@ -232,9 +238,16 @@ async fn request_dynamic_tool(
             success: false,
             error: Some("dynamic tool call was cancelled before receiving a response".to_string()),
             duration: started_at.elapsed(),
-        }),
+        },
     };
-    session.send_event(turn_context, response_event).await;
+    session
+        .emit_turn_item_completed(
+            turn_context,
+            TurnItem::DynamicToolCall(DynamicToolCallItem::from_dynamic_tool_call_response(
+                response_event,
+            )),
+        )
+        .await;
 
     response
 }

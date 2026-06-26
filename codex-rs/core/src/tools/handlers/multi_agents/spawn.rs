@@ -9,6 +9,7 @@ use crate::agent::role::apply_role_to_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_protocol::items::CollabAgentToolCallItem;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -70,20 +71,19 @@ async fn handle_spawn_agent(
             "Agent depth limit reached. Solve the task yourself.".to_string(),
         ));
     }
-    session
-        .send_event(
-            &turn,
-            CollabAgentSpawnBeginEvent {
-                call_id: call_id.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.thread_id,
-                prompt: prompt.clone(),
-                model: args.model.clone().unwrap_or_default(),
-                reasoning_effort: args.reasoning_effort.clone().unwrap_or_default(),
-            }
-            .into(),
-        )
-        .await;
+    emit_collab_tool_call_started(
+        &session,
+        &turn,
+        CollabAgentToolCallItem::from_collab_agent_spawn_begin_event(CollabAgentSpawnBeginEvent {
+            call_id: call_id.clone(),
+            started_at_ms: now_unix_timestamp_ms(),
+            sender_thread_id: session.thread_id,
+            prompt: prompt.clone(),
+            model: args.model.clone().unwrap_or_default(),
+            reasoning_effort: args.reasoning_effort.clone().unwrap_or_default(),
+        }),
+    )
+    .await;
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
     if let Some(service_tier) = args.service_tier.as_ref() {
@@ -177,24 +177,23 @@ async fn handle_spawn_agent(
         .and_then(|snapshot| snapshot.reasoning_effort.clone())
         .unwrap_or(args.reasoning_effort.unwrap_or_default());
     let nickname = new_agent_nickname.clone();
-    session
-        .send_event(
-            &turn,
-            CollabAgentSpawnEndEvent {
-                call_id,
-                completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.thread_id,
-                new_thread_id,
-                new_agent_nickname,
-                new_agent_role,
-                prompt,
-                model: effective_model,
-                reasoning_effort: effective_reasoning_effort,
-                status,
-            }
-            .into(),
-        )
-        .await;
+    emit_collab_tool_call_completed(
+        &session,
+        &turn,
+        CollabAgentToolCallItem::from_collab_agent_spawn_end_event(CollabAgentSpawnEndEvent {
+            call_id,
+            completed_at_ms: now_unix_timestamp_ms(),
+            sender_thread_id: session.thread_id,
+            new_thread_id,
+            new_agent_nickname,
+            new_agent_role,
+            prompt,
+            model: effective_model,
+            reasoning_effort: effective_reasoning_effort,
+            status,
+        }),
+    )
+    .await;
     let new_thread_id = result?.thread_id;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     turn.session_telemetry.counter(

@@ -71,19 +71,18 @@ async fn handle_interrupt_agent(
         Err(err) => Err(collab_agent_error(agent_id, err)),
     };
     result?;
-    session
-        .send_event(
-            &turn,
-            SubAgentActivityEvent {
-                event_id: call_id,
-                occurred_at_ms: now_unix_timestamp_ms(),
-                agent_thread_id: agent_id,
-                agent_path: receiver_agent_path,
-                kind: SubAgentActivityKind::Interrupted,
-            }
-            .into(),
-        )
-        .await;
+    emit_sub_agent_activity(
+        &session,
+        &turn,
+        SubAgentActivityEvent {
+            event_id: call_id,
+            occurred_at_ms: now_unix_timestamp_ms(),
+            agent_thread_id: agent_id,
+            agent_path: receiver_agent_path,
+            kind: SubAgentActivityKind::Interrupted,
+        },
+    )
+    .await;
 
     Ok(InterruptAgentResult {
         previous_status: status,

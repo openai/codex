@@ -67,11 +67,54 @@ pub(crate) enum ThreadListenerCommand {
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegacyItemLifecycle {
+    Started,
+    Completed,
+}
+
+#[derive(Clone)]
+struct PendingLegacyItemSuppression {
+    lifecycle: LegacyItemLifecycle,
+    item_id: String,
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
     pub(crate) command_execution_started: HashSet<String>,
+    pending_legacy_item_suppression: Option<PendingLegacyItemSuppression>,
     pub(crate) last_error: Option<TurnError>,
+}
+
+impl TurnSummary {
+    pub(crate) fn suppress_next_legacy_item(
+        &mut self,
+        lifecycle: LegacyItemLifecycle,
+        item_id: &str,
+    ) {
+        self.pending_legacy_item_suppression = Some(PendingLegacyItemSuppression {
+            lifecycle,
+            item_id: item_id.to_string(),
+        });
+    }
+
+    pub(crate) fn take_legacy_item_suppression(
+        &mut self,
+        lifecycle: LegacyItemLifecycle,
+        item_id: &str,
+    ) -> bool {
+        if self
+            .pending_legacy_item_suppression
+            .as_ref()
+            .is_some_and(|pending| pending.lifecycle == lifecycle && pending.item_id == item_id)
+        {
+            self.pending_legacy_item_suppression = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Default)]

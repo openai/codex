@@ -2,6 +2,7 @@ use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
+use codex_protocol::items::CollabAgentToolCallItem;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -43,18 +44,17 @@ async fn handle_close_agent(
     let receiver_agent = session.services.agent_control.get_agent_metadata(agent_id);
     let known_agent = receiver_agent.is_some();
     let receiver_agent = receiver_agent.unwrap_or_default();
-    session
-        .send_event(
-            &turn,
-            CollabCloseBeginEvent {
-                call_id: call_id.clone(),
-                started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.thread_id,
-                receiver_thread_id: agent_id,
-            }
-            .into(),
-        )
-        .await;
+    emit_collab_tool_call_started(
+        &session,
+        &turn,
+        CollabAgentToolCallItem::from_collab_close_begin_event(CollabCloseBeginEvent {
+            call_id: call_id.clone(),
+            started_at_ms: now_unix_timestamp_ms(),
+            sender_thread_id: session.thread_id,
+            receiver_thread_id: agent_id,
+        }),
+    )
+    .await;
     let status = match session
         .services
         .agent_control
@@ -67,21 +67,20 @@ async fn handle_close_agent(
         }
         Err(err) => {
             let status = session.services.agent_control.get_status(agent_id).await;
-            session
-                .send_event(
-                    &turn,
-                    CollabCloseEndEvent {
-                        call_id: call_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
-                        sender_thread_id: session.thread_id(),
-                        receiver_thread_id: agent_id,
-                        receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                        receiver_agent_role: receiver_agent.agent_role.clone(),
-                        status,
-                    }
-                    .into(),
-                )
-                .await;
+            emit_collab_tool_call_completed(
+                &session,
+                &turn,
+                CollabAgentToolCallItem::from_collab_close_end_event(CollabCloseEndEvent {
+                    call_id: call_id.clone(),
+                    completed_at_ms: now_unix_timestamp_ms(),
+                    sender_thread_id: session.thread_id(),
+                    receiver_thread_id: agent_id,
+                    receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                    receiver_agent_role: receiver_agent.agent_role.clone(),
+                    status,
+                }),
+            )
+            .await;
             return Err(collab_agent_error(agent_id, err));
         }
     };
@@ -89,21 +88,20 @@ async fn handle_close_agent(
         .await
         .map_err(|err| collab_agent_error(agent_id, err))
         .map(|_| ());
-    session
-        .send_event(
-            &turn,
-            CollabCloseEndEvent {
-                call_id,
-                completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.thread_id,
-                receiver_thread_id: agent_id,
-                receiver_agent_nickname: receiver_agent.agent_nickname,
-                receiver_agent_role: receiver_agent.agent_role,
-                status: status.clone(),
-            }
-            .into(),
-        )
-        .await;
+    emit_collab_tool_call_completed(
+        &session,
+        &turn,
+        CollabAgentToolCallItem::from_collab_close_end_event(CollabCloseEndEvent {
+            call_id,
+            completed_at_ms: now_unix_timestamp_ms(),
+            sender_thread_id: session.thread_id,
+            receiver_thread_id: agent_id,
+            receiver_agent_nickname: receiver_agent.agent_nickname,
+            receiver_agent_role: receiver_agent.agent_role,
+            status: status.clone(),
+        }),
+    )
+    .await;
     result?;
 
     Ok(CloseAgentResult {

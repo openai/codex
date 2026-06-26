@@ -12,6 +12,8 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::AgentPath;
+use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
@@ -39,6 +41,19 @@ mod message_tool;
 mod send_message;
 mod spawn;
 pub(crate) mod wait;
+
+pub(crate) async fn emit_sub_agent_activity(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    event: SubAgentActivityEvent,
+) {
+    session
+        .emit_turn_item_completed(
+            turn,
+            TurnItem::SubAgentActivity(SubAgentActivityItem::from_sub_agent_activity_event(event)),
+        )
+        .await;
+}
 
 pub(super) fn communication_from_tool_message(
     author: AgentPath,

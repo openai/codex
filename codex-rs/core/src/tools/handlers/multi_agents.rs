@@ -20,6 +20,8 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::ThreadId;
+use codex_protocol::items::CollabAgentToolCallItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
@@ -90,6 +92,26 @@ mod resume_agent;
 mod send_input;
 mod spawn;
 pub(crate) mod wait;
+
+pub(crate) async fn emit_collab_tool_call_started(
+    session: &Session,
+    turn: &TurnContext,
+    item: CollabAgentToolCallItem,
+) {
+    session
+        .emit_turn_item_started(turn, &TurnItem::CollabAgentToolCall(item))
+        .await;
+}
+
+pub(crate) async fn emit_collab_tool_call_completed(
+    session: &Session,
+    turn: &TurnContext,
+    item: CollabAgentToolCallItem,
+) {
+    session
+        .emit_turn_item_completed(turn, TurnItem::CollabAgentToolCall(item))
+        .await;
+}
 
 #[cfg(test)]
 #[path = "multi_agents_tests.rs"]

@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::control::render_input_preview;
 use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_protocol::items::CollabAgentToolCallItem;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -66,19 +67,20 @@ impl Handler {
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
-        session
-            .send_event(
-                &turn,
+        emit_collab_tool_call_started(
+            &session,
+            &turn,
+            CollabAgentToolCallItem::from_collab_agent_interaction_begin_event(
                 CollabAgentInteractionBeginEvent {
                     call_id: call_id.clone(),
                     started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.thread_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
-                }
-                .into(),
-            )
-            .await;
+                },
+            ),
+        )
+        .await;
         let agent_control = session.services.agent_control.clone();
         let result = agent_control
             .send_input(receiver_thread_id, input_items)
@@ -89,9 +91,10 @@ impl Handler {
             .agent_control
             .get_status(receiver_thread_id)
             .await;
-        session
-            .send_event(
-                &turn,
+        emit_collab_tool_call_completed(
+            &session,
+            &turn,
+            CollabAgentToolCallItem::from_collab_agent_interaction_end_event(
                 CollabAgentInteractionEndEvent {
                     call_id,
                     completed_at_ms: now_unix_timestamp_ms(),
@@ -101,10 +104,10 @@ impl Handler {
                     receiver_agent_role: receiver_agent.agent_role,
                     prompt,
                     status,
-                }
-                .into(),
-            )
-            .await;
+                },
+            ),
+        )
+        .await;
         let submission_id = result?;
 
         Ok(boxed_tool_output(SendInputResult { submission_id }))
