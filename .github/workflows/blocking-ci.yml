@@ -2,6 +2,8 @@ name: blocking-ci
 
 on:
   pull_request: {}
+  push:
+    branches: [main]
 
 jobs:
   bazel:
@@ -19,14 +21,14 @@ jobs:
     uses: ./.github/workflows/cargo-deny.yml
     secrets: inherit
 
-  repo-checks:
-    name: repo-checks
-    uses: ./.github/workflows/repo-checks.yml
-    secrets: inherit
-
   codespell:
     name: Codespell
     uses: ./.github/workflows/codespell.yml
+    secrets: inherit
+
+  repo-checks:
+    name: repo-checks
+    uses: ./.github/workflows/repo-checks.yml
     secrets: inherit
 
   rust-ci:
@@ -46,8 +48,8 @@ jobs:
       - bazel
       - blob-size-policy
       - cargo-deny
-      - repo-checks
       - codespell
+      - repo-checks
       - rust-ci
       - sdk
     runs-on: ubuntu-24.04

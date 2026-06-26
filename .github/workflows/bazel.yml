@@ -5,9 +5,6 @@ name: Bazel
 
 on:
   workflow_call:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

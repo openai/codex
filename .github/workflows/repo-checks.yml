@@ -2,7 +2,6 @@ name: repo-checks
 
 on:
   workflow_call:
-  push: { branches: [main] }
 
 jobs:
   build-test:
