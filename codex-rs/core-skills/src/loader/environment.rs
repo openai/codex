@@ -23,7 +23,6 @@ use super::ParsedSkillFrontmatter;
 use super::SKILLS_FILENAME;
 use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
-use super::SkillFileDiscovery;
 use super::SkillMetadataFile;
 use super::parse_skill_frontmatter_metadata_inner;
 use super::resolve_dependencies;
@@ -33,6 +32,24 @@ use super::validate_len;
 
 const MAX_SKILLS_ENTRIES_PER_ROOT: usize = 20_000;
 const MAX_CONCURRENT_SKILL_LOADS: usize = 64;
+
+struct EnvironmentSkillDiscovery {
+    skills: Vec<DiscoveredEnvironmentSkill>,
+    plugin_roots: HashSet<PathUri>,
+    namespace_roots: HashSet<PathUri>,
+    warnings: Vec<String>,
+}
+
+struct DiscoveredEnvironmentSkill {
+    path: PathUri,
+    metadata: SkillMetadataDiscovery,
+}
+
+enum SkillMetadataDiscovery {
+    Present(PathUri),
+    Absent,
+    Probe(PathUri),
+}
 
 /// URI-native metadata for one skill owned by an execution environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,28 +84,44 @@ impl EnvironmentSkillMetadata {
 
     async fn parse(
         file_system: &dyn ExecutorFileSystem,
-        path: &PathUri,
+        skill: &DiscoveredEnvironmentSkill,
         plugin_namespace: Option<&str>,
     ) -> Result<Self, String> {
-        let contents = file_system
-            .read_file_text(path, /*sandbox*/ None)
-            .await
-            .map_err(|err| format!("failed to read file: {err}"))?;
+        let (contents, discovered_metadata) = match &skill.metadata {
+            SkillMetadataDiscovery::Present(metadata_path) => {
+                let (contents, metadata) = tokio::join!(
+                    read_skill_contents(file_system, &skill.path),
+                    read_skill_metadata(file_system, metadata_path),
+                );
+                (contents?, metadata)
+            }
+            SkillMetadataDiscovery::Absent | SkillMetadataDiscovery::Probe(_) => (
+                read_skill_contents(file_system, &skill.path).await?,
+                (None, None),
+            ),
+        };
         let ParsedSkillFrontmatter {
             name: base_name,
             description,
             short_description,
-        } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(path))
+        } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(&skill.path))
             .map_err(|err| err.to_string())?;
         let name = plugin_namespace
             .map(|namespace| format!("{namespace}:{base_name}"))
             .unwrap_or(base_name);
         validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
             .map_err(|err| err.to_string())?;
-        let (dependencies, policy) = load_skill_metadata(file_system, path).await;
+        let (dependencies, policy) = match &skill.metadata {
+            SkillMetadataDiscovery::Present(_) | SkillMetadataDiscovery::Absent => {
+                discovered_metadata
+            }
+            SkillMetadataDiscovery::Probe(metadata_path) => {
+                probe_skill_metadata(file_system, metadata_path).await
+            }
+        };
 
         Ok(Self {
-            path_to_skills_md: path.clone(),
+            path_to_skills_md: skill.path.clone(),
             name,
             description,
             short_description,
@@ -125,6 +158,7 @@ pub async fn load_environment_skills_from_root(
         .await
     {
         Ok(walk) => {
+            let inventory_complete = !walk.truncated && walk.errors.is_empty();
             let mut warnings = walk
                 .errors
                 .into_iter()
@@ -141,10 +175,13 @@ pub async fn load_environment_skills_from_root(
                 ));
             }
             let mut skill_files = Vec::new();
+            let mut file_paths = HashSet::new();
+            let mut directory_paths = HashSet::new();
             let mut plugin_roots = HashSet::new();
             for entry in walk.entries {
                 match entry.kind {
                     WalkEntryKind::Directory => {
+                        directory_paths.insert(entry.path.clone());
                         if DISCOVERABLE_PLUGIN_MANIFEST_PATHS
                             .iter()
                             .any(|path| path.split('/').next() == entry.path.basename().as_deref())
@@ -154,40 +191,53 @@ pub async fn load_environment_skills_from_root(
                         }
                     }
                     WalkEntryKind::File => {
+                        file_paths.insert(entry.path.clone());
                         if entry.path.basename().as_deref() == Some(SKILLS_FILENAME) {
                             skill_files.push(entry.path);
                         }
                     }
                 }
             }
-            SkillFileDiscovery {
-                skill_files,
+            let skills = skill_files
+                .into_iter()
+                .map(|path| DiscoveredEnvironmentSkill {
+                    metadata: discover_skill_metadata(
+                        &path,
+                        &file_paths,
+                        &directory_paths,
+                        inventory_complete,
+                    ),
+                    path,
+                })
+                .collect();
+            EnvironmentSkillDiscovery {
+                skills,
                 plugin_roots,
                 namespace_roots: HashSet::from([root.clone()]),
                 warnings,
             }
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => SkillFileDiscovery {
-            skill_files: Vec::new(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => EnvironmentSkillDiscovery {
+            skills: Vec::new(),
             plugin_roots: HashSet::new(),
             namespace_roots: HashSet::new(),
             warnings: Vec::new(),
         },
-        Err(error) => SkillFileDiscovery {
-            skill_files: Vec::new(),
+        Err(error) => EnvironmentSkillDiscovery {
+            skills: Vec::new(),
             plugin_roots: HashSet::new(),
             namespace_roots: HashSet::new(),
             warnings: vec![format!("failed to walk skills root {root}: {error:#}")],
         },
     };
     outcome.warnings.extend(discovery.warnings);
-    if discovery.skill_files.is_empty() {
+    if discovery.skills.is_empty() {
         return outcome;
     }
 
     let mut skill_ancestors = HashSet::new();
-    for skill_path in &discovery.skill_files {
-        let mut ancestor = skill_path.parent();
+    for skill in &discovery.skills {
+        let mut ancestor = skill.path.parent();
         while let Some(path) = ancestor {
             skill_ancestors.insert(path.clone());
             ancestor = path.parent();
@@ -224,9 +274,9 @@ pub async fn load_environment_skills_from_root(
 
     // Remote executors can multiplex these independent per-skill reads, so polling a bounded
     // number together allows the I/O for each skill and its metadata to happen concurrently.
-    let skill_results = futures::stream::iter(discovery.skill_files)
-        .map(|path| {
-            let mut ancestor = path.parent();
+    let skill_results = futures::stream::iter(discovery.skills)
+        .map(|skill| {
+            let mut ancestor = skill.path.parent();
             let plugin_namespace = loop {
                 let Some(current) = ancestor else {
                     break None;
@@ -236,9 +286,10 @@ pub async fn load_environment_skills_from_root(
                 }
                 ancestor = current.parent();
             };
+            let path = skill.path.clone();
             async move {
                 let result =
-                    EnvironmentSkillMetadata::parse(file_system, &path, plugin_namespace).await;
+                    EnvironmentSkillMetadata::parse(file_system, &skill, plugin_namespace).await;
                 (path, result)
             }
         })
@@ -267,20 +318,48 @@ pub async fn load_environment_skills_from_root(
     outcome
 }
 
-async fn load_skill_metadata(
+fn discover_skill_metadata(
+    skill_path: &PathUri,
+    file_paths: &HashSet<PathUri>,
+    directory_paths: &HashSet<PathUri>,
+    inventory_complete: bool,
+) -> SkillMetadataDiscovery {
+    let Some(skill_dir) = skill_path.parent() else {
+        return SkillMetadataDiscovery::Absent;
+    };
+    let Ok(metadata_dir) = skill_dir.join(SKILLS_METADATA_DIR) else {
+        return SkillMetadataDiscovery::Absent;
+    };
+    let Ok(metadata_path) = metadata_dir.join(SKILLS_METADATA_FILENAME) else {
+        return SkillMetadataDiscovery::Absent;
+    };
+    if file_paths.contains(&metadata_path) {
+        SkillMetadataDiscovery::Present(metadata_path)
+    } else if inventory_complete && !directory_paths.contains(&metadata_dir) {
+        SkillMetadataDiscovery::Absent
+    } else {
+        // The walk can omit entries after an error or traversal limit. It also omits file
+        // symlinks, so keep the existing probe when the metadata directory itself was observed.
+        SkillMetadataDiscovery::Probe(metadata_path)
+    }
+}
+
+async fn read_skill_contents(
     file_system: &dyn ExecutorFileSystem,
     skill_path: &PathUri,
+) -> Result<String, String> {
+    file_system
+        .read_file_text(skill_path, /*sandbox*/ None)
+        .await
+        .map_err(|err| format!("failed to read file: {err}"))
+}
+
+async fn probe_skill_metadata(
+    file_system: &dyn ExecutorFileSystem,
+    metadata_path: &PathUri,
 ) -> (Option<SkillDependencies>, Option<SkillPolicy>) {
-    let Some(skill_dir) = skill_path.parent() else {
-        return (None, None);
-    };
-    let Ok(metadata_path) =
-        skill_dir.join(&format!("{SKILLS_METADATA_DIR}/{SKILLS_METADATA_FILENAME}"))
-    else {
-        return (None, None);
-    };
     match file_system
-        .get_metadata(&metadata_path, /*sandbox*/ None)
+        .get_metadata(metadata_path, /*sandbox*/ None)
         .await
     {
         Ok(metadata) if metadata.is_file => {}
@@ -291,8 +370,15 @@ async fn load_skill_metadata(
             return (None, None);
         }
     }
+    read_skill_metadata(file_system, metadata_path).await
+}
+
+async fn read_skill_metadata(
+    file_system: &dyn ExecutorFileSystem,
+    metadata_path: &PathUri,
+) -> (Option<SkillDependencies>, Option<SkillPolicy>) {
     let contents = match file_system
-        .read_file_text(&metadata_path, /*sandbox*/ None)
+        .read_file_text(metadata_path, /*sandbox*/ None)
         .await
     {
         Ok(contents) => contents,
