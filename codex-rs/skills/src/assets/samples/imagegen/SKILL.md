@@ -34,7 +34,7 @@ Rules:
 Built-in save-path policy:
 - In built-in tool mode, Codex saves generated images under `$CODEX_HOME/*` by default.
 - Do not describe or rely on OS temp as the default built-in destination.
-- Do not describe or rely on a destination-path argument (if any) on the built-in `image_gen` tool. If a specific location is needed, generate first and then move or copy the selected output from `$CODEX_HOME/generated_images/...`.
+- Do not describe or rely on a destination-path argument (if any) on the built-in `image_gen` tool. If a specific location is needed, generate first and then move or copy the selected output from the path returned by the tool (by default `$CODEX_HOME/generated_images/...`).
 - Save-path precedence in built-in mode:
   1. If the user names a destination, move or copy the selected output there.
   2. If the image is meant for the current project, move or copy the final selected image into the workspace before finishing.
@@ -110,8 +110,8 @@ Assume the user wants a new image unless they clearly ask to change an existing 
 11. For transparent-output requests, follow the transparent image guidance below: generate with built-in `image_gen` on a flat chroma-key background, copy the selected output into the workspace or `tmp/imagegen/`, run the installed `$CODEX_HOME/skills/.system/imagegen/scripts/remove_chroma_key.py` helper, and validate the alpha result before using it. If this path looks unsuitable or fails, ask before switching to CLI `gpt-image-1.5`.
 12. Inspect outputs and validate: subject, style, composition, text accuracy, and invariants/avoid items.
 13. Iterate with a single targeted change, then re-check.
-14. For preview-only work, render the image inline; the underlying file may remain at the default `$CODEX_HOME/generated_images/...` path.
-15. For project-bound work, move or copy the selected artifact into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the default `$CODEX_HOME/generated_images/...` path.
+14. For preview-only work, render the image inline; the underlying file may remain at the path returned by the tool.
+15. For project-bound work, move or copy the selected artifact from the path returned by the tool into the workspace and update any consuming code or references. Never leave a project-referenced asset only at the generated-image output path.
 16. For batches or multi-asset requests, persist every requested deliverable final in the workspace unless the user explicitly asked to keep outputs preview-only. Discarded variants do not need to be kept unless requested.
 17. If the user explicitly chooses or confirms the CLI fallback, then use the fallback-only docs for model, quality, size, `input_fidelity`, masks, output format, output paths, and network setup.
 18. Always report the final saved path(s) for any workspace-bound asset(s), plus the final prompt or prompt set and whether the built-in tool or fallback CLI mode was used.
@@ -123,7 +123,7 @@ Transparent-image requests still use built-in `image_gen` first. Because the bui
 Default sequence:
 1. Use built-in `image_gen` to generate the requested subject on a perfectly flat solid chroma-key background.
 2. Choose a key color that is unlikely to appear in the subject: default `#00ff00`, use `#ff00ff` for green subjects, and avoid `#0000ff` for blue subjects.
-3. After generation, move or copy the selected source image from `$CODEX_HOME/generated_images/...` into the workspace or `tmp/imagegen/`.
+3. After generation, move or copy the selected source image from the path returned by the tool into the workspace or `tmp/imagegen/`.
 4. Run the installed helper path, not a project-relative script path:
    ```bash
    python "${CODEX_HOME:-$HOME/.codex}/skills/.system/imagegen/scripts/remove_chroma_key.py" \

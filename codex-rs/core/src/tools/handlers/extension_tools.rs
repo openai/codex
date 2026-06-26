@@ -559,7 +559,7 @@ mod tests {
         let handler = ExtensionToolAdapter::new(Arc::new(ImageGenerationExtensionExecutor));
         let expected_path = test_path_buf("/tmp/extension-claimed.png").abs();
         let default_path = crate::stream_events_utils::image_generation_artifact_path(
-            &turn.config.codex_home,
+            &turn.config.generated_images_dir,
             &session.thread_id.to_string(),
             "call-image",
         );

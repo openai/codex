@@ -80,7 +80,14 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
     .await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
+    let generated_images_dir = codex_home.path().join("custom-generated-images");
+    let generated_images_dir_config = serde_json::to_string(&generated_images_dir)?;
+    create_config_toml_with_extra_config(
+        codex_home.path(),
+        &server.uri(),
+        ImagegenTestMode::Direct,
+        &format!("generated_images_dir = {generated_images_dir_config}"),
+    )?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access-chatgpt"),
@@ -116,6 +123,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
     assert_eq!(status, "completed");
     assert_eq!(revised_prompt.as_deref(), Some("paint a blue whale"));
     assert_eq!(result, RESULT);
+    assert!(saved_path.starts_with(&generated_images_dir));
     assert_eq!(std::fs::read(&saved_path)?, TINY_PNG_BYTES);
 
     let requests = response_mock.requests();
@@ -552,6 +560,15 @@ fn create_config_toml(
     server_uri: &str,
     mode: ImagegenTestMode,
 ) -> std::io::Result<()> {
+    create_config_toml_with_extra_config(codex_home, server_uri, mode, "")
+}
+
+fn create_config_toml_with_extra_config(
+    codex_home: &Path,
+    server_uri: &str,
+    mode: ImagegenTestMode,
+    extra_config: &str,
+) -> std::io::Result<()> {
     let code_mode_only = match mode {
         ImagegenTestMode::Direct => "",
         ImagegenTestMode::CodeModeOnly => "code_mode_only = true",
@@ -565,6 +582,7 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "openai-custom"
 chatgpt_base_url = "{server_uri}"
+{extra_config}
 
 [features]
 imagegenext = true

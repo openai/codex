@@ -330,6 +330,10 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
 
+    /// Directory where Codex writes generated images.
+    /// Defaults to `$CODEX_HOME/generated_images`.
+    pub generated_images_dir: Option<AbsolutePathBuf>,
+
     /// Debugging and reproducibility settings.
     pub debug: Option<DebugToml>,
 

@@ -29,7 +29,7 @@ fn responses_extensions(auth: &CodexAuth) -> Arc<ExtensionRegistry<Config>> {
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
     install_web_search_extension(&mut extension_builder, Arc::clone(&auth_manager));
     install_image_generation_extension(&mut extension_builder, auth_manager, |config| {
-        Some(config.codex_home.clone())
+        Some(config.generated_images_dir.clone())
     });
     Arc::new(extension_builder.build())
 }

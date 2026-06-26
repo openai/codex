@@ -51,11 +51,15 @@ const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA
 
 fn image_generation_extensions(
     auth: &CodexAuth,
-    resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
+    resolve_generated_images_dir: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
 ) -> Arc<ExtensionRegistry<Config>> {
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
-    install_image_generation_extension(&mut extension_builder, auth_manager, resolve_save_root);
+    install_image_generation_extension(
+        &mut extension_builder,
+        auth_manager,
+        resolve_generated_images_dir,
+    );
     Arc::new(extension_builder.build())
 }
 
@@ -65,7 +69,8 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let extensions = image_generation_extensions(&auth, |config| Some(config.codex_home.clone()));
+    let extensions =
+        image_generation_extensions(&auth, |config| Some(config.generated_images_dir.clone()));
     let mut builder = test_codex()
         .with_auth(auth)
         .with_extensions(extensions)
