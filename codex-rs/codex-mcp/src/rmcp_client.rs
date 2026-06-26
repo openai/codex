@@ -57,6 +57,7 @@ use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StdioServerLauncher;
 use codex_rmcp_client::ToolWithConnectorId;
+use codex_rmcp_client::is_authentication_required_error;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -67,7 +68,6 @@ use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
-use rmcp::transport::auth::AuthError;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -552,16 +552,7 @@ impl StartupOutcomeError {
 
 impl From<anyhow::Error> for StartupOutcomeError {
     fn from(error: anyhow::Error) -> Self {
-        let is_authentication_required = error.chain().any(|source| {
-            source
-                .downcast_ref::<AuthError>()
-                .is_some_and(|auth_error| {
-                    matches!(
-                        auth_error,
-                        AuthError::AuthorizationRequired | AuthError::TokenExpired
-                    )
-                })
-        });
+        let is_authentication_required = is_authentication_required_error(&error);
         Self::Failed {
             error: error.to_string(),
             is_authentication_required,

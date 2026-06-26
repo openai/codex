@@ -9,6 +9,7 @@ mod oauth_http_client;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
+mod startup_error;
 mod stdio_server_launcher;
 mod utils;
 
@@ -40,6 +41,7 @@ pub use rmcp_client::ListToolsWithConnectorIdResult;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
 pub use rmcp_client::ToolWithConnectorId;
+pub use startup_error::is_authentication_required_error;
 pub use stdio_server_launcher::ExecutorStdioServerLauncher;
 pub use stdio_server_launcher::LocalStdioServerLauncher;
 pub use stdio_server_launcher::StdioServerLauncher;
