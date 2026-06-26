@@ -200,8 +200,8 @@ fn remote_control_server_request_error_classifies_status_before_timeout() {
 
 #[tokio::test]
 async fn request_timeout_before_response_headers_is_transient() {
-    let err = timed_out_request(None).await;
-    assert_transient_timeout(&err, None);
+    let err = timed_out_request(/*partial_response*/ None).await;
+    assert_transient_timeout(&err, /*expected_status*/ None);
 }
 
 #[tokio::test]
