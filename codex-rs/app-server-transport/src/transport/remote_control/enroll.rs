@@ -239,7 +239,6 @@ impl RemoteControlEnrollment {
     pub(super) fn clear_server_token(&mut self) {
         self.remote_control_token = None;
         self.expires_at = None;
-        self.next_refresh_at = None;
     }
 }
 

@@ -1566,17 +1566,19 @@ async fn prepare_remote_control_enrollment(
                 )
                 .await?;
             }
-            Err(err)
-                if err.kind() == ErrorKind::PermissionDenied
-                    && recover_remote_control_auth(
-                        auth_context.auth_recovery,
-                        auth_context.auth_change_rx,
-                    )
-                    .await =>
-            {
-                return Err(io::Error::other(format!(
-                    "{err}; retrying after auth recovery"
-                )));
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                if recover_remote_control_auth(
+                    auth_context.auth_recovery,
+                    auth_context.auth_change_rx,
+                )
+                .await
+                {
+                    return Err(io::Error::other(format!(
+                        "{err}; retrying after auth recovery"
+                    )));
+                }
+                enrollment_ref.clear_server_token();
+                return Err(err);
             }
             Err(err) => return Err(err),
         }
@@ -2135,9 +2137,10 @@ mod tests {
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
-            TEST_REMOTE_CONTROL_SERVER_TOKEN,
-        ))));
+        let next_refresh_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(2);
+        let mut enrollment = remote_control_enrollment(Some(TEST_REMOTE_CONTROL_SERVER_TOKEN));
+        enrollment.next_refresh_at = Some(next_refresh_at);
+        let current_enrollment = test_current_enrollment(Some(enrollment));
         let (status_publisher, status_rx) = remote_control_status_channel();
 
         let server_task = tokio::spawn(async move {
@@ -2187,6 +2190,7 @@ mod tests {
         );
         let mut expected_enrollment = remote_control_enrollment(/*remote_control_token*/ None);
         expected_enrollment.remote_control_target = remote_control_target;
+        expected_enrollment.next_refresh_at = Some(next_refresh_at);
         assert_eq!(*current_enrollment.lock().await, Some(expected_enrollment));
     }
 
@@ -2327,9 +2331,12 @@ mod tests {
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(
-            /*remote_control_token*/ None,
-        )));
+        let mut expected_enrollment =
+            remote_control_enrollment(Some(TEST_REMOTE_CONTROL_SERVER_TOKEN));
+        expected_enrollment.remote_control_target = remote_control_target.clone();
+        expected_enrollment.expires_at =
+            Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
+        let current_enrollment = test_current_enrollment(Some(expected_enrollment.clone()));
         let (status_publisher, status_rx) = remote_control_status_channel();
         save_auth(
             codex_home.path(),
@@ -2386,6 +2393,7 @@ mod tests {
                 .expect("token should be readable"),
             "fresh-token"
         );
+        assert_eq!(current_enrollment.snapshot(), Some(expected_enrollment));
         assert!(
             !auth_change_rx
                 .has_changed()

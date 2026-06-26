@@ -179,7 +179,7 @@ fn remote_control_server_request_error_classifies_status_before_timeout() {
             false,
         ),
         (Some(StatusCode::BAD_REQUEST), true, ErrorKind::Other, false),
-        (None, false, ErrorKind::Other, false),
+        (None, false, ErrorKind::Other, true),
     ];
 
     for (status, timed_out, expected_kind, expected_transient) in cases {

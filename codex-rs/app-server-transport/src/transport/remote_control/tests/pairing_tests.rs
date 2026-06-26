@@ -626,6 +626,54 @@ async fn remote_control_handle_refreshes_after_pairing_auth_failure() {
 }
 
 #[tokio::test]
+async fn pairing_auth_failure_preserves_refresh_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let pairing_request = accept_http_request(&listener).await;
+        assert_eq!(
+            pairing_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        respond_with_status(pairing_request.stream, "401 Unauthorized", "").await;
+    });
+    let remote_handle = remote_control_handle_with_current_enrollment(
+        &remote_control_url,
+        remote_control_auth_manager(),
+    );
+    let next_refresh_at = OffsetDateTime::now_utc() + time::Duration::minutes(2);
+    remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .next_refresh_at = Some(next_refresh_at);
+    let mut expected_enrollment = remote_handle
+        .current_enrollment
+        .snapshot()
+        .expect("current enrollment should exist");
+    expected_enrollment.clear_server_token();
+
+    let err = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("refresh deadline should throttle recovery after token rejection");
+    server_task.await.expect("server task should finish");
+
+    assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(
+        remote_handle.current_enrollment.snapshot(),
+        Some(expected_enrollment)
+    );
+}
+
+#[tokio::test]
 async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -701,6 +749,77 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
     server_task.await.expect("server task should finish");
 
     assert_eq!(response, pairing_response("env_test"));
+}
+
+#[tokio::test]
+async fn pairing_publishes_refresh_deferral_after_auth_recovery() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let stale_refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            stale_refresh_request.headers.get("authorization"),
+            Some(&"Bearer stale-token".to_string())
+        );
+        respond_with_status(stale_refresh_request.stream, "401 Unauthorized", "").await;
+
+        let recovered_refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            recovered_refresh_request.headers.get("authorization"),
+            Some(&"Bearer fresh-token".to_string())
+        );
+        respond_with_status_and_headers(
+            recovered_refresh_request.stream,
+            "502 Bad Gateway",
+            &[("retry-after", "120")],
+            "upstream unavailable",
+        )
+        .await;
+    });
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let auth_manager = auth_manager_with_replacement(&codex_home, "account_id").await;
+    let remote_handle =
+        remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager);
+    remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
+
+    let refresh_started_at = OffsetDateTime::now_utc();
+    let refresh_err = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("required refresh should remain strict after auth recovery");
+    let refresh_completed_at = OffsetDateTime::now_utc();
+    let deferred_err = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("published deadline should throttle the next pairing refresh");
+    server_task.await.expect("server task should finish");
+
+    assert!(refresh_err.to_string().contains("HTTP 502 Bad Gateway"));
+    assert_eq!(deferred_err.kind(), io::ErrorKind::WouldBlock);
+    let next_refresh_at = remote_handle
+        .current_enrollment
+        .snapshot()
+        .and_then(|enrollment| enrollment.next_refresh_at)
+        .expect("required refresh failure should publish its retry deadline");
+    assert!(
+        (refresh_started_at + time::Duration::seconds(120)
+            ..=refresh_completed_at + time::Duration::seconds(120))
+            .contains(&next_refresh_at)
+    );
 }
 
 #[tokio::test]

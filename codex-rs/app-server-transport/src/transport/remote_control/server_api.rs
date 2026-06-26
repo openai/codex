@@ -60,6 +60,7 @@ impl RemoteControlServerRequestError {
 
     fn is_transient(&self, kind: ErrorKind) -> bool {
         kind == ErrorKind::TimedOut
+            || self.status.is_none()
             || self.status.is_some_and(|status| {
                 status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
             })
@@ -153,10 +154,6 @@ pub(super) async fn refresh_remote_control_server(
     .await
     {
         Ok(refreshed) => refreshed,
-        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-            enrollment.clear_server_token();
-            return Err(err);
-        }
         Err(err) => {
             let Some(refresh_error) = remote_control_server_request_error(&err) else {
                 return Err(err);

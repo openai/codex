@@ -116,6 +116,50 @@ async fn proactive_refresh_failure_uses_valid_token_for_websocket_connect() {
 }
 
 #[tokio::test]
+async fn proactive_refresh_connection_failure_uses_valid_token_for_websocket_connect() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let server_task = tokio::spawn(async move {
+        let (stream, request_line) = accept_http_request(&listener).await;
+        assert_eq!(
+            request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        drop(stream);
+        accept_test_websocket(&listener).await
+    });
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = remote_control_auth_manager();
+    let mut enrollment = remote_control_enrollment(Some(TEST_REMOTE_CONTROL_SERVER_TOKEN));
+    enrollment.expires_at = Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
+    let current_enrollment = test_current_enrollment(Some(enrollment));
+
+    connect_test_websocket(
+        &remote_control_target,
+        state_db.as_ref(),
+        &auth_manager,
+        &current_enrollment,
+    )
+    .await
+    .expect("valid token should allow websocket connect after refresh connection failure");
+    let server_websocket = server_task.await.expect("server task should succeed");
+
+    assert!(
+        current_enrollment
+            .snapshot()
+            .and_then(|enrollment| enrollment.next_refresh_at)
+            .is_some(),
+        "connection failure should set a retry deadline"
+    );
+    drop(server_websocket);
+}
+
+#[tokio::test]
 async fn websocket_retry_after_throttles_pairing_refresh() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
