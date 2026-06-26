@@ -1,6 +1,6 @@
 name: rust-ci
 on:
-  pull_request: {}
+  workflow_call:
   workflow_dispatch:
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
