@@ -494,13 +494,11 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
-    /// Optional persisted canonical turn id to fork through, inclusive.
+    /// Optional turn id to fork through, inclusive.
     ///
-    /// When specified, later turns are omitted from the fork. The target turn
-    /// must be terminal or the current in-progress turn, and must still be
-    /// present in the effective thread history. A current in-progress turn is
-    /// copied with the same interruption marker as a fork without `turnId`.
-    /// Synthetic ids generated for legacy rollouts are not supported.
+    /// When specified, turns after `turn_id` are omitted from the fork.  
+    /// A current in-progress turn is copied with the same interruption marker
+    /// as a fork without `turnId`.
     #[ts(optional = nullable)]
     pub turn_id: Option<String>,
 
