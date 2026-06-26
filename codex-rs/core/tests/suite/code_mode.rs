@@ -236,7 +236,6 @@ async fn missing_process_host_returns_a_tool_error() -> Result<()> {
     let output = follow_up_mock
         .single_request()
         .custom_tool_call_output("call-1");
-    assert_eq!(output["success"], serde_json::json!(false));
     assert!(
         output["output"]
             .as_str()

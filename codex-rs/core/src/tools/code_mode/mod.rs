@@ -18,8 +18,7 @@ use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
-use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -65,10 +64,9 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Mutex<Option<Arc<dyn CodeModeSession>>>,
+    session: OnceCell<Arc<dyn CodeModeSession>>,
     session_provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
-    session_init_permit: Semaphore,
     shutting_down: AtomicBool,
 }
 
@@ -76,12 +74,15 @@ impl CodeModeService {
     pub(crate) fn new(session_provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Mutex::new(None),
+            session: OnceCell::new(),
             session_provider,
             dispatch_broker,
-            session_init_permit: Semaphore::new(/*permits*/ 1),
             shutting_down: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn session_provider(&self) -> Arc<dyn CodeModeSessionProvider> {
+        Arc::clone(&self.session_provider)
     }
 
     pub(crate) async fn execute(
@@ -107,14 +108,18 @@ impl CodeModeService {
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
         self.shutting_down.store(true, Ordering::Release);
-        let _permit = self
-            .session_init_permit
-            .acquire()
+        // Join any initialization already in progress without initializing an unused service.
+        match self
+            .session
+            .get_or_try_init(|| async {
+                Err::<Arc<dyn CodeModeSession>, String>(
+                    "code mode session is shutting down".to_string(),
+                )
+            })
             .await
-            .map_err(|_| "code mode session initializer closed".to_string())?;
-        match self.current_session().await {
-            Some(session) => session.shutdown().await,
-            None => Ok(()),
+        {
+            Ok(session) => session.shutdown().await,
+            Err(_) => Ok(()),
         }
     }
 
@@ -153,36 +158,23 @@ impl CodeModeService {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("code mode session is shutting down".to_string());
         }
-        if let Some(session) = self.current_session().await {
-            return Ok(session);
-        }
-
-        let _permit = self
-            .session_init_permit
-            .acquire()
+        self.session
+            .get_or_try_init(|| async {
+                if self.shutting_down.load(Ordering::Acquire) {
+                    return Err("code mode session is shutting down".to_string());
+                }
+                let session = self
+                    .session_provider
+                    .create_session(self.dispatch_broker.clone())
+                    .await?;
+                if self.shutting_down.load(Ordering::Acquire) {
+                    let _ = session.shutdown().await;
+                    return Err("code mode session is shutting down".to_string());
+                }
+                Ok(session)
+            })
             .await
-            .map_err(|_| "code mode session initializer closed".to_string())?;
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err("code mode session is shutting down".to_string());
-        }
-        if let Some(session) = self.current_session().await {
-            return Ok(session);
-        }
-
-        let session = self
-            .session_provider
-            .create_session(self.dispatch_broker.clone())
-            .await?;
-        if self.shutting_down.load(Ordering::Acquire) {
-            let _ = session.shutdown().await;
-            return Err("code mode session is shutting down".to_string());
-        }
-        *self.session.lock().await = Some(Arc::clone(&session));
-        Ok(session)
-    }
-
-    async fn current_session(&self) -> Option<Arc<dyn CodeModeSession>> {
-        self.session.lock().await.clone()
+            .map(Arc::clone)
     }
 }
 
