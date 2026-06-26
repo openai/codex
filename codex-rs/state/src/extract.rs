@@ -56,7 +56,8 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
-    metadata.history_mode = meta_line.meta.history_mode;
+    // history_mode comes from the canonical SessionMeta used to build the thread metadata.
+    // Later same-thread SessionMeta lines are compatibility metadata writes.
     metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();

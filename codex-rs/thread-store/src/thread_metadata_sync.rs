@@ -20,6 +20,7 @@ use crate::CreateThreadParams;
 use crate::GitInfoPatch;
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 #[cfg(not(test))]
@@ -198,7 +199,15 @@ impl ThreadMetadataSync {
     }
 
     fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
-        self.observe_items_with_update(items, ThreadMetadataPatch::default())
+        // Later SessionMeta records can be compatibility metadata writes; only the first one
+        // defines the thread history contract.
+        self.observe_items_with_update(
+            items,
+            ThreadMetadataPatch {
+                history_mode: Some(canonical_history_mode_from_rollout_items(items)),
+                ..Default::default()
+            },
+        )
     }
 
     fn observe_items_with_update(
@@ -238,7 +247,6 @@ impl ThreadMetadataSync {
                     {
                         update.memory_mode = Some(memory_mode);
                     }
-                    update.history_mode = Some(meta_line.meta.history_mode);
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
                     if !self.cwd_seen {
@@ -397,6 +405,7 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
@@ -438,6 +447,30 @@ mod tests {
 
         sync.mark_pending_update_applied(&update);
         assert!(sync.take_pending_update().is_none());
+    }
+
+    #[test]
+    fn resume_history_keeps_canonical_history_mode() {
+        let thread_id = ThreadId::new();
+        let sync = ThreadMetadataSync::for_resume(&resume_params(
+            thread_id,
+            vec![
+                RolloutItem::SessionMeta(session_meta_with_history_mode(
+                    thread_id,
+                    ThreadHistoryMode::Paginated,
+                )),
+                RolloutItem::SessionMeta(session_meta_with_history_mode(
+                    thread_id,
+                    ThreadHistoryMode::Legacy,
+                )),
+            ],
+        ));
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+        assert_eq!(
+            update.patch.history_mode,
+            Some(ThreadHistoryMode::Paginated)
+        );
     }
 
     #[test]
@@ -588,12 +621,20 @@ mod tests {
     }
 
     fn session_meta(thread_id: ThreadId) -> SessionMetaLine {
+        session_meta_with_history_mode(thread_id, ThreadHistoryMode::Legacy)
+    }
+
+    fn session_meta_with_history_mode(
+        thread_id: ThreadId,
+        history_mode: ThreadHistoryMode,
+    ) -> SessionMetaLine {
         SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
                 timestamp: "2025-01-03T12:00:00Z".to_string(),
                 source: SessionSource::Exec,
+                history_mode,
                 ..Default::default()
             },
             git: None,
