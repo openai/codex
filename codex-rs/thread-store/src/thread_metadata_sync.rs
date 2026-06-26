@@ -199,15 +199,10 @@ impl ThreadMetadataSync {
     }
 
     fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
-        // Later SessionMeta records can be compatibility metadata writes; only the first one
-        // defines the thread history contract.
-        self.observe_items_with_update(
-            items,
-            ThreadMetadataPatch {
-                history_mode: Some(canonical_history_mode_from_rollout_items(items)),
-                ..Default::default()
-            },
-        )
+        let mut update = self.observe_items_with_update(items, ThreadMetadataPatch::default())?;
+        // Later SessionMeta lines do not redefine the canonical history_mode.
+        update.history_mode = Some(canonical_history_mode_from_rollout_items(items));
+        Some(update)
     }
 
     fn observe_items_with_update(
@@ -416,9 +411,12 @@ mod tests {
     #[test]
     fn resume_history_keeps_derived_metadata_pending_until_applied() {
         let thread_id = ThreadId::new();
+        let mut canonical_session_meta = session_meta(thread_id);
+        canonical_session_meta.meta.history_mode = ThreadHistoryMode::Paginated;
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(
             thread_id,
             vec![
+                RolloutItem::SessionMeta(canonical_session_meta),
                 RolloutItem::SessionMeta(session_meta(thread_id)),
                 RolloutItem::EventMsg(EventMsg::UserMessage(user_message("hello metadata"))),
             ],
@@ -439,6 +437,10 @@ mod tests {
             update.patch.first_user_message.as_deref(),
             Some("hello metadata")
         );
+        assert_eq!(
+            update.patch.history_mode,
+            Some(ThreadHistoryMode::Paginated)
+        );
         assert_eq!(update.patch.updated_at, None);
         assert!(
             sync.take_pending_update().is_some(),
@@ -447,30 +449,6 @@ mod tests {
 
         sync.mark_pending_update_applied(&update);
         assert!(sync.take_pending_update().is_none());
-    }
-
-    #[test]
-    fn resume_history_keeps_canonical_history_mode() {
-        let thread_id = ThreadId::new();
-        let sync = ThreadMetadataSync::for_resume(&resume_params(
-            thread_id,
-            vec![
-                RolloutItem::SessionMeta(session_meta_with_history_mode(
-                    thread_id,
-                    ThreadHistoryMode::Paginated,
-                )),
-                RolloutItem::SessionMeta(session_meta_with_history_mode(
-                    thread_id,
-                    ThreadHistoryMode::Legacy,
-                )),
-            ],
-        ));
-
-        let update = sync.take_pending_update().expect("pending metadata update");
-        assert_eq!(
-            update.patch.history_mode,
-            Some(ThreadHistoryMode::Paginated)
-        );
     }
 
     #[test]
@@ -621,20 +599,12 @@ mod tests {
     }
 
     fn session_meta(thread_id: ThreadId) -> SessionMetaLine {
-        session_meta_with_history_mode(thread_id, ThreadHistoryMode::Legacy)
-    }
-
-    fn session_meta_with_history_mode(
-        thread_id: ThreadId,
-        history_mode: ThreadHistoryMode,
-    ) -> SessionMetaLine {
         SessionMetaLine {
             meta: SessionMeta {
                 session_id: thread_id.into(),
                 id: thread_id,
                 timestamp: "2025-01-03T12:00:00Z".to_string(),
                 source: SessionSource::Exec,
-                history_mode,
                 ..Default::default()
             },
             git: None,

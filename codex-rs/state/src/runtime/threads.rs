@@ -1494,62 +1494,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_rollout_items_preserves_canonical_history_mode() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000125").expect("valid thread id");
-        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-        let mut builder = ThreadMetadataBuilder::new(
-            thread_id,
-            metadata.rollout_path.clone(),
-            metadata.created_at,
-            SessionSource::Cli,
-        );
-        builder.history_mode = ThreadHistoryMode::Paginated;
-        let canonical_meta = SessionMeta {
-            session_id: thread_id.into(),
-            id: thread_id,
-            timestamp: metadata.created_at.to_rfc3339(),
-            source: SessionSource::Cli,
-            history_mode: ThreadHistoryMode::Paginated,
-            ..Default::default()
-        };
-        // An older binary can append a same-thread SessionMeta without history_mode, which
-        // deserializes as Legacy.
-        let mut compatibility_meta = canonical_meta.clone();
-        compatibility_meta.history_mode = ThreadHistoryMode::Legacy;
-
-        runtime
-            .apply_rollout_items(
-                &builder,
-                &[
-                    RolloutItem::SessionMeta(SessionMetaLine {
-                        meta: canonical_meta,
-                        git: None,
-                    }),
-                    RolloutItem::SessionMeta(SessionMetaLine {
-                        meta: compatibility_meta,
-                        git: None,
-                    }),
-                ],
-                /*new_thread_memory_mode*/ None,
-                /*updated_at_override*/ None,
-            )
-            .await
-            .expect("apply_rollout_items should succeed");
-
-        let metadata = runtime
-            .get_thread(thread_id)
-            .await
-            .expect("thread should load")
-            .expect("thread should exist");
-        assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
-    }
-
-    #[tokio::test]
     async fn delete_thread_cleans_associated_state() -> Result<()> {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
