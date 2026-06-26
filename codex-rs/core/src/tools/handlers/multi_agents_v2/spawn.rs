@@ -126,6 +126,7 @@ async fn handle_spawn_agent(
             Some(spawn_source),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
+                initial_communication_source_call_id: Some(call_id.clone()),
                 fork_mode,
                 parent_thread_id: Some(session.thread_id),
                 environments: Some(turn.environments.to_selections()),

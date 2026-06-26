@@ -752,6 +752,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
+        agent_communication_sink: Arc::new(crate::NoopAgentCommunicationSink),
         external_time_provider: None,
         inherited_multi_agent_version: None,
     })

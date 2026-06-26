@@ -47,6 +47,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
+    pub(crate) agent_communication_sink: Arc<dyn crate::AgentCommunicationSink>,
     /// Mirror of the latest manager for extension resource clients that predate runtime snapshots.
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
     /// The latest atomically published MCP config and manager pair.

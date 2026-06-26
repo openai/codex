@@ -282,9 +282,13 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
+    let communication_record = communication.agent_communication_record.clone();
     sess.input_queue
         .enqueue_mailbox_communication(communication)
         .await;
+    if let Some(communication_record) = communication_record {
+        sess.emit_agent_communication_enqueued(communication_record);
+    }
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;

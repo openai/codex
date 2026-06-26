@@ -191,7 +191,8 @@ impl ChatWidget {
                     self.on_shutdown_complete();
                 }
             }
-            ServerNotification::ServerRequestResolved(_)
+            ServerNotification::AgentCommunicationUpdated(_)
+            | ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)

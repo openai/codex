@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::agent_communication::app_server_agent_communication_sink;
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
@@ -379,6 +380,7 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
+                Some(app_server_agent_communication_sink(outgoing.clone())),
                 Some(app_server_time_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),

@@ -1469,6 +1469,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         /*agent_graph_store*/ None,
         installation_id,
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
     let NewThread { thread: codex, .. } = thread_manager

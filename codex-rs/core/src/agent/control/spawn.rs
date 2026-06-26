@@ -197,7 +197,7 @@ impl AgentControl {
     async fn spawn_agent_internal(
         &self,
         config: Config,
-        initial_operation: Op,
+        mut initial_operation: Op,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
@@ -355,6 +355,23 @@ impl AgentControl {
             notification_source.as_ref(),
         )
         .await;
+
+        if multi_agent_version == MultiAgentVersion::V2
+            && let Some(sender_thread_id) = options.parent_thread_id
+            && let Op::InterAgentCommunication { communication } = &mut initial_operation
+        {
+            let record = self
+                .create_and_emit_agent_communication(
+                    state.as_ref(),
+                    codex_protocol::protocol::AgentCommunicationKind::InitialTask,
+                    sender_thread_id,
+                    new_thread.thread_id,
+                    communication,
+                    options.initial_communication_source_call_id.clone(),
+                )
+                .await;
+            communication.agent_communication_record = record;
+        }
 
         self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
             .await?;

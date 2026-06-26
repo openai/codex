@@ -137,6 +137,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         installation_id,
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 

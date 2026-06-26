@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::AgentCommunicationSink;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
@@ -6,6 +7,9 @@ use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentCommunicationKind;
+use codex_protocol::protocol::AgentCommunicationRecord;
+use codex_protocol::protocol::AgentCommunicationState;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -39,8 +43,10 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::MockServer;
@@ -61,6 +67,56 @@ const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
 const SUBAGENT_STOP_CONTINUATION: &str = "continue only the child";
 const INTERNAL_SUBAGENT_PROMPT: &str = "internal subagent: review";
+
+struct RecordingAgentCommunicationSink {
+    tx: mpsc::UnboundedSender<AgentCommunicationRecord>,
+}
+
+impl AgentCommunicationSink for RecordingAgentCommunicationSink {
+    fn emit(&self, record: AgentCommunicationRecord) {
+        self.tx
+            .send(record)
+            .expect("agent communication receiver should remain open");
+    }
+}
+
+async fn wait_for_agent_communication(
+    rx: &mut mpsc::UnboundedReceiver<AgentCommunicationRecord>,
+    kind: AgentCommunicationKind,
+    state: AgentCommunicationState,
+) -> AgentCommunicationRecord {
+    let record = tokio::time::timeout(Duration::from_secs(15), rx.recv())
+        .await
+        .expect("agent communication record timeout")
+        .expect("agent communication sink closed");
+    assert_eq!((record.kind, record.state), (kind, state));
+    record
+}
+
+async fn submit_turn_without_wait(test: &TestCodex, prompt: &str) -> Result<()> {
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                model: Some(test.session_configured.model.clone()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    Ok(())
+}
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     decoded_body(req)
@@ -1122,6 +1178,331 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
                 },
             ],
         })])
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_v2_communications_emit_created_and_enqueued_events() -> Result<()> {
+    const QUEUE_PROMPT: &str = "queue a message for the worker";
+    const FOLLOWUP_PROMPT: &str = "give the worker a follow-up";
+    const FAILED_PROMPT: &str = "message the unavailable worker";
+    const SEND_CALL_ID: &str = "send-call-1";
+    const FOLLOWUP_CALL_ID: &str = "followup-call-1";
+    const FAILED_CALL_ID: &str = "failed-send-call-1";
+    const INITIAL_RESULT: &str = "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\ninitial result";
+    const FOLLOWUP_RESULT: &str = "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nfollow-up result";
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": "encrypted initial task",
+        "task_name": "worker",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-spawn-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-parent-spawn-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| request_has_input_type(req, "agent_message"),
+        sse(vec![
+            ev_response_created("resp-child-initial"),
+            ev_assistant_message("msg-child-initial", "initial result"),
+            ev_completed("resp-child-initial"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-spawn-2"),
+            ev_assistant_message("msg-parent-spawn", "spawned"),
+            ev_completed("resp-parent-spawn-2"),
+        ]),
+    )
+    .await;
+
+    let (communication_tx, mut communication_rx) = mpsc::unbounded_channel();
+    let communication_sink = Arc::new(RecordingAgentCommunicationSink {
+        tx: communication_tx,
+    });
+    let mut builder = test_codex()
+        .with_agent_communication_sink(communication_sink.clone())
+        .with_model("koffing")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    let root_id = test.session_configured.thread_id;
+
+    submit_turn_without_wait(&test, TURN_1_PROMPT).await?;
+    let initial_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::InitialTask,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    let child_id = initial_created.receiver_thread_id;
+    let child = test.thread_manager.get_thread(child_id).await?;
+    let initial_enqueued = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::InitialTask,
+        AgentCommunicationState::Enqueued,
+    )
+    .await;
+    let result_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Result,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    let result_enqueued = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Result,
+        AgentCommunicationState::Enqueued,
+    )
+    .await;
+
+    let send_args = serde_json::to_string(&json!({
+        "target": child_id.to_string(),
+        "message": "encrypted queued message",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, QUEUE_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-send-1"),
+            ev_function_call_with_namespace(
+                SEND_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "send_message",
+                &send_args,
+            ),
+            ev_completed("resp-parent-send-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SEND_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-send-2"),
+            ev_assistant_message("msg-parent-send", "sent"),
+            ev_completed("resp-parent-send-2"),
+        ]),
+    )
+    .await;
+    submit_turn_without_wait(&test, QUEUE_PROMPT).await?;
+    let message_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Message,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    let message_enqueued = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Message,
+        AgentCommunicationState::Enqueued,
+    )
+    .await;
+    wait_for_event_match(test.codex.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
+
+    let followup_args = serde_json::to_string(&json!({
+        "target": child_id.to_string(),
+        "message": "encrypted follow-up",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, FOLLOWUP_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-followup-1"),
+            ev_function_call_with_namespace(
+                FOLLOWUP_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "followup_task",
+                &followup_args,
+            ),
+            ev_completed("resp-parent-followup-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            !body_contains(req, FOLLOWUP_PROMPT) && !body_contains(req, FOLLOWUP_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-followup"),
+            ev_assistant_message("msg-child-followup", "follow-up result"),
+            ev_completed("resp-child-followup"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, FOLLOWUP_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-followup-2"),
+            ev_assistant_message("msg-parent-followup", "followed up"),
+            ev_completed("resp-parent-followup-2"),
+        ]),
+    )
+    .await;
+    submit_turn_without_wait(&test, FOLLOWUP_PROMPT).await?;
+    let followup_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Followup,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    let followup_enqueued = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Followup,
+        AgentCommunicationState::Enqueued,
+    )
+    .await;
+    let followup_result_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Result,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    let followup_result_enqueued = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Result,
+        AgentCommunicationState::Enqueued,
+    )
+    .await;
+
+    for (created, enqueued, sender, receiver, content, source_call_id) in [
+        (
+            &initial_created,
+            &initial_enqueued,
+            root_id,
+            child_id,
+            "encrypted initial task",
+            Some(SPAWN_CALL_ID),
+        ),
+        (
+            &message_created,
+            &message_enqueued,
+            root_id,
+            child_id,
+            "encrypted queued message",
+            Some(SEND_CALL_ID),
+        ),
+        (
+            &followup_created,
+            &followup_enqueued,
+            root_id,
+            child_id,
+            "encrypted follow-up",
+            Some(FOLLOWUP_CALL_ID),
+        ),
+        (
+            &result_created,
+            &result_enqueued,
+            child_id,
+            root_id,
+            INITIAL_RESULT,
+            None,
+        ),
+        (
+            &followup_result_created,
+            &followup_result_enqueued,
+            child_id,
+            root_id,
+            FOLLOWUP_RESULT,
+            None,
+        ),
+    ] {
+        assert_eq!(created.id, enqueued.id);
+        assert_eq!(created.kind, enqueued.kind);
+        assert_eq!(created.sender_thread_id, sender);
+        assert_eq!(enqueued.sender_thread_id, sender);
+        assert_eq!(created.receiver_thread_id, receiver);
+        assert_eq!(enqueued.receiver_thread_id, receiver);
+        assert_eq!(created.content, content);
+        assert_eq!(enqueued.content, content);
+        assert_eq!(created.source_call_id.as_deref(), source_call_id);
+        assert_eq!(enqueued.source_call_id.as_deref(), source_call_id);
+        assert!(created.occurred_at_ms <= enqueued.occurred_at_ms);
+    }
+    let timestamps = [
+        initial_created.occurred_at_ms,
+        initial_enqueued.occurred_at_ms,
+        result_created.occurred_at_ms,
+        result_enqueued.occurred_at_ms,
+        message_created.occurred_at_ms,
+        message_enqueued.occurred_at_ms,
+        followup_created.occurred_at_ms,
+        followup_enqueued.occurred_at_ms,
+        followup_result_created.occurred_at_ms,
+        followup_result_enqueued.occurred_at_ms,
+    ];
+    assert!(timestamps.windows(2).all(|pair| pair[0] <= pair[1]));
+
+    let child_rollout_path = child.rollout_path();
+    test.thread_manager.remove_thread(&child_id).await;
+    child.shutdown_and_wait().await?;
+    if let Some(child_rollout_path) = child_rollout_path {
+        tokio::fs::remove_file(child_rollout_path).await?;
+    }
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, FAILED_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-failed-send"),
+            ev_function_call_with_namespace(
+                FAILED_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "send_message",
+                &send_args,
+            ),
+            ev_completed("resp-parent-failed-send"),
+        ]),
+    )
+    .await;
+    submit_turn_without_wait(&test, FAILED_PROMPT).await?;
+    let failed_created = wait_for_agent_communication(
+        &mut communication_rx,
+        AgentCommunicationKind::Message,
+        AgentCommunicationState::Created,
+    )
+    .await;
+    assert_eq!(
+        failed_created.source_call_id.as_deref(),
+        Some(FAILED_CALL_ID)
+    );
+    assert_eq!(failed_created.receiver_thread_id, child_id);
+    assert_eq!(failed_created.content, "encrypted queued message");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), communication_rx.recv())
+            .await
+            .is_err()
     );
 
     Ok(())

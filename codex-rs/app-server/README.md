@@ -157,6 +157,7 @@ Example with notification opt-out:
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/settings/updated` — experimental notification emitted to subscribed clients when a loaded thread’s effective next-turn settings change; includes `threadId` and the full `threadSettings`.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
+- `agentCommunication/updated` — notification emitted when content is created for transfer between agent threads and again after the recipient mailbox accepts it.
 - `thread/archive` — move a thread’s rollout file into the archived directory and attempt to move any spawned descendant thread rollout files; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/delete` — hard-delete an active or archived thread and any spawned descendant threads; returns `{}` on success and emits `thread/deleted` for each deleted thread.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -1297,6 +1298,8 @@ All filesystem paths in this section must be absolute.
 ## Events
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
+
+Multi-agent communication is exposed live through `agentCommunication/updated`; it is not written to the rollout. Its payload contains a stable `id`, `kind` (`initialTask`, `message`, `followup`, or `result`), `state` (`created` or `enqueued`), exact `senderThreadId` and `receiverThreadId`, `content` (plaintext when available, otherwise the opaque encrypted content), optional causal `sourceCallId`, and `occurredAtMs`. A successful mailbox enqueue produces matching `created` and `enqueued` notifications with the same `id`; if enqueueing fails, only `created` is emitted. `enqueued` means the recipient mailbox accepted the communication, not that the recipient model consumed it.
 
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 

@@ -289,6 +289,7 @@ pub struct TestCodexBuilder {
     extensions: Arc<ExtensionRegistry<Config>>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
+    agent_communication_sink: Option<Arc<dyn codex_core::AgentCommunicationSink>>,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
 }
 
@@ -393,6 +394,14 @@ impl TestCodexBuilder {
 
     pub fn with_external_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
         self.external_time_provider = Some(provider);
+        self
+    }
+
+    pub fn with_agent_communication_sink(
+        mut self,
+        sink: Arc<dyn codex_core::AgentCommunicationSink>,
+    ) -> Self {
+        self.agent_communication_sink = Some(sink);
         self
     }
 
@@ -611,6 +620,7 @@ impl TestCodexBuilder {
             codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id,
             /*attestation_provider*/ None,
+            /*agent_communication_sink*/ self.agent_communication_sink.clone(),
             /*external_time_provider*/ self.external_time_provider.clone(),
         );
         let thread_manager = Arc::new(thread_manager);
@@ -1218,6 +1228,7 @@ pub fn test_codex() -> TestCodexBuilder {
         extensions: empty_extension_registry(),
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
+        agent_communication_sink: None,
         external_time_provider: None,
     }
 }

@@ -31,6 +31,7 @@ pub use codex_thread::TryStartTurnIfIdleError;
 pub use codex_thread::TryStartTurnIfIdleRejectionReason;
 pub use session::turn_context::TurnContext;
 mod agent;
+mod agent_communication;
 mod attestation;
 mod codex_delegate;
 mod command_canonicalization;
@@ -179,6 +180,8 @@ mod tasks;
 mod user_shell_command;
 pub mod util;
 
+pub use agent_communication::AgentCommunicationSink;
+pub use agent_communication::NoopAgentCommunicationSink;
 pub use attestation::AttestationContext;
 pub use attestation::AttestationProvider;
 pub use attestation::GenerateAttestationFuture;

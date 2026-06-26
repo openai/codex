@@ -504,6 +504,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        agent_communication_sink: Arc<dyn crate::AgentCommunicationSink>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -1042,6 +1043,7 @@ impl Session {
             }
 
             let services = SessionServices {
+                agent_communication_sink,
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
                 // McpConnectionManager::new() once all its constructor args are

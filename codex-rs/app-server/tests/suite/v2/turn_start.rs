@@ -18,6 +18,9 @@ use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AdditionalContextEntry;
 use codex_app_server_protocol::AdditionalContextKind;
+use codex_app_server_protocol::AgentCommunication;
+use codex_app_server_protocol::AgentCommunicationKind;
+use codex_app_server_protocol::AgentCommunicationState;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CollabAgentStatus;
@@ -3638,7 +3641,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: PARENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
@@ -3652,6 +3655,42 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
     )
     .await??;
     let _: TurnStartResponse = to_response(turn_resp)?;
+
+    let created_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("agentCommunication/updated"),
+    )
+    .await??;
+    let created: AgentCommunication = serde_json::from_value(
+        created_notification
+            .params
+            .expect("agentCommunication/updated params"),
+    )?;
+    assert_eq!(created.kind, AgentCommunicationKind::InitialTask);
+    assert_eq!(created.state, AgentCommunicationState::Created);
+    assert_eq!(created.sender_thread_id, thread.id);
+    assert_eq!(created.content, CHILD_PROMPT);
+    assert_eq!(created.source_call_id.as_deref(), Some(SPAWN_CALL_ID));
+
+    let enqueued_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("agentCommunication/updated"),
+    )
+    .await??;
+    let enqueued: AgentCommunication = serde_json::from_value(
+        enqueued_notification
+            .params
+            .expect("agentCommunication/updated params"),
+    )?;
+    assert_eq!(
+        enqueued,
+        AgentCommunication {
+            state: AgentCommunicationState::Enqueued,
+            occurred_at_ms: enqueued.occurred_at_ms,
+            ..created.clone()
+        }
+    );
+    assert!(created.occurred_at_ms <= enqueued.occurred_at_ms);
 
     let child_thread_id = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -3673,6 +3712,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected() -> Result<()> {
         }
     })
     .await??;
+    assert_eq!(child_thread_id, created.receiver_thread_id);
 
     let direct_turn_req = mcp
         .send_turn_start_request(TurnStartParams {

@@ -138,6 +138,65 @@
       },
       "type": "object"
     },
+    "AgentCommunication": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/AgentCommunicationKind"
+        },
+        "occurredAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "receiverThreadId": {
+          "type": "string"
+        },
+        "senderThreadId": {
+          "type": "string"
+        },
+        "sourceCallId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/AgentCommunicationState"
+        }
+      },
+      "required": [
+        "content",
+        "id",
+        "kind",
+        "occurredAtMs",
+        "receiverThreadId",
+        "senderThreadId",
+        "sourceCallId",
+        "state"
+      ],
+      "type": "object"
+    },
+    "AgentCommunicationKind": {
+      "enum": [
+        "initialTask",
+        "message",
+        "followup",
+        "result"
+      ],
+      "type": "string"
+    },
+    "AgentCommunicationState": {
+      "enum": [
+        "created",
+        "enqueued"
+      ],
+      "type": "string"
+    },
     "AgentMessageDeltaNotification": {
       "properties": {
         "delta": {
@@ -5975,6 +6034,26 @@
         "params"
       ],
       "title": "Thread/tokenUsage/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "agentCommunication/updated"
+          ],
+          "title": "AgentCommunication/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AgentCommunication"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "AgentCommunication/updatedNotification",
       "type": "object"
     },
     {

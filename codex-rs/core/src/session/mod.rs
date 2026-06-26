@@ -111,6 +111,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -231,7 +232,7 @@ pub(crate) use self::input_queue::TurnInputQueue;
 pub use self::mcp_runtime::McpRuntimeSnapshot;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
-use self::session::Session;
+pub(crate) use self::session::Session;
 use self::session::SessionConfiguration;
 pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
@@ -444,6 +445,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) agent_communication_sink: Arc<dyn crate::AgentCommunicationSink>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
@@ -532,6 +534,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            agent_communication_sink,
             external_time_provider,
             inherited_multi_agent_version,
         } = args;
@@ -700,6 +703,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            agent_communication_sink,
             external_time_provider,
             multi_agent_version,
         ))
@@ -1860,13 +1864,22 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
-        let communication = InterAgentCommunication::new(
+        let mut communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
             /*trigger_turn*/ false,
         );
+        let communication_record = self.new_agent_communication(
+            AgentCommunicationKind::Result,
+            self.thread_id,
+            parent_thread_id,
+            &communication,
+            /*source_call_id*/ None,
+        );
+        self.emit_agent_communication(communication_record.clone());
+        communication.agent_communication_record = Some(communication_record);
         if let Err(err) = self
             .services
             .agent_control

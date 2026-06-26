@@ -24,6 +24,8 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentCommunicationKind;
+use codex_protocol::protocol::AgentCommunicationRecord;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -64,6 +66,7 @@ pub(crate) enum SpawnAgentForkMode {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
+    pub(crate) initial_communication_source_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -199,6 +202,33 @@ impl AgentControl {
             }
         }
         result
+    }
+
+    async fn create_and_emit_agent_communication(
+        &self,
+        state: &ThreadManagerState,
+        kind: AgentCommunicationKind,
+        sender_thread_id: ThreadId,
+        receiver_thread_id: ThreadId,
+        communication: &InterAgentCommunication,
+        source_call_id: Option<String>,
+    ) -> Option<AgentCommunicationRecord> {
+        let sink_thread = match state.get_thread(sender_thread_id).await {
+            Ok(thread) => thread,
+            Err(_) => state.get_thread(receiver_thread_id).await.ok()?,
+        };
+        let record = sink_thread.codex.session.new_agent_communication(
+            kind,
+            sender_thread_id,
+            receiver_thread_id,
+            communication,
+            source_call_id,
+        );
+        sink_thread
+            .codex
+            .session
+            .emit_agent_communication(record.clone());
+        Some(record)
     }
 
     /// Interrupt the current task for an existing agent thread.
@@ -473,13 +503,23 @@ impl AgentControl {
                 ) else {
                     return;
                 };
-                let communication = InterAgentCommunication::new(
+                let mut communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
                     /*trigger_turn*/ false,
                 );
+                communication.agent_communication_record = control
+                    .create_and_emit_agent_communication(
+                        state.as_ref(),
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                        parent_thread_id,
+                        &communication,
+                        /*source_call_id*/ None,
+                    )
+                    .await;
                 let _ = control
                     .send_inter_agent_communication(parent_thread_id, communication)
                     .await;

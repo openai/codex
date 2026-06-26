@@ -597,6 +597,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*agent_graph_store*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
     let selected_root_init = |id: &str, environment_id: &str| {
@@ -797,6 +798,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         /*agent_graph_store*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
     let selected_cwd =
@@ -923,6 +925,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         installation_id.clone(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -964,6 +967,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         /*agent_graph_store*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1024,6 +1028,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         /*agent_graph_store*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1091,6 +1096,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1183,6 +1189,7 @@ async fn subtree_listing_uses_injected_graph_store_without_state_db() {
         Some(agent_graph_store),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1228,6 +1235,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1333,6 +1341,7 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*agent_graph_store*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1555,6 +1564,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1664,6 +1674,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 
@@ -1763,6 +1774,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         local_agent_graph_store_from_state_db(state_db.as_ref()),
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
 

@@ -2112,27 +2112,34 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         &AgentStatus::Completed(Some("done".to_string())),
     )
     .expect("completed status should render");
-    let expected = (
-        worker_thread_id,
-        Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new(
-                tester_path.clone(),
-                worker_path.clone(),
-                Vec::new(),
-                expected_message.clone(),
-                /*trigger_turn*/ false,
-            ),
-        },
-    );
-
     timeout(Duration::from_secs(5), async {
         loop {
             let captured = harness
                 .manager
                 .captured_ops()
                 .into_iter()
-                .find(|entry| *entry == expected);
-            if captured == Some(expected.clone()) {
+                .any(|(thread_id, op)| {
+                    thread_id == worker_thread_id
+                        && matches!(
+                            op,
+                            Op::InterAgentCommunication { communication }
+                                if communication.author == tester_path
+                                    && communication.recipient == worker_path
+                                    && communication.other_recipients.is_empty()
+                                    && communication.content == expected_message
+                                    && !communication.trigger_turn
+                                    && communication.agent_communication_record.as_ref().is_some_and(|record| {
+                                        record.kind
+                                            == codex_protocol::protocol::AgentCommunicationKind::Result
+                                            && record.state
+                                                == codex_protocol::protocol::AgentCommunicationState::Created
+                                            && record.sender_thread_id == tester_thread_id
+                                            && record.receiver_thread_id == worker_thread_id
+                                            && record.source_call_id.is_none()
+                                    })
+                        )
+                });
+            if captured {
                 break;
             }
             sleep(Duration::from_millis(10)).await;
@@ -2383,6 +2390,7 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         /*agent_graph_store*/ None,
         uuid::Uuid::new_v4().to_string(),
         /*attestation_provider*/ None,
+        /*agent_communication_sink*/ None,
         /*external_time_provider*/ None,
     );
     let control = manager.agent_control();

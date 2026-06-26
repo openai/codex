@@ -68,6 +68,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -79,6 +80,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
 
+mod agent_communication;
 mod analytics_utils;
 mod app_info;
 mod app_server_tracing;

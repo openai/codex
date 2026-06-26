@@ -5244,6 +5244,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        Arc::new(crate::NoopAgentCommunicationSink),
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
@@ -5377,6 +5378,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let mcp_runtime =
         crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
+        agent_communication_sink: Arc::new(crate::NoopAgentCommunicationSink),
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
         mcp_projection_lock: Mutex::new(()),
@@ -5626,6 +5628,7 @@ async fn make_session_with_config_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        Arc::new(crate::NoopAgentCommunicationSink),
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
@@ -5741,6 +5744,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        Arc::new(crate::NoopAgentCommunicationSink),
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
@@ -7460,6 +7464,7 @@ where
     let mcp_runtime =
         crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
+        agent_communication_sink: Arc::new(crate::NoopAgentCommunicationSink),
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
         mcp_projection_lock: Mutex::new(()),
