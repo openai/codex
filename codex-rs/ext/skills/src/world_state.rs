@@ -27,36 +27,44 @@ pub(crate) fn executor_skills_world_state_section(
         "body": body,
         "includeInstructions": include_instructions,
     });
+    let retained_body = body.clone();
 
-    WorldStateSectionContribution::new(SKILLS_WORLD_STATE_ID, snapshot, move |previous| {
-        let previous_is_absent = matches!(&previous, PreviousWorldStateSection::Absent);
-        if let PreviousWorldStateSection::Known(previous) = &previous {
-            let previous_body = previous.get("body").and_then(serde_json::Value::as_str);
-            let previous_include_instructions = previous
-                .get("includeInstructions")
-                .and_then(serde_json::Value::as_bool);
-            if previous_body == body.as_deref()
-                && previous_include_instructions == Some(include_instructions)
-            {
-                return None;
+    let contribution =
+        WorldStateSectionContribution::new(SKILLS_WORLD_STATE_ID, snapshot, move |previous| {
+            let previous_is_absent = matches!(&previous, PreviousWorldStateSection::Absent);
+            if let PreviousWorldStateSection::Known(previous) = &previous {
+                let previous_body = previous.get("body").and_then(serde_json::Value::as_str);
+                let previous_include_instructions = previous
+                    .get("includeInstructions")
+                    .and_then(serde_json::Value::as_bool);
+                if previous_body == body.as_deref()
+                    && previous_include_instructions == Some(include_instructions)
+                {
+                    return None;
+                }
             }
-        }
 
-        let body = match body.as_deref() {
-            Some(body) => body,
-            None if previous_is_absent => return None,
-            None if !include_instructions => HIDDEN_EXECUTOR_SKILLS_BODY,
-            None => NO_EXECUTOR_SKILLS_BODY,
-        };
-        Some(RenderedWorldStateFragment::new(
-            "developer",
-            (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
-            body,
-        ))
-    })
-    .with_legacy_matcher(|role, text| {
-        role == "developer"
-            && text.trim_start().starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
-            && text.trim_end().ends_with(SKILLS_INSTRUCTIONS_CLOSE_TAG)
-    })
+            let body = match body.as_deref() {
+                Some(body) => body,
+                None if previous_is_absent => return None,
+                None if !include_instructions => HIDDEN_EXECUTOR_SKILLS_BODY,
+                None => NO_EXECUTOR_SKILLS_BODY,
+            };
+            Some(RenderedWorldStateFragment::new(
+                "developer",
+                (SKILLS_INSTRUCTIONS_OPEN_TAG, SKILLS_INSTRUCTIONS_CLOSE_TAG),
+                body,
+            ))
+        })
+        .with_legacy_matcher(|role, text| {
+            role == "developer"
+                && text.trim_start().starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
+                && text.trim_end().ends_with(SKILLS_INSTRUCTIONS_CLOSE_TAG)
+        });
+    match retained_body {
+        Some(body) => contribution.with_retained_fragment_matcher(move |role, text| {
+            role == "developer" && text.contains(&body)
+        }),
+        None => contribution,
+    }
 }
