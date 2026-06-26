@@ -5,6 +5,7 @@ mod desired_state;
 mod enroll;
 mod protocol;
 mod segment;
+mod server_api;
 mod websocket;
 
 use self::auth::load_remote_control_auth;
@@ -12,10 +13,10 @@ use self::auth::recover_remote_control_auth;
 use self::desired_state::RemoteControlDesiredState;
 use self::desired_state::acquire_persistence_lock;
 use self::enroll::RemoteControlEnrollment;
-use self::enroll::enroll_remote_control_server;
 use self::enroll::load_persisted_remote_control_enrollment;
-use self::enroll::refresh_remote_control_server;
 use self::enroll::update_persisted_remote_control_enrollment;
+use self::server_api::enroll_remote_control_server;
+use self::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
 use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
@@ -828,6 +829,9 @@ async fn refresh_pairing_enrollment(
     if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
         if err.kind() != io::ErrorKind::PermissionDenied {
             return Err(err);
+        }
+        if !replace_current_enrollment(current_enrollment, enrollment) {
+            return Err(pairing_unavailable_error());
         }
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
