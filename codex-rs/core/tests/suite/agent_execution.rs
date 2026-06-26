@@ -1,5 +1,7 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_protocol::error::CodexErr;
+use codex_protocol::protocol::AgentStatus;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -14,6 +16,7 @@ use std::time::Duration;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
+const SECOND_PROMPT: &str = "spawn the second worker";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
@@ -128,6 +131,161 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
         "collab spawn failed: agent thread limit reached"
     );
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_evicted_completed_agent_keeps_final_status() -> Result<()> {
+    let server = start_mock_server().await;
+    let first_args = serde_json::to_string(&json!({
+        "message": FIRST_TASK,
+        "task_name": "first",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
+        sse(vec![
+            ev_response_created("first-response"),
+            ev_function_call_with_namespace(
+                "first-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &first_args,
+            ),
+            ev_completed("first-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_TASK) && !has_function_call_output(request, "first-call")
+        },
+        sse(vec![
+            ev_response_created("first-worker-response"),
+            ev_assistant_message("first-worker-message", "first worker done"),
+            ev_completed("first-worker-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "first-call"),
+        sse(vec![
+            ev_response_created("first-followup-response"),
+            ev_assistant_message("first-followup-message", "spawned"),
+            ev_completed("first-followup-response"),
+        ]),
+    )
+    .await;
+
+    let second_args = serde_json::to_string(&json!({
+        "message": SECOND_TASK,
+        "task_name": "second",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, SECOND_PROMPT),
+        sse(vec![
+            ev_response_created("second-response"),
+            ev_function_call_with_namespace(
+                "second-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &second_args,
+            ),
+            ev_completed("second-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, SECOND_TASK) && !has_function_call_output(request, "second-call")
+        },
+        sse(vec![
+            ev_response_created("second-worker-response"),
+            ev_assistant_message("second-worker-message", "second worker done"),
+            ev_completed("second-worker-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "second-call"),
+        sse(vec![
+            ev_response_created("second-followup-response"),
+            ev_function_call_with_namespace(
+                "interrupt-call",
+                MULTI_AGENT_V2_NAMESPACE,
+                "interrupt_agent",
+                &serde_json::to_string(&json!({"target": "first"}))?,
+            ),
+            ev_completed("second-followup-response"),
+        ]),
+    )
+    .await;
+    let interrupt_followup = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "interrupt-call"),
+        sse(vec![
+            ev_response_created("interrupt-followup-response"),
+            ev_assistant_message("interrupt-followup-message", "done"),
+            ev_completed("interrupt-followup-response"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("koffing").with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+        config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.submit_turn(FIRST_PROMPT).await?;
+
+    let first_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| *id != test.session_configured.thread_id)
+        .expect("first worker should be resident");
+    let first_thread = test.thread_manager.get_thread(first_id).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if first_thread.agent_status().await
+                == AgentStatus::Completed(Some("first worker done".to_string()))
+                && first_thread.inject_if_running(Vec::new()).await.is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    test.submit_turn(SECOND_PROMPT).await?;
+
+    match test.thread_manager.get_thread(first_id).await {
+        Err(CodexErr::ThreadNotFound(thread_id)) => assert_eq!(thread_id, first_id),
+        Err(err) => panic!("expected evicted thread to be missing, got {err:?}"),
+        Ok(_) => panic!("expected evicted thread to be missing"),
+    }
+    let interrupt_output = interrupt_followup
+        .function_call_output_text("interrupt-call")
+        .expect("interrupt_agent output should reach the model");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&interrupt_output)?,
+        json!({"previous_status": {"completed": "first worker done"}})
+    );
 
     Ok(())
 }

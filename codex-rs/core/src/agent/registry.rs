@@ -1,17 +1,24 @@
+use crate::codex_thread::CodexThread;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_string::take_bytes_at_char_boundary;
 use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+
+const COLD_STATUS_MAX_BYTES: usize = 128;
+const COLD_STATUS_TRUNCATION_MARKER: &str = "...[truncated]";
 
 /// This structure is used to add some limits on the multi-agent capabilities for Codex. In
 /// the current implementation, it limits:
@@ -39,6 +46,62 @@ pub(crate) struct AgentMetadata {
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
     pub(crate) last_task_message: Option<String>,
+    pub(crate) cold_status: Arc<Mutex<Option<ColdStatus>>>,
+    pub(crate) generation: Arc<()>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ColdStatus {
+    status: AgentStatus,
+    source: Weak<CodexThread>,
+}
+
+impl AgentMetadata {
+    fn cold_status(&self, live_thread: Option<&Arc<CodexThread>>) -> Option<AgentStatus> {
+        let mut cold_status = self
+            .cold_status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let status = cold_status.as_ref()?;
+        if let Some(live_thread) = live_thread
+            && !status
+                .source
+                .upgrade()
+                .is_some_and(|source| Arc::ptr_eq(&source, live_thread))
+        {
+            *cold_status = None;
+            return None;
+        }
+        Some(status.status.clone())
+    }
+
+    fn install_cold_status(&self, source: &Arc<CodexThread>, status: AgentStatus) {
+        let status = match status {
+            AgentStatus::Completed(message) => {
+                AgentStatus::Completed(message.map(bound_cold_status_text))
+            }
+            AgentStatus::Errored(message) => AgentStatus::Errored(bound_cold_status_text(message)),
+            AgentStatus::PendingInit
+            | AgentStatus::Running
+            | AgentStatus::Interrupted
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound => return,
+        };
+        *self
+            .cold_status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ColdStatus {
+            status,
+            source: Arc::downgrade(source),
+        });
+    }
+
+    pub(crate) fn clear_cold_status(&self) {
+        *self
+            .cold_status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
 }
 
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
@@ -194,6 +257,38 @@ impl AgentRegistry {
         }
     }
 
+    pub(crate) fn cold_status(
+        &self,
+        thread_id: ThreadId,
+        live_thread: Option<&Arc<CodexThread>>,
+    ) -> Option<AgentStatus> {
+        self.agent_metadata_for_thread(thread_id)
+            .and_then(|metadata| metadata.cold_status(live_thread))
+    }
+
+    pub(crate) fn publish_cold_status_if_current(
+        &self,
+        thread_id: ThreadId,
+        expected: &AgentMetadata,
+        source: &Arc<CodexThread>,
+        status: AgentStatus,
+    ) {
+        let active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(metadata) = active_agents
+            .agent_tree
+            .values()
+            .find(|metadata| metadata.agent_id == Some(thread_id))
+        else {
+            return;
+        };
+        if Arc::ptr_eq(&metadata.generation, &expected.generation) {
+            metadata.install_cold_status(source, status);
+        }
+    }
+
     fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {
         let Some(thread_id) = agent_metadata.agent_id else {
             return;
@@ -303,6 +398,16 @@ impl AgentRegistry {
             }
         }
     }
+}
+
+fn bound_cold_status_text(message: String) -> String {
+    if message.len() <= COLD_STATUS_MAX_BYTES {
+        return message;
+    }
+    let content_max_bytes = COLD_STATUS_MAX_BYTES - COLD_STATUS_TRUNCATION_MARKER.len();
+    let mut bounded = take_bytes_at_char_boundary(&message, content_max_bytes).to_string();
+    bounded.push_str(COLD_STATUS_TRUNCATION_MARKER);
+    bounded
 }
 
 pub(crate) struct SpawnReservation {
