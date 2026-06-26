@@ -62,6 +62,19 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn mcp_resource_read_params_deserialize_origin_call_id() {
+    let params: McpResourceReadParams = serde_json::from_value(json!({
+        "threadId": "thread-123",
+        "server": "codex_apps",
+        "uri": "test://codex/resource",
+        "originCallId": "call-123",
+    }))
+    .expect("deserialize resource read params");
+
+    assert_eq!(params.origin_call_id.as_deref(), Some("call-123"));
+}
+
+#[test]
 fn thread_sources_round_trip_as_scalar_labels() {
     for (source, label) in [
         (ThreadSource::User, "user"),

@@ -622,6 +622,17 @@ impl CodexThread {
         Ok(serde_json::to_value(result)?)
     }
 
+    pub async fn mcp_server_info(
+        &self,
+        server: &str,
+    ) -> Option<codex_protocol::mcp::McpServerInfo> {
+        self.codex.session.mcp_server_info(server).await
+    }
+
+    pub async fn mcp_tool_info(&self, server: &str, tool: &str) -> Option<codex_mcp::ToolInfo> {
+        self.codex.session.mcp_tool_info(server, tool).await
+    }
+
     pub async fn call_mcp_tool(
         &self,
         server: &str,

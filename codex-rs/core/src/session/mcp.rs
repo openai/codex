@@ -289,6 +289,29 @@ impl Session {
             .await
     }
 
+    pub async fn mcp_server_info(
+        &self,
+        server: &str,
+    ) -> Option<codex_protocol::mcp::McpServerInfo> {
+        self.services
+            .mcp_connection_manager
+            .load_full()
+            .server_info(server)
+            .await
+    }
+
+    pub async fn mcp_tool_info(&self, server: &str, tool: &str) -> Option<codex_mcp::ToolInfo> {
+        self.services
+            .mcp_connection_manager
+            .load_full()
+            .list_all_tools()
+            .await
+            .into_iter()
+            .find(|tool_info| {
+                tool_info.server_name == server && tool_info.tool.name.as_ref() == tool
+            })
+    }
+
     pub async fn call_tool(
         &self,
         server: &str,
