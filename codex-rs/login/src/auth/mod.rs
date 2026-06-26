@@ -15,6 +15,7 @@ mod revoke;
 pub use bedrock_api_key::BedrockApiKeyAuth;
 pub use bedrock_api_key::login_with_bedrock_api_key;
 pub use caller_provided::CallerProvidedAuth;
+pub use caller_provided::CallerProvidedAuthCapabilities;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;

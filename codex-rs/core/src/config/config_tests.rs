@@ -70,6 +70,9 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_login::AuthManager;
+use codex_login::CallerProvidedAuth;
+use codex_login::CallerProvidedAuthCapabilities;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -197,6 +200,30 @@ async fn derive_legacy_sandbox_policy_for_test(
             );
             SandboxPolicy::new_read_only_policy()
         })
+}
+
+#[tokio::test]
+async fn caller_provided_auth_is_installed_from_runtime_config() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    config.caller_provided_auth = Some(CallerProvidedAuth::new([], "user-123").with_capabilities(
+        CallerProvidedAuthCapabilities {
+            uses_codex_backend: true,
+            ..Default::default()
+        },
+    ));
+
+    let auth_manager = AuthManager::shared_from_config(&config, false).await;
+    let auth = auth_manager.auth().await.expect("caller auth");
+
+    assert!(auth.uses_codex_backend());
+    assert!(!auth.is_chatgpt_auth());
+    assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
+    Ok(())
 }
 
 #[tokio::test]

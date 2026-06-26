@@ -47,14 +47,16 @@ impl AuthMode {
     }
 
     /// Returns whether this mode is backed by Codex services rather than a direct model API.
+    ///
+    /// Caller-provided auth configures this capability per auth instance, so
+    /// the mode alone cannot assert it.
     pub fn uses_codex_backend(self) -> bool {
         match self {
             Self::Chatgpt
             | Self::ChatgptAuthTokens
-            | Self::CallerProvided
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::CallerProvided | Self::BedrockApiKey => false,
         }
     }
 }

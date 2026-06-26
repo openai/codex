@@ -10,6 +10,7 @@ use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_login::CallerProvidedAuth;
+use codex_login::CallerProvidedAuthCapabilities;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use pretty_assertions::assert_eq;
@@ -156,7 +157,12 @@ async fn hosted_apps_mcp_accepts_caller_provided_codex_auth() -> TestResult {
         .cli_overrides(vec![("features.apps".to_string(), true.into())])
         .build()
         .await?;
-    let auth = CodexAuth::CallerProvided(CallerProvidedAuth::new([], "user-123"));
+    let auth = CodexAuth::CallerProvided(
+        CallerProvidedAuth::new([], "user-123").with_capabilities(CallerProvidedAuthCapabilities {
+            uses_codex_backend: true,
+            ..Default::default()
+        }),
+    );
     let manager = installed_manager(&config);
 
     let servers = manager.effective_servers(&config, Some(&auth)).await;

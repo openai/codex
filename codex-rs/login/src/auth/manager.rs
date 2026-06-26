@@ -498,11 +498,17 @@ impl CodexAuth {
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.api_auth_mode().has_chatgpt_account()
+        match self {
+            Self::CallerProvided(auth) => auth.capabilities().has_chatgpt_account,
+            _ => self.api_auth_mode().has_chatgpt_account(),
+        }
     }
 
     pub fn uses_codex_backend(&self) -> bool {
-        self.api_auth_mode().uses_codex_backend()
+        match self {
+            Self::CallerProvided(auth) => auth.capabilities().uses_codex_backend,
+            _ => self.api_auth_mode().uses_codex_backend(),
+        }
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
@@ -1858,6 +1864,13 @@ pub trait AuthManagerConfig {
 
     /// Returns route-selection settings for auth-owned clients.
     fn auth_route_config(&self) -> Option<AuthRouteConfig>;
+
+    /// Returns in-memory auth supplied by a trusted embedding runtime.
+    ///
+    /// Implementations must not populate this from user-controlled config.
+    fn caller_provided_auth(&self) -> Option<CallerProvidedAuth> {
+        None
+    }
 }
 
 impl Debug for AuthManager {
@@ -2285,7 +2298,7 @@ impl AuthManager {
         }
     }
 
-    /// Replaces the current auth snapshot with Codex backend auth supplied by the caller.
+    /// Replaces the current auth snapshot with auth supplied by the caller.
     pub fn set_caller_provided_auth(&self, auth: CallerProvidedAuth) {
         let _ = self.set_cached_auth(Some(CodexAuth::CallerProvided(auth)));
     }
@@ -2354,7 +2367,7 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        Self::shared(
+        let auth_manager = Self::shared(
             config.codex_home(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode(),
@@ -2363,7 +2376,11 @@ impl AuthManager {
             config.auth_keyring_backend_kind(),
             config.auth_route_config(),
         )
-        .await
+        .await;
+        if let Some(auth) = config.caller_provided_auth() {
+            auth_manager.set_caller_provided_auth(auth);
+        }
+        auth_manager
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
