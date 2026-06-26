@@ -136,7 +136,6 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &mut app_server,
         fixture.selected_root.clone(),
         fixture.environment_cwd.clone(),
-        EXECUTOR_ID,
     )
     .await?;
 
@@ -309,7 +308,6 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
         &mut app_server,
         fixture.selected_root,
         fixture.environment_cwd.clone(),
-        LOCAL_ENVIRONMENT_ID,
     )
     .await?;
     let turn_start_id = app_server
@@ -571,13 +569,12 @@ async fn start_thread(
     app_server: &mut TestAppServer,
     selected_root: SelectedCapabilityRoot,
     environment_cwd: AbsolutePathBuf,
-    turn_environment_id: &str,
 ) -> Result<String> {
     let request_id = app_server
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: turn_environment_id.to_string(),
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: environment_cwd.into(),
             }]),
             selected_capability_roots: Some(vec![selected_root]),
@@ -607,7 +604,7 @@ async fn run_turn(
                 text_elements: Vec::new(),
             }],
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: EXECUTOR_ID.to_string(),
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: environment_cwd.into(),
             }]),
             ..Default::default()
