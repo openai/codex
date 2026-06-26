@@ -2,25 +2,7 @@ name: v8-canary
 
 on:
   workflow_call:
-  pull_request:
-    paths:
-      - ".bazelrc"
-      - ".github/actions/setup-bazel-ci/**"
-      - ".github/scripts/run_bazel_with_buildbuddy.py"
-      - ".github/scripts/rusty_v8_bazel.py"
-      - ".github/scripts/rusty_v8_module_bazel.py"
-      - ".github/scripts/v8_canary_changes.py"
-      - ".github/workflows/postmerge-ci.yml"
-      - ".github/workflows/rusty-v8-release.yml"
-      - ".github/workflows/v8-canary.yml"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - "codex-rs/Cargo.toml"
-      - "patches/BUILD.bazel"
-      - "patches/llvm_*.patch"
-      - "patches/rules_cc_*.patch"
-      - "patches/v8_*.patch"
-      - "third_party/v8/**"
+  pull_request: {}
   workflow_dispatch:
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
@@ -36,6 +18,7 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
+      canary_required: ${{ steps.changes.outputs.canary_required }}
       v8_version: ${{ steps.v8_version.outputs.version }}
       windows_source_required: ${{ steps.changes.outputs.windows_source_required }}
 
@@ -59,7 +42,7 @@ jobs:
           version="$(python3 .github/scripts/rusty_v8_bazel.py resolved-v8-crate-version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Detect whether Windows source artifacts need rebuilding
+      - name: Detect V8 canary changes
         id: changes
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
@@ -86,6 +69,7 @@ jobs:
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
+    if: ${{ needs.metadata.outputs.canary_required == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

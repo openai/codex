@@ -54,25 +54,12 @@ jobs:
       - sdk
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
       - name: Require successful dependencies
         env:
           NEEDS: ${{ toJSON(needs) }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          failures="$(
-            jq --raw-output '
-              to_entries[]
-              | select(.value.result != "success")
-              | "\(.key): \(.value.result)"
-            ' <<<"$NEEDS"
-          )"
-
-          if [[ -n "$failures" ]]; then
-            echo 'Required CI dependencies did not succeed:' >&2
-            echo "$failures" >&2
-            exit 1
-          fi
-
-          echo 'All required CI dependencies succeeded.'
+        run: python3 .github/scripts/check_ci_results.py
