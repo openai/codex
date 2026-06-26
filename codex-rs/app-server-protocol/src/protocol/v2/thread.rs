@@ -494,6 +494,14 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
+    /// Optional persisted canonical turn id to fork through, inclusive.
+    ///
+    /// When specified, later turns are omitted from the fork. The target turn
+    /// must be terminal and still present in the effective thread history.
+    /// Synthetic ids generated for legacy rollouts are not supported.
+    #[ts(optional = nullable)]
+    pub turn_id: Option<String>,
+
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]

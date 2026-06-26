@@ -15014,6 +15014,13 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this forked thread."
+        },
+        "turnId": {
+          "description": "Optional persisted canonical turn id to fork through, inclusive.\n\nWhen specified, later turns are omitted from the fork. The target turn must be terminal and still present in the effective thread history. Synthetic ids generated for legacy rollouts are not supported.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

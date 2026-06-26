@@ -18,6 +18,13 @@ import type { ThreadSource } from "./ThreadSource";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadForkParams = {threadId: string, /**
+ * Optional persisted canonical turn id to fork through, inclusive.
+ *
+ * When specified, later turns are omitted from the fork. The target turn
+ * must be terminal and still present in the effective thread history.
+ * Synthetic ids generated for legacy rollouts are not supported.
+ */
+turnId?: string | null, /**
  * Configuration overrides for the forked thread, if any.
  */
 model?: string | null, modelProvider?: string | null, serviceTier?: string | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
