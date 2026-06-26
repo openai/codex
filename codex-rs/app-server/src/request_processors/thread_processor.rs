@@ -3387,6 +3387,7 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
+            last_turn_id,
             path,
             model,
             model_provider,
@@ -3421,12 +3422,20 @@ impl ThreadRequestProcessor {
         let history_items = source_thread
             .history
             .take()
-            .map(|history| Arc::new(history.items))
+            .map(|history| history.items)
             .ok_or_else(|| {
                 internal_error(format!(
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
+        let history_items = if let Some(last_turn_id) = last_turn_id.as_deref() {
+            Arc::new(
+                truncate_rollout_after_turn_id(&history_items, last_turn_id)
+                    .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
+            )
+        } else {
+            Arc::new(history_items)
+        };
         let history_cwd = Some(source_thread.cwd.clone());
 
         // Persist Windows sandbox mode.

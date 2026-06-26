@@ -330,6 +330,7 @@ use codex_core::path_utils;
 #[cfg(test)]
 use codex_core::read_head_for_summary;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::truncate_rollout_after_turn_id;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;

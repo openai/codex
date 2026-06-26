@@ -840,6 +840,30 @@ fn thread_path_params_deserialize_empty_path_as_none() {
 }
 
 #[test]
+fn thread_fork_last_turn_id_round_trips() {
+    let params: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "lastTurnId": "turn-2",
+    }))
+    .expect("thread/fork params deserialize");
+
+    assert_eq!(params.last_turn_id, Some("turn-2".to_string()));
+    let serialized = serde_json::to_value(params).expect("thread/fork params serialize");
+    assert_eq!(serialized["lastTurnId"], json!("turn-2"));
+
+    let omitted = serde_json::to_value(ThreadForkParams {
+        thread_id: "thread-1".to_string(),
+        ..Default::default()
+    })
+    .expect("thread/fork params without last turn id serialize");
+    assert_eq!(
+        omitted["lastTurnId"],
+        serde_json::Value::Null,
+        "optional lastTurnId should serialize as null when omitted"
+    );
+}
+
+#[test]
 fn fs_get_metadata_response_round_trips_minimal_fields() {
     let response = FsGetMetadataResponse {
         is_directory: false,

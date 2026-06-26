@@ -5,6 +5,10 @@
 
 use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -147,6 +151,58 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n_from_start];
     items[..cut_idx].to_vec()
+}
+
+/// Return a rollout prefix ending after the requested persisted terminal turn.
+///
+/// The turn must still be present in the effective post-rollback history and
+/// must have an explicit persisted TurnStarted boundary. Synthetic IDs
+/// generated while projecting legacy rollouts are intentionally unsupported
+/// because they do not provide a stable raw rollout boundary for a fork.
+pub fn truncate_rollout_after_turn_id(
+    items: &[RolloutItem],
+    last_turn_id: &str,
+) -> CodexResult<Vec<RolloutItem>> {
+    let turns = build_turns_from_rollout_items(items);
+    let turn = turns
+        .iter()
+        .find(|turn| turn.id == last_turn_id)
+        .ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "lastTurnId '{last_turn_id}' was not found in the source thread"
+            ))
+        })?;
+
+    let target_start_index = items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event))
+                    if event.turn_id == last_turn_id
+            )
+        })
+        .ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "lastTurnId '{last_turn_id}' is not a persisted canonical turn in the source thread"
+            ))
+        })?;
+
+    if matches!(turn.status, TurnStatus::InProgress) {
+        return Err(CodexErr::InvalidRequest(format!(
+            "lastTurnId '{last_turn_id}' identifies an in-progress turn"
+        )));
+    }
+
+    let cut_index = items
+        .iter()
+        .enumerate()
+        .skip(target_start_index.saturating_add(1))
+        .find_map(|(index, item)| {
+            matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))).then_some(index)
+        })
+        .unwrap_or(items.len());
+    Ok(items[..cut_index].to_vec())
 }
 
 /// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
