@@ -95,6 +95,7 @@ pub enum RolloutRecorderParams {
         dynamic_tools: Vec<DynamicToolSpec>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         multi_agent_version: Option<MultiAgentVersion>,
+        history_mode: ThreadHistoryMode,
         initial_window_id: Option<String>,
     },
     Resume {
@@ -187,6 +188,7 @@ impl RolloutRecorderParams {
             dynamic_tools,
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: None,
         }
     }
@@ -222,6 +224,16 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *version = multi_agent_version;
+        }
+        self
+    }
+
+    pub fn with_history_mode(mut self, history_mode: ThreadHistoryMode) -> Self {
+        if let Self::Create {
+            history_mode: mode, ..
+        } = &mut self
+        {
+            *mode = history_mode;
         }
         self
     }
@@ -752,6 +764,7 @@ impl RolloutRecorder {
                 dynamic_tools,
                 selected_capability_roots,
                 multi_agent_version,
+                history_mode,
                 initial_window_id,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
@@ -790,7 +803,7 @@ impl RolloutRecorder {
                     },
                     selected_capability_roots,
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
-                    history_mode: Default::default(),
+                    history_mode,
                     multi_agent_version,
                     context_window: initial_window_id.map(SessionContextWindow::new),
                 };

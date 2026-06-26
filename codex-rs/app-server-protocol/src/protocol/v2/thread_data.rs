@@ -83,6 +83,15 @@ impl From<CoreThreadHistoryMode> for ThreadHistoryMode {
     }
 }
 
+impl From<ThreadHistoryMode> for CoreThreadHistoryMode {
+    fn from(value: ThreadHistoryMode) -> Self {
+        match value {
+            ThreadHistoryMode::Legacy => Self::Legacy,
+            ThreadHistoryMode::Paginated => Self::Paginated,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS)]
 #[serde(try_from = "String", into = "String")]
 #[ts(type = "string")]

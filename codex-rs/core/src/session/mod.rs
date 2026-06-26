@@ -123,6 +123,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -425,6 +426,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
+    pub(crate) requested_history_mode: Option<ThreadHistoryMode>,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -515,6 +517,7 @@ impl Codex {
             mcp_manager,
             extensions,
             conversation_history,
+            requested_history_mode,
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -605,8 +608,9 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
-        let history_mode =
-            conversation_history.get_history_mode(thread_store.default_history_mode());
+        let history_mode = conversation_history.get_history_mode(
+            requested_history_mode.unwrap_or_else(|| thread_store.default_history_mode()),
+        );
         config
             .validate_multi_agent_v2_config()
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;

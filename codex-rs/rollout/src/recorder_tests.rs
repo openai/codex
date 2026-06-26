@@ -15,6 +15,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
@@ -429,6 +430,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             Vec::new(),
         )
         .with_session_id(session_id)
+        .with_history_mode(ThreadHistoryMode::Paginated)
         .with_initial_window_id(initial_window_id.clone()),
     )
     .await?;
@@ -480,6 +482,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
         panic!("expected session metadata in rollout");
     };
     assert_eq!(session_meta.meta.session_id, session_id);
+    assert_eq!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(
         session_meta
             .meta
