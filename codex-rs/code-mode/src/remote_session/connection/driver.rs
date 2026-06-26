@@ -10,7 +10,7 @@ use codex_code_mode_protocol::host::RequestId;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub(super) use self::cleanup::ConnectionCleanup;
+pub(in crate::remote_session) use self::cleanup::SessionCleanup;
 use self::delegate_runtime::DelegateRuntime;
 use self::request_tracker::RequestTracker;
 use self::session_registry::SessionRegistry;
@@ -31,7 +31,6 @@ pub(super) struct DriverLifecycle {
     pub(super) alive: Arc<AtomicBool>,
     pub(super) failure: Arc<std::sync::Mutex<Option<String>>>,
     pub(super) cancellation: CancellationToken,
-    pub(super) cleanup: ConnectionCleanup,
 }
 
 pub(super) struct ConnectionDriver {
@@ -67,7 +66,7 @@ impl ConnectionDriver {
                 outgoing_tx,
                 requests: RequestTracker::new(),
                 sessions: SessionRegistry::new(),
-                delegates: DelegateRuntime::new(event_tx, lifecycle.cleanup),
+                delegates: DelegateRuntime::new(event_tx),
                 alive: lifecycle.alive,
                 failure: lifecycle.failure,
                 cancellation: lifecycle.cancellation,
@@ -159,8 +158,8 @@ impl ConnectionDriver {
             failure.get_or_insert(reason).clone()
         };
         self.requests.fail_all(&reason);
-        let live_cells = self.sessions.drain();
-        self.delegates.fail_all(&reason, live_cells);
+        let failed_sessions = self.sessions.drain();
+        self.delegates.fail_all(failed_sessions);
         self.cancellation.cancel();
     }
 }

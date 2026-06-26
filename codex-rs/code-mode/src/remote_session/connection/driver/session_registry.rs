@@ -7,6 +7,7 @@ use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireCellId;
 
 use super::cell_ids::public_cell_id;
+use super::cleanup::SessionCleanup;
 use super::types::RemoteSession;
 
 pub(super) struct CellOwner {
@@ -21,6 +22,11 @@ pub(super) struct DelegateTarget {
     pub(super) delegate: Arc<dyn CodeModeSessionDelegate>,
 }
 
+pub(super) struct FailedSession {
+    pub(super) cleanup: SessionCleanup,
+    pub(super) cells: Vec<CellOwner>,
+}
+
 pub(super) enum CellAdmissionError {
     MissingSession,
     DuplicateCell,
@@ -29,6 +35,7 @@ pub(super) enum CellAdmissionError {
 struct SessionRecord {
     remote: RemoteSession,
     delegate: Arc<dyn CodeModeSessionDelegate>,
+    cleanup: SessionCleanup,
     phase: SessionPhase,
     cells: HashMap<WireCellId, CellId>,
 }
@@ -58,12 +65,14 @@ impl SessionRegistry {
         &mut self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        cleanup: SessionCleanup,
     ) {
         self.records.insert(
             session.id.clone(),
             SessionRecord {
                 remote: session,
                 delegate,
+                cleanup,
                 phase: SessionPhase::Ready,
                 cells: HashMap::new(),
             },
@@ -189,16 +198,24 @@ impl SessionRegistry {
             .collect()
     }
 
-    pub(super) fn drain(&mut self) -> Vec<CellOwner> {
+    pub(super) fn drain(&mut self) -> Vec<FailedSession> {
         let sessions = std::mem::take(&mut self.records);
         sessions
             .into_iter()
-            .flat_map(|(session_id, session)| {
-                session.cells.into_values().map(move |cell_id| CellOwner {
-                    session_id: session_id.clone(),
-                    cell_id,
-                    delegate: Arc::clone(&session.delegate),
-                })
+            .map(|(session_id, session)| {
+                let cells = session
+                    .cells
+                    .into_values()
+                    .map(|cell_id| CellOwner {
+                        session_id: session_id.clone(),
+                        cell_id,
+                        delegate: Arc::clone(&session.delegate),
+                    })
+                    .collect();
+                FailedSession {
+                    cleanup: session.cleanup,
+                    cells,
+                }
             })
             .collect()
     }

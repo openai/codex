@@ -811,10 +811,27 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
             .expect("second wait task")
             .is_err()
     );
-    assert_eq!(
+    let closure_events = [
         next_callback_event(&mut events_a).await,
-        CallbackEvent::Cancelled("tool_call_slow".to_string())
-    );
+        next_callback_event(&mut events_a).await,
+    ];
+    assert!(closure_events.contains(&CallbackEvent::Cancelled("tool_call_slow".to_string())));
+    assert!(closure_events.contains(&CallbackEvent::CellClosed(cell_a.clone())));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if delegate_b
+                .closed_cells
+                .lock()
+                .expect("closed cells lock")
+                .contains(&cell_b)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("unrelated session cleanup timeout");
 
     assert_eq!(
         execute(&session_b, execute_request(r#"text("replacement");"#)).await,
@@ -835,41 +852,17 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
         .expect_err("stale cell should be rejected");
     assert!(stale_error.contains("stale code-mode host generation"));
 
-    let shutdown_session_a = Arc::clone(&session_a);
-    let mut shutdown_a = tokio::spawn(async move { shutdown_session_a.shutdown().await });
-    let shutdown_session_b = Arc::clone(&session_b);
-    let mut shutdown_b = tokio::spawn(async move { shutdown_session_b.shutdown().await });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut shutdown_a)
-            .await
-            .is_err()
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut shutdown_b)
-            .await
-            .is_err()
-    );
+    tokio::time::timeout(Duration::from_secs(5), session_a.shutdown())
+        .await
+        .expect("failed session shutdown timeout")
+        .expect("shutdown failed session");
+    tokio::time::timeout(Duration::from_secs(5), session_b.shutdown())
+        .await
+        .expect("unrelated session shutdown timeout")
+        .expect("shutdown replacement session");
 
     delegate_a.release_slow_cleanup();
-    assert_eq!(
-        next_callback_event(&mut events_a).await,
-        CallbackEvent::CellClosed(cell_a.clone())
-    );
-    shutdown_a
-        .await
-        .expect("shutdown task")
-        .expect("shutdown failed session after cleanup");
-    shutdown_b
-        .await
-        .expect("replacement shutdown task")
-        .expect("shutdown replacement session");
-    assert!(
-        delegate_b
-            .closed_cells
-            .lock()
-            .expect("closed cells lock")
-            .contains(&cell_b)
-    );
+    tokio::task::yield_now().await;
     assert!(matches!(
         events_a.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)

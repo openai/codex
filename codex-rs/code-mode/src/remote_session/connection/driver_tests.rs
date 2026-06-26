@@ -28,12 +28,12 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use super::ConnectionCleanup;
 use super::ConnectionDriver;
 use super::DriverCommand;
 use super::DriverEvent;
 use super::DriverLifecycle;
 use super::RemoteSession;
+use super::SessionCleanup;
 
 struct DriverHarness {
     command_tx: mpsc::Sender<DriverCommand>,
@@ -41,7 +41,6 @@ struct DriverHarness {
     execute_claim_tx: mpsc::UnboundedSender<RequestId>,
     outgoing_rx: mpsc::Receiver<codex_code_mode_protocol::host::EncodedFrame>,
     cancellation: CancellationToken,
-    cleanup: ConnectionCleanup,
     alive: Arc<AtomicBool>,
     driver_task: tokio::task::JoinHandle<()>,
 }
@@ -52,7 +51,6 @@ impl DriverHarness {
         let (event_tx, event_rx) = mpsc::channel(/*max_capacity*/ 16);
         let (outgoing_tx, outgoing_rx) = mpsc::channel(/*max_capacity*/ 16);
         let cancellation = CancellationToken::new();
-        let cleanup = ConnectionCleanup::new();
         let alive = Arc::new(AtomicBool::new(true));
         let (driver, execute_claim_tx) = ConnectionDriver::new(
             command_rx,
@@ -63,7 +61,6 @@ impl DriverHarness {
                 alive: Arc::clone(&alive),
                 failure: Arc::new(StdMutex::new(None)),
                 cancellation: cancellation.clone(),
-                cleanup: cleanup.clone(),
             },
         );
         let driver_task = tokio::spawn(driver.run());
@@ -73,18 +70,23 @@ impl DriverHarness {
             execute_claim_tx,
             outgoing_rx,
             cancellation,
-            cleanup,
             alive,
             driver_task,
         }
     }
 
-    async fn open(&mut self, session: RemoteSession, delegate: Arc<dyn CodeModeSessionDelegate>) {
+    async fn open(
+        &mut self,
+        session: RemoteSession,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> SessionCleanup {
+        let cleanup = SessionCleanup::new();
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(DriverCommand::OpenSession {
                 session: session.clone(),
                 delegate,
+                cleanup: cleanup.clone(),
                 caller_cancellation: CancellationToken::new(),
                 response_tx,
             })
@@ -106,6 +108,7 @@ impl DriverHarness {
             .await
             .expect("open reply")
             .expect("open session");
+        cleanup
     }
 
     async fn start_cell(
@@ -329,11 +332,13 @@ async fn dropped_open_waiter_shuts_down_committed_session() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let (open_tx, open_rx) = oneshot::channel();
+    let cleanup = SessionCleanup::new();
     harness
         .command_tx
         .send(DriverCommand::OpenSession {
             session: session.clone(),
             delegate: Arc::new(RecordingDelegate::default()),
+            cleanup,
             caller_cancellation: CancellationToken::new(),
             response_tx: open_tx,
         })
@@ -458,7 +463,7 @@ async fn delegate_cancel_is_best_effort_and_sends_no_late_response() {
 }
 
 #[tokio::test]
-async fn terminate_returns_before_delegate_cleanup_but_cell_closed_waits() {
+async fn terminate_closes_cell_without_waiting_for_delegate_cleanup() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let (delegate, mut events_rx, release) = HeldDelegate::new();
@@ -515,10 +520,12 @@ async fn terminate_returns_before_delegate_cleanup_but_cell_closed_waits() {
         .await
         .expect("terminate response");
 
-    assert_eq!(
+    let closure_events = [
         next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::Cancelled
-    );
+        next_held_delegate_event(&mut events_rx).await,
+    ];
+    assert!(closure_events.contains(&HeldDelegateEvent::Cancelled));
+    assert!(closure_events.contains(&HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))));
     assert_eq!(
         response_rx.await.expect("terminate reply"),
         Ok(codex_code_mode_protocol::WaitOutcome::LiveCell(
@@ -530,7 +537,7 @@ async fn terminate_returns_before_delegate_cleanup_but_cell_closed_waits() {
     );
     assert!(matches!(
         events_rx.try_recv(),
-        Err(mpsc::error::TryRecvError::Empty)
+        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
     ));
 
     release.cancel();
@@ -538,18 +545,19 @@ async fn terminate_returns_before_delegate_cleanup_but_cell_closed_waits() {
         next_held_delegate_event(&mut events_rx).await,
         HeldDelegateEvent::Finished
     );
-    assert_eq!(
-        next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
-    );
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+    ));
     assert!(matches!(
         harness.outgoing_rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
     ));
+    assert!(harness.alive.load(Ordering::Acquire));
 }
 
 #[tokio::test]
-async fn shutdown_waits_for_cancelled_delegate_cleanup_and_cell_closed() {
+async fn shutdown_closes_cell_without_waiting_for_delegate_cleanup() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let (delegate, mut events_rx, release) = HeldDelegate::new();
@@ -564,7 +572,7 @@ async fn shutdown_waits_for_cancelled_delegate_cleanup_and_cell_closed() {
         HeldDelegateEvent::Started
     );
 
-    let (response_tx, mut response_rx) = oneshot::channel();
+    let (response_tx, response_rx) = oneshot::channel();
     harness
         .command_tx
         .send(DriverCommand::ShutdownSession {
@@ -602,15 +610,13 @@ async fn shutdown_waits_for_cancelled_delegate_cleanup_and_cell_closed() {
         .await
         .expect("shutdown response");
 
-    assert_eq!(
+    let closure_events = [
         next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::Cancelled
-    );
-    tokio::task::yield_now().await;
-    assert!(matches!(
-        response_rx.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
+        next_held_delegate_event(&mut events_rx).await,
+    ];
+    assert!(closure_events.contains(&HeldDelegateEvent::Cancelled));
+    assert!(closure_events.contains(&HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))));
+    assert_eq!(response_rx.await.expect("shutdown reply"), Ok(()));
     assert!(matches!(
         events_rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
@@ -621,15 +627,15 @@ async fn shutdown_waits_for_cancelled_delegate_cleanup_and_cell_closed() {
         next_held_delegate_event(&mut events_rx).await,
         HeldDelegateEvent::Finished
     );
-    assert_eq!(
-        next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
-    );
-    assert_eq!(response_rx.await.expect("shutdown reply"), Ok(()));
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+    ));
     assert!(matches!(
         harness.outgoing_rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
     ));
+    assert!(harness.alive.load(Ordering::Acquire));
 }
 
 #[tokio::test]
@@ -1307,7 +1313,7 @@ async fn connection_failure_closes_every_live_cell_once() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let delegate = Arc::new(RecordingDelegate::default());
-    harness.open(session.clone(), delegate.clone()).await;
+    let cleanup = harness.open(session.clone(), delegate.clone()).await;
     let (execute_tx, execute_rx) = oneshot::channel();
     harness
         .command_tx
@@ -1347,9 +1353,9 @@ async fn connection_failure_closes_every_live_cell_once() {
         .send(DriverEvent::Failed("host crashed".to_string()))
         .await
         .expect("failure event");
-    tokio::time::timeout(Duration::from_secs(1), harness.cleanup.wait())
+    tokio::time::timeout(Duration::from_secs(1), cleanup.wait())
         .await
-        .expect("connection cleanup timeout");
+        .expect("session cleanup timeout");
     assert_eq!(
         *delegate.closed_cells.lock().expect("closed cells lock"),
         vec![CellId::new("1".to_string())]
@@ -1357,11 +1363,11 @@ async fn connection_failure_closes_every_live_cell_once() {
 }
 
 #[tokio::test]
-async fn connection_cleanup_completes_after_delegate_and_cell_closed() {
+async fn session_cleanup_does_not_wait_for_delegate_completion() {
     let mut harness = DriverHarness::start();
     let session = remote_session();
     let (delegate, mut events_rx, release) = HeldDelegate::new();
-    harness.open(session.clone(), delegate).await;
+    let cleanup = harness.open(session.clone(), delegate).await;
     let _started = harness
         .start_cell(session.clone(), /*request_id*/ 2, "1")
         .await;
@@ -1378,15 +1384,15 @@ async fn connection_cleanup_completes_after_delegate_and_cell_closed() {
         .send(DriverEvent::Failed("host crashed".to_string()))
         .await
         .expect("failure event");
-    assert_eq!(
+    let closure_events = [
         next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::Cancelled
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(10), harness.cleanup.wait())
-            .await
-            .is_err()
-    );
+        next_held_delegate_event(&mut events_rx).await,
+    ];
+    assert!(closure_events.contains(&HeldDelegateEvent::Cancelled));
+    assert!(closure_events.contains(&HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))));
+    tokio::time::timeout(Duration::from_secs(1), cleanup.wait())
+        .await
+        .expect("session cleanup timeout");
     assert!(matches!(
         events_rx.try_recv(),
         Err(mpsc::error::TryRecvError::Empty)
@@ -1397,13 +1403,10 @@ async fn connection_cleanup_completes_after_delegate_and_cell_closed() {
         next_held_delegate_event(&mut events_rx).await,
         HeldDelegateEvent::Finished
     );
-    assert_eq!(
-        next_held_delegate_event(&mut events_rx).await,
-        HeldDelegateEvent::CellClosed(CellId::new("1".to_string()))
-    );
-    tokio::time::timeout(Duration::from_secs(1), harness.cleanup.wait())
-        .await
-        .expect("connection cleanup timeout");
+    assert!(matches!(
+        events_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+    ));
 }
 
 #[tokio::test]

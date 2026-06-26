@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use super::cleanup::SessionCleanup;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::remote_session) struct RemoteSession {
     pub(in crate::remote_session) id: SessionId,
@@ -28,6 +30,7 @@ pub(in crate::remote_session::connection) enum DriverCommand {
     OpenSession {
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        cleanup: SessionCleanup,
         caller_cancellation: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
@@ -132,6 +135,7 @@ pub(super) enum PendingRequest {
     OpenSession {
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        cleanup: SessionCleanup,
         cancellation: CancellableRequest,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
@@ -164,11 +168,6 @@ pub(super) struct DeferredWait {
     pub(super) request: WireWaitRequest,
     pub(super) caller_cancellation: CancellationToken,
     pub(super) response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
-}
-
-pub(super) struct DeferredShutdown {
-    pub(super) session_id: SessionId,
-    pub(super) response_tx: oneshot::Sender<Result<(), String>>,
 }
 
 impl PendingRequest {

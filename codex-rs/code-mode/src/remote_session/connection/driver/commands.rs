@@ -28,9 +28,10 @@ impl ConnectionDriver {
             DriverCommand::OpenSession {
                 session,
                 delegate,
+                cleanup,
                 caller_cancellation,
                 response_tx,
-            } => self.open_session(session, delegate, caller_cancellation, response_tx),
+            } => self.open_session(session, delegate, cleanup, caller_cancellation, response_tx),
             DriverCommand::Execute {
                 session,
                 request,
@@ -59,6 +60,7 @@ impl ConnectionDriver {
         &mut self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        cleanup: super::cleanup::SessionCleanup,
         caller_cancellation: CancellationToken,
         response_tx: oneshot::Sender<Result<(), String>>,
     ) -> bool {
@@ -97,6 +99,7 @@ impl ConnectionDriver {
             PendingRequest::OpenSession {
                 session,
                 delegate,
+                cleanup,
                 cancellation,
                 response_tx,
             },

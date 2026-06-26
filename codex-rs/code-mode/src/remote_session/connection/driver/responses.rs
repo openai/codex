@@ -15,7 +15,6 @@ use super::cell_ids::runtime_response_cell_id;
 use super::cell_ids::wait_outcome_cell_id;
 use super::request_tracker::CancellationAction;
 use super::session_registry::CellAdmissionError;
-use super::types::DeferredShutdown;
 use super::types::DeliveredExecute;
 use super::types::InitialResponse;
 use super::types::PendingRequest;
@@ -93,12 +92,14 @@ impl ConnectionDriver {
             PendingRequest::OpenSession {
                 session,
                 delegate,
+                cleanup,
                 cancellation,
                 response_tx,
             } => match result {
                 Ok(HostResponse::SessionReady { session_id }) if session_id == session.id => {
                     let abandoned = cancellation.is_cancelled() || response_tx.is_closed();
-                    self.sessions.insert_ready(session.clone(), delegate);
+                    self.sessions
+                        .insert_ready(session.clone(), delegate, cleanup);
                     if abandoned || response_tx.send(Ok(())).is_err() {
                         return self.shutdown_abandoned_session(session);
                     }
@@ -252,14 +253,7 @@ impl ConnectionDriver {
                     if !self.apply_delegate_effects(effects) {
                         return false;
                     }
-                    if self.delegates.is_session_draining(&session.id) {
-                        self.delegates.defer_shutdown(DeferredShutdown {
-                            session_id: session.id,
-                            response_tx,
-                        });
-                    } else {
-                        let _ = response_tx.send(Ok(()));
-                    }
+                    let _ = response_tx.send(Ok(()));
                 }
                 Ok(_) => {
                     let err = "code-mode host returned an invalid shutdown response".to_string();

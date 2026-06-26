@@ -32,12 +32,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
 
-use self::driver::ConnectionCleanup;
 use self::driver::ConnectionDriver;
 use self::driver::DriverCommand;
 use self::driver::DriverEvent;
 use self::driver::DriverLifecycle;
 pub(super) use self::driver::RemoteSession;
+pub(super) use self::driver::SessionCleanup;
 use self::reader::drive_reader;
 
 mod driver;
@@ -52,7 +52,6 @@ pub(super) struct Connection {
     alive: Arc<AtomicBool>,
     failure: Arc<std::sync::Mutex<Option<String>>>,
     cancellation: CancellationToken,
-    cleanup: ConnectionCleanup,
 }
 
 struct CallerCancellation {
@@ -187,7 +186,6 @@ impl Connection {
         let (event_tx, event_rx) = mpsc::channel(IPC_CHANNEL_CAPACITY);
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<EncodedFrame>(IPC_CHANNEL_CAPACITY);
         let cancellation = CancellationToken::new();
-        let cleanup = ConnectionCleanup::new();
         let alive = Arc::new(AtomicBool::new(true));
         let failure = Arc::new(std::sync::Mutex::new(None));
 
@@ -224,7 +222,6 @@ impl Connection {
                 alive: Arc::clone(&alive),
                 failure: Arc::clone(&failure),
                 cancellation: cancellation.clone(),
-                cleanup: cleanup.clone(),
             },
         );
         let driver_task = tokio::spawn(driver.run());
@@ -248,7 +245,6 @@ impl Connection {
             alive,
             failure,
             cancellation,
-            cleanup,
         })
     }
 
@@ -267,19 +263,22 @@ impl Connection {
         &self,
         session: RemoteSession,
         delegate: Arc<dyn CodeModeSessionDelegate>,
-    ) -> Result<(), String> {
+    ) -> Result<SessionCleanup, String> {
+        let cleanup = SessionCleanup::new();
         let cancellation = CallerCancellation::new();
         let (response_tx, response_rx) = oneshot::channel();
         self.send(DriverCommand::OpenSession {
             session,
             delegate,
+            cleanup: cleanup.clone(),
             caller_cancellation: cancellation.token(),
             response_tx,
         })
         .await?;
         let result = self.receive(response_rx).await;
         cancellation.disarm();
-        result
+        result?;
+        Ok(cleanup)
     }
 
     pub(super) async fn execute(
@@ -352,14 +351,6 @@ impl Connection {
         })
         .await?;
         self.receive(response_rx).await
-    }
-
-    pub(super) async fn wait_for_cleanup(&self) {
-        self.cleanup.wait().await;
-    }
-
-    pub(super) fn cleanup_is_complete(&self) -> bool {
-        self.cleanup.is_complete()
     }
 
     async fn send(&self, command: DriverCommand) -> Result<(), String> {
