@@ -18,6 +18,7 @@ use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
 use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -141,6 +142,7 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        elicitation_router: ElicitationRequestRouter,
     ) -> Self {
         let mut required_servers = mcp_servers
             .iter()
@@ -155,6 +157,7 @@ impl McpConnectionManager {
             approval_policy.value(),
             initial_permission_profile,
             elicitation_reviewer,
+            elicitation_router,
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
@@ -352,6 +355,7 @@ impl McpConnectionManager {
                 approval_policy.value(),
                 permission_profile.clone(),
                 /*reviewer*/ None,
+                ElicitationRequestRouter::default(),
             ),
             startup_cancellation_token: CancellationToken::new(),
         }
@@ -442,6 +446,10 @@ impl McpConnectionManager {
 
     pub fn set_elicitations_auto_deny(&self, auto_deny: bool) {
         self.elicitation_requests.set_auto_deny(auto_deny);
+    }
+
+    pub fn elicitation_router(&self) -> ElicitationRequestRouter {
+        self.elicitation_requests.router()
     }
 
     pub async fn resolve_elicitation(
