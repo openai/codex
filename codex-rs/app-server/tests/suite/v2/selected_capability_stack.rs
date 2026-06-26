@@ -582,10 +582,7 @@ fn latest_selected_skill_update(request: &ResponsesRequest) -> Option<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| {
-            text.contains(SKILL_DESCRIPTION) || text.contains(NO_SELECTED_SKILLS_MESSAGE)
-        })
-        .next_back()
+        .rfind(|text| text.contains(SKILL_DESCRIPTION) || text.contains(NO_SELECTED_SKILLS_MESSAGE))
 }
 
 fn assert_selected_plugin_tools(request: &ResponsesRequest) {
