@@ -3999,6 +3999,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-terminal-browser"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-utils-pty",
+ "futures",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "vt100",
+ "which 8.0.0",
+]
+
+[[package]]
 name = "codex-terminal-detection"
 version = "0.0.0"
 dependencies = [
@@ -4111,6 +4131,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
+ "codex-terminal-browser",
  "codex-terminal-detection",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",

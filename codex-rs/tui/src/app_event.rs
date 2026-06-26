@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
+use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
@@ -26,6 +27,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
@@ -255,6 +257,24 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
+
+    /// Show or hide the floating terminal browser.
+    ToggleTerminalBrowser,
+
+    /// Close the terminal browser process and discard its browsing profile.
+    CloseTerminalBrowser,
+
+    /// The terminal browser process finished closing.
+    TerminalBrowserClosed,
+
+    /// The browser's terminal frame, status, or visibility changed.
+    TerminalBrowserUpdated,
+
+    /// Complete an app-server dynamic tool request after browser work finishes.
+    TerminalBrowserToolCompleted {
+        request_id: AppServerRequestId,
+        response: DynamicToolCallResponse,
+    },
 
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),

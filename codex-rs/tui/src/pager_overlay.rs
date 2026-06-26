@@ -29,6 +29,7 @@ use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
+use crate::terminal_browser::TerminalBrowserOverlay;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
@@ -53,6 +54,7 @@ use ratatui::widgets::Wrap;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    TerminalBrowser(TerminalBrowserOverlay),
 }
 
 impl Overlay {
@@ -76,10 +78,19 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
     }
 
+    pub(crate) fn new_terminal_browser(overlay: TerminalBrowserOverlay) -> Self {
+        Self::TerminalBrowser(overlay)
+    }
+
+    pub(crate) fn is_terminal_browser(&self) -> bool {
+        matches!(self, Self::TerminalBrowser(_))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::TerminalBrowser(_) => Ok(()),
         }
     }
 
@@ -87,6 +98,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::TerminalBrowser(_) => false,
         }
     }
 }

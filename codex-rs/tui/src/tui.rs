@@ -97,12 +97,17 @@ impl Drop for Tui {
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
 
     use super::clear_for_viewport_change;
+    use super::enter_alt_screen_impl;
+    use super::leave_alt_screen_impl;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
 
@@ -169,6 +174,58 @@ mod tests {
             !rows.iter().skip(1).any(|row| row.contains("stale")),
             "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
+    }
+
+    #[test]
+    fn repeated_alt_screen_entry_preserves_the_original_inline_viewport() {
+        let width = 80;
+        let height = 24;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal =
+            CustomTerminal::with_options_and_cursor_position(backend, Position { x: 0, y: 7 })
+                .expect("terminal");
+        let inline_viewport = Rect::new(
+            /*x*/ 0, /*y*/ 7, /*width*/ width, /*height*/ 6,
+        );
+        terminal.set_viewport_area(inline_viewport);
+        let mut saved_viewport = None;
+        let active = AtomicBool::new(/*v*/ false);
+
+        enter_alt_screen_impl(
+            &mut terminal,
+            &mut saved_viewport,
+            &active,
+            /*alt_screen_enabled*/ true,
+        )
+        .expect("first alternate-screen entry");
+        enter_alt_screen_impl(
+            &mut terminal,
+            &mut saved_viewport,
+            &active,
+            /*alt_screen_enabled*/ true,
+        )
+        .expect("repeated alternate-screen entry");
+
+        assert_eq!(saved_viewport, Some(inline_viewport));
+        leave_alt_screen_impl(
+            &mut terminal,
+            &mut saved_viewport,
+            &active,
+            /*alt_screen_enabled*/ true,
+        )
+        .expect("alternate-screen exit");
+        assert_eq!(terminal.viewport_area, inline_viewport);
+        assert_eq!(saved_viewport, None);
+        assert!(!active.load(Ordering::Relaxed));
+
+        leave_alt_screen_impl(
+            &mut terminal,
+            &mut saved_viewport,
+            &active,
+            /*alt_screen_enabled*/ true,
+        )
+        .expect("repeated alternate-screen exit");
+        assert_eq!(terminal.viewport_area, inline_viewport);
     }
 }
 
@@ -567,6 +624,55 @@ where
     terminal.clear_after_position(clear_position)
 }
 
+fn enter_alt_screen_impl<B>(
+    terminal: &mut CustomTerminal<B>,
+    alt_saved_viewport: &mut Option<Rect>,
+    alt_screen_active: &AtomicBool,
+    alt_screen_enabled: bool,
+) -> Result<()>
+where
+    B: Backend + Write,
+{
+    if !alt_screen_enabled || alt_screen_active.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+    let _ = execute!(terminal.backend_mut(), EnableAlternateScroll);
+    if let Ok(size) = terminal.size() {
+        *alt_saved_viewport = Some(terminal.viewport_area);
+        terminal.set_viewport_area(Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            size.width,
+            size.height,
+        ));
+        let _ = terminal.clear();
+    }
+    alt_screen_active.store(/*val*/ true, Ordering::Relaxed);
+    Ok(())
+}
+
+fn leave_alt_screen_impl<B>(
+    terminal: &mut CustomTerminal<B>,
+    alt_saved_viewport: &mut Option<Rect>,
+    alt_screen_active: &AtomicBool,
+    alt_screen_enabled: bool,
+) -> Result<()>
+where
+    B: Backend + Write,
+{
+    if !alt_screen_enabled || !alt_screen_active.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let _ = execute!(terminal.backend_mut(), DisableAlternateScroll);
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    if let Some(saved) = alt_saved_viewport.take() {
+        terminal.set_viewport_area(saved);
+    }
+    alt_screen_active.store(/*val*/ false, Ordering::Relaxed);
+    Ok(())
+}
+
 impl Tui {
     pub(crate) fn new(
         terminal: Terminal,
@@ -734,39 +840,22 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
-        let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
-        if let Ok(size) = self.terminal.size() {
-            self.alt_saved_viewport = Some(self.terminal.viewport_area);
-            self.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                0,
-                0,
-                size.width,
-                size.height,
-            ));
-            let _ = self.terminal.clear();
-        }
-        self.alt_screen_active.store(true, Ordering::Relaxed);
-        Ok(())
+        enter_alt_screen_impl(
+            &mut self.terminal,
+            &mut self.alt_saved_viewport,
+            &self.alt_screen_active,
+            self.alt_screen_enabled,
+        )
     }
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
-        // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
-        if let Some(saved) = self.alt_saved_viewport.take() {
-            self.terminal.set_viewport_area(saved);
-        }
-        self.alt_screen_active.store(false, Ordering::Relaxed);
-        Ok(())
+        leave_alt_screen_impl(
+            &mut self.terminal,
+            &mut self.alt_saved_viewport,
+            &self.alt_screen_active,
+            self.alt_screen_enabled,
+        )
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {

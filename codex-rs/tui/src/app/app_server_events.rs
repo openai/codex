@@ -10,6 +10,8 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::terminal_browser::TERMINAL_BROWSER_NAMESPACE;
+use crate::terminal_browser::dynamic_tool_response;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
@@ -181,6 +183,50 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        if let ServerRequest::DynamicToolCall { request_id, params } = &request
+            && params.namespace.as_deref() == Some(TERMINAL_BROWSER_NAMESPACE)
+        {
+            if self
+                .chat_widget
+                .thread_id()
+                .is_none_or(|thread_id| thread_id.to_string() != params.thread_id)
+            {
+                let message = "Terminal browser tools are only available to the active TUI thread."
+                    .to_string();
+                if let Err(err) = self
+                    .reject_app_server_request(app_server_client, request_id.clone(), message)
+                    .await
+                {
+                    tracing::warn!("{err}");
+                }
+                return;
+            }
+            let Some(browser) = self.reconcile_terminal_browser_network_policy().await else {
+                let message = "Terminal browser is not enabled for this TUI session.".to_string();
+                if let Err(err) = self
+                    .reject_app_server_request(app_server_client, request_id.clone(), message)
+                    .await
+                {
+                    tracing::warn!("{err}");
+                }
+                return;
+            };
+            let request_id = request_id.clone();
+            let session_key = params.thread_id.clone();
+            let tool = params.tool.clone();
+            let arguments = params.arguments.clone();
+            let app_event_tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let response =
+                    dynamic_tool_response(browser.execute(&session_key, &tool, arguments).await);
+                app_event_tx.send(AppEvent::TerminalBrowserToolCompleted {
+                    request_id,
+                    response,
+                });
+            });
+            return;
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)

@@ -299,6 +299,7 @@ impl App {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
         }
+        self.sync_terminal_browser_overlay(tui);
     }
 
     /// Initialize backtrack state and show composer hint.

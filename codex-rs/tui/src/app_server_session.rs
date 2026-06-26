@@ -13,6 +13,8 @@ use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
+use crate::terminal_browser::dynamic_tool_specs;
+use crate::terminal_browser::terminal_browser_available;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
@@ -1378,6 +1380,13 @@ fn thread_start_params_from_config(
     remote_cwd_override: Option<&std::path::Path>,
     session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
+    let dynamic_tools = (matches!(thread_params_mode, ThreadParamsMode::Embedded)
+        && config
+            .features
+            .enabled(codex_features::Feature::TerminalBrowser)
+        && config.permissions.network_sandbox_policy().is_enabled()
+        && terminal_browser_available())
+    .then(dynamic_tool_specs);
     let permissions = permissions_selection_from_config(config, thread_params_mode);
     let sandbox = permissions
         .is_none()
@@ -1405,6 +1414,7 @@ fn thread_start_params_from_config(
         developer_instructions: with_terminal_visualization_instructions(
             config, /*control_instructions*/ None,
         ),
+        dynamic_tools,
         ..ThreadStartParams::default()
     }
 }

@@ -130,6 +130,9 @@ impl App {
         tui: &mut tui::Tui,
         redraw_header: bool,
     ) -> Result<()> {
+        if self.terminal_browser_overlay_active() {
+            self.hide_terminal_browser(tui);
+        }
         let is_alt_screen_active = tui.is_alt_screen_active();
 
         // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
@@ -163,6 +166,11 @@ impl App {
     }
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
+        if self.terminal_browser_overlay_active()
+            && let Some(browser) = self.terminal_browser.as_ref()
+        {
+            browser.set_visibility(/*visible*/ false);
+        }
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();

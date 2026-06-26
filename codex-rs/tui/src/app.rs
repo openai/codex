@@ -159,6 +159,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
+use codex_terminal_browser::TerminalBrowser;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
@@ -519,8 +520,9 @@ pub(crate) struct App {
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
-    // Pager overlay state (Transcript or Static like Diff)
+    // Top-level overlay state (pager views or the floating terminal browser).
     pub(crate) overlay: Option<Overlay>,
+    pub(crate) terminal_browser: Option<Arc<TerminalBrowser>>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
@@ -548,7 +550,7 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
-    app_server_target: AppServerTarget,
+    pub(crate) app_server_target: AppServerTarget,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -1021,6 +1023,7 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             transcript_cells: Vec::new(),
             overlay: None,
+            terminal_browser: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
@@ -1053,6 +1056,7 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
+        let _ = app.reconcile_terminal_browser_network_policy().await;
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }
@@ -1214,6 +1218,9 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
         };
+        if let Some(browser) = app.terminal_browser.as_ref() {
+            browser.close().await;
+        }
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
@@ -1260,9 +1267,22 @@ See the Codex keymap documentation for supported actions and examples."
             self.handle_draw_pre_render(tui)?;
         }
 
-        if self.overlay.is_some() {
+        if self.overlay.is_some() && !self.terminal_browser_overlay_active() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
+            if self.terminal_browser_overlay_active()
+                && matches!(
+                    &event,
+                    TuiEvent::Key(KeyEvent {
+                        code: KeyCode::Esc,
+                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                        ..
+                    })
+                )
+            {
+                self.hide_terminal_browser(tui);
+                return Ok(AppRunControl::Continue);
+            }
             match event {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
@@ -1290,7 +1310,10 @@ See the Codex keymap documentation for supported actions and examples."
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
                     let rendered_area = self.render_chat_widget_frame(tui)?;
-                    if self.chat_widget.ambient_pet_image_enabled() {
+                    let terminal_browser_overlay_active = self.terminal_browser_overlay_active();
+                    if self.chat_widget.ambient_pet_image_enabled()
+                        && !terminal_browser_overlay_active
+                    {
                         let terminal_size = tui.terminal.size()?;
                         let ambient_pet_area = Rect::new(
                             /*x*/ 0,
@@ -1305,14 +1328,17 @@ See the Codex keymap documentation for supported actions and examples."
                             self.handle_ambient_pet_image_render_error(tui, err)?;
                         }
                     }
-                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
-                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                    if !terminal_browser_overlay_active {
+                        if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
+                            if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                                self.handle_pet_picker_preview_image_render_error(tui, err)?;
+                            }
+                        } else if self.chat_widget.should_clear_pet_picker_preview_image()
+                            && let Err(err) =
+                                tui.draw_pet_picker_preview_image(/*request*/ None)
+                        {
                             self.handle_pet_picker_preview_image_render_error(tui, err)?;
                         }
-                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
-                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
-                    {
-                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
                     }
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
@@ -1335,14 +1361,35 @@ See the Codex keymap documentation for supported actions and examples."
     }
 
     fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
-        let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
+        let terminal_size = tui.terminal.size()?;
+        let terminal_browser_overlay_active = self.terminal_browser_overlay_active();
+        if terminal_browser_overlay_active
+            && let Some(Overlay::TerminalBrowser(overlay)) = self.overlay.as_ref()
+            && let Err(err) = overlay.resize(Rect::new(
+                /*x*/ 0,
+                /*y*/ 0,
+                terminal_size.width,
+                terminal_size.height,
+            ))
+        {
+            tracing::debug!(error = %err, "failed to resize terminal browser");
+        }
+        let desired_height = if terminal_browser_overlay_active {
+            terminal_size.height
+        } else {
+            self.chat_widget.desired_height(terminal_size.width)
+        };
         let mut rendered_area = Rect::default();
+        let chat_widget = &self.chat_widget;
+        let overlay = &mut self.overlay;
         tui.draw_with_resize_reflow(desired_height, |frame| {
             let area = frame.area();
             rendered_area = area;
-            self.chat_widget.render(area, frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+            chat_widget.render(area, frame.buffer);
+            if let Some(Overlay::TerminalBrowser(overlay)) = overlay.as_ref() {
+                overlay.render(area, frame.buffer);
+            } else if let Some((x, y)) = chat_widget.cursor_pos(area) {
+                frame.set_cursor_style(chat_widget.cursor_style(area));
                 frame.set_cursor_position((x, y));
             }
         })?;

@@ -36,6 +36,7 @@ pub enum SlashCommand {
     Resume,
     Fork,
     App,
+    Browser,
     Init,
     Compact,
     Plan,
@@ -94,6 +95,7 @@ impl SlashCommand {
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::App => "continue this session in Codex Desktop",
+            SlashCommand::Browser => "show, hide, or close the terminal browser",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Copy => "copy last response as markdown",
             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
@@ -167,6 +169,7 @@ impl SlashCommand {
                 | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Browser
         )
     }
 
@@ -223,6 +226,7 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::App
+            | SlashCommand::Browser
             | SlashCommand::Goal
             | SlashCommand::Mcp
             | SlashCommand::Apps
@@ -248,6 +252,7 @@ impl SlashCommand {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::App => cfg!(any(target_os = "macos", target_os = "windows")),
+            SlashCommand::Browser => cfg!(any(target_os = "macos", target_os = "linux")),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
@@ -295,6 +300,8 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
+        assert!(SlashCommand::Browser.available_during_task());
+        assert!(SlashCommand::Browser.supports_inline_args());
     }
 
     #[test]

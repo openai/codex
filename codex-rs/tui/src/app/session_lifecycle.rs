@@ -424,7 +424,7 @@ impl App {
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
-        self.reset_for_thread_switch(tui)?;
+        self.reset_for_thread_switch(tui).await?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
         if is_replay_only {
             let message = if attached_replay_only {
@@ -450,7 +450,8 @@ impl App {
                 .is_none_or(|entry| !entry.is_closed)
     }
 
-    pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    pub(super) async fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.reset_terminal_browser_for_thread_change(tui).await;
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
         Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
@@ -604,6 +605,7 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
+        self.reset_terminal_browser_for_thread_change(tui).await;
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,

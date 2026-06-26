@@ -33,6 +33,7 @@ impl App {
     }
 
     pub(super) async fn sync_active_thread_permission_settings_to_cached_session(&mut self) {
+        let _ = self.reconcile_terminal_browser_network_policy().await;
         let Some(active_thread_id) = self.active_thread_id else {
             return;
         };

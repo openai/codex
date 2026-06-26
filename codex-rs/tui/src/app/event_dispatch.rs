@@ -410,6 +410,40 @@ impl App {
                         .add_error_message(format!("Failed to retry with a faster model: {err}"));
                 }
             }
+            AppEvent::ToggleTerminalBrowser => {
+                self.toggle_terminal_browser(tui);
+            }
+            AppEvent::CloseTerminalBrowser => {
+                self.close_terminal_browser();
+            }
+            AppEvent::TerminalBrowserClosed => {
+                self.sync_terminal_browser_overlay(tui);
+            }
+            AppEvent::TerminalBrowserUpdated => {
+                self.sync_terminal_browser_overlay(tui);
+            }
+            AppEvent::TerminalBrowserToolCompleted {
+                request_id,
+                response,
+            } => match serde_json::to_value(response) {
+                Ok(result) => {
+                    if let Err(err) = app_server.resolve_server_request(request_id, result).await {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to resolve terminal browser tool request: {err}"
+                        ));
+                    }
+                }
+                Err(err) => {
+                    let message = format!("Failed to serialize terminal browser response: {err}");
+                    self.chat_widget.add_error_message(message.clone());
+                    if let Err(reject_err) = self
+                        .reject_app_server_request(app_server, request_id, message)
+                        .await
+                    {
+                        tracing::warn!("{reject_err}");
+                    }
+                }
+            },
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
             }

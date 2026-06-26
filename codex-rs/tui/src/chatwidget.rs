@@ -693,7 +693,7 @@ pub(crate) struct ChatWidget {
     // Instruction source files loaded for the current session, supplied by app-server.
     instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
-    session_network_proxy: Option<SessionNetworkProxyRuntime>,
+    pub(crate) session_network_proxy: Option<SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Shared latch so we only warn once about invalid terminal-title item IDs.

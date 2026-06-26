@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
+assertion_line: 430
 expression: commands
 ---
 /model - choose what model and reasoning effort to use
@@ -21,6 +22,7 @@ expression: commands
 /resume - resume a saved chat
 /fork - fork the current chat
 /app - continue this session in Codex Desktop
+/browser - show, hide, or close the terminal browser
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /agent - switch the active agent thread
