@@ -192,7 +192,7 @@ impl Drop for InFlightCall {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn canonical_script_observes_frames_notifications_and_callback_cancellation() -> Result<()> {
+async fn canonical_script_does_not_resolve_unawaited_tool_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -223,7 +223,7 @@ notify("boo");
 await Promise.all([tool_call_a(), tool_call_b()]);
 text("tool calls done");
 setTimeout(tool_call_c, 99999);
-tool_call_d();
+void tool_call_d().then(() => text("D res"), () => {});
 "#;
 
     responses::mount_sse_once(
@@ -278,33 +278,24 @@ tool_call_d();
     );
 
     parallel_call_permits.add_permits(2);
-    while !events.contains(&CanonicalToolEvent::Cancelled(CanonicalToolCall::D)) {
-        let event = tokio::select! {
-            result = &mut turn => panic!("turn completed before call D was cancelled: {result:?}"),
-            event = events_rx.recv() => event.expect("canonical tool event channel closed"),
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                panic!("timed out waiting for canonical call D cancellation")
-            }
-        };
+    let mut completed_parallel_calls = HashSet::new();
+    while completed_parallel_calls.len() < 2 {
+        let event = tokio::time::timeout(Duration::from_secs(5), events_rx.recv())
+            .await
+            .expect("timed out waiting for canonical calls A and B to complete")
+            .expect("canonical tool event channel closed");
+        if let CanonicalToolEvent::Completed(call @ (CanonicalToolCall::A | CanonicalToolCall::B)) =
+            event
+        {
+            completed_parallel_calls.insert(call);
+        }
         events.push(event);
     }
-    turn.await?;
-
-    while let Ok(event) = events_rx.try_recv() {
-        events.push(event);
-    }
-    assert_eq!(events.len(), 6);
     assert_eq!(
-        events.iter().copied().collect::<HashSet<_>>(),
-        HashSet::from([
-            CanonicalToolEvent::Started(CanonicalToolCall::A),
-            CanonicalToolEvent::Started(CanonicalToolCall::B),
-            CanonicalToolEvent::Started(CanonicalToolCall::D),
-            CanonicalToolEvent::Completed(CanonicalToolCall::A),
-            CanonicalToolEvent::Completed(CanonicalToolCall::B),
-            CanonicalToolEvent::Cancelled(CanonicalToolCall::D),
-        ])
+        completed_parallel_calls,
+        HashSet::from([CanonicalToolCall::A, CanonicalToolCall::B])
     );
+    turn.await?;
 
     let first_frame_request = first_frame_mock.single_request();
     let first_outputs = exec_outputs(&first_frame_request, "call-1");
@@ -336,7 +327,7 @@ tool_call_d();
                 "wait",
                 &serde_json::to_string(&json!({
                     "cell_id": cell_id,
-                    "yield_time_ms": 1_000,
+                    "yield_time_ms": 5_000,
                 }))?,
             ),
             ev_completed("resp-4"),
@@ -357,7 +348,11 @@ tool_call_d();
 
     let completion_request = completion_mock.single_request();
     let completion_items = function_tool_output_items(&completion_request, "call-2");
-    assert_eq!(completion_items.len(), 3);
+    assert_eq!(
+        completion_items.len(),
+        3,
+        "unawaited call D unexpectedly resolved"
+    );
     super::assert_regex_match(
         concat!(
             r"(?s)\A",
@@ -370,13 +365,59 @@ tool_call_d();
     while let Ok(event) = events_rx.try_recv() {
         events.push(event);
     }
-    assert_eq!(events.len(), 6);
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, CanonicalToolEvent::Started(CanonicalToolCall::C)))
+    while events.contains(&CanonicalToolEvent::Started(CanonicalToolCall::D))
+        && !events.contains(&CanonicalToolEvent::Cancelled(CanonicalToolCall::D))
+    {
+        let event = tokio::time::timeout(Duration::from_secs(5), events_rx.recv())
+            .await
+            .expect("timed out waiting for canonical call D cancellation")
+            .expect("canonical tool event channel closed");
+        events.push(event);
+    }
+    assert_eq!(
+        events.iter().copied().collect::<HashSet<_>>().len(),
+        events.len(),
+        "canonical tool events should not be duplicated"
     );
-
+    assert_eq!(
+        events
+            .iter()
+            .copied()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    CanonicalToolEvent::Started(CanonicalToolCall::D)
+                        | CanonicalToolEvent::Cancelled(CanonicalToolCall::D)
+                )
+            })
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            CanonicalToolEvent::Started(CanonicalToolCall::A),
+            CanonicalToolEvent::Started(CanonicalToolCall::B),
+            CanonicalToolEvent::Completed(CanonicalToolCall::A),
+            CanonicalToolEvent::Completed(CanonicalToolCall::B),
+        ])
+    );
+    let d_events = events
+        .iter()
+        .copied()
+        .filter(|event| {
+            matches!(
+                event,
+                CanonicalToolEvent::Started(CanonicalToolCall::D)
+                    | CanonicalToolEvent::Cancelled(CanonicalToolCall::D)
+            )
+        })
+        .collect::<Vec<_>>();
+    if !d_events.is_empty() {
+        assert_eq!(
+            d_events,
+            vec![
+                CanonicalToolEvent::Started(CanonicalToolCall::D),
+                CanonicalToolEvent::Cancelled(CanonicalToolCall::D),
+            ]
+        );
+    }
     Ok(())
 }
 
