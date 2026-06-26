@@ -1416,6 +1416,7 @@ async fn host_owned_codex_apps_manager(
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
+        codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;
     Arc::new(manager)

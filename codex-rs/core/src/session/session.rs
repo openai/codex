@@ -1207,6 +1207,7 @@ impl Session {
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),
+                codex_mcp::ElicitationRequestRouter::default(),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",
