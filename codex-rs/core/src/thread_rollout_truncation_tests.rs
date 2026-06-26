@@ -154,29 +154,16 @@ fn truncate_rollout_after_turn_id_rejects_synthetic_legacy_turn_id() {
 }
 
 #[test]
-fn truncate_rollout_after_turn_id_keeps_current_in_progress_turn() {
+fn truncate_rollout_after_turn_id_rejects_in_progress_turn() {
     let rollout = vec![turn_started("turn-1")];
 
-    let truncated = truncate_rollout_after_turn_id(&rollout, "turn-1")
-        .expect("current in-progress turn should be a fork anchor");
-
-    assert_eq!(
-        serde_json::to_value(&truncated).unwrap(),
-        serde_json::to_value(&rollout).unwrap()
-    );
-}
-
-#[test]
-fn truncate_rollout_after_turn_id_rejects_non_current_in_progress_turn() {
-    let rollout = vec![turn_started("turn-1"), turn_started("turn-2")];
-
     let err = truncate_rollout_after_turn_id(&rollout, "turn-1")
-        .expect_err("non-current in-progress turn should not be a fork anchor");
+        .expect_err("in-progress turn should not be a fork anchor");
 
     assert!(matches!(
         err,
         CodexErr::InvalidRequest(message)
-            if message == "turnId 'turn-1' identifies a non-current in-progress turn"
+            if message == "turnId 'turn-1' identifies an in-progress turn"
     ));
 }
 

@@ -18,13 +18,10 @@ import type { ThreadSource } from "./ThreadSource";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadForkParams = {threadId: string, /**
- * Optional persisted canonical turn id to fork through, inclusive.
+ * Optional turn id to fork through, inclusive.
  *
- * When specified, later turns are omitted from the fork. The target turn
- * must be terminal or the current in-progress turn, and must still be
- * present in the effective thread history. A current in-progress turn is
- * copied with the same interruption marker as a fork without `turnId`.
- * Synthetic ids generated for legacy rollouts are not supported.
+ * When specified, turns after `turn_id` are omitted from the fork.
+ * The referenced turn cannot be in progress.
  */
 turnId?: string | null, /**
  * Configuration overrides for the forked thread, if any.

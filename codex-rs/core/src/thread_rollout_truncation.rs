@@ -188,15 +188,9 @@ pub fn truncate_rollout_after_turn_id(
             ))
         })?;
 
-    if matches!(turn.status, TurnStatus::InProgress)
-        && turns.last().is_some_and(|turn| turn.id == turn_id)
-    {
-        return Ok(items.to_vec());
-    }
-
     if matches!(turn.status, TurnStatus::InProgress) {
         return Err(CodexErr::InvalidRequest(format!(
-            "turnId '{turn_id}' identifies a non-current in-progress turn"
+            "turnId '{turn_id}' identifies an in-progress turn"
         )));
     }
 

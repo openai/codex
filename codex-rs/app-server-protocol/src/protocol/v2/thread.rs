@@ -496,9 +496,8 @@ pub struct ThreadForkParams {
 
     /// Optional turn id to fork through, inclusive.
     ///
-    /// When specified, turns after `turn_id` are omitted from the fork.  
-    /// A current in-progress turn is copied with the same interruption marker
-    /// as a fork without `turnId`.
+    /// When specified, turns after `turn_id` are omitted from the fork.
+    /// The referenced turn cannot be in progress.
     #[ts(optional = nullable)]
     pub turn_id: Option<String>,
 
