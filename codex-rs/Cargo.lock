@@ -4003,12 +4003,18 @@ name = "codex-terminal-browser"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-protocol",
+ "codex-sandboxing",
+ "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "codex-utils-pty",
  "futures",
+ "libc",
  "pretty_assertions",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

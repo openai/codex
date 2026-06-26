@@ -1,15 +1,38 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod accessibility;
 mod actions;
 mod cdp;
+mod devtools;
+mod diagnostics;
+mod error;
+mod handles;
+mod human_control;
+mod input;
+mod navigation;
 mod network;
 mod process;
+mod profile;
+mod profile_control;
+mod runtime;
+mod sandbox;
 mod screen;
 mod scripts;
 mod session;
+mod tool_dispatch;
+mod url_policy;
 
 pub use actions::BrowserToolOutput;
+pub use diagnostics::BrowserDoctorReport;
+pub use error::BrowserToolFailure;
+pub use error::classify_browser_error;
+pub use input::BrowserInputModifiers;
+pub use input::BrowserKeyInput;
+pub use input::BrowserMouseButton;
+pub use input::BrowserMouseInput;
+pub use input::BrowserMouseKind;
 pub use network::BrowserNetworkPolicy;
+pub use sandbox::BrowserLaunchContext;
 pub use screen::BrowserCell;
 pub use screen::BrowserColor;
 pub use screen::BrowserScreen;

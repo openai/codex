@@ -7,47 +7,55 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
-use codex_utils_pty::ProcessHandle;
-use serde::Deserialize;
-use serde_json::Value;
-use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::mpsc;
-use tokio::sync::watch;
-use url::Url;
-
-use crate::actions;
-use crate::actions::BrowserToolOutput;
+use crate::diagnostics::BrowserDoctorReport;
+use crate::diagnostics::BrowserInstallation;
+use crate::diagnostics::inspect_installation;
+use crate::diagnostics::installation_report;
+use crate::diagnostics::unavailable_report;
+use crate::human_control::HumanInputSender;
+use crate::human_control::QueuedHumanInput;
 use crate::network::BrowserNetworkPolicy;
 use crate::process::BrowserSession;
+use crate::profile::BrowserProfileName;
+use crate::profile::BrowserProfileStore;
+use crate::sandbox::BrowserLaunchContext;
 use crate::screen::BrowserStatus;
 use crate::screen::BrowserView;
 use crate::screen::TerminalSize;
+use anyhow::Result;
+use codex_utils_pty::ProcessHandle;
+use serde::Deserialize;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::watch;
 
 const CARBONYL_BINARY_ENV: &str = "CODEX_CARBONYL_BINARY";
-const MAX_URL_INPUT_BYTES: usize = 4 * 1024;
-const MAX_FILL_TEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct TerminalBrowser {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
 pub(crate) struct Inner {
-    pub(crate) binary: Option<PathBuf>,
+    pub(crate) binary: RwLock<Option<PathBuf>>,
+    pub(crate) installation: AsyncMutex<Option<BrowserInstallation>>,
+    pub(crate) launch_context: BrowserLaunchContext,
+    pub(crate) profile_store: Option<BrowserProfileStore>,
+    pub(crate) selected_profile: Mutex<Option<BrowserProfileName>>,
     pub(crate) session_key: Mutex<Option<String>>,
     pub(crate) network_policy: RwLock<BrowserNetworkPolicy>,
-    pub(crate) size: Mutex<TerminalSize>,
     pub(crate) view: RwLock<BrowserView>,
     pub(crate) updates: watch::Sender<u64>,
     pub(crate) update_sequence: AtomicU64,
     pub(crate) operation: AsyncMutex<()>,
     pub(crate) session: AsyncMutex<Option<BrowserSession>>,
     pub(crate) process: Mutex<Option<Arc<ProcessHandle>>>,
-    pub(crate) resize_tx: Mutex<Option<mpsc::UnboundedSender<TerminalSize>>>,
+    pub(crate) resize_tx: watch::Sender<TerminalSize>,
     pub(crate) closing: AtomicBool,
+    pub(crate) human_control: AtomicBool,
+    pub(crate) human_control_transition: AtomicBool,
+    pub(crate) human_control_generation: AtomicU64,
+    pub(crate) human_input_tx: HumanInputSender,
+    pub(crate) human_input_rx: Mutex<Option<tokio::sync::mpsc::Receiver<QueuedHumanInput>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,51 +72,18 @@ pub(crate) enum RenderMode {
     Bitmap,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct OpenArgs {
-    url: String,
-    visible: Option<bool>,
-    render_mode: Option<RenderMode>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NodeArgs {
-    node_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FillArgs {
-    node_id: String,
-    text: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PressArgs {
-    key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScrollArgs {
-    #[serde(default)]
-    delta_x: i64,
-    #[serde(default)]
-    delta_y: i64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VisibilityArgs {
-    visible: bool,
-}
-
 impl TerminalBrowser {
     pub fn discover() -> Self {
+        Self::discover_with_launch_context(BrowserLaunchContext::default())
+    }
+
+    pub fn discover_with_launch_context(launch_context: BrowserLaunchContext) -> Self {
         let size = TerminalSize::default();
+        let profile_store =
+            BrowserProfileStore::from_context(&launch_context).unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to configure terminal-browser profile storage");
+                None
+            });
         let binary = discover_binary();
         let status = match &binary {
             Ok(_) => BrowserStatus::Idle,
@@ -117,26 +92,71 @@ impl TerminalBrowser {
             },
         };
         let (updates, _) = watch::channel(/*init*/ 0);
+        let (resize_tx, _) = watch::channel(size);
+        let (human_input_tx, human_input_rx) = Self::human_input_channel();
+
         Self {
             inner: Arc::new(Inner {
-                binary: binary.ok(),
+                binary: RwLock::new(binary.ok()),
+                installation: AsyncMutex::new(/*value*/ None),
+                launch_context,
+                profile_store,
+                selected_profile: Mutex::new(/*value*/ None),
                 session_key: Mutex::new(/*t*/ None),
                 network_policy: RwLock::new(/*t*/ BrowserNetworkPolicy::Disabled),
-                size: Mutex::new(size),
                 view: RwLock::new(BrowserView::new(status, size)),
                 updates,
                 update_sequence: AtomicU64::new(/*v*/ 0),
                 operation: AsyncMutex::new(()),
                 session: AsyncMutex::new(/*t*/ None),
                 process: Mutex::new(/*t*/ None),
-                resize_tx: Mutex::new(/*t*/ None),
+                resize_tx,
                 closing: AtomicBool::new(/*v*/ false),
+                human_control: AtomicBool::new(/*v*/ false),
+                human_control_transition: AtomicBool::new(/*v*/ false),
+                human_control_generation: AtomicU64::new(/*v*/ 0),
+                human_input_tx,
+                human_input_rx: Mutex::new(Some(human_input_rx)),
             }),
         }
     }
 
     pub fn is_available(&self) -> bool {
-        self.inner.binary.is_some()
+        self.inner
+            .binary
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    pub async fn doctor(&self) -> BrowserDoctorReport {
+        let binary = match discover_binary() {
+            Ok(binary) => binary,
+            Err(reason) => {
+                self.inner.update_view(|view| {
+                    view.status = BrowserStatus::Unavailable {
+                        reason: reason.clone(),
+                    };
+                });
+                return unavailable_report(&reason);
+            }
+        };
+        let result = inspect_installation(&binary, &self.inner.launch_context).await;
+        let report = installation_report(&result);
+        if let Ok(installation) = result {
+            *self
+                .inner
+                .binary
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = Some(installation.path.clone());
+            *self.inner.installation.lock().await = Some(installation);
+            self.inner.update_view(|view| {
+                if matches!(view.status, BrowserStatus::Unavailable { .. }) {
+                    view.status = BrowserStatus::Idle;
+                }
+            });
+        }
+        report
     }
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
@@ -185,145 +205,26 @@ impl TerminalBrowser {
             size.rows > 0 && size.cols > 0,
             "browser size must be non-zero"
         );
-        *self
-            .inner
-            .size
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = size;
-        if let Some(process) = self
+        let process = self
             .inner
             .process
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            process.resize(size.into())?;
-        }
-        if let Some(tx) = self
-            .inner
-            .resize_tx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            let _ = tx.send(size);
-        }
-        Ok(())
-    }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the operation and session guards serialize stateful CDP calls with lifecycle changes"
-    )]
-    pub async fn execute(
-        &self,
-        session_key: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<BrowserToolOutput> {
-        let _operation = self
-            .inner
-            .operation
-            .try_lock()
-            .map_err(|_| anyhow!("browser_busy: another terminal browser action is running"))?;
-        let session_changed = {
-            let mut current = self
-                .inner
-                .session_key
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if current.as_deref() == Some(session_key) {
+            .unwrap_or_else(PoisonError::into_inner);
+        let changed = self.inner.resize_tx.send_if_modified(|current| {
+            if *current == size {
                 false
             } else {
-                *current = Some(session_key.to_string());
+                *current = size;
                 true
             }
-        };
-        if session_changed {
-            self.inner.close_session().await;
+        });
+        if !changed {
+            return Ok(());
         }
-        if !matches!(tool, "open" | "set_visibility" | "close") {
-            let network_policy = self.inner.network_policy();
-            let policy_changed = self
-                .inner
-                .session
-                .lock()
-                .await
-                .as_ref()
-                .is_some_and(|session| session.config.network_policy != network_policy);
-            if policy_changed {
-                self.inner.close_session().await;
-                anyhow::bail!("browser network policy changed; reopen the page before continuing");
-            }
+        if let Some(process) = process.as_ref() {
+            process.resize(size.into())?;
         }
-        match tool {
-            "open" => self.open(serde_json::from_value(arguments)?).await,
-            "snapshot" => {
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::snapshot(&mut session.cdp).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "click" => {
-                let args: NodeArgs = serde_json::from_value(arguments)?;
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::click(&mut session.cdp, &args.node_id).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "fill" => {
-                let args: FillArgs = serde_json::from_value(arguments)?;
-                anyhow::ensure!(
-                    args.text.len() <= MAX_FILL_TEXT_BYTES,
-                    "fill text exceeds the 64 KiB input limit"
-                );
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::fill(&mut session.cdp, &args.node_id, &args.text).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "press" => {
-                let args: PressArgs = serde_json::from_value(arguments)?;
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::press(&mut session.cdp, &args.key).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "scroll" => {
-                let args: ScrollArgs = serde_json::from_value(arguments)?;
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::scroll(&mut session.cdp, args.delta_x, args.delta_y).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "screenshot" => {
-                let mut session = self.inner.session.lock().await;
-                let session = session.as_mut().context("terminal browser is not open")?;
-                let output = actions::screenshot(&mut session.cdp).await?;
-                self.refresh_page_metadata(session).await;
-                Ok(output)
-            }
-            "set_visibility" => {
-                let args: VisibilityArgs = serde_json::from_value(arguments)?;
-                self.set_visibility(args.visible);
-                Ok(BrowserToolOutput::Text(format!(
-                    "terminal browser visibility set to {}",
-                    args.visible
-                )))
-            }
-            "close" => {
-                self.inner.close_session().await;
-                Ok(BrowserToolOutput::Text(
-                    "terminal browser closed".to_string(),
-                ))
-            }
-            _ => anyhow::bail!("unknown terminal browser tool: {tool}"),
-        }
+        Ok(())
     }
 
     #[expect(
@@ -333,80 +234,6 @@ impl TerminalBrowser {
     pub async fn close(&self) {
         let _operation = self.inner.operation.lock().await;
         self.inner.close_session().await;
-    }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the session guard keeps navigation and metadata refresh on the same CDP client"
-    )]
-    async fn open(&self, args: OpenArgs) -> Result<BrowserToolOutput> {
-        anyhow::ensure!(
-            args.url.len() <= MAX_URL_INPUT_BYTES,
-            "URL exceeds the 4 KiB input limit"
-        );
-        let url = Url::parse(&args.url).context("parse terminal browser URL")?;
-        anyhow::ensure!(
-            matches!(url.scheme(), "http" | "https"),
-            "terminal_browser only supports http and https URLs"
-        );
-        let network_policy = self.inner.network_policy();
-        anyhow::ensure!(
-            !matches!(&network_policy, BrowserNetworkPolicy::Disabled),
-            "terminal browser network access is disabled by the active permission profile"
-        );
-        let config = SessionConfig {
-            render_mode: args.render_mode.unwrap_or_default(),
-            network_policy,
-        };
-        let visible = args.visible.unwrap_or(/*default*/ true);
-        self.inner.update_view(|view| {
-            view.status = BrowserStatus::Starting;
-            view.visible = visible;
-            view.url = Some(url.as_str().to_string());
-        });
-        if let Err(error) = self.inner.ensure_session(config).await {
-            self.inner.set_crashed(error.to_string());
-            return Err(error);
-        }
-
-        let mut session = self.inner.session.lock().await;
-        let session = session.as_mut().context("terminal browser did not start")?;
-        let metadata = match async {
-            actions::navigate(&mut session.cdp, url.as_str()).await?;
-            actions::page_metadata(&mut session.cdp).await
-        }
-        .await
-        {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.inner
-                    .update_view(|view| view.status = BrowserStatus::Running);
-                return Err(error);
-            }
-        };
-        let final_url = metadata.url.unwrap_or_else(|| url.as_str().to_string());
-        self.inner.update_view(|view| {
-            view.status = BrowserStatus::Running;
-            view.title = metadata.title;
-            view.url = Some(final_url);
-            view.visible = visible;
-        });
-        Ok(BrowserToolOutput::Text(format!(
-            "opened {} in the terminal browser",
-            url.as_str()
-        )))
-    }
-
-    async fn refresh_page_metadata(&self, session: &mut BrowserSession) {
-        match actions::page_metadata(&mut session.cdp).await {
-            Ok(metadata) => self.inner.update_view(|view| {
-                view.url = metadata.url;
-                view.title = metadata.title;
-            }),
-            Err(error) => {
-                tracing::debug!(%error, "failed to refresh terminal browser page metadata");
-            }
-        }
     }
 }
 
@@ -419,7 +246,13 @@ impl Inner {
     }
 
     pub(crate) fn set_crashed(&self, message: String) {
-        self.update_view(|view| view.status = BrowserStatus::Crashed { message });
+        self.human_control.store(/*val*/ false, Ordering::SeqCst);
+        self.human_control_generation
+            .fetch_add(/*val*/ 1, Ordering::SeqCst);
+        self.update_view(|view| {
+            view.human_control = false;
+            view.status = BrowserStatus::Crashed { message };
+        });
     }
 
     pub(crate) fn update_view(&self, update: impl FnOnce(&mut BrowserView)) {

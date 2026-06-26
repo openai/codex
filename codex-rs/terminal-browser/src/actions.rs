@@ -1,19 +1,25 @@
-use std::time::Duration;
-use std::time::Instant;
-
 use anyhow::Context;
 use anyhow::Result;
 use serde_json::Value;
 use serde_json::json;
 
 use crate::cdp::CdpClient;
+use crate::input::BrowserKeyInput;
+use crate::input::BrowserMouseInput;
+use crate::input::BrowserMouseKind;
 use crate::scripts;
 
 const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
-const MAX_SNAPSHOT_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_SNAPSHOT_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_SNAPSHOT_URL_CHARS: usize = 2_048;
 const MAX_SNAPSHOT_TITLE_CHARS: usize = 512;
-const MAX_SNAPSHOT_TEXT_CHARS: usize = 12_000;
+const MAX_SNAPSHOT_TEXT_CHARS: usize = 6_000;
+
+#[derive(Default)]
+pub(crate) struct HumanMouseDispatchState {
+    viewport: Option<(u16, u16, f64, f64)>,
+    buttons: u8,
+}
 
 pub(crate) struct PageMetadata {
     pub(crate) url: Option<String>,
@@ -26,19 +32,7 @@ pub enum BrowserToolOutput {
     ImageDataUrl(String),
 }
 
-pub(crate) async fn navigate(client: &mut CdpClient, url: &str) -> Result<()> {
-    client
-        .evaluate("globalThis.__codexTerminalBrowserNavigationMarker = true")
-        .await?;
-    let result = client.call("Page.navigate", json!({ "url": url })).await?;
-    if let Some(error) = result.get("errorText").and_then(Value::as_str) {
-        anyhow::bail!("navigation failed: {error}");
-    }
-    let cross_document = result.get("loaderId").and_then(Value::as_str).is_some();
-    wait_until_ready(client, cross_document).await
-}
-
-pub(crate) async fn page_metadata(client: &mut CdpClient) -> Result<PageMetadata> {
+pub(crate) async fn page_metadata(client: &CdpClient) -> Result<PageMetadata> {
     let metadata = client
         .evaluate("({ url: location.href, title: document.title })")
         .await?;
@@ -54,32 +48,7 @@ pub(crate) async fn page_metadata(client: &mut CdpClient) -> Result<PageMetadata
     })
 }
 
-pub(crate) async fn snapshot(client: &mut CdpClient) -> Result<BrowserToolOutput> {
-    let snapshot = client.evaluate(scripts::SNAPSHOT_EXPRESSION).await?;
-    Ok(BrowserToolOutput::Text(bounded_snapshot_json(snapshot)?))
-}
-
-pub(crate) async fn click(client: &mut CdpClient, node_id: &str) -> Result<BrowserToolOutput> {
-    let result = client
-        .evaluate(&scripts::click_expression(node_id)?)
-        .await?;
-    ensure_script_ok(&result)?;
-    Ok(BrowserToolOutput::Text(format!("clicked {node_id}")))
-}
-
-pub(crate) async fn fill(
-    client: &mut CdpClient,
-    node_id: &str,
-    text: &str,
-) -> Result<BrowserToolOutput> {
-    let result = client
-        .evaluate(&scripts::fill_expression(node_id, text)?)
-        .await?;
-    ensure_script_ok(&result)?;
-    Ok(BrowserToolOutput::Text(format!("filled {node_id}")))
-}
-
-pub(crate) async fn press(client: &mut CdpClient, key: &str) -> Result<BrowserToolOutput> {
+pub(crate) async fn press(client: &CdpClient, key: &str) -> Result<BrowserToolOutput> {
     anyhow::ensure!(!key.is_empty(), "key must not be empty");
     anyhow::ensure!(key.chars().count() <= 32, "key is too long");
     let code = scripts::key_code(key);
@@ -106,7 +75,7 @@ pub(crate) async fn press(client: &mut CdpClient, key: &str) -> Result<BrowserTo
 }
 
 pub(crate) async fn scroll(
-    client: &mut CdpClient,
+    client: &CdpClient,
     delta_x: i64,
     delta_y: i64,
 ) -> Result<BrowserToolOutput> {
@@ -116,7 +85,7 @@ pub(crate) async fn scroll(
     Ok(BrowserToolOutput::Text(serde_json::to_string(&result)?))
 }
 
-pub(crate) async fn screenshot(client: &mut CdpClient) -> Result<BrowserToolOutput> {
+pub(crate) async fn screenshot(client: &CdpClient) -> Result<BrowserToolOutput> {
     let result = client
         .call(
             "Page.captureScreenshot",
@@ -137,41 +106,103 @@ pub(crate) async fn screenshot(client: &mut CdpClient) -> Result<BrowserToolOutp
     )))
 }
 
-async fn wait_until_ready(client: &mut CdpClient, cross_document: bool) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 15);
-    loop {
-        if let Ok(state) = client
-            .evaluate(
-                "({ state: document.readyState, marker: globalThis.__codexTerminalBrowserNavigationMarker === true })",
-            )
-            .await
-        {
-            let ready = matches!(
-                state.get("state").and_then(Value::as_str),
-                Some("interactive" | "complete")
-            );
-            let old_document = state
-                .get("marker")
-                .and_then(Value::as_bool)
-                .unwrap_or(/*default*/ false);
-            if ready && (!cross_document || !old_document) {
-                return Ok(());
-            }
-        }
-        anyhow::ensure!(Instant::now() < deadline, "navigation timed out");
-        tokio::time::sleep(Duration::from_millis(/*millis*/ 100)).await;
-    }
+pub(crate) async fn dispatch_human_key(client: &CdpClient, input: &BrowserKeyInput) -> Result<()> {
+    let text = input.text.as_deref().unwrap_or_default();
+    let modifiers = input.modifiers.cdp_mask();
+    client
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "rawKeyDown",
+                "key": input.key,
+                "code": input.code,
+                "text": text,
+                "unmodifiedText": text,
+                "modifiers": modifiers,
+            }),
+        )
+        .await?;
+    client
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": "keyUp",
+                "key": input.key,
+                "code": input.code,
+                "modifiers": modifiers,
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
-fn ensure_script_ok(result: &Value) -> Result<()> {
-    if result.get("ok").and_then(Value::as_bool) == Some(true) {
-        return Ok(());
+pub(crate) async fn insert_human_text(client: &CdpClient, text: &str) -> Result<()> {
+    client
+        .call("Input.insertText", json!({ "text": text }))
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn dispatch_human_mouse(
+    client: &CdpClient,
+    input: BrowserMouseInput,
+    state: &mut HumanMouseDispatchState,
+) -> Result<()> {
+    anyhow::ensure!(
+        input.viewport_cols > 0 && input.viewport_rows > 0,
+        "browser viewport must be non-zero"
+    );
+    let (width, height) = if let Some((cols, rows, width, height)) = state.viewport
+        && cols == input.viewport_cols
+        && rows == input.viewport_rows
+    {
+        (width, height)
+    } else {
+        let metrics = client.call("Page.getLayoutMetrics", json!({})).await?;
+        let width = metrics
+            .pointer("/cssLayoutViewport/clientWidth")
+            .or_else(|| metrics.pointer("/layoutViewport/clientWidth"))
+            .and_then(Value::as_f64)
+            .context("browser layout metrics omitted viewport width")?;
+        let height = metrics
+            .pointer("/cssLayoutViewport/clientHeight")
+            .or_else(|| metrics.pointer("/layoutViewport/clientHeight"))
+            .and_then(Value::as_f64)
+            .context("browser layout metrics omitted viewport height")?;
+        state.viewport = Some((input.viewport_cols, input.viewport_rows, width, height));
+        (width, height)
+    };
+    let x = f64::from(input.column) * width / f64::from(input.viewport_cols);
+    let y = f64::from(input.row) * height / f64::from(input.viewport_rows);
+    let modifiers = input.modifiers.cdp_mask();
+    let (event_type, delta_x, delta_y) = match input.kind {
+        BrowserMouseKind::Move => ("mouseMoved", 0.0, 0.0),
+        BrowserMouseKind::Down => ("mousePressed", 0.0, 0.0),
+        BrowserMouseKind::Up => ("mouseReleased", 0.0, 0.0),
+        BrowserMouseKind::Wheel { delta_x, delta_y } => ("mouseWheel", delta_x, delta_y),
+    };
+    match input.kind {
+        BrowserMouseKind::Down => state.buttons |= input.button.cdp_buttons_mask(),
+        BrowserMouseKind::Up => state.buttons &= !input.button.cdp_buttons_mask(),
+        BrowserMouseKind::Move | BrowserMouseKind::Wheel { .. } => {}
     }
-    let error = result
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or("browser action failed");
-    anyhow::bail!("{error}; take a new snapshot and retry")
+    client
+        .call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": input.button.as_cdp(),
+                "buttons": state.buttons,
+                "modifiers": modifiers,
+                "clickCount": if matches!(input.kind, BrowserMouseKind::Down | BrowserMouseKind::Up) { 1 } else { 0 },
+                "deltaX": delta_x,
+                "deltaY": delta_y,
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
 pub(crate) fn bounded_snapshot_json(mut snapshot: Value) -> Result<String> {
@@ -231,3 +262,7 @@ fn truncate_string_field(value: &mut Value, field: &str, max_chars: usize) {
 fn clipped(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
+
+#[cfg(test)]
+#[path = "actions_tests.rs"]
+mod tests;

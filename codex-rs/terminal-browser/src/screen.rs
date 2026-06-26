@@ -6,6 +6,15 @@ pub struct TerminalSize {
     pub cols: u16,
 }
 
+impl From<TerminalSize> for codex_utils_pty::TerminalSize {
+    fn from(value: TerminalSize) -> Self {
+        Self {
+            rows: value.rows,
+            cols: value.cols,
+        }
+    }
+}
+
 impl Default for TerminalSize {
     fn default() -> Self {
         Self {
@@ -79,6 +88,7 @@ pub struct BrowserView {
     pub title: Option<String>,
     pub url: Option<String>,
     pub visible: bool,
+    pub human_control: bool,
     pub screen: BrowserScreen,
 }
 
@@ -89,6 +99,7 @@ impl BrowserView {
             title: None,
             url: None,
             visible: false,
+            human_control: false,
             screen: BrowserScreen::blank(size),
         }
     }
