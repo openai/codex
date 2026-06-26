@@ -182,6 +182,7 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
     let server = run_login_server(ServerOptions {
         codex_home: tmp.path().to_path_buf(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
