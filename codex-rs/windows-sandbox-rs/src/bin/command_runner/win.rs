@@ -39,7 +39,7 @@ use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
-use codex_windows_sandbox::spawn_process_with_pipes_with_launch;
+use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::token_mode_for_permission_profile;
 use codex_windows_sandbox::write_frame;
@@ -300,7 +300,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let mut hpc_handle: Option<HANDLE> = None;
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
-        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user_with_launch(
+        let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
             h_token.raw(),
             &req.launch,
             &effective_cwd,
@@ -332,7 +332,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         } else {
             StdinMode::Closed
         };
-        let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes_with_launch(
+        let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
             h_token.raw(),
             &req.launch,
             &effective_cwd,

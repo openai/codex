@@ -1,8 +1,8 @@
 #![cfg(target_os = "windows")]
 
 use super::WindowsSandboxSessionRequest;
+use super::backends::legacy::spawn_windows_sandbox_session_legacy;
 use super::spawn_windows_sandbox_session_for_level;
-use super::spawn_windows_sandbox_session_legacy;
 use crate::WindowsProcessLaunch;
 use crate::WindowsSandboxCancellationToken;
 use crate::ipc_framed::Message;
@@ -87,6 +87,13 @@ fn workspace_roots_for(root: &Path) -> Vec<AbsolutePathBuf> {
     vec![AbsolutePathBuf::from_absolute_path(root).expect("absolute workspace root")]
 }
 
+fn unresolved_launch(command: Vec<String>) -> WindowsProcessLaunch {
+    WindowsProcessLaunch {
+        application_path: None,
+        command,
+    }
+}
+
 fn wait_for_frame_count(frames_path: &Path, expected_frames: usize) -> Vec<Message> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -166,11 +173,11 @@ fn legacy_non_tty_cmd_emits_output() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
                 "/c".to_string(),
                 "echo LEGACY-NONTTY-CMD".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
@@ -257,11 +264,11 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
                 "/c".to_string(),
                 "echo deny-read".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
@@ -297,12 +304,12 @@ fn legacy_non_tty_powershell_emits_output() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 pwsh.display().to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "Write-Output LEGACY-NONTTY-DIRECT".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
@@ -575,14 +582,14 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 pwsh.display().to_string(),
                 "-NoLogo".to_string(),
                 "-NoProfile".to_string(),
                 "-NoExit".to_string(),
                 "-Command".to_string(),
                 "$PID; Write-Output ready".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
@@ -629,11 +636,11 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
                 "/K".to_string(),
                 "echo ready".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
@@ -683,11 +690,11 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             &permission_profile,
             workspace_roots_for(cwd.as_path()).as_slice(),
             codex_home.path(),
-            vec![
+            unresolved_launch(vec![
                 "C:\\Windows\\System32\\cmd.exe".to_string(),
                 "/K".to_string(),
                 "echo ready".to_string(),
-            ],
+            ]),
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),

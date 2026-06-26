@@ -88,35 +88,9 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
     })
 }
 
-/// Spawn a process under `h_token` with ConPTY attached.
-///
-/// This is the main shared ConPTY entry point and is used by both the legacy/direct path
-/// and the elevated runner path whenever a PTY-backed sandboxed process is needed.
-pub fn spawn_conpty_process_as_user(
-    h_token: HANDLE,
-    argv: &[String],
-    cwd: &Path,
-    env_map: &HashMap<String, String>,
-    use_private_desktop: bool,
-    logs_base_dir: Option<&Path>,
-) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
-    let launch = WindowsProcessLaunch {
-        application_path: None,
-        command: argv.to_vec(),
-    };
-    spawn_conpty_process_as_user_with_launch(
-        h_token,
-        &launch,
-        cwd,
-        env_map,
-        use_private_desktop,
-        logs_base_dir,
-    )
-}
-
 /// Spawns a ConPTY process with an optional explicit `lpApplicationName`.
 #[doc(hidden)]
-pub fn spawn_conpty_process_as_user_with_launch(
+pub fn spawn_conpty_process_as_user(
     h_token: HANDLE,
     launch: &WindowsProcessLaunch,
     cwd: &Path,

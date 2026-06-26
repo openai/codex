@@ -164,8 +164,6 @@ pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
-pub use conpty::spawn_conpty_process_as_user_with_launch;
-#[cfg(target_os = "windows")]
 pub use deny_read_acl::apply_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::plan_deny_read_acl_paths;
@@ -246,13 +244,9 @@ pub use process::StdinMode;
 #[doc(hidden)]
 pub use process::WindowsProcessLaunch;
 #[cfg(target_os = "windows")]
-pub use process::create_process_as_user;
-#[cfg(target_os = "windows")]
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
 pub use process::spawn_process_with_pipes;
-#[cfg(target_os = "windows")]
-pub use process::spawn_process_with_pipes_with_launch;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
@@ -315,11 +309,7 @@ pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use unified_exec::WindowsSandboxSessionRequest;
 #[cfg(target_os = "windows")]
-pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
-#[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_for_level;
-#[cfg(target_os = "windows")]
-pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]
@@ -361,7 +351,7 @@ mod windows_impl {
     use super::logging::log_success;
     use super::process::CreateProcessAsUserRequest;
     use super::process::WindowsProcessLaunch;
-    use super::process::create_process_as_user_with_launch;
+    use super::process::create_process_as_user;
     use super::sandbox_utils::ensure_codex_home_exists;
     use super::spawn_prep::LegacyAclSids;
     use super::spawn_prep::SpawnPrepOptions;
@@ -575,7 +565,7 @@ mod windows_impl {
             command: command.clone(),
         };
         let spawn_res = unsafe {
-            create_process_as_user_with_launch(
+            create_process_as_user(
                 security.h_token,
                 CreateProcessAsUserRequest {
                     launch: &launch,

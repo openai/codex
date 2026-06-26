@@ -99,7 +99,7 @@ pub(crate) struct CreateProcessAsUserRequest<'a> {
 /// # Safety
 /// Caller must provide a valid primary token handle (`h_token`) with appropriate access, and all
 /// borrowed request fields must remain valid for the duration of the call.
-pub(crate) unsafe fn create_process_as_user_with_launch(
+pub(crate) unsafe fn create_process_as_user(
     h_token: HANDLE,
     request: CreateProcessAsUserRequest<'_>,
 ) -> Result<CreatedProcess> {
@@ -227,36 +227,6 @@ pub(crate) unsafe fn create_process_as_user_with_launch(
     }
 }
 
-/// # Safety
-/// Caller must provide a valid primary token handle (`h_token`) with appropriate access, and the
-/// borrowed command inputs must remain valid for the duration of the call.
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn create_process_as_user(
-    h_token: HANDLE,
-    argv: &[String],
-    cwd: &Path,
-    env_map: &HashMap<String, String>,
-    logs_base_dir: Option<&Path>,
-    stdio: Option<(HANDLE, HANDLE, HANDLE)>,
-    use_private_desktop: bool,
-) -> Result<CreatedProcess> {
-    let launch = WindowsProcessLaunch {
-        application_path: None,
-        command: argv.to_vec(),
-    };
-    create_process_as_user_with_launch(
-        h_token,
-        CreateProcessAsUserRequest {
-            launch: &launch,
-            cwd,
-            env_map,
-            logs_base_dir,
-            stdio,
-            use_private_desktop,
-        },
-    )
-}
-
 /// Controls whether the child's stdin handle is kept open for writing.
 #[allow(dead_code)]
 pub enum StdinMode {
@@ -281,38 +251,10 @@ pub struct PipeSpawnHandles {
     pub(crate) desktop: LaunchDesktop,
 }
 
-/// Spawns a process with anonymous pipes and returns the relevant handles.
-#[allow(clippy::too_many_arguments)]
-pub fn spawn_process_with_pipes(
-    h_token: HANDLE,
-    argv: &[String],
-    cwd: &Path,
-    env_map: &HashMap<String, String>,
-    stdin_mode: StdinMode,
-    stderr_mode: StderrMode,
-    use_private_desktop: bool,
-    logs_base_dir: Option<&Path>,
-) -> Result<PipeSpawnHandles> {
-    let launch = WindowsProcessLaunch {
-        application_path: None,
-        command: argv.to_vec(),
-    };
-    spawn_process_with_pipes_with_launch(
-        h_token,
-        &launch,
-        cwd,
-        env_map,
-        stdin_mode,
-        stderr_mode,
-        use_private_desktop,
-        logs_base_dir,
-    )
-}
-
 /// Spawns a process with an optional explicit `lpApplicationName`.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_process_with_pipes_with_launch(
+pub fn spawn_process_with_pipes(
     h_token: HANDLE,
     launch: &WindowsProcessLaunch,
     cwd: &Path,
@@ -354,7 +296,7 @@ pub fn spawn_process_with_pipes_with_launch(
     };
 
     let spawn_result = unsafe {
-        create_process_as_user_with_launch(
+        create_process_as_user(
             h_token,
             CreateProcessAsUserRequest {
                 launch,
