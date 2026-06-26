@@ -107,6 +107,22 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn histogram_records_negative_values() -> Result<()> {
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+
+    metrics.histogram("codex.score_delta", /*value*/ -25, &[])?;
+    metrics.shutdown()?;
+
+    let resource_metrics = latest_metrics(&exporter);
+    let (_, bucket_counts, sum, count) = histogram_data(&resource_metrics, "codex.score_delta");
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(sum, -25.0);
+    assert_eq!(count, 1);
+
+    Ok(())
+}
+
 // Ensures defaults merge per line and overrides take precedence.
 #[test]
 fn send_merges_default_tags_per_line() -> Result<()> {
