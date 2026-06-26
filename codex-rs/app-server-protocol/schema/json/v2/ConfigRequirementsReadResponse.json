@@ -375,16 +375,15 @@
     "ModelsRequirements": {
       "properties": {
         "newThread": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NewThreadModelDefaults"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "additionalProperties": {
+            "$ref": "#/definitions/NewThreadModelDefaults"
+          },
+          "type": "object"
         }
       },
+      "required": [
+        "newThread"
+      ],
       "type": "object"
     },
     "NetworkDomainPermission": {

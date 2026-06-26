@@ -81,7 +81,7 @@ async fn config_requirements_read_includes_new_thread_model_defaults() -> Result
     std::fs::write(
         codex_home.path().join("requirements.toml"),
         r#"
-[models.new_thread]
+[models.new_thread."codex.thread.coding"]
 model = "gpt-managed"
 model_reasoning_effort = "medium"
 service_tier = "fast"
@@ -101,7 +101,7 @@ service_tier = "fast"
     let defaults = response
         .requirements
         .and_then(|requirements| requirements.models)
-        .and_then(|models| models.new_thread)
+        .and_then(|models| models.new_thread.get("codex.thread.coding").cloned())
         .expect("managed new-thread defaults");
     assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
     assert_eq!(

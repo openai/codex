@@ -397,7 +397,7 @@ pub struct ConfigRequirements {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ModelsRequirements {
-    pub new_thread: Option<NewThreadModelDefaults>,
+    pub new_thread: BTreeMap<String, NewThreadModelDefaults>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

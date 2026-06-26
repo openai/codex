@@ -378,11 +378,20 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
         models: requirements.models.map(|models| ModelsRequirements {
-            new_thread: models.new_thread.map(|new_thread| NewThreadModelDefaults {
-                model: new_thread.model,
-                model_reasoning_effort: new_thread.model_reasoning_effort,
-                service_tier: new_thread.service_tier,
-            }),
+            new_thread: models
+                .new_thread
+                .into_iter()
+                .map(|(scope_id, new_thread)| {
+                    (
+                        scope_id,
+                        NewThreadModelDefaults {
+                            model: new_thread.model,
+                            model_reasoning_effort: new_thread.model_reasoning_effort,
+                            service_tier: new_thread.service_tier,
+                        },
+                    )
+                })
+                .collect(),
         }),
     }
 }
@@ -644,18 +653,21 @@ mod tests {
     fn requirements_api_includes_new_thread_model_defaults() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             models: Some(ModelsRequirementsToml {
-                new_thread: Some(NewThreadModelDefaultsToml {
-                    model: Some("gpt-managed".to_string()),
-                    model_reasoning_effort: Some(ReasoningEffort::Medium),
-                    service_tier: Some("fast".to_string()),
-                }),
+                new_thread: BTreeMap::from([(
+                    "codex.thread.coding".to_string(),
+                    NewThreadModelDefaultsToml {
+                        model: Some("gpt-managed".to_string()),
+                        model_reasoning_effort: Some(ReasoningEffort::Medium),
+                        service_tier: Some("fast".to_string()),
+                    },
+                )]),
             }),
             ..ConfigRequirementsToml::default()
         });
 
         let defaults = mapped
             .models
-            .and_then(|models| models.new_thread)
+            .and_then(|models| models.new_thread.get("codex.thread.coding").cloned())
             .expect("new-thread defaults");
         assert_eq!(defaults.model.as_deref(), Some("gpt-managed"));
         assert_eq!(

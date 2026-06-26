@@ -1673,6 +1673,20 @@
       },
       "type": "object"
     },
+    "ModelsToml": {
+      "additionalProperties": false,
+      "description": "Model defaults keyed by the stable policy scope selected when a thread starts.",
+      "properties": {
+        "new_thread": {
+          "additionalProperties": {
+            "$ref": "#/definitions/NewThreadModelDefaultsToml"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -1981,6 +1995,21 @@
       "type": "string"
     },
     "NetworkUnixSocketPermissionsToml": {
+      "type": "object"
+    },
+    "NewThreadModelDefaultsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "model_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "service_tier": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "Notice": {
@@ -5235,6 +5264,14 @@
         }
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+    },
+    "models": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelsToml"
+        }
+      ],
+      "description": "Scope-specific defaults applied only when a thread start names a policy scope."
     },
     "notice": {
       "allOf": [

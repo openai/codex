@@ -12801,16 +12801,15 @@
       "ModelsRequirements": {
         "properties": {
           "newThread": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/NewThreadModelDefaults"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NewThreadModelDefaults"
+            },
+            "type": "object"
           }
         },
+        "required": [
+          "newThread"
+        ],
         "type": "object"
       },
       "MultiAgentMode": {
@@ -19313,6 +19312,13 @@
             ]
           },
           "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelPolicyScope": {
+            "description": "Stable model-policy scope used to resolve already-loaded new-thread defaults.",
             "type": [
               "string",
               "null"

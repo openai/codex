@@ -148,12 +148,44 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+/// Model defaults keyed by the stable policy scope selected when a thread starts.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelsToml {
+    #[serde(default)]
+    pub new_thread: BTreeMap<String, NewThreadModelDefaultsToml>,
+}
+
+impl ModelsToml {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.new_thread
+            .values()
+            .all(NewThreadModelDefaultsToml::is_empty)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NewThreadModelDefaultsToml {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub service_tier: Option<String>,
+}
+
+impl NewThreadModelDefaultsToml {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.model.is_none() && self.model_reasoning_effort.is_none() && self.service_tier.is_none()
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Scope-specific defaults applied only when a thread start names a policy scope.
+    pub models: Option<ModelsToml>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -974,6 +1006,42 @@ mod tests {
 
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn model_defaults_are_keyed_by_policy_scope() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[models.new_thread."codex.thread.general"]
+model = "general-model"
+
+[models.new_thread."codex.thread.coding"]
+model = "coding-model"
+model_reasoning_effort = "high"
+"#,
+        )
+        .expect("scoped model defaults should deserialize");
+
+        assert_eq!(
+            config.models.expect("model defaults").new_thread,
+            BTreeMap::from([
+                (
+                    "codex.thread.coding".to_string(),
+                    NewThreadModelDefaultsToml {
+                        model: Some("coding-model".to_string()),
+                        model_reasoning_effort: Some(ReasoningEffort::High),
+                        service_tier: None,
+                    },
+                ),
+                (
+                    "codex.thread.general".to_string(),
+                    NewThreadModelDefaultsToml {
+                        model: Some("general-model".to_string()),
+                        ..Default::default()
+                    },
+                ),
+            ])
+        );
+    }
 
     #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {

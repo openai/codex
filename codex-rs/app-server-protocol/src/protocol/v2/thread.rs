@@ -55,6 +55,9 @@ pub enum ThreadStartSource {
 pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub model: Option<String>,
+    /// Stable model-policy scope used to resolve already-loaded new-thread defaults.
+    #[ts(optional = nullable)]
+    pub model_policy_scope: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
     #[serde(

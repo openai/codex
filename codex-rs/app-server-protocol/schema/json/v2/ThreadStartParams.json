@@ -326,6 +326,13 @@
         "null"
       ]
     },
+    "modelPolicyScope": {
+      "description": "Stable model-policy scope used to resolve already-loaded new-thread defaults.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "modelProvider": {
       "type": [
         "string",

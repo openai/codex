@@ -16,6 +16,7 @@ use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
 use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
+use codex_config::NewThreadModelDefaultsToml;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
 use codex_config::ResidencyRequirement;
@@ -621,6 +622,9 @@ pub struct Config {
     /// Effective service tier request id preference for new turns.
     /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
+
+    /// Scope-specific model defaults available to app-server thread starts.
+    pub new_thread_model_defaults: BTreeMap<String, NewThreadModelDefaultsToml>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -3544,6 +3548,10 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(cfg.model);
+        let new_thread_model_defaults = cfg
+            .models
+            .map(|models| models.new_thread)
+            .unwrap_or_default();
         let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
@@ -3753,6 +3761,7 @@ impl Config {
         let config = Self {
             model,
             service_tier,
+            new_thread_model_defaults,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,

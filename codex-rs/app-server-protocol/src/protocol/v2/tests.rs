@@ -3691,6 +3691,19 @@ fn thread_start_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
+fn thread_start_params_accept_model_policy_scope() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "modelPolicyScope": "codex.thread.coding",
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.model_policy_scope.as_deref(),
+        Some("codex.thread.coding")
+    );
+}
+
+#[test]
 fn thread_lifecycle_responses_default_missing_optional_fields() {
     let response = json!({
         "thread": {

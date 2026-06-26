@@ -116,7 +116,7 @@ fn new_thread_model_defaults_use_toml_priority() {
             "req_low",
             "Low",
             r#"
-[models.new_thread]
+[models.new_thread."codex.thread.coding"]
 model = "low-priority-model"
 model_reasoning_effort = "low"
 service_tier = "flex"
@@ -126,7 +126,7 @@ service_tier = "flex"
             "req_high",
             "High",
             r#"
-[models.new_thread]
+[models.new_thread."codex.thread.coding"]
 model = "high-priority-model"
 model_reasoning_effort = "high"
 service_tier = "fast"
@@ -140,10 +140,49 @@ service_tier = "fast"
         composed,
         expected_requirements(
             r#"
-[models.new_thread]
+[models.new_thread."codex.thread.coding"]
 model = "high-priority-model"
 model_reasoning_effort = "high"
 service_tier = "fast"
+"#
+        )
+    );
+}
+
+#[test]
+fn new_thread_model_defaults_preserve_distinct_scopes() {
+    let composed = compose(vec![
+        layer(
+            "general",
+            "General",
+            r#"
+[models.new_thread."codex.thread.general"]
+model = "general-model"
+"#,
+        ),
+        layer(
+            "coding",
+            "Coding",
+            r#"
+[models.new_thread."codex.thread.coding"]
+model = "coding-model"
+model_reasoning_effort = "high"
+"#,
+        ),
+    ])
+    .expect("compose requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+[models.new_thread."codex.thread.coding"]
+model = "coding-model"
+model_reasoning_effort = "high"
+
+[models.new_thread."codex.thread.general"]
+model = "general-model"
 "#
         )
     );

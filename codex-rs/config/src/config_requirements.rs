@@ -2,6 +2,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
+#[cfg(test)]
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -20,6 +21,9 @@ use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
+use crate::config_toml::ModelsToml;
+#[cfg(test)]
+use crate::config_toml::NewThreadModelDefaultsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::WindowsSandboxModeToml;
@@ -892,31 +896,7 @@ pub struct ConfigRequirementsToml {
     pub guardian_policy_config: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct ModelsRequirementsToml {
-    pub new_thread: Option<NewThreadModelDefaultsToml>,
-}
-
-impl ModelsRequirementsToml {
-    fn is_empty(&self) -> bool {
-        self.new_thread
-            .as_ref()
-            .is_none_or(NewThreadModelDefaultsToml::is_empty)
-    }
-}
-
-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct NewThreadModelDefaultsToml {
-    pub model: Option<String>,
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub service_tier: Option<String>,
-}
-
-impl NewThreadModelDefaultsToml {
-    fn is_empty(&self) -> bool {
-        self.model.is_none() && self.model_reasoning_effort.is_none() && self.service_tier.is_none()
-    }
-}
+pub type ModelsRequirementsToml = ModelsToml;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct RemoteSandboxConfigToml {
@@ -1837,7 +1817,7 @@ mod tests {
     fn deserialize_new_thread_model_defaults() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-                [models.new_thread]
+                [models.new_thread."codex.thread.coding"]
                 model = "managed-model"
                 model_reasoning_effort = "medium"
                 service_tier = "fast"
@@ -1847,11 +1827,14 @@ mod tests {
         assert_eq!(
             requirements.models,
             Some(ModelsRequirementsToml {
-                new_thread: Some(NewThreadModelDefaultsToml {
-                    model: Some("managed-model".to_string()),
-                    model_reasoning_effort: Some(ReasoningEffort::Medium),
-                    service_tier: Some("fast".to_string()),
-                }),
+                new_thread: BTreeMap::from([(
+                    "codex.thread.coding".to_string(),
+                    NewThreadModelDefaultsToml {
+                        model: Some("managed-model".to_string()),
+                        model_reasoning_effort: Some(ReasoningEffort::Medium),
+                        service_tier: Some("fast".to_string()),
+                    },
+                )]),
             })
         );
         assert!(!requirements.is_empty());
@@ -1881,11 +1864,14 @@ mod tests {
             allow_locked_computer_use: Some(false),
         };
         let models = ModelsRequirementsToml {
-            new_thread: Some(NewThreadModelDefaultsToml {
-                model: Some("managed-model".to_string()),
-                model_reasoning_effort: Some(ReasoningEffort::Medium),
-                service_tier: Some("fast".to_string()),
-            }),
+            new_thread: BTreeMap::from([(
+                "codex.thread.coding".to_string(),
+                NewThreadModelDefaultsToml {
+                    model: Some("managed-model".to_string()),
+                    model_reasoning_effort: Some(ReasoningEffort::Medium),
+                    service_tier: Some("fast".to_string()),
+                },
+            )]),
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();

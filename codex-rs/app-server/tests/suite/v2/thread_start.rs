@@ -27,6 +27,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::loader::project_trust_key;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
+use codex_core::test_support::all_model_presets;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -36,6 +37,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -197,6 +199,91 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     assert_eq!(started.thread, thread);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_resolves_defaults_for_the_requested_model_policy_scope() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let managed_model = create_config_with_scoped_model_defaults(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let general_response = start_thread(
+        &mut mcp,
+        ThreadStartParams {
+            model_policy_scope: Some("codex.thread.general".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(general_response.model, "mock-model");
+
+    let coding_response = start_thread(
+        &mut mcp,
+        ThreadStartParams {
+            model_policy_scope: Some("codex.thread.coding".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        (
+            coding_response.model.as_str(),
+            coding_response.reasoning_effort,
+            coding_response.service_tier.as_deref(),
+        ),
+        (
+            managed_model.as_str(),
+            Some(ReasoningEffort::Medium),
+            Some("priority"),
+        )
+    );
+
+    let explicit_response = start_thread(
+        &mut mcp,
+        ThreadStartParams {
+            model: Some("gpt-5.2".to_string()),
+            model_policy_scope: Some("codex.thread.coding".to_string()),
+            service_tier: Some(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
+            config: Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                json!("low"),
+            )])),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        (
+            explicit_response.model.as_str(),
+            explicit_response.reasoning_effort,
+            explicit_response.service_tier.as_deref(),
+        ),
+        (
+            "gpt-5.2",
+            Some(ReasoningEffort::Low),
+            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE),
+        )
+    );
+
+    let no_scope_response = start_thread(&mut mcp, ThreadStartParams::default()).await?;
+    assert_eq!(no_scope_response.model, "mock-model");
+    Ok(())
+}
+
+async fn start_thread(
+    mcp: &mut TestAppServer,
+    params: ThreadStartParams,
+) -> Result<ThreadStartResponse> {
+    let request_id = mcp.send_thread_start_request_with_auto_env(params).await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
 }
 
 #[tokio::test]
@@ -1194,6 +1281,44 @@ fn create_config_toml_without_approval_policy(
     create_config_toml_with_optional_approval_policy(
         codex_home, server_uri, /*approval_policy*/ None,
     )
+}
+
+fn create_config_with_scoped_model_defaults(codex_home: &Path, server_uri: &str) -> Result<String> {
+    create_config_toml_without_approval_policy(codex_home, server_uri)?;
+    let config_path = codex_home.join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(
+        r#"
+[models.new_thread."codex.thread.general"]
+model = "gpt-5.2"
+"#,
+    );
+    std::fs::write(config_path, config)?;
+
+    let managed_model = all_model_presets()
+        .iter()
+        .find(|preset| {
+            preset.id != "gpt-5.2"
+                && preset
+                    .service_tiers
+                    .iter()
+                    .any(|tier| tier.id == "priority")
+        })
+        .context("expected a model with the fast service tier")?
+        .id
+        .clone();
+    std::fs::write(
+        codex_home.join("requirements.toml"),
+        format!(
+            r#"
+[models.new_thread."codex.thread.coding"]
+model = "{managed_model}"
+model_reasoning_effort = "medium"
+service_tier = "fast"
+"#
+        ),
+    )?;
+    Ok(managed_model)
 }
 
 fn create_config_toml_with_optional_approval_policy(

@@ -3,6 +3,7 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -193,6 +194,12 @@ fn has_model_resume_override(
         || request_overrides.is_some_and(|overrides| overrides.contains_key("model"))
         || request_overrides
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
+}
+
+fn normalize_service_tier(service_tier: String) -> String {
+    ServiceTier::from_request_value(&service_tier)
+        .map(|tier| tier.request_value().to_string())
+        .unwrap_or(service_tier)
 }
 
 fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
@@ -886,6 +893,7 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
             model,
+            model_policy_scope,
             model_provider,
             service_tier,
             cwd,
@@ -957,6 +965,7 @@ impl ThreadRequestProcessor {
                 supports_openai_form_elicitation,
                 config,
                 typesafe_overrides,
+                model_policy_scope,
                 multi_agent_mode,
                 dynamic_tools,
                 selected_capability_roots.unwrap_or_default(),
@@ -1032,6 +1041,7 @@ impl ThreadRequestProcessor {
         supports_openai_form_elicitation: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
+        model_policy_scope: Option<String>,
         multi_agent_mode: Option<MultiAgentMode>,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
@@ -1044,6 +1054,26 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
+        let current_cli_overrides = config_manager.current_cli_overrides();
+        let has_cli_override = |key: &str| {
+            current_cli_overrides
+                .iter()
+                .any(|(path, _value)| path == key)
+        };
+        let has_explicit_model = has_cli_override("model")
+            || typesafe_overrides.model.is_some()
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("model"));
+        let has_explicit_reasoning_effort = has_cli_override("model_reasoning_effort")
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
+        let has_explicit_service_tier = has_cli_override("service_tier")
+            || typesafe_overrides.service_tier.is_some()
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("service_tier"));
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
@@ -1068,7 +1098,6 @@ impl ThreadRequestProcessor {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
                 .unwrap_or_else(|| config.cwd.clone());
-            let current_cli_overrides = config_manager.current_cli_overrides();
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
                 codex_core::config::set_project_trust_level(
@@ -1112,6 +1141,41 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
+        }
+
+        if let Some(scope_id) = model_policy_scope.as_deref() {
+            if let Some(defaults) = config.new_thread_model_defaults.get(scope_id).cloned() {
+                if config.model.is_none() {
+                    config.model = defaults.model;
+                }
+                if config.model_reasoning_effort.is_none() {
+                    config.model_reasoning_effort = defaults.model_reasoning_effort;
+                }
+                if config.service_tier.is_none() {
+                    config.service_tier = defaults.service_tier.map(normalize_service_tier);
+                }
+            }
+
+            if let Some(defaults) = config
+                .config_layer_stack
+                .requirements_toml()
+                .models
+                .as_ref()
+                .and_then(|models| models.new_thread.get(scope_id))
+                .cloned()
+            {
+                if !has_explicit_model && let Some(model) = defaults.model {
+                    config.model = Some(model);
+                }
+                if !has_explicit_reasoning_effort
+                    && let Some(reasoning_effort) = defaults.model_reasoning_effort
+                {
+                    config.model_reasoning_effort = Some(reasoning_effort);
+                }
+                if !has_explicit_service_tier && let Some(service_tier) = defaults.service_tier {
+                    config.service_tier = Some(normalize_service_tier(service_tier));
+                }
+            }
         }
 
         let environments = environments.unwrap_or_else(|| {
