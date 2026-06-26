@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
@@ -13,6 +14,7 @@ use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
@@ -291,13 +293,7 @@ fn trim_git_suffix(value: &str) -> &str {
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let git = Path::new("git");
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output =
-        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(!output.stdout.is_empty())
+    run_git_status_with_timeout_from(git, cwd, fsmonitor, GIT_COMMAND_TIMEOUT).await
 }
 
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
@@ -443,6 +439,54 @@ async fn run_git_command_with_timeout_from(
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
+    let mut command = git_command(git, cwd, fsmonitor);
+    command.args(args).kill_on_drop(true);
+    match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => Some(output),
+        _ => None,
+    }
+}
+
+async fn run_git_status_with_timeout_from(
+    git: &Path,
+    cwd: &Path,
+    fsmonitor: crate::FsmonitorOverride,
+    duration: TokioDuration,
+) -> Option<bool> {
+    let mut command = git_command(git, cwd, fsmonitor);
+    command
+        .args(["status", "--porcelain"])
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let mut child = command.spawn().ok()?;
+    #[cfg(unix)]
+    let process_group_id = child.id().expect("spawned child has a process ID");
+    let mut stdout = child.stdout.take()?;
+    let mut output = Vec::new();
+    let status = match timeout(duration, async {
+        stdout.read_to_end(&mut output).await?;
+        child.wait().await
+    })
+    .await
+    {
+        Ok(Ok(status)) => status,
+        _ => {
+            #[cfg(unix)]
+            let _ = codex_utils_pty::process_group::kill_process_group(process_group_id);
+            let _ = child.kill().await;
+            return None;
+        }
+    };
+
+    status.success().then_some(!output.is_empty())
+}
+
+fn git_command(git: &Path, cwd: &Path, fsmonitor: crate::FsmonitorOverride) -> Command {
     let mut command = Command::new(git);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -450,15 +494,8 @@ async fn run_git_command_with_timeout_from(
         // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
         .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
         .args(["-c", fsmonitor.git_config_arg()])
-        .args(args)
-        .current_dir(cwd)
-        .kill_on_drop(true);
-    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
-
-    match result {
-        Ok(Ok(output)) => Some(output),
-        _ => None, // Timeout or error
-    }
+        .current_dir(cwd);
+    command
 }
 
 async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
@@ -1085,5 +1122,37 @@ mod tests {
                 format!("-c {disabled_hooks} -c core.fsmonitor=true status --porcelain"),
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn git_status_timeout_kills_wrapped_processes() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let git = temp_dir.path().join("git");
+        let ready = temp_dir.path().join("git.ready");
+        let survived = temp_dir.path().join("git.survived");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\n\
+             (sleep 1; : >\"$0.survived\") &\n\
+             : >\"$0.ready\"\n\
+             wait\n",
+        )
+        .expect("write fake Git");
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
+            .expect("mark fake Git executable");
+
+        let result = run_git_status_with_timeout_from(
+            &git,
+            temp_dir.path(),
+            crate::FsmonitorOverride::Disabled,
+            TokioDuration::from_millis(500),
+        )
+        .await;
+        tokio::time::sleep(TokioDuration::from_millis(1100)).await;
+
+        assert_eq!(result, None);
+        assert!(ready.exists(), "fake Git did not start its child");
+        assert!(!survived.exists(), "wrapped process survived the timeout");
     }
 }
