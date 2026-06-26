@@ -1,3 +1,7 @@
+use crate::AgentPath;
+use crate::ThreadId;
+use crate::dynamic_tools::DynamicToolCallOutputContentItem;
+use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
@@ -5,11 +9,31 @@ use crate::models::ImageDetail;
 use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
+use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use crate::parse_command::ParsedCommand;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
+use crate::protocol::AgentStatus;
+use crate::protocol::CollabAgentInteractionBeginEvent;
+use crate::protocol::CollabAgentInteractionEndEvent;
+use crate::protocol::CollabAgentRef;
+use crate::protocol::CollabAgentSpawnBeginEvent;
+use crate::protocol::CollabAgentSpawnEndEvent;
+use crate::protocol::CollabAgentStatusEntry;
+use crate::protocol::CollabCloseBeginEvent;
+use crate::protocol::CollabCloseEndEvent;
+use crate::protocol::CollabResumeBeginEvent;
+use crate::protocol::CollabResumeEndEvent;
+use crate::protocol::CollabWaitingBeginEvent;
+use crate::protocol::CollabWaitingEndEvent;
 use crate::protocol::ContextCompactedEvent;
+use crate::protocol::DynamicToolCallResponseEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::ImageGenerationEndEvent;
 use crate::protocol::McpInvocation;
@@ -18,6 +42,8 @@ use crate::protocol::McpToolCallEndEvent;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::PatchApplyStatus;
+use crate::protocol::SubAgentActivityEvent;
+use crate::protocol::SubAgentActivityKind;
 use crate::protocol::UserMessageEvent;
 use crate::protocol::ViewImageToolCallEvent;
 use crate::protocol::WebSearchEndEvent;
@@ -46,6 +72,10 @@ pub enum TurnItem {
     AgentMessage(AgentMessageItem),
     Plan(PlanItem),
     Reasoning(ReasoningItem),
+    CommandExecution(CommandExecutionItem),
+    DynamicToolCall(DynamicToolCallItem),
+    CollabAgentToolCall(CollabAgentToolCallItem),
+    SubAgentActivity(SubAgentActivityItem),
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
     Sleep(SleepItem),
@@ -127,6 +157,151 @@ pub struct ReasoningItem {
     pub summary_text: Vec<String>,
     #[serde(default)]
     pub raw_content: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum CommandExecutionStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Declined,
+}
+
+impl From<ExecCommandStatus> for CommandExecutionStatus {
+    fn from(value: ExecCommandStatus) -> Self {
+        match value {
+            ExecCommandStatus::Completed => Self::Completed,
+            ExecCommandStatus::Failed => Self::Failed,
+            ExecCommandStatus::Declined => Self::Declined,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct CommandExecutionItem {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
+    pub command: Vec<String>,
+    pub cwd: PathUri,
+    pub parsed_cmd: Vec<ParsedCommand>,
+    pub source: ExecCommandSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
+    pub status: CommandExecutionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stdout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stderr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub aggregated_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string", optional)]
+    pub duration: Option<Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub formatted_output: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum DynamicToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DynamicToolCallItem {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub namespace: Option<String>,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+    pub status: DynamicToolCallStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub success: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string", optional)]
+    pub duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum CollabAgentTool {
+    SpawnAgent,
+    SendInput,
+    ResumeAgent,
+    Wait,
+    CloseAgent,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum CollabAgentToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct CollabAgentToolCallItem {
+    pub id: String,
+    pub tool: CollabAgentTool,
+    pub status: CollabAgentToolCallStatus,
+    pub sender_thread_id: ThreadId,
+    #[serde(default)]
+    pub receiver_thread_ids: Vec<ThreadId>,
+    #[serde(default)]
+    pub receiver_agents: Vec<CollabAgentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+    #[serde(default)]
+    pub agents_states: HashMap<ThreadId, AgentStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct SubAgentActivityItem {
+    pub id: String,
+    pub kind: SubAgentActivityKind,
+    pub agent_thread_id: ThreadId,
+    pub agent_path: AgentPath,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -511,6 +686,551 @@ impl ReasoningItem {
     }
 }
 
+impl CommandExecutionItem {
+    pub fn from_exec_command_begin_event(event: ExecCommandBeginEvent) -> Self {
+        Self {
+            id: event.call_id,
+            process_id: event.process_id,
+            command: event.command,
+            cwd: event.cwd,
+            parsed_cmd: event.parsed_cmd,
+            source: event.source,
+            interaction_input: event.interaction_input,
+            status: CommandExecutionStatus::InProgress,
+            stdout: None,
+            stderr: None,
+            aggregated_output: None,
+            exit_code: None,
+            duration: None,
+            formatted_output: None,
+        }
+    }
+
+    pub fn from_exec_command_end_event(event: ExecCommandEndEvent) -> Self {
+        Self {
+            id: event.call_id,
+            process_id: event.process_id,
+            command: event.command,
+            cwd: event.cwd,
+            parsed_cmd: event.parsed_cmd,
+            source: event.source,
+            interaction_input: event.interaction_input,
+            status: event.status.into(),
+            stdout: Some(event.stdout),
+            stderr: Some(event.stderr),
+            aggregated_output: Some(event.aggregated_output),
+            exit_code: Some(event.exit_code),
+            duration: Some(event.duration),
+            formatted_output: Some(event.formatted_output),
+        }
+    }
+
+    pub fn as_legacy_begin_event(&self, turn_id: String, started_at_ms: i64) -> EventMsg {
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: self.id.clone(),
+            process_id: self.process_id.clone(),
+            turn_id,
+            started_at_ms,
+            command: self.command.clone(),
+            cwd: self.cwd.clone(),
+            parsed_cmd: self.parsed_cmd.clone(),
+            source: self.source,
+            interaction_input: self.interaction_input.clone(),
+        })
+    }
+
+    pub fn as_legacy_end_event(&self, turn_id: String, completed_at_ms: i64) -> Option<EventMsg> {
+        let status = match self.status {
+            CommandExecutionStatus::InProgress => return None,
+            CommandExecutionStatus::Completed => ExecCommandStatus::Completed,
+            CommandExecutionStatus::Failed => ExecCommandStatus::Failed,
+            CommandExecutionStatus::Declined => ExecCommandStatus::Declined,
+        };
+        Some(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: self.id.clone(),
+            process_id: self.process_id.clone(),
+            turn_id,
+            completed_at_ms,
+            command: self.command.clone(),
+            cwd: self.cwd.clone(),
+            parsed_cmd: self.parsed_cmd.clone(),
+            source: self.source,
+            interaction_input: self.interaction_input.clone(),
+            stdout: self.stdout.clone().unwrap_or_default(),
+            stderr: self.stderr.clone().unwrap_or_default(),
+            aggregated_output: self.aggregated_output.clone().unwrap_or_default(),
+            exit_code: self.exit_code.unwrap_or_default(),
+            duration: self.duration.unwrap_or_default(),
+            formatted_output: self.formatted_output.clone().unwrap_or_default(),
+            status,
+        }))
+    }
+}
+
+impl DynamicToolCallItem {
+    pub fn from_dynamic_tool_call_request(event: DynamicToolCallRequest) -> Self {
+        Self {
+            id: event.call_id,
+            namespace: event.namespace,
+            tool: event.tool,
+            arguments: event.arguments,
+            status: DynamicToolCallStatus::InProgress,
+            content_items: None,
+            success: None,
+            error: None,
+            duration: None,
+        }
+    }
+
+    pub fn from_dynamic_tool_call_response(event: DynamicToolCallResponseEvent) -> Self {
+        Self {
+            id: event.call_id,
+            namespace: event.namespace,
+            tool: event.tool,
+            arguments: event.arguments,
+            status: if event.success {
+                DynamicToolCallStatus::Completed
+            } else {
+                DynamicToolCallStatus::Failed
+            },
+            content_items: Some(event.content_items),
+            success: Some(event.success),
+            error: event.error,
+            duration: Some(event.duration),
+        }
+    }
+
+    pub fn as_legacy_request_event(&self, turn_id: String, started_at_ms: i64) -> EventMsg {
+        EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+            call_id: self.id.clone(),
+            turn_id,
+            started_at_ms,
+            namespace: self.namespace.clone(),
+            tool: self.tool.clone(),
+            arguments: self.arguments.clone(),
+        })
+    }
+
+    pub fn as_legacy_response_event(
+        &self,
+        turn_id: String,
+        completed_at_ms: i64,
+    ) -> Option<EventMsg> {
+        if matches!(self.status, DynamicToolCallStatus::InProgress) {
+            return None;
+        }
+        Some(EventMsg::DynamicToolCallResponse(
+            DynamicToolCallResponseEvent {
+                call_id: self.id.clone(),
+                turn_id,
+                completed_at_ms,
+                namespace: self.namespace.clone(),
+                tool: self.tool.clone(),
+                arguments: self.arguments.clone(),
+                content_items: self.content_items.clone().unwrap_or_default(),
+                success: self.success.unwrap_or(false),
+                error: self.error.clone(),
+                duration: self.duration.unwrap_or_default(),
+            },
+        ))
+    }
+}
+
+impl CollabAgentToolCallItem {
+    pub fn from_collab_agent_spawn_begin_event(event: CollabAgentSpawnBeginEvent) -> Self {
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::SpawnAgent,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: Vec::new(),
+            receiver_agents: Vec::new(),
+            prompt: Some(event.prompt),
+            model: Some(event.model),
+            reasoning_effort: Some(event.reasoning_effort),
+            agents_states: HashMap::new(),
+        }
+    }
+
+    pub fn from_collab_agent_spawn_end_event(event: CollabAgentSpawnEndEvent) -> Self {
+        let receiver_thread_ids = event.new_thread_id.into_iter().collect::<Vec<_>>();
+        let receiver_agents = receiver_thread_ids
+            .first()
+            .copied()
+            .map(|thread_id| CollabAgentRef {
+                thread_id,
+                agent_nickname: event.new_agent_nickname,
+                agent_role: event.new_agent_role,
+            })
+            .into_iter()
+            .collect();
+        let agents_states = receiver_thread_ids
+            .first()
+            .copied()
+            .map(|thread_id| [(thread_id, event.status.clone())].into_iter().collect())
+            .unwrap_or_default();
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::SpawnAgent,
+            status: collab_tool_call_status(&event.status, !receiver_thread_ids.is_empty()),
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids,
+            receiver_agents,
+            prompt: Some(event.prompt),
+            model: Some(event.model),
+            reasoning_effort: Some(event.reasoning_effort),
+            agents_states,
+        }
+    }
+
+    pub fn from_collab_agent_interaction_begin_event(
+        event: CollabAgentInteractionBeginEvent,
+    ) -> Self {
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::SendInput,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: Vec::new(),
+            prompt: Some(event.prompt),
+            model: None,
+            reasoning_effort: None,
+            agents_states: HashMap::new(),
+        }
+    }
+
+    pub fn from_collab_agent_interaction_end_event(event: CollabAgentInteractionEndEvent) -> Self {
+        let receiver_agent = CollabAgentRef {
+            thread_id: event.receiver_thread_id,
+            agent_nickname: event.receiver_agent_nickname,
+            agent_role: event.receiver_agent_role,
+        };
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::SendInput,
+            status: collab_tool_call_status(&event.status, true),
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: vec![receiver_agent],
+            prompt: Some(event.prompt),
+            model: None,
+            reasoning_effort: None,
+            agents_states: [(event.receiver_thread_id, event.status)]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    pub fn from_collab_waiting_begin_event(event: CollabWaitingBeginEvent) -> Self {
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::Wait,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: event.receiver_thread_ids,
+            receiver_agents: event.receiver_agents,
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: HashMap::new(),
+        }
+    }
+
+    pub fn from_collab_waiting_end_event(event: CollabWaitingEndEvent) -> Self {
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::Wait,
+            status: if event
+                .statuses
+                .values()
+                .any(|status| matches!(status, AgentStatus::Errored(_) | AgentStatus::NotFound))
+            {
+                CollabAgentToolCallStatus::Failed
+            } else {
+                CollabAgentToolCallStatus::Completed
+            },
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: event.statuses.keys().copied().collect(),
+            receiver_agents: event
+                .agent_statuses
+                .iter()
+                .map(|entry| CollabAgentRef {
+                    thread_id: entry.thread_id,
+                    agent_nickname: entry.agent_nickname.clone(),
+                    agent_role: entry.agent_role.clone(),
+                })
+                .collect(),
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: event.statuses,
+        }
+    }
+
+    pub fn from_collab_close_begin_event(event: CollabCloseBeginEvent) -> Self {
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::CloseAgent,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: Vec::new(),
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: HashMap::new(),
+        }
+    }
+
+    pub fn from_collab_close_end_event(event: CollabCloseEndEvent) -> Self {
+        let receiver_agent = CollabAgentRef {
+            thread_id: event.receiver_thread_id,
+            agent_nickname: event.receiver_agent_nickname,
+            agent_role: event.receiver_agent_role,
+        };
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::CloseAgent,
+            status: collab_tool_call_status(&event.status, true),
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: vec![receiver_agent],
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: [(event.receiver_thread_id, event.status)]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    pub fn from_collab_resume_begin_event(event: CollabResumeBeginEvent) -> Self {
+        let receiver_agent = CollabAgentRef {
+            thread_id: event.receiver_thread_id,
+            agent_nickname: event.receiver_agent_nickname,
+            agent_role: event.receiver_agent_role,
+        };
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::ResumeAgent,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: vec![receiver_agent],
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: HashMap::new(),
+        }
+    }
+
+    pub fn from_collab_resume_end_event(event: CollabResumeEndEvent) -> Self {
+        let receiver_agent = CollabAgentRef {
+            thread_id: event.receiver_thread_id,
+            agent_nickname: event.receiver_agent_nickname,
+            agent_role: event.receiver_agent_role,
+        };
+        Self {
+            id: event.call_id,
+            tool: CollabAgentTool::ResumeAgent,
+            status: collab_tool_call_status(&event.status, true),
+            sender_thread_id: event.sender_thread_id,
+            receiver_thread_ids: vec![event.receiver_thread_id],
+            receiver_agents: vec![receiver_agent],
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: [(event.receiver_thread_id, event.status)]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    pub fn as_legacy_begin_event(&self, started_at_ms: i64) -> Option<EventMsg> {
+        let receiver_thread_id = self.receiver_thread_ids.first().copied();
+        match self.tool {
+            CollabAgentTool::SpawnAgent => Some(EventMsg::CollabAgentSpawnBegin(
+                CollabAgentSpawnBeginEvent {
+                    call_id: self.id.clone(),
+                    started_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    prompt: self.prompt.clone().unwrap_or_default(),
+                    model: self.model.clone().unwrap_or_default(),
+                    reasoning_effort: self.reasoning_effort.clone().unwrap_or_default(),
+                },
+            )),
+            CollabAgentTool::SendInput => receiver_thread_id.map(|receiver_thread_id| {
+                EventMsg::CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent {
+                    call_id: self.id.clone(),
+                    started_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                    prompt: self.prompt.clone().unwrap_or_default(),
+                })
+            }),
+            CollabAgentTool::ResumeAgent => receiver_thread_id.map(|receiver_thread_id| {
+                let receiver_agent = self.receiver_agent(receiver_thread_id);
+                EventMsg::CollabResumeBegin(CollabResumeBeginEvent {
+                    call_id: self.id.clone(),
+                    started_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent
+                        .as_ref()
+                        .and_then(|agent| agent.agent_nickname.clone()),
+                    receiver_agent_role: receiver_agent.and_then(|agent| agent.agent_role),
+                })
+            }),
+            CollabAgentTool::Wait => Some(EventMsg::CollabWaitingBegin(CollabWaitingBeginEvent {
+                started_at_ms,
+                sender_thread_id: self.sender_thread_id,
+                receiver_thread_ids: self.receiver_thread_ids.clone(),
+                receiver_agents: self.receiver_agents.clone(),
+                call_id: self.id.clone(),
+            })),
+            CollabAgentTool::CloseAgent => receiver_thread_id.map(|receiver_thread_id| {
+                EventMsg::CollabCloseBegin(CollabCloseBeginEvent {
+                    call_id: self.id.clone(),
+                    started_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                })
+            }),
+        }
+    }
+
+    pub fn as_legacy_end_event(&self, completed_at_ms: i64) -> Option<EventMsg> {
+        if matches!(self.status, CollabAgentToolCallStatus::InProgress) {
+            return None;
+        }
+        let receiver_thread_id = self.receiver_thread_ids.first().copied();
+        match self.tool {
+            CollabAgentTool::SpawnAgent => {
+                let receiver_agent = receiver_thread_id.and_then(|id| self.receiver_agent(id));
+                Some(EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
+                    call_id: self.id.clone(),
+                    completed_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    new_thread_id: receiver_thread_id,
+                    new_agent_nickname: receiver_agent
+                        .as_ref()
+                        .and_then(|agent| agent.agent_nickname.clone()),
+                    new_agent_role: receiver_agent.and_then(|agent| agent.agent_role),
+                    prompt: self.prompt.clone().unwrap_or_default(),
+                    model: self.model.clone().unwrap_or_default(),
+                    reasoning_effort: self.reasoning_effort.clone().unwrap_or_default(),
+                    status: receiver_thread_id
+                        .map(|thread_id| self.agent_status(thread_id))
+                        .unwrap_or(AgentStatus::NotFound),
+                }))
+            }
+            CollabAgentTool::SendInput => receiver_thread_id.map(|receiver_thread_id| {
+                let receiver_agent = self.receiver_agent(receiver_thread_id);
+                EventMsg::CollabAgentInteractionEnd(CollabAgentInteractionEndEvent {
+                    call_id: self.id.clone(),
+                    completed_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent
+                        .as_ref()
+                        .and_then(|agent| agent.agent_nickname.clone()),
+                    receiver_agent_role: receiver_agent.and_then(|agent| agent.agent_role),
+                    prompt: self.prompt.clone().unwrap_or_default(),
+                    status: self.agent_status(receiver_thread_id),
+                })
+            }),
+            CollabAgentTool::ResumeAgent => receiver_thread_id.map(|receiver_thread_id| {
+                let receiver_agent = self.receiver_agent(receiver_thread_id);
+                EventMsg::CollabResumeEnd(CollabResumeEndEvent {
+                    call_id: self.id.clone(),
+                    completed_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent
+                        .as_ref()
+                        .and_then(|agent| agent.agent_nickname.clone()),
+                    receiver_agent_role: receiver_agent.and_then(|agent| agent.agent_role),
+                    status: self.agent_status(receiver_thread_id),
+                })
+            }),
+            CollabAgentTool::Wait => Some(EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
+                sender_thread_id: self.sender_thread_id,
+                call_id: self.id.clone(),
+                completed_at_ms,
+                agent_statuses: self
+                    .receiver_agents
+                    .iter()
+                    .map(|agent| CollabAgentStatusEntry {
+                        thread_id: agent.thread_id,
+                        agent_nickname: agent.agent_nickname.clone(),
+                        agent_role: agent.agent_role.clone(),
+                        status: self.agent_status(agent.thread_id),
+                    })
+                    .collect(),
+                statuses: self.agents_states.clone(),
+            })),
+            CollabAgentTool::CloseAgent => receiver_thread_id.map(|receiver_thread_id| {
+                let receiver_agent = self.receiver_agent(receiver_thread_id);
+                EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                    call_id: self.id.clone(),
+                    completed_at_ms,
+                    sender_thread_id: self.sender_thread_id,
+                    receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent
+                        .as_ref()
+                        .and_then(|agent| agent.agent_nickname.clone()),
+                    receiver_agent_role: receiver_agent.and_then(|agent| agent.agent_role),
+                    status: self.agent_status(receiver_thread_id),
+                })
+            }),
+        }
+    }
+
+    fn receiver_agent(&self, thread_id: ThreadId) -> Option<CollabAgentRef> {
+        self.receiver_agents
+            .iter()
+            .find(|agent| agent.thread_id == thread_id)
+            .cloned()
+    }
+
+    fn agent_status(&self, thread_id: ThreadId) -> AgentStatus {
+        self.agents_states
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or(AgentStatus::NotFound)
+    }
+}
+
+fn collab_tool_call_status(status: &AgentStatus, has_receiver: bool) -> CollabAgentToolCallStatus {
+    match status {
+        AgentStatus::Errored(_) | AgentStatus::NotFound => CollabAgentToolCallStatus::Failed,
+        _ if has_receiver => CollabAgentToolCallStatus::Completed,
+        _ => CollabAgentToolCallStatus::Failed,
+    }
+}
+
+impl SubAgentActivityItem {
+    pub fn from_sub_agent_activity_event(event: SubAgentActivityEvent) -> Self {
+        Self {
+            id: event.event_id,
+            kind: event.kind,
+            agent_thread_id: event.agent_thread_id,
+            agent_path: event.agent_path,
+        }
+    }
+
+    pub fn as_legacy_event(&self, occurred_at_ms: i64) -> EventMsg {
+        EventMsg::SubAgentActivity(SubAgentActivityEvent {
+            event_id: self.id.clone(),
+            occurred_at_ms,
+            agent_thread_id: self.agent_thread_id,
+            agent_path: self.agent_path.clone(),
+            kind: self.kind,
+        })
+    }
+}
+
 impl WebSearchItem {
     pub fn as_legacy_event(&self) -> EventMsg {
         EventMsg::WebSearchEnd(WebSearchEndEvent {
@@ -611,6 +1331,10 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.id.clone(),
             TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
+            TurnItem::CommandExecution(item) => item.id.clone(),
+            TurnItem::DynamicToolCall(item) => item.id.clone(),
+            TurnItem::CollabAgentToolCall(item) => item.id.clone(),
+            TurnItem::SubAgentActivity(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Sleep(item) => item.id.clone(),
@@ -627,6 +1351,10 @@ impl TurnItem {
             TurnItem::HookPrompt(_) => Vec::new(),
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::Plan(_) => Vec::new(),
+            TurnItem::CommandExecution(_)
+            | TurnItem::DynamicToolCall(_)
+            | TurnItem::CollabAgentToolCall(_) => Vec::new(),
+            TurnItem::SubAgentActivity(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageView(item) => {
                 vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
