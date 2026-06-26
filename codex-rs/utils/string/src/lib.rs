@@ -8,6 +8,19 @@ pub use truncate::approx_tokens_from_byte_count;
 pub use truncate::truncate_middle_chars;
 pub use truncate::truncate_middle_with_token_budget;
 
+/// Returns the stable `_<hash>` suffix used to disambiguate normalized names.
+///
+/// The hash is the first 12 lowercase hexadecimal characters of SHA-1. This is
+/// intended for stable naming compatibility, not cryptographic use.
+pub fn sha1_12_hex_suffix(value: &str) -> String {
+    use sha1::Digest;
+
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(value.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    format!("_{}", &hash[..12])
+}
+
 // Truncate a &str to a byte budget at a char boundary (prefix)
 #[inline]
 pub fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
@@ -105,6 +118,7 @@ mod tests {
     use super::find_uuids;
     use super::normalize_markdown_hash_location_suffix;
     use super::sanitize_metric_tag_value;
+    use super::sha1_12_hex_suffix;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -160,6 +174,14 @@ mod tests {
         assert_eq!(
             normalize_markdown_hash_location_suffix("#L74C3-L76C9"),
             Some(":74:3-76:9".to_string())
+        );
+    }
+
+    #[test]
+    fn sha1_12_hex_suffix_matches_stable_format() {
+        assert_eq!(
+            sha1_12_hex_suffix("server\0namespace\0tool"),
+            "_42e9a317c1d9"
         );
     }
 }

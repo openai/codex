@@ -38,6 +38,7 @@ pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpSe
 pub use app_mcp_routing::apps_route_available;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
+pub use discoverable::plugin_install_requested_metadata;
 pub use loader::PluginHookLoadOutcome;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;

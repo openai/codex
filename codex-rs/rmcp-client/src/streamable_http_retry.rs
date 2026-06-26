@@ -159,7 +159,10 @@ impl RmcpClient {
             | StreamableHttpError::ServerDoesNotSupportSse
             | StreamableHttpError::Deserialize(_)
             | StreamableHttpError::Client(StreamableHttpClientAdapterError::SessionExpired404)
-            | StreamableHttpError::Client(StreamableHttpClientAdapterError::Header(_)) => false,
+            | StreamableHttpError::Client(StreamableHttpClientAdapterError::Header(_))
+            | StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::ResponseBodyTooLarge { .. },
+            ) => false,
             _ => false,
         }
     }

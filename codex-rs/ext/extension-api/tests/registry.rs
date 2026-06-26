@@ -8,11 +8,15 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::PluginInstallVerificationContext;
+use codex_extension_api::PluginInstallVerifier;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::PromptSlot;
+use codex_extension_api::ThreadDataInitializer;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::TokenUsageContributor;
 use codex_extension_api::ToolCall;
@@ -35,6 +39,14 @@ use pretty_assertions::assert_eq;
 
 struct AllContributors;
 
+struct ThreadDataInitialized;
+
+impl ThreadDataInitializer for AllContributors {
+    fn initialize(&self, thread_data: &mut ExtensionDataInit) {
+        thread_data.insert(ThreadDataInitialized);
+    }
+}
+
 impl ContextContributor for AllContributors {
     fn contribute_thread_context<'a>(
         &'a self,
@@ -52,6 +64,18 @@ impl TurnLifecycleContributor for AllContributors {}
 impl ConfigContributor<()> for AllContributors {}
 
 impl TokenUsageContributor for AllContributors {}
+
+impl PluginInstallVerifier<()> for AllContributors {
+    fn verify<'a>(
+        &'a self,
+        context: PluginInstallVerificationContext<'a, ()>,
+    ) -> ExtensionFuture<'a, Option<bool>> {
+        Box::pin(async move {
+            assert_eq!(context.plugin().id, "plugin@test");
+            Some(true)
+        })
+    }
+}
 
 impl TurnInputContributor for AllContributors {
     fn contribute<'a>(
@@ -109,15 +133,52 @@ impl ApprovalReviewContributor for AllContributors {
     }
 }
 
+struct FixedPluginInstallVerifier(Option<bool>);
+
+impl PluginInstallVerifier<()> for FixedPluginInstallVerifier {
+    fn verify<'a>(
+        &'a self,
+        _context: PluginInstallVerificationContext<'a, ()>,
+    ) -> ExtensionFuture<'a, Option<bool>> {
+        Box::pin(std::future::ready(self.0))
+    }
+}
+
+#[tokio::test]
+async fn plugin_install_verification_requires_every_claimed_condition() {
+    let plugin = codex_tools::DiscoverablePluginInfo {
+        id: "plugin@test".to_string(),
+        ..Default::default()
+    };
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    builder.plugin_install_verifier(Arc::new(FixedPluginInstallVerifier(None)));
+    builder.plugin_install_verifier(Arc::new(FixedPluginInstallVerifier(Some(true))));
+    builder.plugin_install_verifier(Arc::new(FixedPluginInstallVerifier(Some(false))));
+    let registry = builder.build();
+
+    assert_eq!(
+        registry
+            .verify_plugin_install(PluginInstallVerificationContext::new(&plugin, &(),))
+            .await,
+        Some(false)
+    );
+}
+
 #[tokio::test]
 async fn build_round_trips_every_contributor_category() {
+    let plugin = codex_tools::DiscoverablePluginInfo {
+        id: "plugin@test".to_string(),
+        ..Default::default()
+    };
     let contributor = Arc::new(AllContributors);
     let mut builder = ExtensionRegistryBuilder::<()>::new();
+    builder.thread_data_initializer(contributor.clone());
     builder.thread_lifecycle_contributor(contributor.clone());
     builder.turn_lifecycle_contributor(contributor.clone());
     builder.config_contributor(contributor.clone());
     builder.token_usage_contributor(contributor.clone());
     builder.prompt_contributor(contributor.clone());
+    builder.plugin_install_verifier(contributor.clone());
     builder.turn_input_contributor(contributor.clone());
     builder.tool_contributor(contributor.clone());
     builder.tool_lifecycle_contributor(contributor.clone());
@@ -125,11 +186,20 @@ async fn build_round_trips_every_contributor_category() {
     builder.approval_review_contributor(contributor);
     let registry = builder.build();
 
+    let mut thread_data = ExtensionDataInit::new();
+    registry.initialize_thread_data(&mut thread_data);
+    assert!(thread_data.get::<ThreadDataInitialized>().is_some());
     assert_eq!(registry.thread_lifecycle_contributors().len(), 1);
     assert_eq!(registry.turn_lifecycle_contributors().len(), 1);
     assert_eq!(registry.config_contributors().len(), 1);
     assert_eq!(registry.token_usage_contributors().len(), 1);
     assert_eq!(registry.context_contributors().len(), 1);
+    assert_eq!(
+        registry
+            .verify_plugin_install(PluginInstallVerificationContext::new(&plugin, &(),))
+            .await,
+        Some(true)
+    );
     assert_eq!(registry.turn_input_contributors().len(), 1);
     assert_eq!(registry.tool_contributors().len(), 1);
     assert_eq!(registry.tool_lifecycle_contributors().len(), 1);

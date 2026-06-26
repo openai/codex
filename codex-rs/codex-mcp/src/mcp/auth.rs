@@ -192,46 +192,40 @@ where
 {
     let futures = servers.into_iter().map(|(name, server)| {
         let name = name.clone();
-        let config = server.configured_config().cloned();
+        let config = server.config().clone();
         let runtime_context = runtime_context.clone();
-        let has_runtime_auth = config
-            .as_ref()
-            .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
-            && auth.is_some_and(CodexAuth::uses_codex_backend)
-            && config.as_ref().is_some_and(|config| {
-                matches!(
+        let has_runtime_bearer_token = server.runtime_bearer_token().is_some();
+        let has_runtime_auth = has_runtime_bearer_token
+            || (matches!(&config.auth, McpServerAuth::ChatGpt)
+                && auth.is_some_and(CodexAuth::uses_codex_backend)
+                && matches!(
                     &config.transport,
                     McpServerTransportConfig::StreamableHttp {
                         bearer_token_env_var: None,
                         ..
                     }
-                )
-            });
+                ));
         async move {
-            let auth_state = match config.as_ref() {
-                Some(config) => {
-                    match compute_auth_status(
-                        &name,
-                        config,
-                        store_mode,
-                        keyring_backend_kind,
-                        has_runtime_auth,
-                        &runtime_context,
-                    )
-                    .await
-                    {
-                        Ok(status) => status,
-                        Err(error) => {
-                            warn!(
-                                "failed to determine auth status for MCP server `{name}`: {error:?}"
-                            );
-                            McpAuthState::Unsupported
-                        }
-                    }
+            let auth_state = match compute_auth_status(
+                &name,
+                &config,
+                store_mode,
+                keyring_backend_kind,
+                has_runtime_auth,
+                &runtime_context,
+            )
+            .await
+            {
+                Ok(status) => status,
+                Err(error) => {
+                    warn!("failed to determine auth status for MCP server `{name}`: {error:?}");
+                    McpAuthState::Unsupported
                 }
-                None => McpAuthState::Unsupported,
             };
-            let entry = McpAuthStatusEntry { config, auth_state };
+            let entry = McpAuthStatusEntry {
+                config: Some(config),
+                auth_state,
+            };
             (name, entry)
         }
     });
@@ -298,14 +292,61 @@ async fn compute_auth_status(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
     use anyhow::anyhow;
+    use codex_config::McpServerConfig;
+    use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::OAuthCredentialsStoreMode;
+    use codex_exec_server::EnvironmentManager;
+    use codex_rmcp_client::McpAuthState;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::McpOAuthScopesSource;
     use super::OAuthProviderError;
     use super::ResolvedMcpOAuthScopes;
+    use super::compute_auth_statuses;
     use super::resolve_oauth_scopes;
     use super::should_retry_without_scopes;
+    use crate::EffectiveMcpServer;
+    use crate::runtime::McpRuntimeContext;
+
+    #[tokio::test]
+    async fn runtime_bearer_token_reports_bearer_auth_without_serializing_the_secret() {
+        let config: McpServerConfig = serde_json::from_value(json!({
+            "url": "http://127.0.0.1/mcp",
+        }))
+        .expect("valid HTTP MCP config");
+        let server = EffectiveMcpServer::configured_with_runtime_bearer_token(
+            config,
+            "runtime-secret".to_string(),
+        )
+        .expect("valid runtime bearer token");
+        let name = "runtime".to_string();
+        let servers = HashMap::from([(name.clone(), server)]);
+        let runtime_context = McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
+            PathBuf::from("/tmp"),
+        );
+
+        let statuses = compute_auth_statuses(
+            servers.iter(),
+            OAuthCredentialsStoreMode::default(),
+            AuthKeyringBackendKind::default(),
+            /*auth*/ None,
+            &runtime_context,
+        )
+        .await;
+
+        assert_eq!(statuses[&name].auth_state, McpAuthState::BearerToken);
+        let serialized =
+            serde_json::to_string(statuses[&name].config.as_ref().expect("configured server"))
+                .expect("serialize config");
+        assert!(!serialized.contains("runtime-secret"));
+    }
 
     #[test]
     fn resolve_oauth_scopes_prefers_explicit() {

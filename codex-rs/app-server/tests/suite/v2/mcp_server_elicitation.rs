@@ -114,7 +114,7 @@ async fn mcp_server_form_elicitation_round_trip() -> Result<()> {
         McpServerElicitationRequestParams {
             thread_id: fixture.thread_id.clone(),
             turn_id: Some(fixture.turn_id.clone()),
-            server_name: "codex_apps".to_string(),
+            server_name: "codex_apps__calendar".to_string(),
             request: McpServerElicitationRequest::Form {
                 meta: None,
                 message: ELICITATION_MESSAGE.to_string(),
@@ -138,7 +138,7 @@ async fn mcp_server_openai_form_elicitation_round_trip() -> Result<()> {
         McpServerElicitationRequestParams {
             thread_id: fixture.thread_id.clone(),
             turn_id: Some(fixture.turn_id.clone()),
-            server_name: "codex_apps".to_string(),
+            server_name: "codex_apps__calendar".to_string(),
             request: McpServerElicitationRequest::OpenAiForm {
                 meta: None,
                 message: OPENAI_FORM_MESSAGE.to_string(),
@@ -859,6 +859,7 @@ mcp_oauth_credentials_store = "file"
 
 [features]
 apps = true
+auth_elicitation = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

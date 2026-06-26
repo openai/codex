@@ -19,6 +19,7 @@ use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
 use crate::agent::control::AgentExecutionGuard;
+use crate::mcp_tool_call::McpToolCallApprovalContext;
 use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
@@ -90,6 +91,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
+    pending_mcp_tool_call_approval_contexts: HashMap<String, McpToolCallApprovalContext>,
     pub(crate) pending_input: TurnInputQueue,
     mailbox_delivery_phase: MailboxDeliveryPhase,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
@@ -127,6 +129,7 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
+        self.pending_mcp_tool_call_approval_contexts.clear();
     }
 
     pub(crate) fn insert_pending_request_permissions(
@@ -192,6 +195,22 @@ impl TurnState {
         key: &str,
     ) -> Option<oneshot::Sender<DynamicToolResponse>> {
         self.pending_dynamic_tools.remove(key)
+    }
+
+    pub(crate) fn insert_mcp_tool_call_approval_context(
+        &mut self,
+        call_id: String,
+        context: McpToolCallApprovalContext,
+    ) {
+        self.pending_mcp_tool_call_approval_contexts
+            .insert(call_id, context);
+    }
+
+    pub(crate) fn take_mcp_tool_call_approval_context(
+        &mut self,
+        call_id: &str,
+    ) -> Option<McpToolCallApprovalContext> {
+        self.pending_mcp_tool_call_approval_contexts.remove(call_id)
     }
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {

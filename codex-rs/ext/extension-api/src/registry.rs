@@ -9,6 +9,9 @@ use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
 use crate::NoopExtensionEventSink;
+use crate::PluginInstallVerificationContext;
+use crate::PluginInstallVerifier;
+use crate::ThreadDataInitializer;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
 use crate::ToolContributor;
@@ -20,12 +23,14 @@ use crate::TurnLifecycleContributor;
 /// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
+    thread_data_initializers: Vec<Arc<dyn ThreadDataInitializer>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
+    plugin_install_verifiers: Vec<Arc<dyn PluginInstallVerifier<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
@@ -37,6 +42,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             event_sink: Arc::new(NoopExtensionEventSink),
+            thread_data_initializers: Vec::new(),
             thread_lifecycle_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
@@ -44,6 +50,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
             approval_review_contributors: Vec::new(),
             context_contributors: Vec::new(),
             mcp_server_contributors: Vec::new(),
+            plugin_install_verifiers: Vec::new(),
             turn_input_contributors: Vec::new(),
             tool_contributors: Vec::new(),
             tool_lifecycle_contributors: Vec::new(),
@@ -74,6 +81,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Registers one approval-review contributor.
     pub fn approval_review_contributor(&mut self, contributor: Arc<dyn ApprovalReviewContributor>) {
         self.approval_review_contributors.push(contributor);
+    }
+
+    /// Registers one thread-data initializer.
+    pub fn thread_data_initializer(&mut self, initializer: Arc<dyn ThreadDataInitializer>) {
+        self.thread_data_initializers.push(initializer);
     }
 
     /// Registers one thread-lifecycle contributor.
@@ -109,6 +121,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.mcp_server_contributors.push(contributor);
     }
 
+    /// Registers an extension-owned plugin-install completion check.
+    pub fn plugin_install_verifier(&mut self, verifier: Arc<dyn PluginInstallVerifier<C>>) {
+        self.plugin_install_verifiers.push(verifier);
+    }
+
     /// Registers one turn-input contributor.
     pub fn turn_input_contributor(&mut self, contributor: Arc<dyn TurnInputContributor>) {
         self.turn_input_contributors.push(contributor);
@@ -133,6 +150,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
             event_sink: self.event_sink,
+            thread_data_initializers: self.thread_data_initializers,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
@@ -140,6 +158,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
             approval_review_contributors: self.approval_review_contributors,
             context_contributors: self.context_contributors,
             mcp_server_contributors: self.mcp_server_contributors,
+            plugin_install_verifiers: self.plugin_install_verifiers,
             turn_input_contributors: self.turn_input_contributors,
             tool_contributors: self.tool_contributors,
             tool_lifecycle_contributors: self.tool_lifecycle_contributors,
@@ -151,12 +170,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
+    thread_data_initializers: Vec<Arc<dyn ThreadDataInitializer>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
     token_usage_contributors: Vec<Arc<dyn TokenUsageContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
+    plugin_install_verifiers: Vec<Arc<dyn PluginInstallVerifier<C>>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
@@ -168,6 +189,13 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the host event sink retained by this registry.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)
+    }
+
+    /// Seeds extension-private inputs for a thread before runtime resolution.
+    pub fn initialize_thread_data(&self, thread_data: &mut crate::ExtensionDataInit) {
+        for initializer in &self.thread_data_initializers {
+            initializer.initialize(thread_data);
+        }
     }
 
     /// Returns the registered thread-lifecycle contributors.
@@ -218,6 +246,28 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered runtime MCP server contributors.
     pub fn mcp_server_contributors(&self) -> &[Arc<dyn McpServerContributor<C>>] {
         &self.mcp_server_contributors
+    }
+
+    /// Verifies every extension-owned completion condition claimed for a plugin install.
+    pub async fn verify_plugin_install(
+        &self,
+        context: PluginInstallVerificationContext<'_, C>,
+    ) -> Option<bool> {
+        let mut claimed = false;
+        for verifier in &self.plugin_install_verifiers {
+            match verifier
+                .verify(PluginInstallVerificationContext::new(
+                    context.plugin(),
+                    context.config(),
+                ))
+                .await
+            {
+                Some(true) => claimed = true,
+                Some(false) => return Some(false),
+                None => {}
+            }
+        }
+        claimed.then_some(true)
     }
 
     /// Returns the registered turn-input contributors.

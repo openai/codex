@@ -334,9 +334,7 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
-    features.enabled(Feature::ToolSuggest)
-        && features.enabled(Feature::Apps)
-        && features.enabled(Feature::Plugins)
+    features.enabled(Feature::ToolSuggest) && features.enabled(Feature::Plugins)
 }
 
 fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
@@ -749,15 +747,15 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     if tool_suggest_enabled(turn_context)
         && let Some(candidates) = context
             .tool_suggest_candidates
-            .filter(|candidates| !candidates.tools.is_empty())
+            .filter(|candidates| !candidates.plugins.is_empty())
     {
         if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
             planned_tools.add(ListAvailablePluginsToInstallHandler::new(
-                collect_request_plugin_install_entries(&candidates.tools),
+                collect_request_plugin_install_entries(&candidates.plugins),
             ));
         }
         planned_tools.add(RequestPluginInstallHandler::new(
-            candidates.tools.clone(),
+            candidates.plugins.clone(),
             candidates.presentation,
         ));
     }

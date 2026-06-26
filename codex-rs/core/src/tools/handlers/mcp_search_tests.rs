@@ -11,19 +11,19 @@ fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
 
     assert_eq!(
         search_info.entry.search_text,
-        "mcp__calendar___create_event _create_event createEvent codex-apps Create event Create a calendar event. Calendar Plan events. Calendar plugin attendees start_time"
+        "mcp__calendar___create_event _create_event createEvent mcp__calendar__ Create event Create a calendar event. Plan events. Calendar plugin attendees start_time"
     );
     assert_eq!(
         search_info.source_info,
         Some(ToolSearchSourceInfo {
-            name: "Calendar".to_string(),
+            name: "calendar-server".to_string(),
             description: Some("Plan events.".to_string()),
         })
     );
 }
 
 #[test]
-fn search_info_uses_connector_name_for_output_namespace_description() {
+fn search_info_uses_server_name_without_namespace_title() {
     let mut tool_info = tool_info();
     tool_info.namespace_description = None;
     let handler = McpHandler::new(tool_info).expect("MCP tool spec should build");
@@ -32,24 +32,47 @@ fn search_info_uses_connector_name_for_output_namespace_description() {
     let LoadableToolSpec::Namespace(namespace) = search_info.entry.output else {
         panic!("expected namespace search output");
     };
-    assert_eq!(namespace.description, "Tools for working with Calendar.");
+    assert_eq!(
+        namespace.description,
+        "Tools in the mcp__calendar__ namespace."
+    );
     assert_eq!(
         search_info.source_info,
         Some(ToolSearchSourceInfo {
-            name: "Calendar".to_string(),
+            name: "calendar-server".to_string(),
             description: None,
+        })
+    );
+    assert!(!search_info.entry.search_text.contains("calendar-server"));
+}
+
+#[test]
+fn search_info_indexes_namespace_title() {
+    let mut tool_info = tool_info();
+    tool_info.namespace_title = Some("Google Calendar".to_string());
+    let handler = McpHandler::new(tool_info).expect("MCP tool spec should build");
+    let search_info = handler.search_info().expect("MCP search info");
+
+    assert!(search_info.entry.search_text.contains("Google Calendar"));
+    assert_eq!(
+        search_info.source_info,
+        Some(ToolSearchSourceInfo {
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events.".to_string()),
         })
     );
 }
 
 fn tool_info() -> ToolInfo {
     ToolInfo {
-        server_name: "codex-apps".to_string(),
+        server_name: "calendar-server".to_string(),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: "_create_event".to_string(),
         callable_namespace: "mcp__calendar__".to_string(),
         namespace_description: Some("Plan events.".to_string()),
+        namespace_title: None,
+        search_aliases: Vec::new(),
         tool: rmcp::model::Tool::new(
             "createEvent",
             "Create a calendar event.",
@@ -63,8 +86,6 @@ fn tool_info() -> ToolInfo {
             }))),
         )
         .with_title("Create event"),
-        connector_id: None,
-        connector_name: Some("Calendar".to_string()),
         plugin_display_names: vec![" Calendar plugin ".to_string(), " ".to_string()],
     }
 }

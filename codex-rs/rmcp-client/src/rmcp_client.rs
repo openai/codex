@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -40,7 +41,6 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerResult;
-use rmcp::model::Tool;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
@@ -98,6 +98,17 @@ enum PendingTransport {
     },
 }
 
+struct OAuthTransportParams<'a> {
+    server_name: &'a str,
+    url: &'a str,
+    initial_tokens: StoredOAuthTokens,
+    credentials_store: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    default_headers: HeaderMap,
+    http_client: Arc<dyn HttpClient>,
+    max_post_response_body_bytes: Option<NonZeroUsize>,
+}
+
 enum ClientState {
     Connecting {
         transport: Option<PendingTransport>,
@@ -128,6 +139,7 @@ enum TransportRecipe {
         keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
+        max_post_response_body_bytes: Option<NonZeroUsize>,
     },
 }
 
@@ -232,6 +244,14 @@ enum ClientOperationError {
     Timeout { label: String, duration: Duration },
 }
 
+/// Returns the original MCP protocol error carried by an RMCP client operation.
+pub fn mcp_error_data(error: &anyhow::Error) -> Option<&rmcp::ErrorData> {
+    match error.downcast_ref::<ClientOperationError>()? {
+        ClientOperationError::Service(rmcp::service::ServiceError::McpError(error)) => Some(error),
+        ClientOperationError::Service(_) | ClientOperationError::Timeout { .. } => None,
+    }
+}
+
 fn remaining_operation_timeout(
     label: &str,
     timeout: Option<Duration>,
@@ -303,18 +323,6 @@ impl From<ElicitationResponse> for CreateElicitationResult {
 pub type SendElicitation = Box<
     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
 >;
-
-pub struct ToolWithConnectorId {
-    pub tool: Tool,
-    pub connector_id: Option<String>,
-    pub connector_name: Option<String>,
-    pub connector_description: Option<String>,
-}
-
-pub struct ListToolsWithConnectorIdResult {
-    pub next_cursor: Option<String>,
-    pub tools: Vec<ToolWithConnectorId>,
-}
 
 /// MCP client implemented on top of the official `rmcp` SDK.
 /// https://github.com/modelcontextprotocol/rust-sdk
@@ -394,6 +402,66 @@ impl RmcpClient {
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
+        Self::new_streamable_http_client_inner(
+            server_name,
+            url,
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
+            keyring_backend_kind,
+            http_client,
+            auth_provider,
+            /*max_post_response_body_bytes*/ None,
+        )
+        .await
+    }
+
+    /// Creates a Streamable HTTP MCP client with a hard limit on each POST response body.
+    ///
+    /// The limit is enforced while streaming, before JSON or SSE deserialization, and remains in
+    /// effect when the client recreates its transport after a session expires.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_streamable_http_client_with_post_response_body_limit(
+        server_name: &str,
+        url: &str,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+        http_client: Arc<dyn HttpClient>,
+        auth_provider: Option<SharedAuthProvider>,
+        max_post_response_body_bytes: NonZeroUsize,
+    ) -> Result<Self> {
+        Self::new_streamable_http_client_inner(
+            server_name,
+            url,
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
+            keyring_backend_kind,
+            http_client,
+            auth_provider,
+            Some(max_post_response_body_bytes),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_streamable_http_client_inner(
+        server_name: &str,
+        url: &str,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
+        http_client: Arc<dyn HttpClient>,
+        auth_provider: Option<SharedAuthProvider>,
+        max_post_response_body_bytes: Option<NonZeroUsize>,
+    ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
             url: url.to_string(),
@@ -404,6 +472,7 @@ impl RmcpClient {
             keyring_backend_kind,
             http_client,
             auth_provider,
+            max_post_response_body_bytes,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -500,52 +569,6 @@ impl RmcpClient {
             .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    pub async fn list_tools_with_connector_ids(
-        &self,
-        params: Option<PaginatedRequestParams>,
-        timeout: Option<Duration>,
-    ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await;
-        let result = self
-            .run_service_operation("tools/list", timeout, move |service| {
-                let params = params.clone();
-                async move { service.list_tools(params).await }.boxed()
-            })
-            .await?;
-        let tools = result
-            .tools
-            .into_iter()
-            .map(|tool| {
-                let meta = tool.meta.as_ref();
-                let connector_id = Self::meta_string(meta, "connector_id");
-                let connector_name = Self::meta_string(meta, "connector_name")
-                    .or_else(|| Self::meta_string(meta, "connector_display_name"));
-                let connector_description = Self::meta_string(meta, "connector_description")
-                    .or_else(|| Self::meta_string(meta, "connectorDescription"));
-                Ok(ToolWithConnectorId {
-                    tool,
-                    connector_id,
-                    connector_name,
-                    connector_description,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.persist_oauth_tokens().await;
-        Ok(ListToolsWithConnectorIdResult {
-            next_cursor: result.next_cursor,
-            tools,
-        })
-    }
-
-    fn meta_string(meta: Option<&rmcp::model::Meta>, key: &str) -> Option<String> {
-        meta.and_then(|meta| meta.get(key))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
     }
 
     pub async fn list_resources(
@@ -783,6 +806,7 @@ impl RmcpClient {
                 keyring_backend_kind,
                 http_client,
                 auth_provider,
+                max_post_response_body_bytes,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
@@ -809,15 +833,16 @@ impl RmcpClient {
                 };
 
                 if let Some(initial_tokens) = initial_oauth_tokens.clone() {
-                    match create_oauth_transport_and_runtime(
+                    match create_oauth_transport_and_runtime(OAuthTransportParams {
                         server_name,
                         url,
-                        initial_tokens.clone(),
-                        *store_mode,
-                        *keyring_backend_kind,
-                        default_headers.clone(),
-                        Arc::clone(http_client),
-                    )
+                        initial_tokens: initial_tokens.clone(),
+                        credentials_store: *store_mode,
+                        keyring_backend_kind: *keyring_backend_kind,
+                        default_headers: default_headers.clone(),
+                        http_client: Arc::clone(http_client),
+                        max_post_response_body_bytes: *max_post_response_body_bytes,
+                    })
                     .await
                     {
                         Ok((transport, oauth_persistor)) => {
@@ -844,10 +869,11 @@ impl RmcpClient {
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
                             let transport = StreamableHttpClientTransport::with_client(
-                                StreamableHttpClientAdapter::new(
+                                streamable_http_client_adapter(
                                     Arc::clone(http_client),
                                     default_headers,
                                     /*auth_provider*/ None,
+                                    *max_post_response_body_bytes,
                                 ),
                                 http_config,
                             );
@@ -863,10 +889,11 @@ impl RmcpClient {
                     }
 
                     let transport = StreamableHttpClientTransport::with_client(
-                        StreamableHttpClientAdapter::new(
+                        streamable_http_client_adapter(
                             Arc::clone(http_client),
                             default_headers,
                             auth_provider,
+                            *max_post_response_body_bytes,
                         ),
                         http_config,
                     );
@@ -1154,17 +1181,21 @@ impl RmcpClient {
 }
 
 async fn create_oauth_transport_and_runtime(
-    server_name: &str,
-    url: &str,
-    initial_tokens: StoredOAuthTokens,
-    credentials_store: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-    default_headers: HeaderMap,
-    http_client: Arc<dyn HttpClient>,
+    params: OAuthTransportParams<'_>,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
+    let OAuthTransportParams {
+        server_name,
+        url,
+        initial_tokens,
+        credentials_store,
+        keyring_backend_kind,
+        default_headers,
+        http_client,
+        max_post_response_body_bytes,
+    } = params;
     let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
         http_client.clone(),
         default_headers.clone(),
@@ -1188,7 +1219,12 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None),
+        streamable_http_client_adapter(
+            http_client,
+            default_headers,
+            /*auth_provider*/ None,
+            max_post_response_body_bytes,
+        ),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
@@ -1210,6 +1246,23 @@ async fn create_oauth_transport_and_runtime(
     Ok((transport, runtime))
 }
 
+fn streamable_http_client_adapter(
+    http_client: Arc<dyn HttpClient>,
+    default_headers: HeaderMap,
+    auth_provider: Option<SharedAuthProvider>,
+    max_post_response_body_bytes: Option<NonZeroUsize>,
+) -> StreamableHttpClientAdapter {
+    match max_post_response_body_bytes {
+        Some(limit) => StreamableHttpClientAdapter::new_with_post_response_body_limit(
+            http_client,
+            default_headers,
+            auth_provider,
+            limit,
+        ),
+        None => StreamableHttpClientAdapter::new(http_client, default_headers, auth_provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -1218,6 +1271,17 @@ mod tests {
     use tokio::time;
 
     use super::*;
+
+    #[test]
+    fn protocol_error_can_be_recovered_without_changing_display_chain() {
+        let protocol_error = rmcp::ErrorData::invalid_params("bad input", None);
+        let error = anyhow::Error::from(ClientOperationError::Service(
+            rmcp::service::ServiceError::McpError(protocol_error.clone()),
+        ));
+
+        assert_eq!(mcp_error_data(&error), Some(&protocol_error));
+        assert_eq!(format!("{error:#}"), "Mcp error: -32602: bad input");
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {

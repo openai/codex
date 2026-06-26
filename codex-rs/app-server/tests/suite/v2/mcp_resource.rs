@@ -14,6 +14,7 @@ use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpResourceContent;
 use codex_app_server_protocol::McpResourceReadParams;
@@ -35,6 +36,7 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::ListResourcesResult;
+use rmcp::model::ListToolsResult;
 use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
@@ -45,6 +47,7 @@ use rmcp::model::Resource;
 use rmcp::model::ResourceContents;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
+use rmcp::model::Tool;
 use rmcp::service::RequestContext;
 use rmcp::service::RoleServer;
 use rmcp::transport::StreamableHttpServerConfig;
@@ -57,10 +60,14 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const TEST_RESOURCE_SERVER_NAME: &str = "test_resources";
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
 const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
 const TEST_RESOURCE_BLOB: &str = "YmluYXJ5LXJlc291cmNl";
 const TEST_RESOURCE_TEXT: &str = "Resource body from the MCP server.";
+const CONNECTOR_UI_RESOURCE_URI: &str = "ui://calendar/widget.html";
+const CONNECTOR_UI_RESOURCE_TEXT: &str = "<main>Calendar widget</main>";
+const MISSING_CONNECTOR_UI_RESOURCE_URI: &str = "ui://calendar/missing.html";
 const SKILL_NAME: &str = "demo-plugin:deploy";
 const RAW_SKILL_DESCRIPTION: &str = "Deploy\nthrough the <hosted> orchestrator.";
 const SKILL_DESCRIPTION: &str = "Deploy through the &lt;hosted&gt; orchestrator.";
@@ -87,10 +94,20 @@ const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
-        start_resource_apps_mcp_server().await?;
+        start_resource_apps_mcp_server(Vec::new()).await?;
     let responses_server_uri = responses_server.uri();
-    let (_codex_home, mut mcp) =
-        start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
+    let resource_server_config = format!(
+        r#"
+[mcp_servers.{TEST_RESOURCE_SERVER_NAME}]
+url = "{apps_server_url}/api/codex/ps/mcp"
+"#
+    );
+    let (_codex_home, mut mcp) = start_resource_test_app_server_with_extra_config(
+        &apps_server_url,
+        &responses_server_uri,
+        &resource_server_config,
+    )
+    .await?;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -108,7 +125,7 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     let read_request_id = mcp
         .send_mcp_resource_read_request(McpResourceReadParams {
             thread_id: Some(thread.id),
-            server: "codex_apps".to_string(),
+            server: TEST_RESOURCE_SERVER_NAME.to_string(),
             uri: TEST_RESOURCE_URI.to_string(),
         })
         .await?;
@@ -128,10 +145,174 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_resource_read_proxies_connector_ui_content_and_error() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let mut connector_tool = Tool::new(
+        "calendar_open_widget".to_string(),
+        "Open the Calendar widget.".to_string(),
+        Arc::new(Default::default()),
+    );
+    connector_tool.meta = Some(Meta(serde_json::Map::from_iter([
+        ("connector_id".to_string(), json!("calendar")),
+        ("connector_name".to_string(), json!("Calendar")),
+        (
+            "ui".to_string(),
+            json!({ "resourceUri": CONNECTOR_UI_RESOURCE_URI }),
+        ),
+    ])));
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server(vec![connector_tool]).await?;
+    let (_codex_home, mut mcp) =
+        start_resource_test_app_server(&apps_server_url, &responses_server.uri()).await?;
+
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    let _response_mock = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-apps-ui-warmup"),
+            responses::ev_assistant_message("msg-apps-ui-warmup", "Ready"),
+            responses::ev_completed("resp-apps-ui-warmup"),
+        ]),
+    )
+    .await;
+    let turn_start_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Load connected Apps.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let read_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: Some(thread.id.clone()),
+            server: "codex_apps__calendar".to_string(),
+            uri: CONNECTOR_UI_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<McpResourceReadResponse>(read_response)?,
+        McpResourceReadResponse {
+            contents: vec![McpResourceContent::Text {
+                uri: CONNECTOR_UI_RESOURCE_URI.to_string(),
+                mime_type: Some("text/html".to_string()),
+                text: CONNECTOR_UI_RESOURCE_TEXT.to_string(),
+                meta: None,
+            }],
+        }
+    );
+
+    let missing_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: Some(thread.id),
+            server: "codex_apps__calendar".to_string(),
+            uri: MISSING_CONNECTOR_UI_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(missing_request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert_eq!(
+        error.error.message,
+        format!(
+            "resources/read failed for `codex_apps__calendar` ({MISSING_CONNECTOR_UI_RESOURCE_URI}): Mcp error: -32002: resource `{MISSING_CONNECTOR_UI_RESOURCE_URI}` is not declared by this MCP server"
+        )
+    );
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_resource_read_cold_starts_apps_without_thread() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let mut connector_tool = Tool::new(
+        "calendar_open_widget".to_string(),
+        "Open the Calendar widget.".to_string(),
+        Arc::new(Default::default()),
+    );
+    connector_tool.meta = Some(Meta(serde_json::Map::from_iter([
+        ("connector_id".to_string(), json!("calendar")),
+        ("connector_name".to_string(), json!("Calendar")),
+        (
+            "ui".to_string(),
+            json!({ "resourceUri": CONNECTOR_UI_RESOURCE_URI }),
+        ),
+    ])));
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server(vec![connector_tool]).await?;
+    let (_codex_home, mut mcp) =
+        start_resource_test_app_server(&apps_server_url, &responses_server.uri()).await?;
+
+    let read_request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: "codex_apps__calendar".to_string(),
+            uri: CONNECTOR_UI_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let read_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        to_response::<McpResourceReadResponse>(read_response)?,
+        McpResourceReadResponse {
+            contents: vec![McpResourceContent::Text {
+                uri: CONNECTOR_UI_RESOURCE_URI.to_string(),
+                mime_type: Some("text/html".to_string()),
+                text: CONNECTOR_UI_RESOURCE_TEXT.to_string(),
+                meta: None,
+            }],
+        }
+    );
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_calls, apps_server_handle) =
-        start_resource_apps_mcp_server().await?;
+        start_resource_apps_mcp_server(Vec::new()).await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
         start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
@@ -367,7 +548,7 @@ async fn orchestrator_skill_can_read_referenced_resource_without_an_executor() -
 async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
-        start_resource_apps_mcp_server().await?;
+        start_resource_apps_mcp_server(Vec::new()).await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) =
         start_resource_test_app_server(&apps_server_url, &responses_server_uri).await?;
@@ -440,7 +621,7 @@ async fn local_executor_does_not_expose_orchestrator_skills() -> Result<()> {
 async fn disabled_orchestrator_skills_do_not_expose_skills_namespace() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_calls, apps_server_handle) =
-        start_resource_apps_mcp_server().await?;
+        start_resource_apps_mcp_server(Vec::new()).await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) = start_resource_test_app_server_with_extra_config(
         &apps_server_url,
@@ -528,7 +709,7 @@ enabled = false
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents_without_thread() -> Result<()> {
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
-        start_resource_apps_mcp_server().await?;
+        start_resource_apps_mcp_server(Vec::new()).await?;
 
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -540,6 +721,9 @@ mcp_oauth_credentials_store = "file"
 
 [features]
 apps = true
+
+[mcp_servers.{TEST_RESOURCE_SERVER_NAME}]
+url = "{apps_server_url}/api/codex/ps/mcp"
 "#
         ),
     )?;
@@ -558,7 +742,7 @@ apps = true
     let read_request_id = mcp
         .send_mcp_resource_read_request(McpResourceReadParams {
             thread_id: None,
-            server: "codex_apps".to_string(),
+            server: TEST_RESOURCE_SERVER_NAME.to_string(),
             uri: TEST_RESOURCE_URI.to_string(),
         })
         .await?;
@@ -697,18 +881,21 @@ stream_max_retries = 0
     Ok((codex_home, mcp))
 }
 
-async fn start_resource_apps_mcp_server()
--> Result<(String, Arc<ResourceAppsMcpCalls>, JoinHandle<()>)> {
+async fn start_resource_apps_mcp_server(
+    tools: Vec<Tool>,
+) -> Result<(String, Arc<ResourceAppsMcpCalls>, JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let apps_server_url = format!("http://{addr}");
     let calls = Arc::new(ResourceAppsMcpCalls::default());
     let server_calls = Arc::clone(&calls);
+    let tools: Arc<[Tool]> = Arc::from(tools);
 
     let mcp_service = StreamableHttpService::new(
         move || {
             Ok(ResourceAppsMcpServer {
                 calls: Arc::clone(&server_calls),
+                tools: Arc::clone(&tools),
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -768,12 +955,30 @@ struct ResourceAppsMcpCallCounts {
 #[derive(Clone)]
 struct ResourceAppsMcpServer {
     calls: Arc<ResourceAppsMcpCalls>,
+    tools: Arc<[Tool]>,
 }
 
 impl ServerHandler for ResourceAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_resources().build())
-            .with_protocol_version(ProtocolVersion::V_2025_06_18)
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_protocol_version(ProtocolVersion::V_2025_06_18)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult {
+            tools: self.tools.to_vec(),
+            next_cursor: None,
+            meta: None,
+        })
     }
 
     async fn list_resources(
@@ -848,6 +1053,16 @@ impl ServerHandler for ResourceAppsMcpServer {
                     uri: SKILL_REFERENCE_URI.to_string(),
                     mime_type: Some("text/markdown".to_string()),
                     text: SKILL_REFERENCE_CONTENTS.to_string(),
+                    meta: None,
+                },
+            ]));
+        }
+        if uri == CONNECTOR_UI_RESOURCE_URI {
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
+                    uri: CONNECTOR_UI_RESOURCE_URI.to_string(),
+                    mime_type: Some("text/html".to_string()),
+                    text: CONNECTOR_UI_RESOURCE_TEXT.to_string(),
                     meta: None,
                 },
             ]));

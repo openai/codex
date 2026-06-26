@@ -6,10 +6,12 @@ use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_tools::DiscoverablePluginInfo;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
+use crate::ExtensionDataInit;
 
 mod context;
 mod mcp;
@@ -23,6 +25,8 @@ mod world_state;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp::McpServerContributionMode;
+pub use mcp::McpServerContributions;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;
@@ -48,24 +52,99 @@ pub use world_state::WorldStateSectionContribution;
 /// Boxed, sendable future returned by asynchronous extension contributors.
 pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Extension contribution that resolves runtime MCP servers from host config.
+/// Extension contribution that resolves configured or runtime-only MCP servers from host config.
 ///
 /// Contributors run in registration order. Later contributions for the same
-/// name replace earlier ones. Implementations must contribute only names they
-/// own and must apply any source-specific policy before returning a server.
+/// name replace earlier ones. Runtime-only server state remains in memory and
+/// is excluded from serializable configured-server views. Implementations must
+/// contribute only names they own and must apply any source-specific policy
+/// before returning a server.
 /// Thread-scoped resolution exposes the host-seeded thread inputs; global
 /// resolution exposes none and must not imply a local fallback. Thread inputs
 /// are frozen for the runtime and do not include lifecycle-contributor state.
 /// Auto-discovered plugin servers are resolved by the plugin manager. A
 /// thread-selected plugin contribution must carry its own package provenance.
+/// Contributors that initialize or refresh external discovery must honor
+/// [`McpServerContributionContext::mode`].
 pub trait McpServerContributor<C: Sync>: Send + Sync {
     /// Stable identity used for registration provenance and conflict diagnostics.
     fn id(&self) -> &'static str;
+
+    /// Monotonic revision of the contributor's currently published server set.
+    ///
+    /// Hosts use this to replace a running generic MCP runtime after asynchronous discovery.
+    /// Contributors derived entirely from host config can keep the default revision.
+    fn revision(&self) -> u64 {
+        0
+    }
 
     fn contribute<'a>(
         &'a self,
         context: McpServerContributionContext<'a, C>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
+
+    /// Resolves contributions with the revision observed before resolution begins.
+    ///
+    /// Hosts should persist this captured revision with the resolved runtime. If publication races
+    /// resolution, a later revision comparison will observe the change and rebuild at the next
+    /// safe boundary.
+    fn contribute_with_revision<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, C>,
+    ) -> ExtensionFuture<'a, McpServerContributions> {
+        let revision = self.revision();
+        Box::pin(async move {
+            McpServerContributions {
+                revision,
+                contributions: self.contribute(context).await,
+            }
+        })
+    }
+
+    /// Refreshes contributor-owned discovery before the host resolves a replacement runtime.
+    ///
+    /// Most contributors are derived entirely from the supplied context and need no refresh.
+    fn refresh<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, C>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _context = context;
+        })
+    }
+}
+
+/// Input for an extension-owned check that a confirmed plugin install made its capabilities
+/// available to the current host configuration.
+pub struct PluginInstallVerificationContext<'a, C> {
+    plugin: &'a DiscoverablePluginInfo,
+    config: &'a C,
+}
+
+impl<'a, C> PluginInstallVerificationContext<'a, C> {
+    pub fn new(plugin: &'a DiscoverablePluginInfo, config: &'a C) -> Self {
+        Self { plugin, config }
+    }
+
+    pub fn plugin(&self) -> &'a DiscoverablePluginInfo {
+        self.plugin
+    }
+
+    pub fn config(&self) -> &'a C {
+        self.config
+    }
+}
+
+/// Extension-owned verification for capabilities that must materialize after plugin install.
+///
+/// `None` means the verifier does not own any completion condition for this plugin. When one or
+/// more verifiers return `Some`, every claimed condition must succeed.
+pub trait PluginInstallVerifier<C: Sync>: Send + Sync {
+    fn verify<'a>(
+        &'a self,
+        context: PluginInstallVerificationContext<'a, C>,
+    ) -> ExtensionFuture<'a, Option<bool>>;
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
@@ -108,6 +187,14 @@ pub trait ContextContributor: Send + Sync {
             Vec::new()
         })
     }
+}
+
+/// Synchronous contribution that seeds extension-private state for every new thread.
+///
+/// The host invokes initializers after applying caller-provided inputs and before resolving
+/// thread-scoped MCP servers. Implementations should preserve an existing value of their type.
+pub trait ThreadDataInitializer: Send + Sync {
+    fn initialize(&self, thread_data: &mut ExtensionDataInit);
 }
 
 /// Contributor for host-owned thread lifecycle gates.
@@ -290,6 +377,14 @@ pub trait ApprovalReviewContributor: Send + Sync {
 /// explicitly exposed thread- and turn-lifetime stores when they need durable
 /// extension-private state.
 pub trait TurnItemContributor: Send + Sync {
+    /// Returns whether this contributor can mutate `item`.
+    ///
+    /// Hosts may stream an item before its final form is available when no
+    /// registered contributor applies to it.
+    fn applies_to(&self, _item: &TurnItem) -> bool {
+        true
+    }
+
     fn contribute<'a>(
         &'a self,
         thread_store: &'a ExtensionData,

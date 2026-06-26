@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -33,23 +32,6 @@ mod read_mcp_resource;
 pub use list_mcp_resource_templates::ListMcpResourceTemplatesHandler;
 pub use list_mcp_resources::ListMcpResourcesHandler;
 pub use read_mcp_resource::ReadMcpResourceHandler;
-
-fn model_can_access_mcp_server(turn: &TurnContext, server: &str) -> bool {
-    turn.config.orchestrator_mcp_enabled || server != CODEX_APPS_MCP_SERVER_NAME
-}
-
-fn ensure_model_can_access_mcp_server(
-    turn: &TurnContext,
-    server: &str,
-) -> Result<(), FunctionCallError> {
-    if model_can_access_mcp_server(turn, server) {
-        Ok(())
-    } else {
-        Err(FunctionCallError::RespondToModel(format!(
-            "MCP server '{server}' is disabled by `orchestrator.mcp.enabled`"
-        )))
-    }
-}
 
 #[derive(Debug, Deserialize, Default)]
 struct ListResourcesArgs {
@@ -216,23 +198,13 @@ async fn emit_tool_call_begin(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
-        id: call_id.to_string(),
+    let item = TurnItem::McpToolCall(McpToolCallItem::new(
+        call_id.to_string(),
         server,
         tool,
-        arguments: arguments.unwrap_or(Value::Null),
-        connector_id: None,
-        mcp_app_resource_uri: None,
-        link_id: None,
-        app_name: None,
-        template_id: None,
-        action_name: None,
-        plugin_id: None,
-        status: McpToolCallStatus::InProgress,
-        result: None,
-        error: None,
-        duration: None,
-    });
+        arguments.unwrap_or(Value::Null),
+        McpToolCallStatus::InProgress,
+    ));
     session.emit_turn_item_started(turn, &item).await;
 }
 
@@ -260,23 +232,16 @@ async fn emit_tool_call_end(
         tool,
         arguments,
     } = invocation;
-    let item = TurnItem::McpToolCall(McpToolCallItem {
-        id: call_id.to_string(),
-        server,
-        tool,
-        arguments: arguments.unwrap_or(Value::Null),
-        connector_id: None,
-        mcp_app_resource_uri: None,
-        link_id: None,
-        app_name: None,
-        template_id: None,
-        action_name: None,
-        plugin_id: None,
-        status,
-        result,
-        error,
-        duration: Some(duration),
-    });
+    let item = TurnItem::McpToolCall(
+        McpToolCallItem::new(
+            call_id.to_string(),
+            server,
+            tool,
+            arguments.unwrap_or(Value::Null),
+            status,
+        )
+        .with_attempt_outcome(result, error, duration),
+    );
     session.emit_turn_item_completed(turn, item).await;
 }
 

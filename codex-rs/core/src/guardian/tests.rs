@@ -920,9 +920,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
         arguments: Some(serde_json::json!({
             "url": "https://example.com",
         })),
-        connector_id: None,
-        connector_name: Some("Playwright".to_string()),
-        connector_description: None,
+        approval_source: None,
         connected_account_email: Some("owner@example.com".to_string()),
         tool_title: Some("Navigate".to_string()),
         tool_description: None,
@@ -942,7 +940,6 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
             "arguments": {
                 "url": "https://example.com",
             },
-            "connector_name": "Playwright",
             "connected_account_email": "owner@example.com",
             "tool_title": "Navigate",
             "annotations": {
@@ -3003,7 +3000,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_disables_mcp_apps_plugins_and_memories() {
+async fn guardian_review_session_config_disables_mcp_extensions_plugins_and_memories() {
     let mut parent_config = test_config().await;
     let server: McpServerConfig =
         toml::from_str("command = \"docs-server\"").expect("deserialize MCP server");
@@ -3013,13 +3010,8 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_and_memories()
         .expect("parent MCP servers are configurable");
     parent_config
         .features
-        .enable(Feature::Apps)
-        .expect("apps feature is configurable");
-    parent_config
-        .features
         .enable(Feature::Plugins)
         .expect("plugins feature is configurable");
-    parent_config.include_apps_instructions = true;
     parent_config.memories.use_memories = true;
     parent_config.memories.dedicated_tools = true;
 
@@ -3032,9 +3024,8 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_and_memories()
     .expect("guardian config");
 
     assert!(guardian_config.mcp_servers.get().is_empty());
-    assert!(!guardian_config.features.enabled(Feature::Apps));
     assert!(!guardian_config.features.enabled(Feature::Plugins));
-    assert!(!guardian_config.include_apps_instructions);
+    assert!(!guardian_config.orchestrator_mcp_enabled);
     assert!(!guardian_config.memories.use_memories);
     assert!(!guardian_config.memories.dedicated_tools);
 }
@@ -3063,7 +3054,7 @@ async fn guardian_review_session_config_allows_pinned_disabled_feature() {
 
     assert!(guardian_config.features.enabled(Feature::Collab));
     assert!(guardian_config.mcp_servers.get().is_empty());
-    assert!(!guardian_config.include_apps_instructions);
+    assert!(!guardian_config.orchestrator_mcp_enabled);
 }
 
 #[tokio::test]

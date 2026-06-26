@@ -11,6 +11,7 @@ use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
 use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
+use crate::config::Config;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
@@ -21,10 +22,16 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
+use std::sync::Arc;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
+    /// Full source config used to resolve MCP registrations and contributors.
+    ///
+    /// Host-driven config reloads can refresh MCP policy without changing session-static settings
+    /// retained in `session_configuration`.
+    pub(crate) mcp_source_config: Arc<Config>,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
@@ -39,7 +46,6 @@ pub(crate) struct SessionState {
     /// Startup prewarmed session prepared during session initialization.
     pub(crate) startup_prewarm: Option<SessionStartupPrewarmHandle>,
     pub(crate) current_time_reminder: CurrentTimeReminderState,
-    pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
@@ -60,8 +66,10 @@ impl SessionState {
         auto_compact_window_ids: AutoCompactWindowIds,
     ) -> Self {
         let history = ContextManager::new();
+        let mcp_source_config = Arc::clone(&session_configuration.original_config_do_not_use);
         Self {
             session_configuration,
+            mcp_source_config,
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
@@ -71,7 +79,6 @@ impl SessionState {
             auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
             startup_prewarm: None,
             current_time_reminder: CurrentTimeReminderState::default(),
-            active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
@@ -251,25 +258,6 @@ impl SessionState {
 
     pub(crate) fn take_session_startup_prewarm(&mut self) -> Option<SessionStartupPrewarmHandle> {
         self.startup_prewarm.take()
-    }
-
-    // Adds connector IDs to the active set and returns the merged selection.
-    pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
-    where
-        I: IntoIterator<Item = String>,
-    {
-        self.active_connector_selection.extend(connector_ids);
-        self.active_connector_selection.clone()
-    }
-
-    // Returns the current connector selection tracked on session state.
-    pub(crate) fn get_connector_selection(&self) -> HashSet<String> {
-        self.active_connector_selection.clone()
-    }
-
-    // Removes all currently tracked connector selections.
-    pub(crate) fn clear_connector_selection(&mut self) {
-        self.active_connector_selection.clear();
     }
 
     pub(crate) fn queue_pending_session_start_source(

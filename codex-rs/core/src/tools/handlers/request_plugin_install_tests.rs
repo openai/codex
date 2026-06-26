@@ -7,8 +7,6 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
-use codex_config::types::ToolSuggestDiscoverable;
-use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
@@ -72,6 +70,25 @@ fn remote_plugin_install_suggestions_skip_core_installed_verification() {
 }
 
 #[test]
+fn plugin_install_completion_requires_base_and_claimed_extension_checks() {
+    assert!(!plugin_install_completed_with_extensions(
+        /*base_completed*/ false,
+        Some(true)
+    ));
+    assert!(!plugin_install_completed_with_extensions(
+        /*base_completed*/ true,
+        Some(false)
+    ));
+    assert!(plugin_install_completed_with_extensions(
+        /*base_completed*/ true,
+        Some(true)
+    ));
+    assert!(plugin_install_completed_with_extensions(
+        /*base_completed*/ true, /*extension_completed*/ None
+    ));
+}
+
+#[test]
 fn recommended_plugin_install_args_accept_legacy_tool_id() {
     let current: RecommendedPluginInstallArgs = serde_json::from_value(json!({
         "plugin_id": "google-drive@openai-curated-remote",
@@ -126,40 +143,19 @@ fn request_plugin_install_response_persists_only_decline_always_mode() {
 }
 
 #[tokio::test]
-async fn persist_disabled_install_request_writes_connector_config() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    let tool = connector_tool("connector_calendar", "Google Calendar");
-
-    persist_disabled_install_request(&codex_home.path().abs(), &tool)
-        .await
-        .expect("persist connector disable");
-
-    let contents =
-        std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).expect("read config");
-    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
-    assert_eq!(
-        parsed.tool_suggest,
-        Some(ToolSuggestConfig {
-            discoverables: Vec::new(),
-            disabled_tools: vec![ToolSuggestDisabledTool::connector("connector_calendar")],
-        })
-    );
-}
-
-#[tokio::test]
 async fn persist_disabled_install_request_writes_plugin_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let tool = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+    let plugin = DiscoverablePluginInfo {
         id: "slack@openai-curated".to_string(),
         remote_plugin_id: None,
         name: "Slack".to_string(),
         description: None,
         has_skills: true,
         mcp_server_names: Vec::new(),
-        app_connector_ids: Vec::new(),
-    }));
+        ..DiscoverablePluginInfo::default()
+    };
 
-    persist_disabled_install_request(&codex_home.path().abs(), &tool)
+    persist_disabled_install_request(&codex_home.path().abs(), &plugin)
         .await
         .expect("persist plugin disable");
 
@@ -173,77 +169,4 @@ async fn persist_disabled_install_request_writes_plugin_config() {
             disabled_tools: vec![ToolSuggestDisabledTool::plugin("slack@openai-curated")],
         })
     );
-}
-
-#[tokio::test]
-async fn persist_disabled_install_request_dedupes_existing_disabled_tools() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    let tool = connector_tool("connector_calendar", "Google Calendar");
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-[tool_suggest]
-discoverables = [
-  { type = "plugin", id = "sample@openai-curated" }
-]
-
-[[tool_suggest.disabled_tools]]
-type = "connector"
-id = " connector_calendar "
-
-[[tool_suggest.disabled_tools]]
-type = "connector"
-id = "connector_calendar"
-
-[[tool_suggest.disabled_tools]]
-type = "connector"
-id = "   "
-
-[[tool_suggest.disabled_tools]]
-type = "plugin"
-id = "slack@openai-curated"
-"#,
-    )
-    .expect("write config");
-
-    persist_disabled_install_request(&codex_home.path().abs(), &tool)
-        .await
-        .expect("persist connector disable");
-
-    let contents =
-        std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).expect("read config");
-    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
-    assert_eq!(
-        parsed.tool_suggest,
-        Some(ToolSuggestConfig {
-            discoverables: vec![ToolSuggestDiscoverable {
-                kind: ToolSuggestDiscoverableType::Plugin,
-                id: "sample@openai-curated".to_string(),
-            }],
-            disabled_tools: vec![
-                ToolSuggestDisabledTool::connector("connector_calendar"),
-                ToolSuggestDisabledTool::plugin("slack@openai-curated"),
-            ],
-        })
-    );
-}
-
-fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
-    DiscoverableTool::Connector(Box::new(AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        icon_assets: None,
-        icon_dark_assets: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: false,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }))
 }

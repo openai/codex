@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use codex_config::AppToolApproval;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::McpServerConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::McpToolApproval;
 use pretty_assertions::assert_eq;
 
 use super::McpPluginAttribution;
@@ -14,6 +14,7 @@ use super::McpServerConflictAction;
 use super::McpServerRegistration;
 use super::McpServerSource;
 use super::ResolvedMcpCatalog;
+use crate::EffectiveMcpServer;
 
 fn server(url: &str) -> McpServerConfig {
     McpServerConfig {
@@ -31,7 +32,7 @@ fn server(url: &str) -> McpServerConfig {
         disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(7)),
         tool_timeout_sec: Some(Duration::from_secs(11)),
-        default_tools_approval_mode: Some(AppToolApproval::Prompt),
+        default_tools_approval_mode: Some(McpToolApproval::Prompt),
         enabled_tools: Some(vec!["read".to_string()]),
         disabled_tools: Some(vec!["write".to_string()]),
         scopes: None,
@@ -40,10 +41,109 @@ fn server(url: &str) -> McpServerConfig {
         tools: HashMap::from([(
             "read".to_string(),
             McpServerToolConfig {
-                approval_mode: Some(AppToolApproval::Approve),
+                approval_mode: Some(McpToolApproval::Approve),
             },
         )]),
     }
+}
+
+fn effective_server(url: &str, bearer_token: &str) -> EffectiveMcpServer {
+    EffectiveMcpServer::configured_with_runtime_bearer_token(server(url), bearer_token.to_string())
+        .expect("valid runtime bearer server")
+}
+
+fn resolved_server(source: McpServerSource, config: McpServerConfig) -> super::ResolvedMcpServer {
+    super::ResolvedMcpServer {
+        source,
+        server: super::McpServerRegistrationValue::Configured(Box::new(config)),
+    }
+}
+
+#[test]
+fn effective_extension_registration_is_excluded_from_configured_servers() {
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_effective_extension(
+        "runtime".to_string(),
+        "runtime_extension",
+        /*contribution_order*/ 0,
+        effective_server("http://127.0.0.1:4321/mcp", "runtime-secret"),
+    ));
+
+    let catalog = builder.build();
+
+    assert!(catalog.server("runtime").is_some());
+    assert!(catalog.configured_servers().is_empty());
+    let effective = catalog.effective_servers();
+    let effective_config = effective["runtime"].config();
+    assert_eq!(
+        &effective_config.transport,
+        &server("http://127.0.0.1:4321/mcp").transport
+    );
+    let debug = format!("{catalog:?}");
+    assert!(debug.contains("[REDACTED]"));
+    assert!(!debug.contains("runtime-secret"));
+}
+
+#[test]
+fn effective_and_configured_extension_collisions_follow_contribution_order() {
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_effective_extension(
+        "shared".to_string(),
+        "runtime_extension",
+        /*contribution_order*/ 0,
+        effective_server("http://127.0.0.1:4321/mcp", "runtime-secret"),
+    ));
+    let configured = server("https://configured.example/mcp");
+    builder.register(McpServerRegistration::from_extension(
+        "shared".to_string(),
+        "configured_extension",
+        /*contribution_order*/ 1,
+        configured.clone(),
+    ));
+
+    let catalog = builder.build();
+
+    assert_eq!(
+        catalog.configured_servers(),
+        HashMap::from([("shared".to_string(), configured)])
+    );
+    assert!(catalog.effective_servers().is_empty());
+    assert_eq!(
+        catalog.conflicts(),
+        &[McpServerConflict {
+            name: "shared".to_string(),
+            outcome: register(extension_source("configured_extension")),
+            contenders: vec![
+                register(extension_source("runtime_extension")),
+                register(extension_source("configured_extension")),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn disabled_name_veto_disables_an_effective_extension_winner() {
+    let mut disabled = server("https://configured.example/mcp");
+    disabled.enabled = false;
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_config(
+        "shared".to_string(),
+        disabled,
+    ));
+    let mut builder = builder.build().to_builder();
+    builder.register(McpServerRegistration::from_effective_extension(
+        "shared".to_string(),
+        "runtime_extension",
+        /*contribution_order*/ 0,
+        effective_server("http://127.0.0.1:4321/mcp", "runtime-secret"),
+    ));
+
+    let effective = builder.build().effective_servers();
+
+    assert!(!effective["shared"].enabled());
+    let debug = format!("{:?}", effective["shared"]);
+    assert!(debug.contains("[REDACTED]"));
+    assert!(!debug.contains("runtime-secret"));
 }
 
 fn plugin(plugin_id: &str) -> McpPluginAttribution {
@@ -56,10 +156,6 @@ fn plugin_source(plugin_id: &str) -> McpServerSource {
 
 fn selected_plugin_source(plugin_id: &str) -> McpServerSource {
     McpServerSource::SelectedPlugin(plugin(plugin_id))
-}
-
-fn compatibility_source(id: &str) -> McpServerSource {
-    McpServerSource::Compatibility { id: id.to_string() }
 }
 
 fn extension_source(id: &str) -> McpServerSource {
@@ -97,11 +193,6 @@ fn source_precedence_preserves_the_winning_registration() {
         plugin("other-plugin@test"),
         /*plugin_order*/ 1,
         server("https://other-plugin.example/mcp"),
-    ));
-    builder.register(McpServerRegistration::from_compatibility(
-        "docs".to_string(),
-        "legacy",
-        server("https://compatibility.example/mcp"),
     ));
     builder.register(McpServerRegistration::from_config(
         "docs".to_string(),
@@ -179,10 +270,7 @@ fn disabled_winner_remains_a_veto_when_the_catalog_is_extended() {
 
     assert_eq!(
         resolved.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: extension_source("hosted"),
-            config: expected,
-        })
+        Some(&resolved_server(extension_source("hosted"), expected))
     );
 }
 
@@ -211,10 +299,7 @@ fn disabled_discovered_plugin_remains_a_veto_for_runtime_overlays() {
 
     assert_eq!(
         resolved.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: extension_source("hosted"),
-            config: expected,
-        })
+        Some(&resolved_server(extension_source("hosted"), expected))
     );
 }
 
@@ -258,7 +343,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
     let selected = server("https://selected-alpha.example/mcp");
     let mut discovered = server("https://local.example/mcp");
     discovered.enabled = false;
-    discovered.default_tools_approval_mode = Some(AppToolApproval::Auto);
+    discovered.default_tools_approval_mode = Some(McpToolApproval::Auto);
     let mut builder = ResolvedMcpCatalog::builder();
     builder.register(McpServerRegistration::from_plugin(
         "docs".to_string(),
@@ -283,10 +368,10 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
 
     assert_eq!(
         catalog.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: selected_plugin_source("selected-alpha"),
-            config: selected,
-        })
+        Some(&resolved_server(
+            selected_plugin_source("selected-alpha"),
+            selected,
+        ))
     );
     assert_eq!(
         catalog.plugin_attributions_by_server_name(),
@@ -304,17 +389,6 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         }]
     );
 
-    let refreshed = server("https://refreshed.example/mcp");
-    let catalog =
-        catalog.with_materialized_servers(HashMap::from([("docs".to_string(), refreshed.clone())]));
-    assert_eq!(
-        catalog.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: selected_plugin_source("selected-alpha"),
-            config: refreshed,
-        })
-    );
-
     let mut builder = catalog.to_builder();
     let configured = server("https://config.example/mcp");
     builder.register(McpServerRegistration::from_config(
@@ -325,10 +399,94 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
 
     assert_eq!(
         catalog.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: McpServerSource::Config,
-            config: configured,
-        })
+        Some(&resolved_server(McpServerSource::Config, configured))
+    );
+}
+
+#[test]
+fn selected_plugin_recomputes_a_disabled_discovered_plugin_veto_before_overlays() {
+    let mut disabled = server("https://discovered.example/mcp");
+    disabled.enabled = false;
+    let selected = server("https://selected.example/mcp");
+    let extension = server("https://extension.example/mcp");
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_plugin(
+        "docs".to_string(),
+        plugin("discovered"),
+        /*plugin_order*/ 0,
+        disabled,
+    ));
+
+    let mut builder = builder.build().to_builder_recomputing_disabled_vetoes();
+    builder.register(McpServerRegistration::from_selected_plugin(
+        "docs".to_string(),
+        plugin("selected"),
+        /*selection_order*/ 0,
+        selected.clone(),
+    ));
+    let catalog = builder.build();
+
+    assert_eq!(
+        catalog.server("docs"),
+        Some(&resolved_server(
+            selected_plugin_source("selected"),
+            selected,
+        ))
+    );
+
+    let mut builder = catalog.to_builder();
+    builder.register(McpServerRegistration::from_extension(
+        "docs".to_string(),
+        "runtime",
+        /*contribution_order*/ 0,
+        extension.clone(),
+    ));
+
+    assert_eq!(
+        builder.build().server("docs"),
+        Some(&resolved_server(extension_source("runtime"), extension))
+    );
+}
+
+#[test]
+fn selected_plugin_rebuild_preserves_an_explicit_disabled_name_veto() {
+    let selected = server("https://selected.example/mcp");
+    let extension = server("https://extension.example/mcp");
+    let mut expected_extension = extension.clone();
+    expected_extension.enabled = false;
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.disable("docs".to_string());
+
+    let mut builder = builder.build().to_builder_recomputing_disabled_vetoes();
+    builder.register(McpServerRegistration::from_selected_plugin(
+        "docs".to_string(),
+        plugin("selected"),
+        /*selection_order*/ 0,
+        selected,
+    ));
+    let catalog = builder.build();
+    assert!(
+        !catalog
+            .server("docs")
+            .expect("selected server")
+            .config()
+            .enabled
+    );
+
+    let mut builder = catalog.to_builder();
+    builder.register(McpServerRegistration::from_extension(
+        "docs".to_string(),
+        "runtime",
+        /*contribution_order*/ 0,
+        extension,
+    ));
+
+    assert_eq!(
+        builder.build().server("docs"),
+        Some(&resolved_server(
+            extension_source("runtime"),
+            expected_extension,
+        ))
     );
 }
 
@@ -356,24 +514,23 @@ fn disabled_selected_plugin_does_not_veto_runtime_overlays() {
 
     assert_eq!(
         resolved.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: extension_source("hosted"),
-            config: extension,
-        })
+        Some(&resolved_server(extension_source("hosted"), extension))
     );
 }
 
 #[test]
 fn equal_precedence_uses_insertion_order_not_source_identity() {
     let mut builder = ResolvedMcpCatalog::builder();
-    builder.register(McpServerRegistration::from_compatibility(
+    builder.register(McpServerRegistration::from_extension(
         "docs".to_string(),
         "z-first",
+        /*contribution_order*/ 0,
         server("https://first.example/mcp"),
     ));
-    builder.register(McpServerRegistration::from_compatibility(
+    builder.register(McpServerRegistration::from_extension(
         "docs".to_string(),
         "a-second",
+        /*contribution_order*/ 0,
         server("https://second.example/mcp"),
     ));
 
@@ -381,13 +538,17 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
 
     assert_eq!(
         catalog.server("docs"),
-        Some(&super::ResolvedMcpServer {
-            source: compatibility_source("a-second"),
-            config: server("https://second.example/mcp"),
-        })
+        Some(&resolved_server(
+            extension_source("a-second"),
+            server("https://second.example/mcp"),
+        ))
     );
     let mut builder = catalog.to_builder();
-    builder.remove_compatibility("docs".to_string(), "remove-last");
+    builder.remove_extension(
+        "docs".to_string(),
+        "remove-last",
+        /*contribution_order*/ 0,
+    );
 
     let catalog = builder.build();
 
@@ -396,11 +557,11 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
         catalog.conflicts(),
         &[McpServerConflict {
             name: "docs".to_string(),
-            outcome: remove(compatibility_source("remove-last")),
+            outcome: remove(extension_source("remove-last")),
             contenders: vec![
-                register(compatibility_source("z-first")),
-                register(compatibility_source("a-second")),
-                remove(compatibility_source("remove-last")),
+                register(extension_source("z-first")),
+                register(extension_source("a-second")),
+                remove(extension_source("remove-last")),
             ],
         }]
     );

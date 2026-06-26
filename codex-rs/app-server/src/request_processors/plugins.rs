@@ -35,6 +35,7 @@ pub(crate) struct PluginRequestProcessor {
     analytics_events_client: AnalyticsEventsClient,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
 }
 
 fn plugin_skills_to_info(
@@ -346,6 +347,7 @@ impl PluginRequestProcessor {
         analytics_events_client: AnalyticsEventsClient,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        codex_apps: Arc<codex_mcp_extension::CodexAppsMcpExtension>,
     ) -> Self {
         Self {
             auth_manager,
@@ -354,6 +356,7 @@ impl PluginRequestProcessor {
             analytics_events_client,
             config_manager,
             workspace_settings_cache,
+            codex_apps,
         }
     }
 
@@ -1754,15 +1757,9 @@ impl PluginRequestProcessor {
             return Vec::new();
         }
 
-        let environment_manager = self.thread_manager.environment_manager();
-        let (all_connectors_result, accessible_connectors_result) = tokio::join!(
+        let (all_connectors_result, accessible_snapshot_result) = tokio::join!(
             connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
-            connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-                config,
-                /*force_refetch*/ true,
-                Arc::clone(&environment_manager),
-                self.thread_manager.mcp_manager(),
-            ),
+            self.codex_apps.refresh_snapshot(config),
         );
 
         let all_connectors = match all_connectors_result {
@@ -1778,19 +1775,33 @@ impl PluginRequestProcessor {
             }
         };
         let all_connectors = connectors::connectors_for_plugin_apps(all_connectors, plugin_apps);
-        let (accessible_connectors, codex_apps_ready) = match accessible_connectors_result {
-            Ok(status) => (status.connectors, status.codex_apps_ready),
+        let (accessible_connectors, codex_apps_ready) = match accessible_snapshot_result {
+            Ok(Some(snapshot)) => (
+                super::apps_processor::accessible_app_infos_from_snapshot(
+                    &snapshot,
+                    &codex_connectors::ConnectorSnapshot::default(),
+                ),
+                true,
+            ),
+            Ok(None) => (Vec::new(), true),
             Err(err) => {
                 warn!(
                     plugin = plugin_id,
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
-                (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config)
-                        .await
-                        .unwrap_or_default(),
-                    false,
-                )
+                match self.codex_apps.current_snapshot(config).await {
+                    Some(snapshot) => {
+                        let ready = snapshot.is_live_inventory();
+                        (
+                            super::apps_processor::accessible_app_infos_from_snapshot(
+                                &snapshot,
+                                &codex_connectors::ConnectorSnapshot::default(),
+                            ),
+                            ready,
+                        )
+                    }
+                    None => (Vec::new(), false),
+                }
             }
         };
         if !codex_apps_ready {

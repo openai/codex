@@ -1,203 +1,177 @@
 use std::sync::Arc;
 
-use codex_config::McpServerTransportConfig;
+use codex_apps::CODEX_APPS_RESOURCE_MCP_SERVER_NAME;
 use codex_core::McpManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core_plugins::PluginsManager;
+use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-#[tokio::test]
-async fn contributes_hosted_plugin_runtime_without_an_executor() -> TestResult {
-    let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![
-            ("features.apps".to_string(), true.into()),
-            ("chatgpt_base_url".to_string(), "https://chatgpt.com".into()),
-        ])
-        .build()
-        .await?;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let manager = installed_manager(&config);
-
-    let servers = manager.effective_servers(&config, Some(&auth)).await;
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .and_then(|server| server.configured_config())
-        .ok_or("hosted plugin runtime should be contributed as a configured server")?;
-    let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
-        panic!("hosted plugin runtime should use streamable HTTP");
-    };
-    assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
-
-    Ok(())
+fn test_apps_extension(
+    auth_manager: Arc<AuthManager>,
+    plugins_manager: Arc<PluginsManager>,
+) -> codex_mcp_extension::CodexAppsMcpExtension {
+    codex_mcp_extension::CodexAppsMcpExtension::new(
+        auth_manager,
+        Arc::new(EnvironmentManager::without_environments()),
+        plugins_manager,
+    )
 }
 
 #[tokio::test]
-async fn runtime_overlay_preserves_disabled_server() -> TestResult {
+async fn manager_without_apps_extension_has_no_reserved_singleton() -> TestResult {
     let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![
-            ("features.apps".to_string(), true.into()),
-            (
-                "mcp_servers.codex_apps.url".to_string(),
-                "https://example.com/mcp".into(),
-            ),
-            ("mcp_servers.codex_apps.enabled".to_string(), false.into()),
-        ])
-        .build()
-        .await?;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let manager = installed_manager(&config);
-
-    let servers = manager.effective_servers(&config, Some(&auth)).await;
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .ok_or("hosted plugin runtime should remain configured")?;
-
-    assert!(!server.enabled());
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_fallback_overwrites_reserved_config_without_an_extension() -> TestResult {
-    let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![
-            ("features.apps".to_string(), true.into()),
-            (
-                "mcp_servers.codex_apps.url".to_string(),
-                "https://example.com/mcp".into(),
-            ),
-        ])
-        .build()
-        .await?;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ true,
+        /*orchestrator_mcp_enabled*/ true,
+    )
+    .await?;
     let manager = McpManager::new(Arc::new(PluginsManager::new(
         config.codex_home.to_path_buf(),
     )));
 
-    let servers = manager.effective_servers(&config, Some(&auth)).await;
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .and_then(|server| server.configured_config())
-        .ok_or("legacy Apps MCP should be present")?;
-    let McpServerTransportConfig::StreamableHttp { url, .. } = &server.transport else {
-        panic!("legacy Apps MCP should use streamable HTTP");
-    };
-    assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+    let servers = manager.effective_servers(&config).await;
 
+    assert!(!servers.contains_key(CODEX_APPS_RESOURCE_MCP_SERVER_NAME));
     Ok(())
 }
 
 #[tokio::test]
-async fn later_extension_can_remove_same_name_registration() -> TestResult {
+async fn guardian_apps_feature_gate_does_not_touch_the_shared_service() -> TestResult {
     let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![("features.apps".to_string(), true.into())])
-        .build()
-        .await?;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let mut builder = ExtensionRegistryBuilder::new();
-    codex_mcp_extension::install(&mut builder);
-    builder.mcp_server_contributor(Arc::new(RemoveCodexApps));
-    let manager = McpManager::new_with_extensions(
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ false,
+        /*orchestrator_mcp_enabled*/ true,
+    )
+    .await?;
+    let service = test_apps_extension(
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
         Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
-        Arc::new(builder.build()),
     );
 
-    let servers = manager.effective_servers(&config, Some(&auth)).await;
+    let contributions = service
+        .contribute(McpServerContributionContext::global(&config))
+        .await;
 
-    assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+    assert!(contributions.is_empty());
+    assert!(service.snapshot(&config).await?.is_none());
     Ok(())
 }
 
 #[tokio::test]
-async fn hosted_apps_mcp_requires_chatgpt_auth() -> TestResult {
+async fn orchestrator_gate_does_not_touch_the_shared_service() -> TestResult {
     let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cli_overrides(vec![("features.apps".to_string(), true.into())])
-        .build()
-        .await?;
-    let auth = CodexAuth::from_api_key("test");
-    let manager = installed_manager(&config);
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ true,
+        /*orchestrator_mcp_enabled*/ false,
+    )
+    .await?;
+    let service = test_apps_extension(
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
+    );
 
-    let servers = manager.effective_servers(&config, Some(&auth)).await;
-    assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+    let contributions = service
+        .contribute(McpServerContributionContext::global(&config))
+        .await;
 
+    assert!(contributions.is_empty());
     Ok(())
 }
 
 #[tokio::test]
-async fn disabled_apps_remove_reserved_server_config_for_all_hosts() -> TestResult {
+async fn apps_extension_requires_codex_backend_auth_without_connecting() -> TestResult {
     let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ true,
+        /*orchestrator_mcp_enabled*/ true,
+    )
+    .await?;
+    let service = test_apps_extension(
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test")),
+        Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
+    );
+
+    assert!(service.snapshot(&config).await?.is_none());
+    assert!(
+        service
+            .contribute(McpServerContributionContext::global(&config))
+            .await
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn install_registers_the_shared_instance() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ false,
+        /*orchestrator_mcp_enabled*/ true,
+    )
+    .await?;
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let service = Arc::new(test_apps_extension(
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        Arc::clone(&plugins_manager),
+    ));
+    let mut builder = ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install(&mut builder, service);
+    let manager = McpManager::new_with_extensions(plugins_manager, Arc::new(builder.build()));
+
+    assert!(manager.effective_servers(&config).await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_extension_bundle_owns_registration_and_shutdown() -> TestResult {
+    let codex_home = tempfile::tempdir()?;
+    let config = apps_config(
+        codex_home.path(),
+        /*apps_enabled*/ false,
+        /*orchestrator_mcp_enabled*/ true,
+    )
+    .await?;
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let extensions = codex_mcp_extension::McpHostExtensions::new(
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        Arc::new(EnvironmentManager::without_environments()),
+        Arc::clone(&plugins_manager),
+    );
+    let manager = McpManager::new_with_extensions(plugins_manager, extensions.registry());
+
+    assert!(manager.effective_servers(&config).await.is_empty());
+    extensions.shutdown().await;
+    Ok(())
+}
+
+async fn apps_config(
+    codex_home: &std::path::Path,
+    apps_enabled: bool,
+    orchestrator_mcp_enabled: bool,
+) -> Result<Config, std::io::Error> {
+    ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(codex_home.to_path_buf()))
         .cli_overrides(vec![
-            ("features.apps".to_string(), false.into()),
+            ("features.apps".to_string(), apps_enabled.into()),
             (
-                "mcp_servers.codex_apps.url".to_string(),
-                "https://example.com/mcp".into(),
+                "orchestrator.mcp.enabled".to_string(),
+                orchestrator_mcp_enabled.into(),
             ),
         ])
         .build()
-        .await?;
-    let managers = [
-        installed_manager(&config),
-        McpManager::new(Arc::new(PluginsManager::new(
-            config.codex_home.to_path_buf(),
-        ))),
-    ];
-    for manager in managers {
-        let servers = manager.runtime_servers(&config).await;
-        assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
-    }
-    Ok(())
-}
-
-fn installed_manager(config: &Config) -> McpManager {
-    let mut builder = ExtensionRegistryBuilder::new();
-    codex_mcp_extension::install(&mut builder);
-    McpManager::new_with_extensions(
-        Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
-        Arc::new(builder.build()),
-    )
-}
-
-struct RemoveCodexApps;
-
-impl McpServerContributor<Config> for RemoveCodexApps {
-    fn id(&self) -> &'static str {
-        "remove_codex_apps"
-    }
-
-    fn contribute<'a>(
-        &'a self,
-        _context: McpServerContributionContext<'a, Config>,
-    ) -> codex_extension_api::ExtensionFuture<'a, Vec<McpServerContribution>> {
-        Box::pin(async move {
-            vec![McpServerContribution::Remove {
-                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            }]
-        })
-    }
+        .await
 }

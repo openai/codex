@@ -1020,7 +1020,7 @@ pub(crate) fn build_guardian_review_session_config(
         .map_err(|err| {
             anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
-    guardian_config.include_apps_instructions = false;
+    guardian_config.orchestrator_mcp_enabled = false;
     guardian_config
         .mcp_servers
         .set(HashMap::new())
@@ -1047,7 +1047,6 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::Collab,
         Feature::MultiAgentV2,
         Feature::CodexHooks,
-        Feature::Apps,
         Feature::Plugins,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,

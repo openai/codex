@@ -1,9 +1,12 @@
 use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
+use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use async_channel::bounded;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::McpToolCallStatus;
+use codex_protocol::mcp_approval_meta::McpToolSource;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -396,6 +399,129 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 }
 
 #[tokio::test]
+async fn delegated_mcp_begin_uses_only_pinned_approval_context_after_runtime_refresh() {
+    let (session, turn_context, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut turn_context = Arc::try_unwrap(turn_context).expect("single turn context ref");
+    let mut config = turn_context.config.as_ref().clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    turn_context.config = Arc::new(config);
+    let turn_context = Arc::new(turn_context);
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let pinned_context = McpToolCallApprovalContext {
+        guardian_request: GuardianApprovalRequest::McpToolCall {
+            id: "call-1".to_string(),
+            server: "shared_server".to_string(),
+            tool_name: "dangerous_tool".to_string(),
+            arguments: Some(serde_json::json!({"source": "pinned"})),
+            approval_source: McpToolSource::new(
+                "pinned-source",
+                "Pinned source",
+                /*description*/ None,
+            ),
+            connected_account_email: Some("pinned@example.com".to_string()),
+            tool_title: Some("Pinned tool".to_string()),
+            tool_description: None,
+            annotations: None,
+        },
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
+    };
+    session
+        .record_mcp_tool_call_approval_context("call-1", pinned_context.clone())
+        .await;
+
+    let previous_runtime = session.services.latest_mcp_runtime();
+    let replacement_manager = codex_mcp::McpConnectionManager::new_uninitialized(
+        previous_runtime.config().prefix_mcp_tool_names,
+    );
+    let replacement_runtime = session.services.publish_mcp_runtime(
+        Arc::new(previous_runtime.config().clone()),
+        previous_runtime.runtime_context().clone(),
+        previous_runtime.available_environment_ids().to_vec(),
+        previous_runtime.inputs().clone(),
+        replacement_manager,
+    );
+    assert!(!Arc::ptr_eq(&previous_runtime, &replacement_runtime));
+
+    let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (tx_ops, _rx_ops) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub: tx_ops,
+        rx_event: rx_events,
+        agent_status,
+        session: Arc::clone(&session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+    let (tx_forwarded, rx_forwarded) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let pending_mcp_approval_contexts = Arc::new(Mutex::new(HashMap::new()));
+    let forward = tokio::spawn(forward_events(
+        codex,
+        tx_forwarded,
+        Arc::clone(&session),
+        Arc::clone(&turn_context),
+        Arc::clone(&pending_mcp_approval_contexts),
+        CancellationToken::new(),
+    ));
+
+    tx_events
+        .send(Event {
+            id: turn_context.sub_id.clone(),
+            msg: McpToolCallItem::new(
+                "call-1".to_string(),
+                "shared_server".to_string(),
+                "dangerous_tool".to_string(),
+                serde_json::json!({"source": "event"}),
+                McpToolCallStatus::InProgress,
+            )
+            .as_legacy_begin_event(),
+        })
+        .await
+        .expect("send begin event");
+    let forwarded = timeout(Duration::from_secs(1), rx_forwarded.recv())
+        .await
+        .expect("begin event timed out")
+        .expect("begin event was not forwarded");
+    assert!(matches!(forwarded.msg, EventMsg::McpToolCallBegin(_)));
+
+    tx_events
+        .send(Event {
+            id: turn_context.sub_id.clone(),
+            msg: McpToolCallItem::new(
+                "call-without-context".to_string(),
+                "shared_server".to_string(),
+                "dangerous_tool".to_string(),
+                serde_json::Value::Null,
+                McpToolCallStatus::InProgress,
+            )
+            .as_legacy_begin_event(),
+        })
+        .await
+        .expect("send begin event without pinned context");
+    drop(tx_events);
+    let forwarded = timeout(Duration::from_secs(1), rx_forwarded.recv())
+        .await
+        .expect("begin event without context timed out")
+        .expect("begin event without context was not forwarded");
+    assert!(matches!(forwarded.msg, EventMsg::McpToolCallBegin(_)));
+
+    timeout(Duration::from_secs(1), forward)
+        .await
+        .expect("event forwarder did not finish")
+        .expect("event forwarder task failed");
+    {
+        let pending = pending_mcp_approval_contexts.lock().await;
+        assert_eq!(pending.get("call-1"), Some(&pinned_context));
+        assert_eq!(pending.get("call-without-context"), None);
+    }
+    assert_eq!(
+        session.take_mcp_tool_call_approval_context("call-1").await,
+        None
+    );
+}
+
+#[tokio::test]
 async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
@@ -409,15 +535,19 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
         .expect("set on-request policy");
     let parent_ctx = Arc::new(parent_ctx);
 
-    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+    let pending_mcp_approval_contexts = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
-        PendingMcpInvocation {
-            invocation: McpInvocation {
-                server: "custom_server".to_string(),
-                tool: "dangerous_tool".to_string(),
-                arguments: None,
-            },
-            metadata: None,
+        McpToolCallApprovalContext {
+            guardian_request: build_guardian_mcp_tool_review_request(
+                "call-1",
+                &McpInvocation {
+                    server: "custom_server".to_string(),
+                    tool: "dangerous_tool".to_string(),
+                    arguments: None,
+                },
+                /*metadata*/ None,
+            ),
+            approvals_reviewer: ApprovalsReviewer::AutoReview,
         },
     )])));
     let cancel_token = CancellationToken::new();
@@ -426,14 +556,14 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
         &parent_ctx,
-        &pending_mcp_invocations,
+        &pending_mcp_approval_contexts,
         &RequestUserInputEvent {
             call_id: "call-1".to_string(),
             turn_id: "child-turn-1".to_string(),
             questions: vec![RequestUserInputQuestion {
                 id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
-                header: "Approve app tool call?".to_string(),
-                question: "Allow this app tool?".to_string(),
+                header: "Approve MCP tool call?".to_string(),
+                question: "Allow this MCP tool?".to_string(),
                 is_other: false,
                 is_secret: false,
                 options: None,
@@ -461,15 +591,19 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
-    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+    let pending_mcp_approval_contexts = Arc::new(Mutex::new(HashMap::from([(
         "call-1".to_string(),
-        PendingMcpInvocation {
-            invocation: McpInvocation {
-                server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool: "dangerous_tool".to_string(),
-                arguments: None,
-            },
-            metadata: None,
+        McpToolCallApprovalContext {
+            guardian_request: build_guardian_mcp_tool_review_request(
+                "call-1",
+                &McpInvocation {
+                    server: "test_server".to_string(),
+                    tool: "dangerous_tool".to_string(),
+                    arguments: None,
+                },
+                /*metadata*/ None,
+            ),
+            approvals_reviewer: ApprovalsReviewer::User,
         },
     )])));
     let cancel_token = CancellationToken::new();
@@ -479,8 +613,8 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
         turn_id: "child-turn-1".to_string(),
         questions: vec![RequestUserInputQuestion {
             id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
-            header: "Approve app tool call?".to_string(),
-            question: "Allow this app tool?".to_string(),
+            header: "Approve MCP tool call?".to_string(),
+            question: "Allow this MCP tool?".to_string(),
             is_other: false,
             is_secret: false,
             options: None,
@@ -490,7 +624,7 @@ async fn delegated_mcp_user_reviewer_returns_none_without_metadata() {
     let response = maybe_auto_review_mcp_request_user_input(
         &parent_session,
         &parent_ctx,
-        &pending_mcp_invocations,
+        &pending_mcp_approval_contexts,
         &event,
         &cancel_token,
     )

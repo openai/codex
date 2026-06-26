@@ -1,3 +1,4 @@
+use super::session::PendingMcpServerRefresh;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
@@ -13,6 +14,8 @@ use crate::session::step_context::StepContext;
 use crate::shell::default_user_shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillRenderSideEffects;
+use crate::skills::model::SkillDependencies;
+use crate::skills::model::SkillToolDependency;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
@@ -71,7 +74,6 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_path_uri::PathUri;
 use tracing::Span;
 
-use crate::connectors::AppInfo;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::ActiveTurn;
 use crate::state::TaskKind;
@@ -180,7 +182,6 @@ use uuid::Uuid;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
-use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -194,7 +195,13 @@ impl StepContext {
             Arc::clone(&turn),
             environments,
             Vec::new(),
-            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(
+                Arc::clone(&turn.config),
+                codex_mcp::McpRuntimeContext::new(
+                    Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+                    turn.config.cwd.to_path_buf(),
+                ),
+            ),
             /*loaded_agents_md*/ None,
         ))
     }
@@ -313,18 +320,6 @@ fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
     }
 }
 
-fn skill_message(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    }
-}
-
 #[tokio::test]
 async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_startup_prewarm() {
     let _trace_test_context = install_test_tracing("codex-core-tests");
@@ -390,7 +385,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     let response = session
         .request_mcp_server_elicitation(
             turn_context.as_ref(),
-            "codex_apps".to_string(),
+            "sample_server".to_string(),
             RequestId::String("request-1".into()),
             ElicitationRequest::Form {
                 meta: None,
@@ -636,26 +631,6 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     ToolCallRuntime::new(router, session, step_context, tracker)
-}
-
-fn make_connector(id: &str, name: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        icon_assets: None,
-        icon_dark_assets: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: true,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }
 }
 
 #[test]
@@ -1264,39 +1239,6 @@ async fn get_base_instructions_no_user_content() {
 }
 
 #[tokio::test]
-async fn reload_user_config_layer_updates_effective_apps_config() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let codex_home = session.codex_home().await;
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
-    let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
-    std::fs::write(
-        &config_toml_path,
-        "[apps.calendar]\nenabled = false\ndestructive_enabled = false\n",
-    )
-    .expect("write user config");
-
-    session.reload_user_config_layer().await;
-
-    let config = session.get_config().await;
-    let apps_toml = config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .cloned()
-        .expect("apps table");
-    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
-        .expect("deserialize apps config");
-    let app = apps
-        .apps
-        .get("calendar")
-        .expect("calendar app config exists");
-
-    assert!(!app.enabled);
-    assert_eq!(app.destructive_enabled, Some(false));
-}
-
-#[tokio::test]
 async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
     let (session, _turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1519,7 +1461,7 @@ async fn reload_user_config_layer_updates_effective_tool_suggest_config() {
         &config_toml_path,
         r#"[tool_suggest]
 disabled_tools = [
-  { type = "connector", id = " calendar " },
+  { type = "plugin", id = " calendar@openai-curated " },
   { type = "plugin", id = "slack@openai-curated" },
 ]
 "#,
@@ -1532,7 +1474,7 @@ disabled_tools = [
     assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
-            ToolSuggestDisabledTool::connector("calendar"),
+            ToolSuggestDisabledTool::plugin("calendar@openai-curated"),
             ToolSuggestDisabledTool::plugin("slack@openai-curated"),
         ]
     );
@@ -1546,15 +1488,14 @@ async fn refresh_runtime_config_updates_runtime_refreshable_fields_and_keeps_ses
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
-        r#"[apps.calendar]
-enabled = false
-destructive_enabled = false
-
-[tool_suggest]
+        r#"[tool_suggest]
 disabled_tools = [
-  { type = "connector", id = " calendar " },
+  { type = "plugin", id = " calendar@openai-curated " },
   { type = "plugin", id = "slack@openai-curated" },
 ]
+
+[mcp_servers.refresh_probe]
+url = "http://127.0.0.1:9/mcp"
 "#,
     )
     .expect("write user config");
@@ -1567,74 +1508,22 @@ disabled_tools = [
     session.refresh_runtime_config(next_config).await;
 
     let config = session.get_config().await;
-    let apps_toml = config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .cloned()
-        .expect("apps table");
-    let apps = codex_config::types::AppsConfigToml::deserialize(apps_toml)
-        .expect("deserialize apps config");
-    let app = apps
-        .apps
-        .get("calendar")
-        .expect("calendar app config exists");
-
-    assert!(!app.enabled);
-    assert_eq!(app.destructive_enabled, Some(false));
     assert_eq!(config.model, original.model);
     assert_eq!(config.notify, original.notify);
     assert_eq!(
+        config.mcp_servers.get().get("refresh_probe"),
+        Some(&test_http_mcp_server("http://127.0.0.1:9/mcp"))
+    );
+    assert_eq!(
         config.tool_suggest.disabled_tools,
         vec![
-            ToolSuggestDisabledTool::connector("calendar"),
+            ToolSuggestDisabledTool::plugin("calendar@openai-curated"),
             ToolSuggestDisabledTool::plugin("slack@openai-curated"),
         ]
     );
-}
-
-#[test]
-fn collect_explicit_app_ids_from_skill_items_includes_linked_mentions() {
-    let connectors = vec![make_connector("calendar", "Calendar")];
-    let skill_items = vec![skill_message(
-        "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse [$calendar](app://calendar)\n</skill>",
-    )];
-
-    let connector_ids =
-        collect_explicit_app_ids_from_skill_items(&skill_items, &connectors, &HashMap::new());
-
-    assert_eq!(connector_ids, HashSet::from(["calendar".to_string()]));
-}
-
-#[test]
-fn collect_explicit_app_ids_from_skill_items_resolves_unambiguous_plain_mentions() {
-    let connectors = vec![make_connector("calendar", "Calendar")];
-    let skill_items = vec![skill_message(
-        "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse $calendar\n</skill>",
-    )];
-
-    let connector_ids =
-        collect_explicit_app_ids_from_skill_items(&skill_items, &connectors, &HashMap::new());
-
-    assert_eq!(connector_ids, HashSet::from(["calendar".to_string()]));
-}
-
-#[test]
-fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_conflicts() {
-    let connectors = vec![make_connector("calendar", "Calendar")];
-    let skill_items = vec![skill_message(
-        "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse $calendar\n</skill>",
-    )];
-    let skill_name_counts_lower = HashMap::from([("calendar".to_string(), 1)]);
-
-    let connector_ids = collect_explicit_app_ids_from_skill_items(
-        &skill_items,
-        &connectors,
-        &skill_name_counts_lower,
-    );
-
-    assert_eq!(connector_ids, HashSet::<String>::new());
+    let mcp_source_config = session.mcp_source_config().await;
+    assert_eq!(mcp_source_config.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(mcp_source_config.notify, Some(vec!["echo".to_string()]));
 }
 
 #[tokio::test]
@@ -2663,7 +2552,7 @@ async fn config_change_contributor_observes_effective_config_changes() {
         codex_home.join(CONFIG_TOML_FILE),
         r#"[tool_suggest]
 disabled_tools = [
-  { type = "connector", id = " calendar " },
+  { type = "plugin", id = " calendar@openai-curated " },
   { type = "plugin", id = "slack@openai-curated" },
 ]
 "#,
@@ -2673,7 +2562,7 @@ disabled_tools = [
     session.refresh_runtime_config(next_config).await;
 
     let expected_disabled_tools = vec![
-        ToolSuggestDisabledTool::connector("calendar"),
+        ToolSuggestDisabledTool::plugin("calendar@openai-curated"),
         ToolSuggestDisabledTool::plugin("slack@openai-curated"),
     ];
     let expected = vec![
@@ -4424,6 +4313,7 @@ async fn resolved_environments_for_configuration(
         default_user_shell(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
+        /*retain_initial_handles*/ false,
         /*non_blocking_snapshots*/ false,
     );
     turn_environments.update_selections(session_configuration.environment_selections());
@@ -5352,6 +5242,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_environments,
+        /*retain_initial_handles*/ false,
         /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
@@ -5367,13 +5258,20 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
+    let mcp_runtime_context = Session::mcp_runtime_context_for_environments(
+        turn_environments.environment_manager(),
+        &resolved_turn_environments,
+        session_configuration.cwd().to_path_buf(),
+    );
+    let mcp_runtime = crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(
+        Arc::clone(&config),
+        mcp_runtime_context,
+    );
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
-        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        mcp_refresh_lock: Mutex::new(()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -5490,7 +5388,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        pending_mcp_server_refresh_config: Mutex::new(None),
+        pending_mcp_server_refresh: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7427,6 +7325,7 @@ where
         default_user_shell(),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
+        /*retain_initial_handles*/ false,
         /*non_blocking_snapshots*/ false,
     ));
     let environment = Arc::clone(
@@ -7442,13 +7341,20 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
-    let mcp_runtime =
-        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
+    let mcp_runtime_context = Session::mcp_runtime_context_for_environments(
+        turn_environments.environment_manager(),
+        &resolved_turn_environments,
+        session_configuration.cwd().to_path_buf(),
+    );
+    let mcp_runtime = crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(
+        Arc::clone(&config),
+        mcp_runtime_context,
+    );
     let services = SessionServices {
         mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
         mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
-        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        mcp_refresh_lock: Mutex::new(()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -7565,7 +7471,7 @@ where
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        pending_mcp_server_refresh_config: Mutex::new(None),
+        pending_mcp_server_refresh: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
@@ -7633,31 +7539,19 @@ async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
         auth_keyring_backend_kind,
     };
     {
-        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
-        *guard = Some(refresh_config);
+        let mut guard = session.pending_mcp_server_refresh.lock().await;
+        *guard = Some(PendingMcpServerRefresh::SourceLess(refresh_config));
     }
 
     assert!(!old_token.is_cancelled());
-    assert!(
-        session
-            .pending_mcp_server_refresh_config
-            .lock()
-            .await
-            .is_some()
-    );
+    assert!(session.pending_mcp_server_refresh.lock().await.is_some());
 
     session
         .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
     assert!(!old_token.is_cancelled());
-    assert!(
-        session
-            .pending_mcp_server_refresh_config
-            .lock()
-            .await
-            .is_none()
-    );
+    assert!(session.pending_mcp_server_refresh.lock().await.is_none());
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
     let new_runtime = session.services.latest_mcp_runtime();
@@ -7704,10 +7598,13 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
             tools: HashMap::new(),
         },
     )]))?;
+    let refresh_base = session.configured_mcp_base(&refresh_config).await;
     session
         .refresh_mcp_servers_now(
             step_context.turn.as_ref(),
-            &refresh_config,
+            refresh_base,
+            refresh_config.mcp_oauth_credentials_store_mode,
+            refresh_config.auth_keyring_backend_kind(),
             /*elicitation_reviewer*/ None,
         )
         .await;
@@ -7725,6 +7622,415 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
             .any(|name| name.to_string() == "list_mcp_resources")
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn environment_registry_change_reconciles_mcp_at_turn_boundary() {
+    let (session, turn_context) = make_session_and_context().await;
+    let environment_manager = session.services.turn_environments.environment_manager();
+    let before_manager = session.services.mcp_connection_manager.load_full();
+    let before_runtime_context = session
+        .services
+        .latest_mcp_runtime()
+        .runtime_context()
+        .clone();
+
+    environment_manager
+        .upsert_environment(
+            "replacement".to_string(),
+            "ws://127.0.0.1:1".to_string(),
+            /*connect_timeout*/ None,
+        )
+        .expect("publish replacement environment");
+    let replacement_runtime_context = Session::mcp_runtime_context_for_environments(
+        environment_manager,
+        &turn_context.environments,
+        {
+            #[allow(deprecated)]
+            turn_context.cwd.to_path_buf()
+        },
+    );
+    assert!(!before_runtime_context.has_same_launch_context(&replacement_runtime_context));
+
+    session
+        .refresh_mcp_servers_if_contributions_changed(&turn_context)
+        .await;
+
+    let after_manager = session.services.mcp_connection_manager.load_full();
+    assert!(!Arc::ptr_eq(&before_manager, &after_manager));
+    assert!(
+        session
+            .services
+            .latest_mcp_runtime()
+            .runtime_context()
+            .has_same_launch_context(&replacement_runtime_context)
+    );
+}
+
+fn test_http_mcp_server(url: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: codex_config::McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        auth: Default::default(),
+        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn new_session_config_replaces_stale_queued_base_and_contributor_policy() {
+    struct ConfigRecordingContributor {
+        disabled_tool_counts: Arc<std::sync::Mutex<Vec<usize>>>,
+        models: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        revision: std::sync::atomic::AtomicU64,
+    }
+
+    impl codex_extension_api::McpServerContributor<Config> for ConfigRecordingContributor {
+        fn id(&self) -> &'static str {
+            "config-recording-test"
+        }
+
+        fn revision(&self) -> u64 {
+            self.revision.load(std::sync::atomic::Ordering::Acquire)
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async move {
+                self.disabled_tool_counts
+                    .lock()
+                    .expect("disabled tool counts lock")
+                    .push(context.config().tool_suggest.disabled_tools.len());
+                self.models
+                    .lock()
+                    .expect("models lock")
+                    .push(context.config().model.clone());
+                Vec::new()
+            })
+        }
+    }
+
+    let (mut session, first_turn) = make_session_and_context().await;
+    let initial_model = session.get_config().await.model.clone();
+    let disabled_tool_counts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let models = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+    let contributor = Arc::new(ConfigRecordingContributor {
+        disabled_tool_counts: Arc::clone(&disabled_tool_counts),
+        models: Arc::clone(&models),
+        revision: std::sync::atomic::AtomicU64::new(0),
+    });
+    extensions.mcp_server_contributor(contributor.clone());
+    session.services.mcp_manager = Arc::new(McpManager::new_with_extensions(
+        Arc::clone(&session.services.plugins_manager),
+        Arc::new(extensions.build()),
+    ));
+
+    session
+        .refresh_mcp_servers_if_contributions_changed(&first_turn)
+        .await;
+
+    let mut queued_config = first_turn.config.as_ref().clone();
+    queued_config
+        .mcp_servers
+        .set(HashMap::from([(
+            "stale-queued".to_string(),
+            test_http_mcp_server("http://127.0.0.1:8/mcp"),
+        )]))
+        .expect("queued MCP config");
+    session
+        .queue_mcp_server_refresh_from_config(&queued_config)
+        .await;
+
+    let replacement_servers = HashMap::from([(
+        "replacement".to_string(),
+        test_http_mcp_server("http://127.0.0.1:9/mcp"),
+    )]);
+    let mut next_config = (*session.mcp_source_config().await).clone();
+    next_config.model = Some("fresh-mcp-source-model".to_string());
+    next_config.mcp_oauth_credentials_store_mode = OAuthCredentialsStoreMode::Keyring;
+    next_config
+        .features
+        .enable(Feature::SecretAuthStorage)
+        .expect("enable secret auth storage");
+    next_config.tool_suggest.disabled_tools =
+        vec![ToolSuggestDisabledTool::plugin("calendar@openai-curated")];
+    next_config
+        .mcp_servers
+        .set(replacement_servers.clone())
+        .expect("replacement MCP config");
+    session.refresh_runtime_config(next_config).await;
+    let contributor_config = session.mcp_source_config().await;
+
+    // The turn predates the session config update. Runtime contributor policy must not regress to
+    // that stale snapshot, and the queued base must not be combined with the newer policy.
+    session
+        .refresh_mcp_servers_if_requested(&first_turn, /*elicitation_reviewer*/ None)
+        .await;
+
+    assert_eq!(
+        *disabled_tool_counts
+            .lock()
+            .expect("disabled tool counts lock"),
+        vec![0, 1]
+    );
+    assert_eq!(
+        *models.lock().expect("models lock"),
+        vec![
+            initial_model.clone(),
+            Some("fresh-mcp-source-model".to_string())
+        ]
+    );
+    assert_eq!(session.get_config().await.model, initial_model);
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("replacement"),
+        Some("http://127.0.0.1:9")
+    );
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("stale-queued"),
+        None
+    );
+    let runtime = session.services.latest_mcp_runtime();
+    let publication = runtime.inputs();
+    assert!(Arc::ptr_eq(
+        &publication.contributor_config,
+        &contributor_config
+    ));
+    assert_eq!(
+        publication.configured_base.configured_servers(),
+        replacement_servers
+    );
+    assert_eq!(publication.store_mode, OAuthCredentialsStoreMode::Keyring);
+    assert_eq!(
+        publication.keyring_backend_kind,
+        AuthKeyringBackendKind::Secrets
+    );
+    contributor
+        .revision
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    session
+        .refresh_mcp_servers_if_contributions_changed(&first_turn)
+        .await;
+    assert_eq!(
+        *models.lock().expect("models lock"),
+        vec![
+            initial_model,
+            Some("fresh-mcp-source-model".to_string()),
+            Some("fresh-mcp-source-model".to_string()),
+        ]
+    );
+    let runtime = session.services.latest_mcp_runtime();
+    let publication = runtime.inputs();
+    assert!(Arc::ptr_eq(
+        &publication.contributor_config,
+        &contributor_config
+    ));
+    assert_eq!(publication.store_mode, OAuthCredentialsStoreMode::Keyring);
+    assert_eq!(
+        publication.keyring_backend_kind,
+        AuthKeyringBackendKind::Secrets
+    );
+}
+
+#[tokio::test]
+async fn skill_dependency_install_preserves_supplied_base_through_contributor_refresh() {
+    struct RevisionContributor {
+        use_second_server: std::sync::atomic::AtomicBool,
+        revision: std::sync::atomic::AtomicU64,
+    }
+
+    impl codex_extension_api::McpServerContributor<Config> for RevisionContributor {
+        fn id(&self) -> &'static str {
+            "revision-test"
+        }
+
+        fn revision(&self) -> u64 {
+            self.revision.load(std::sync::atomic::Ordering::Acquire)
+        }
+
+        fn contribute<'a>(
+            &'a self,
+            _context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async move {
+                let (name, url) = if self
+                    .use_second_server
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    ("second", "http://127.0.0.1:11/mcp")
+                } else {
+                    ("first", "http://127.0.0.1:10/mcp")
+                };
+                vec![codex_extension_api::McpServerContribution::Set {
+                    name: name.to_string(),
+                    config: Box::new(test_http_mcp_server(url)),
+                }]
+            })
+        }
+    }
+
+    let codex_home = tempfile::tempdir().expect("create Codex home");
+    let (session, turn_context, _rx) = make_session_and_context_with_auth_config_home_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        codex_home.path(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SkillMcpDependencyInstall)
+                .expect("enable skill MCP dependency install");
+        },
+    )
+    .await;
+    let mut session = Arc::into_inner(session).expect("sole session owner");
+    let contributor = Arc::new(RevisionContributor {
+        use_second_server: std::sync::atomic::AtomicBool::new(false),
+        revision: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_server_contributor(contributor.clone());
+    session.services.mcp_manager = Arc::new(McpManager::new_with_extensions(
+        Arc::clone(&session.services.plugins_manager),
+        Arc::new(extensions.build()),
+    ));
+
+    let replacement_servers = HashMap::from([(
+        "replacement".to_string(),
+        test_http_mcp_server("http://127.0.0.1:9/mcp"),
+    )]);
+    crate::mcp_skill_dependencies::maybe_install_mcp_dependencies(
+        &session,
+        &turn_context,
+        turn_context.config.as_ref(),
+        &[SkillMetadata {
+            name: "replacement-skill".to_string(),
+            description: "installs a replacement MCP server".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: Some(SkillDependencies {
+                tools: vec![SkillToolDependency {
+                    r#type: "mcp".to_string(),
+                    value: "replacement".to_string(),
+                    description: None,
+                    transport: Some("streamable_http".to_string()),
+                    command: None,
+                    url: Some("http://127.0.0.1:9/mcp".to_string()),
+                }],
+            }),
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/replacement-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+            plugin_id: None,
+        }],
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("replacement"),
+        Some("http://127.0.0.1:9")
+    );
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("first"),
+        Some("http://127.0.0.1:10")
+    );
+
+    contributor
+        .use_second_server
+        .store(true, std::sync::atomic::Ordering::Release);
+    contributor
+        .revision
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    session
+        .refresh_mcp_servers_if_contributions_changed(&turn_context)
+        .await;
+
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("replacement"),
+        Some("http://127.0.0.1:9")
+    );
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("first"),
+        None
+    );
+    assert_eq!(
+        session
+            .services
+            .mcp_connection_manager
+            .load_full()
+            .server_origin("second"),
+        Some("http://127.0.0.1:11")
+    );
+    let contributor_config = session.get_config().await;
+    let runtime = session.services.latest_mcp_runtime();
+    let publication = runtime.inputs();
+    assert!(Arc::ptr_eq(
+        &publication.contributor_config,
+        &contributor_config
+    ));
+    assert_ne!(
+        publication.contributor_config.mcp_servers.get(),
+        &replacement_servers
+    );
+    assert_eq!(
+        publication.configured_base.configured_servers(),
+        replacement_servers
+    );
+    assert_eq!(
+        publication.store_mode,
+        turn_context.config.mcp_oauth_credentials_store_mode
+    );
+    assert_eq!(
+        publication.keyring_backend_kind,
+        turn_context.config.auth_keyring_backend_kind()
+    );
+    assert_eq!(
+        publication.contributors_revision,
+        vec![("revision-test", 1)]
+    );
 }
 
 #[tokio::test]
@@ -9178,6 +9484,7 @@ async fn attach_in_memory_thread_store(
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {

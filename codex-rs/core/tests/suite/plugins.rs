@@ -8,11 +8,11 @@ use std::time::Instant;
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
@@ -29,6 +29,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use core_test_support::wait_for_mcp_server_registration;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -36,6 +37,7 @@ const SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@test";
 const SAMPLE_PLUGIN_DISPLAY_NAME: &str = "sample";
 const SAMPLE_PLUGIN_DESCRIPTION: &str = "inspect sample data";
 const SAMPLE_PLUGIN_APP_NAMESPACE: &str = "mcp__codex_apps__google_calendar";
+const SAMPLE_PLUGIN_APP_SERVER_NAME: &str = "codex_apps__google_calendar";
 const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
 const PLUGIN_MCP_SEARCH_CALL_ID: &str = "plugin-mcp-search";
@@ -139,20 +141,15 @@ async fn build_apps_enabled_plugin_test_codex(
     codex_home: Arc<TempDir>,
     chatgpt_base_url: String,
 ) -> Result<TestCodex> {
-    let mut builder = test_codex()
+    let mut builder = apps_enabled_builder(chatgpt_base_url)
         .with_home(codex_home)
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow feature update");
-            config.chatgpt_base_url = chatgpt_base_url;
-        });
-    Ok(builder
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let test = builder
         .build(server)
         .await
-        .expect("create new conversation"))
+        .expect("create new conversation");
+    wait_for_mcp_server_registration(&test.codex, SAMPLE_PLUGIN_APP_SERVER_NAME).await?;
+    Ok(test)
 }
 
 async fn mount_plugin_tool_search_turn(server: &MockServer) -> ResponseMock {
@@ -255,8 +252,8 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         .find("## Plugins")
         .expect("expected plugins section in developer message");
     assert!(
-        apps_pos < skills_pos && skills_pos < plugins_pos,
-        "expected Apps -> Skills -> Plugins order: {developer_messages:?}"
+        skills_pos < plugins_pos && plugins_pos < apps_pos,
+        "expected host capabilities before extension capabilities: {developer_messages:?}"
     );
     assert!(
         !developer_text.contains("`sample`: inspect sample data"),
@@ -275,7 +272,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() -> Result<()> {
+async fn explicit_plugin_mentions_use_apps_mcp_for_chatgpt_dual_surface_plugins() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
@@ -297,7 +294,6 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
         build_apps_enabled_plugin_test_codex(&server, codex_home, apps_server.chatgpt_base_url)
             .await?;
     let codex = Arc::clone(&test_codex.codex);
-    wait_for_mcp_server(&codex, CODEX_APPS_MCP_SERVER_NAME).await?;
 
     codex
         .submit(Op::UserInput {
@@ -323,16 +319,10 @@ async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() ->
         "expected plugin skills guidance: {developer_messages:?}"
     );
     assert!(
-        !developer_messages
-            .iter()
-            .any(|text| text.contains("MCP servers from this plugin")),
-        "expected plugin MCP guidance to be suppressed for ChatGPT auth: {developer_messages:?}"
-    );
-    assert!(
         developer_messages
             .iter()
-            .any(|text| text.contains("Apps from this plugin")),
-        "expected visible plugin app guidance: {developer_messages:?}"
+            .any(|text| text.contains(SAMPLE_PLUGIN_APP_NAMESPACE)),
+        "expected ordinary Apps MCP namespace in plugin guidance: {developer_messages:?}"
     );
     assert!(
         request
@@ -402,8 +392,8 @@ async fn explicit_plugin_mentions_keep_non_conflicting_mcp_for_chatgpt_auth() ->
     assert!(
         developer_messages
             .iter()
-            .any(|text| text.contains("Apps from this plugin")),
-        "expected plugin app guidance: {developer_messages:?}"
+            .any(|text| text.contains(SAMPLE_PLUGIN_APP_NAMESPACE)),
+        "expected ordinary Apps MCP namespace in plugin guidance: {developer_messages:?}"
     );
     let (calendar_tool, echo_tool) = searched_plugin_tools(&requests[1]);
     assert!(

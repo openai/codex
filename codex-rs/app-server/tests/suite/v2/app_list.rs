@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,6 +21,7 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
+use axum::routing::any;
 use axum::routing::get;
 use codex_app_server_protocol::AppBranding;
 use codex_app_server_protocol::AppInfo;
@@ -29,6 +33,9 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpAuthStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadStartParams;
@@ -154,6 +161,298 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
     server_handle.abort();
     let _ = server_handle.await;
     Ok(())
+}
+
+#[tokio::test]
+async fn oauth_rejects_runtime_only_apps_server_before_network_discovery() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let tools = vec![connector_tool("beta", "Beta")?];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-runtime-only-oauth")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    server_control.gate_next_initialize();
+
+    let oauth_request = mcp
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({ "name": "codex_apps__beta" })),
+        )
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(oauth_request)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "No MCP server named 'codex_apps__beta' found."
+    );
+    assert_eq!(server_control.initialize_call_count(), 0);
+    assert_eq!(server_control.tools_list_call_count(), 0);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth_rejects_configured_server_overridden_by_published_apps_server() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let tools = vec![connector_tool("beta", "Beta")?];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let (configured_url, configured_requests, configured_handle) =
+        start_counting_http_server().await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!(
+        r#"
+[mcp_servers.codex_apps__beta]
+url = "{configured_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-published-apps-oauth")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    force_refresh_apps(&mut mcp).await?;
+    let initialize_calls = server_control.initialize_call_count();
+    let tools_list_calls = server_control.tools_list_call_count();
+
+    let oauth_request = mcp
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({ "name": "codex_apps__beta" })),
+        )
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(oauth_request)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert_eq!(
+        error.error.message,
+        "No MCP server named 'codex_apps__beta' found."
+    );
+    assert_eq!(server_control.initialize_call_count(), initialize_calls);
+    assert_eq!(server_control.tools_list_call_count(), tools_list_calls);
+    assert_eq!(configured_requests.load(Ordering::Acquire), 0);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    configured_handle.abort();
+    let _ = configured_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_cold_starts_and_tracks_apps_namespace_replacement() -> Result<()> {
+    let beta = AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    };
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        vec![beta],
+        vec![connector_tool("beta", "Beta")?],
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-status-refresh")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let initial = list_mcp_server_status(&mut mcp).await?;
+    assert_eq!(
+        initial
+            .data
+            .iter()
+            .map(|status| status.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["codex_apps", "codex_apps__beta"]
+    );
+    let beta = initial
+        .data
+        .iter()
+        .find(|status| status.name == "codex_apps__beta")
+        .expect("Beta namespace");
+    assert_eq!(beta.auth_status, McpAuthStatus::BearerToken);
+    assert_eq!(
+        beta.tools.keys().cloned().collect::<Vec<_>>(),
+        vec!["connector_beta".to_string()]
+    );
+
+    server_control.set_connectors(vec![AppInfo {
+        id: "gamma".to_string(),
+        name: "Gamma".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }]);
+    server_control.set_tools(vec![connector_tool("gamma", "Gamma")?]);
+    force_refresh_apps(&mut mcp).await?;
+
+    let refreshed = list_mcp_server_status(&mut mcp).await?;
+    assert_eq!(
+        refreshed
+            .data
+            .iter()
+            .map(|status| status.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["codex_apps", "codex_apps__gamma"]
+    );
+    let gamma = refreshed
+        .data
+        .iter()
+        .find(|status| status.name == "codex_apps__gamma")
+        .expect("Gamma namespace");
+    assert_eq!(
+        gamma.tools.keys().cloned().collect::<Vec<_>>(),
+        vec!["connector_gamma".to_string()]
+    );
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+async fn force_refresh_apps(mcp: &mut TestAppServer) -> Result<()> {
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: AppsListResponse = to_response(response)?;
+    Ok(())
+}
+
+async fn list_mcp_server_status(mcp: &mut TestAppServer) -> Result<ListMcpServerStatusResponse> {
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
 }
 
 #[tokio::test]
@@ -440,7 +739,7 @@ async fn list_apps_keeps_apps_with_app_only_tools_accessible() -> Result<()> {
 }
 
 #[tokio::test]
-async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
+async fn list_apps_reports_managed_disable_over_user_enable() -> Result<()> {
     let connectors = vec![AppInfo {
         id: "beta".to_string(),
         name: "Beta".to_string(),
@@ -473,9 +772,13 @@ chatgpt_base_url = "{server_url}"
 connectors = true
 
 [apps.beta]
-enabled = false
+enabled = true
 "#
         ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "[apps.beta]\nenabled = false\n",
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -883,16 +1186,6 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
         })
         .await?;
 
-    let maybe_update = timeout(
-        Duration::from_millis(150),
-        read_app_list_updated_notification(&mut mcp),
-    )
-    .await;
-    assert!(
-        maybe_update.is_err(),
-        "unexpected empty interim app/list update"
-    );
-
     let expected = vec![AppInfo {
         id: "alpha".to_string(),
         name: "Alpha".to_string(),
@@ -1185,6 +1478,192 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
 }
 
 #[tokio::test]
+async fn list_apps_returns_raw_cache_while_a_new_process_refreshes_live_inventory() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "beta".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        vec![connector_tool("beta", "Beta Cached")?],
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut expected_cached = AppInfo {
+        id: "beta".to_string(),
+        name: "Beta Cached".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    };
+
+    {
+        let mut first_process = TestAppServer::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, first_process.initialize()).await??;
+        let request_id = first_process
+            .send_apps_list_request(AppsListParams {
+                limit: None,
+                cursor: None,
+                thread_id: None,
+                force_refetch: false,
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            first_process.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let AppsListResponse { data, next_cursor } = to_response(response)?;
+        assert_eq!(data, vec![expected_cached.clone()]);
+        assert!(next_cursor.is_none());
+    }
+
+    server_control.set_tools(vec![connector_tool("beta", "Beta Live")?]);
+    server_control.gate_next_initialize();
+
+    let mut second_process = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, second_process.initialize()).await??;
+    let request_id = second_process
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+
+    timeout(DEFAULT_TIMEOUT, server_control.wait_for_gated_initialize()).await?;
+    let cached_response: JSONRPCResponse = timeout(
+        Duration::from_secs(10),
+        second_process.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: cached_data,
+        next_cursor,
+    } = to_response(cached_response)?;
+    assert_eq!(cached_data, vec![expected_cached.clone()]);
+    assert!(next_cursor.is_none());
+
+    server_control.release_gated_initialize();
+    expected_cached.name = "Beta Live".to_string();
+    let expected_live = vec![expected_cached];
+    let live_update = timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let update = read_app_list_updated_notification(&mut second_process).await?;
+            if update.data == expected_live {
+                return Ok::<_, anyhow::Error>(update);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(live_update.data, expected_live);
+
+    let current_request_id = second_process
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let current_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        second_process.read_stream_until_response_message(RequestId::Integer(current_request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<AppsListResponse>(current_response)?.data,
+        expected_live
+    );
+    assert_eq!(
+        server_control.tools_list_call_count(),
+        2,
+        "the cached startup and its app-list retry must share one live inventory fetch"
+    );
+
+    // A fresh process starts from the now-stale raw cache. Its first force-refetch must join the
+    // cached startup refresh and return the live generation rather than the cached one.
+    drop(second_process);
+    server_control.set_tools(vec![connector_tool("beta", "Beta Forced")?]);
+    server_control.gate_next_initialize();
+    let mut forced_process = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, forced_process.initialize()).await??;
+    let forced_request_id = forced_process
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+    timeout(DEFAULT_TIMEOUT, server_control.wait_for_gated_initialize()).await?;
+    server_control.release_gated_initialize();
+    let forced_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        forced_process.read_stream_until_response_message(RequestId::Integer(forced_request_id)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: forced_data,
+        next_cursor,
+    } = to_response(forced_response)?;
+    assert_eq!(
+        forced_data,
+        vec![AppInfo {
+            name: "Beta Forced".to_string(),
+            ..expected_live[0].clone()
+        }]
+    );
+    assert!(next_cursor.is_none());
+    assert_eq!(
+        server_control.tools_list_call_count(),
+        3,
+        "a cold force-refetch must join the cached startup refresh"
+    );
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Result<()> {
     let initial_connectors = vec![
         AppInfo {
@@ -1397,16 +1876,6 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         ]
     );
 
-    let maybe_second_update = timeout(
-        Duration::from_millis(150),
-        read_app_list_updated_notification(&mut mcp),
-    )
-    .await;
-    assert!(
-        maybe_second_update.is_err(),
-        "unexpected inaccessible-only app/list update during force refetch"
-    );
-
     let expected_final = vec![AppInfo {
         id: "alpha".to_string(),
         name: "Alpha".to_string(),
@@ -1471,18 +1940,43 @@ struct AppsServerState {
 struct AppListMcpServer {
     tools: Arc<StdMutex<Vec<Tool>>>,
     tools_delay: Duration,
+    initialize_gate: Arc<AppsInitializeGate>,
+    initialize_calls: Arc<AtomicUsize>,
+    tools_list_calls: Arc<AtomicUsize>,
 }
 
 impl AppListMcpServer {
-    fn new(tools: Arc<StdMutex<Vec<Tool>>>, tools_delay: Duration) -> Self {
-        Self { tools, tools_delay }
+    fn new(
+        tools: Arc<StdMutex<Vec<Tool>>>,
+        tools_delay: Duration,
+        initialize_gate: Arc<AppsInitializeGate>,
+        initialize_calls: Arc<AtomicUsize>,
+        tools_list_calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            tools,
+            tools_delay,
+            initialize_gate,
+            initialize_calls,
+            tools_list_calls,
+        }
     }
+}
+
+#[derive(Default)]
+struct AppsInitializeGate {
+    enabled: AtomicBool,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
 struct AppsServerControl {
     response: Arc<StdMutex<serde_json::Value>>,
     tools: Arc<StdMutex<Vec<Tool>>>,
+    initialize_gate: Arc<AppsInitializeGate>,
+    initialize_calls: Arc<AtomicUsize>,
+    tools_list_calls: Arc<AtomicUsize>,
 }
 
 impl AppsServerControl {
@@ -1501,9 +1995,43 @@ impl AppsServerControl {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *tools_guard = tools;
     }
+
+    fn gate_next_initialize(&self) {
+        self.initialize_gate.enabled.store(true, Ordering::Release);
+    }
+
+    async fn wait_for_gated_initialize(&self) {
+        self.initialize_gate.started.notified().await;
+    }
+
+    fn release_gated_initialize(&self) {
+        self.initialize_gate.release.notify_one();
+    }
+
+    fn initialize_call_count(&self) -> usize {
+        self.initialize_calls.load(Ordering::Relaxed)
+    }
+
+    fn tools_list_call_count(&self) -> usize {
+        self.tools_list_calls.load(Ordering::Relaxed)
+    }
 }
 
 impl ServerHandler for AppListMcpServer {
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        self.initialize_calls.fetch_add(1, Ordering::Relaxed);
+        if self.initialize_gate.enabled.swap(false, Ordering::AcqRel) {
+            self.initialize_gate.started.notify_one();
+            self.initialize_gate.release.notified().await;
+        }
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
@@ -1516,7 +2044,9 @@ impl ServerHandler for AppListMcpServer {
     {
         let tools = self.tools.clone();
         let tools_delay = self.tools_delay;
+        let tools_list_calls = Arc::clone(&self.tools_list_calls);
         async move {
+            tools_list_calls.fetch_add(1, Ordering::Relaxed);
             if tools_delay > Duration::ZERO {
                 tokio::time::sleep(tools_delay).await;
             }
@@ -1543,6 +2073,24 @@ pub(super) async fn start_apps_server_with_delays(
         start_apps_server_with_delays_and_control(connectors, tools, directory_delay, tools_delay)
             .await?;
     Ok((server_url, server_handle))
+}
+
+async fn start_counting_http_server() -> Result<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let service_requests = Arc::clone(&requests);
+    let router = Router::new().fallback(any(move || {
+        let requests = Arc::clone(&service_requests);
+        async move {
+            requests.fetch_add(1, Ordering::AcqRel);
+            StatusCode::NOT_FOUND
+        }
+    }));
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok((format!("http://{addr}"), requests, handle))
 }
 
 async fn start_apps_server_with_workspace_plugins_enabled(
@@ -1589,6 +2137,9 @@ async fn start_apps_server_with_delays_and_control_inner(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
+    let initialize_gate = Arc::new(AppsInitializeGate::default());
+    let initialize_calls = Arc::new(AtomicUsize::new(0));
+    let tools_list_calls = Arc::new(AtomicUsize::new(0));
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
@@ -1600,6 +2151,9 @@ async fn start_apps_server_with_delays_and_control_inner(
     let server_control = AppsServerControl {
         response,
         tools: tools.clone(),
+        initialize_gate: Arc::clone(&initialize_gate),
+        initialize_calls: Arc::clone(&initialize_calls),
+        tools_list_calls: Arc::clone(&tools_list_calls),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1608,7 +2162,15 @@ async fn start_apps_server_with_delays_and_control_inner(
     let mcp_service = StreamableHttpService::new(
         {
             let tools = tools.clone();
-            move || Ok(AppListMcpServer::new(tools.clone(), tools_delay))
+            move || {
+                Ok(AppListMcpServer::new(
+                    tools.clone(),
+                    tools_delay,
+                    Arc::clone(&initialize_gate),
+                    Arc::clone(&initialize_calls),
+                    Arc::clone(&tools_list_calls),
+                ))
+            }
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),

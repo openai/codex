@@ -2,14 +2,19 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::AskForApproval;
+use anyhow::ensure;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_path_uri::PathUri;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::CALENDAR_EXTRACT_TEXT_TOOL_NAME;
+use core_test_support::apps_test_server::CALENDAR_MCP_SERVER_NAME;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_HOOK_MATCHER;
 use core_test_support::apps_test_server::DOCUMENT_EXTRACT_TEXT_RESOURCE_URI;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_EXTRACT_TEXT_TOOL as DOCUMENT_EXTRACT_TOOL;
@@ -29,9 +34,14 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::wait_for_mcp_server_registration;
+use futures::SinkExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tokio::net::TcpListener;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::Message;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -41,6 +51,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const STREAMED_FILE_SIZE: usize = 13 * 1024 * 1024;
+const FOREIGN_REPORT: &[u8] = b"foreign report";
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
@@ -139,7 +150,12 @@ async fn mount_file_upload_mocks(server: &MockServer, file_size_bytes: u64) {
         .await;
 }
 
-async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<ResponseMock> {
+async fn run_extract_turn(
+    test: &TestCodex,
+    server: &MockServer,
+    environments: Option<Vec<TurnEnvironmentSelection>>,
+) -> Result<ResponseMock> {
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
     let mock = mount_sse_sequence(
         server,
         vec![
@@ -173,14 +189,106 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
     )
     .await;
 
-    test.submit_turn_with_approval_and_permission_profile(
-        "Extract the report text with the app tool.",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
+    test.submit_turn_with_environments("Extract the report text with the app tool.", environments)
+        .await?;
 
     Ok(mock)
+}
+
+async fn serve_foreign_file_environment(
+    listener: TcpListener,
+    expected_path: PathUri,
+) -> Result<()> {
+    let mut websocket = super::remote_env::accept_initialized_exec_server(listener).await;
+    let mut open_handle = None;
+
+    loop {
+        let request = super::remote_env::read_exec_server_json(&mut websocket).await;
+        let method = request["method"].as_str().context("missing method")?;
+        let id = request["id"].clone();
+        let response = match method {
+            "environment/info" => json!({
+                "id": id,
+                "result": { "shell": { "name": "zsh", "path": "/bin/zsh" } }
+            }),
+            "fs/canonicalize" => json!({
+                "id": id,
+                "result": { "path": request["params"]["path"].clone() }
+            }),
+            "fs/getMetadata" => {
+                if request["params"]["path"] == json!(&expected_path) {
+                    json!({
+                        "id": id,
+                        "result": {
+                            "isDirectory": false,
+                            "isFile": true,
+                            "isSymlink": false,
+                            "size": FOREIGN_REPORT.len(),
+                            "createdAtMs": 0,
+                            "modifiedAtMs": 0,
+                        }
+                    })
+                } else {
+                    json!({
+                        "id": id,
+                        "error": { "code": -32004, "message": "not found" }
+                    })
+                }
+            }
+            "fs/open" => {
+                ensure!(
+                    request["params"]["path"] == json!(&expected_path),
+                    "unexpected fs/open path: {}",
+                    request["params"]["path"]
+                );
+                let handle = request["params"]["handleId"]
+                    .as_str()
+                    .context("missing handleId")?
+                    .to_string();
+                open_handle = Some(handle.clone());
+                json!({ "id": id, "result": { "handleId": handle } })
+            }
+            "fs/readBlock" => {
+                let handle = request["params"]["handleId"]
+                    .as_str()
+                    .context("missing handleId")?;
+                ensure!(
+                    open_handle.as_deref() == Some(handle),
+                    "unexpected fs/readBlock handle"
+                );
+                ensure!(
+                    request["params"]["offset"] == 0,
+                    "unexpected fs/readBlock offset: {}",
+                    request["params"]["offset"]
+                );
+                json!({
+                    "id": id,
+                    "result": {
+                        "chunk": BASE64_STANDARD.encode(FOREIGN_REPORT),
+                        "eof": true,
+                    }
+                })
+            }
+            "fs/close" => {
+                let handle = request["params"]["handleId"]
+                    .as_str()
+                    .context("missing handleId")?;
+                ensure!(open_handle.as_deref() == Some(handle));
+                let response = json!({ "id": id, "result": {} });
+                websocket
+                    .send(Message::Text(response.to_string().into()))
+                    .await?;
+                return Ok(());
+            }
+            "http/request" => {
+                anyhow::bail!("Apps loopback MCP transport escaped to the primary environment")
+            }
+            _ => anyhow::bail!("unexpected exec-server request: {method}"),
+        };
+        websocket
+            .send(Message::Text(response.to_string().into()))
+            .await?;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -204,7 +312,7 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             Ok(())
         });
     let test = builder.build_with_auto_env(&server).await?;
-    let mock = run_extract_turn(&test, &server).await?;
+    let mock = run_extract_turn(&test, &server, /*environments*/ None).await?;
 
     let requests = mock.requests();
     let search_output = requests[1].tool_search_output("extract-search-1");
@@ -247,6 +355,56 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_apps_http_mcp_uploads_from_primary_remote_environment() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let foreign_cwd = PathUri::parse("file:///foreign-workspace")?;
+    let expected_path = foreign_cwd.join("report.txt")?;
+    let foreign_environment = tokio::spawn(serve_foreign_file_environment(listener, expected_path));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_file_upload_mocks(&server, FOREIGN_REPORT.len() as u64).await;
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_exec_server_url(exec_server_url)
+        .with_config(|config| config.project_doc_max_bytes = 0);
+    let test = builder.build(&server).await?;
+
+    let _responses = run_extract_turn(
+        &test,
+        &server,
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: foreign_cwd,
+        }]),
+    )
+    .await?;
+
+    timeout(Duration::from_secs(5), foreign_environment)
+        .await
+        .context("foreign file environment should complete")???;
+    let upload_requests = server
+        .received_requests()
+        .await
+        .context("file server should record requests")?
+        .into_iter()
+        .filter(|request| request.method.as_str() == "PUT")
+        .filter(|request| request.url.path() == "/upload/file_123")
+        .collect::<Vec<_>>();
+    assert_eq!(upload_requests.len(), 1);
+    assert_eq!(upload_requests[0].body.as_slice(), FOREIGN_REPORT);
+
+    let apps_tool_call =
+        recorded_apps_tool_call_by_name(&server, CALENDAR_EXTRACT_TEXT_TOOL_NAME).await;
+    assert_eq!(
+        apps_tool_call.pointer("/params/arguments/file"),
+        Some(&uploaded_file(&server, FOREIGN_REPORT.len() as u64))
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -263,7 +421,7 @@ async fn codex_apps_file_params_pass_uploaded_file_to_post_tool_use_hook() -> Re
         });
     let test = builder.build(&server).await?;
     tokio::fs::write(test.cwd.path().join("report.txt"), b"hello world").await?;
-    let _responses = run_extract_turn(&test, &server).await?;
+    let _responses = run_extract_turn(&test, &server, /*environments*/ None).await?;
 
     let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 1);

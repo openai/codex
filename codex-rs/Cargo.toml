@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps",
     "aws-auth",
     "analytics",
     "agent-graph-store",
@@ -143,6 +144,7 @@ codex-agent-graph-store = { path = "agent-graph-store" }
 codex-agent-identity = { path = "agent-identity" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
+codex-apps = { path = "apps" }
 codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
 codex-app-server-transport = { path = "app-server-transport" }

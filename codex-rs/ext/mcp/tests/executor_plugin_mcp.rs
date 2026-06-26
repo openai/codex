@@ -137,7 +137,7 @@ async fn selected_plugin_contributions(
                 enabled: config.enabled,
             },
             McpServerContribution::Set { .. }
-            | McpServerContribution::SelectedPluginConnectors { .. }
+            | McpServerContribution::SetEffective { .. }
             | McpServerContribution::Remove { .. } => {
                 panic!("expected selected plugin contribution")
             }

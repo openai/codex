@@ -4206,7 +4206,6 @@ source = "{remote_repo_url}"
         plugins: config.clone(),
         configured_plugin_ids: HashSet::from(["sample@debug".to_string()]),
         disabled_plugin_ids: HashSet::new(),
-        loaded_plugin_app_connector_ids: HashSet::new(),
     };
     let expected = ToolSuggestDiscoverablePlugin {
         id: "sample@debug".to_string(),
@@ -4872,7 +4871,7 @@ remote_plugin = true
 
     assert_eq!(
         candidates,
-        Some(vec![DiscoverableTool::from(DiscoverablePluginInfo {
+        Some(vec![DiscoverablePluginInfo {
             id: "slack@openai-curated-remote".to_string(),
             remote_plugin_id: Some("plugin_slack".to_string()),
             name: "Slack".to_string(),
@@ -4880,7 +4879,7 @@ remote_plugin = true
             has_skills: false,
             mcp_server_names: Vec::new(),
             app_connector_ids: Vec::new(),
-        })])
+        }])
     );
 }
 

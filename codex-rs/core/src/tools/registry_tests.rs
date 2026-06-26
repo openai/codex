@@ -142,7 +142,7 @@ impl codex_extension_api::ToolLifecycleContributor for ToolLifecycleRecorder {
 
 #[test]
 fn handler_looks_up_namespaced_aliases_explicitly() {
-    let namespace = "mcp__codex_apps__gmail";
+    let namespace = "mcp__mail";
     let tool_name = "gmail_get_recent_emails";
     let plain_name = codex_tools::ToolName::plain(tool_name);
     let namespaced_name = codex_tools::ToolName::namespaced(namespace, tool_name);
@@ -160,7 +160,7 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     let plain = registry.tool(&plain_name);
     let namespaced = registry.tool(&namespaced_name);
     let missing_namespaced = registry.tool(&codex_tools::ToolName::namespaced(
-        "mcp__codex_apps__calendar",
+        "mcp__calendar",
         tool_name,
     ));
 

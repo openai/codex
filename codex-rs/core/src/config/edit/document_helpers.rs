@@ -1,9 +1,9 @@
-use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::McpToolApproval;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use toml_edit::Array as TomlArray;
@@ -119,9 +119,9 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
     }
     if let Some(approval_mode) = config.default_tools_approval_mode {
         entry["default_tools_approval_mode"] = value(match approval_mode {
-            AppToolApproval::Auto => "auto",
-            AppToolApproval::Prompt => "prompt",
-            AppToolApproval::Approve => "approve",
+            McpToolApproval::Auto => "auto",
+            McpToolApproval::Prompt => "prompt",
+            McpToolApproval::Approve => "approve",
         });
     }
     if let Some(enabled_tools) = &config.enabled_tools
@@ -171,9 +171,9 @@ fn serialize_mcp_server_tool(config: &McpServerToolConfig) -> TomlItem {
     entry.set_implicit(false);
     if let Some(approval_mode) = config.approval_mode {
         entry["approval_mode"] = value(match approval_mode {
-            AppToolApproval::Auto => "auto",
-            AppToolApproval::Prompt => "prompt",
-            AppToolApproval::Approve => "approve",
+            McpToolApproval::Auto => "auto",
+            McpToolApproval::Prompt => "prompt",
+            McpToolApproval::Approve => "approve",
         });
     }
     TomlItem::Table(entry)
@@ -222,11 +222,9 @@ pub(super) fn parse_tool_suggest_disabled_tool(
     value: &TomlValue,
 ) -> Option<ToolSuggestDisabledTool> {
     let table = value.as_inline_table()?;
-    let kind = match table.get("type").and_then(TomlValue::as_str) {
-        Some("connector") => ToolSuggestDiscoverableType::Connector,
-        Some("plugin") => ToolSuggestDiscoverableType::Plugin,
-        _ => return None,
-    };
+    let kind = ToolSuggestDiscoverableType::from_config_str(
+        table.get("type").and_then(TomlValue::as_str)?,
+    )?;
     let id = table.get("id").and_then(TomlValue::as_str)?;
     Some(ToolSuggestDisabledTool {
         kind,
@@ -237,11 +235,9 @@ pub(super) fn parse_tool_suggest_disabled_tool(
 pub(super) fn parse_tool_suggest_disabled_tool_table(
     table: &TomlTable,
 ) -> Option<ToolSuggestDisabledTool> {
-    let kind = match table.get("type").and_then(TomlItem::as_str) {
-        Some("connector") => ToolSuggestDiscoverableType::Connector,
-        Some("plugin") => ToolSuggestDiscoverableType::Plugin,
-        _ => return None,
-    };
+    let kind = ToolSuggestDiscoverableType::from_config_str(
+        table.get("type").and_then(TomlItem::as_str)?,
+    )?;
     let id = table.get("id").and_then(TomlItem::as_str)?;
     Some(ToolSuggestDisabledTool {
         kind,
@@ -255,14 +251,7 @@ pub(super) fn tool_suggest_disabled_tools_value(
     let mut array = TomlArray::new();
     for disabled_tool in disabled_tools {
         let mut table = InlineTable::new();
-        table.insert(
-            "type",
-            match disabled_tool.kind {
-                ToolSuggestDiscoverableType::Connector => "connector",
-                ToolSuggestDiscoverableType::Plugin => "plugin",
-            }
-            .into(),
-        );
+        table.insert("type", disabled_tool.kind.as_config_str().into());
         table.insert("id", disabled_tool.id.clone().into());
         array.push(table);
     }

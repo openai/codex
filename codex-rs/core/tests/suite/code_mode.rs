@@ -27,6 +27,7 @@ use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
+use core_test_support::apps_test_server::CALENDAR_MCP_SERVER_NAME;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_APP_ONLY_TOOL;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::apps_test_server::search_capable_apps_builder;
@@ -48,6 +49,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
+use core_test_support::wait_for_mcp_server_registration;
 use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageBuffer;
@@ -573,7 +575,7 @@ if (!tool) {
     .await;
 
     let apps_base_url = apps_server.chatgpt_base_url.clone();
-    let mut builder = test_codex()
+    let mut builder = search_capable_apps_builder(apps_base_url)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config
@@ -595,12 +597,12 @@ if (!tool) {
                 .iter_mut()
                 .find(|model| model.slug == "gpt-5.4")
                 .expect("gpt-5.4 exists in bundled models.json");
-            config.chatgpt_base_url = apps_base_url;
             config.model = Some("gpt-5.4".to_string());
             model.supports_search_tool = true;
             config.model_catalog = Some(model_catalog);
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
     test.submit_turn("inspect tools in code mode only").await?;
 
     let first_body = resp_mock.single_request().body_json();
@@ -714,6 +716,7 @@ text(JSON.stringify({{
                 .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
+    wait_for_mcp_server_registration(&test.codex, CALENDAR_MCP_SERVER_NAME).await?;
     test.submit_turn("try to call the app-only calendar tool through exec")
         .await?;
 

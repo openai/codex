@@ -13,7 +13,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
-use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverablePluginInfo;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
@@ -53,7 +53,7 @@ pub(crate) enum ToolSuggestPresentation {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ToolSuggestCandidates {
-    pub(crate) tools: Vec<DiscoverableTool>,
+    pub(crate) plugins: Vec<DiscoverablePluginInfo>,
     pub(crate) presentation: ToolSuggestPresentation,
 }
 

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use crate::session::turn_context::TurnContext;
-use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::MCP_ERROR_CODE_META_KEY;
 use serde_json::Value as JsonValue;
 use tracing::Span;
 
@@ -42,20 +42,13 @@ pub(super) fn emit_mcp_call_metrics(
     outcome: &McpCallMetricOutcome,
     server_name: &str,
     tool_name: &str,
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
+    runtime_labels: &[(String, String)],
     duration: Option<Duration>,
 ) {
-    let tags = mcp_call_metric_tags(
-        outcome.status,
-        server_name,
-        tool_name,
-        connector_id,
-        connector_name,
-    );
+    let tags = mcp_call_metric_tags(outcome.status, server_name, tool_name, runtime_labels);
     let tag_refs: Vec<(&str, &str)> = tags
         .iter()
-        .map(|(key, value)| (*key, value.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
     turn_context
         .session_telemetry
@@ -73,11 +66,14 @@ pub(super) fn emit_mcp_call_metrics(
         return;
     };
     let mut error_tags = tags;
-    error_tags.push(("error_type", sanitize_metric_tag_value(error_type)));
-    error_tags.push(("error_code", error_code.to_string()));
+    error_tags.push((
+        "error_type".to_string(),
+        sanitize_metric_tag_value(error_type),
+    ));
+    error_tags.push(("error_code".to_string(), error_code.to_string()));
     let error_tag_refs: Vec<(&str, &str)> = error_tags
         .iter()
-        .map(|(key, value)| (*key, value.as_str()))
+        .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
     turn_context.session_telemetry.counter(
         MCP_CALL_ERROR_COUNT_METRIC,
@@ -86,24 +82,26 @@ pub(super) fn emit_mcp_call_metrics(
     );
 }
 
-fn mcp_call_metric_tags(
+pub(super) fn mcp_call_metric_tags(
     status: &str,
     server_name: &str,
     tool_name: &str,
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
-) -> Vec<(&'static str, String)> {
+    runtime_labels: &[(String, String)],
+) -> Vec<(String, String)> {
     let mut tags = vec![
-        ("status", sanitize_metric_tag_value(status)),
-        ("server", sanitize_metric_tag_value(server_name)),
-        ("tool", sanitize_metric_tag_value(tool_name)),
+        ("status".to_string(), sanitize_metric_tag_value(status)),
+        ("server".to_string(), sanitize_metric_tag_value(server_name)),
+        ("tool".to_string(), sanitize_metric_tag_value(tool_name)),
     ];
-    if let Some(connector_id) = connector_id.filter(|connector_id| !connector_id.is_empty()) {
-        tags.push(("connector_id", sanitize_metric_tag_value(connector_id)));
-    }
-    if let Some(connector_name) = connector_name.filter(|connector_name| !connector_name.is_empty())
-    {
-        tags.push(("connector_name", sanitize_metric_tag_value(connector_name)));
+    for (key, value) in runtime_labels {
+        if matches!(
+            key.as_str(),
+            "status" | "server" | "tool" | "error_type" | "error_code"
+        ) || tags.iter().any(|(existing, _)| existing == key)
+        {
+            continue;
+        }
+        tags.push((key.clone(), sanitize_metric_tag_value(value)));
     }
     tags
 }
@@ -125,17 +123,7 @@ pub(super) fn mcp_call_metric_outcome(
                         .meta
                         .as_ref()
                         .and_then(JsonValue::as_object)
-                        .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-                        .and_then(JsonValue::as_object)
-                        .and_then(|codex_apps| codex_apps.get("connector_auth_failure"))
-                        .and_then(JsonValue::as_object)
-                        .filter(|auth_failure| {
-                            auth_failure
-                                .get("is_auth_failure")
-                                .and_then(JsonValue::as_bool)
-                                == Some(true)
-                        })
-                        .and_then(|auth_failure| auth_failure.get("error_code"))
+                        .and_then(|meta| meta.get(MCP_ERROR_CODE_META_KEY))
                         .and_then(JsonValue::as_str)
                         .filter(|error_code| !error_code.is_empty())
                 });

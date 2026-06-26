@@ -11,13 +11,6 @@ use codex_connectors::DirectoryListResponse;
 use codex_connectors::merge::merge_connectors;
 use codex_connectors::merge::merge_plugin_connectors;
 use codex_core::config::Config;
-pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
-pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager;
-pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager;
-pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
-pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
-pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
-pub use codex_core::connectors::with_app_enabled_state;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -45,24 +38,6 @@ async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
         "ChatGPT connectors require Codex backend auth"
     );
     Ok(auth)
-}
-
-pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !apps_enabled(config).await {
-        return Ok(Vec::new());
-    }
-    let (connectors_result, accessible_result) = tokio::join!(
-        list_all_connectors(config),
-        list_accessible_connectors_from_mcp_tools(config),
-    );
-    let connectors = connectors_result?;
-    let accessible = accessible_result?;
-    Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(
-            connectors, accessible, /*all_connectors_loaded*/ true,
-        ),
-        config,
-    ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {

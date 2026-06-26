@@ -18,6 +18,10 @@ pub struct TurnInputEnvironment {
 pub struct TurnInputContext {
     /// Stable host-owned turn identifier.
     pub turn_id: String,
+    /// Model slug selected for this turn.
+    pub model_slug: String,
+    /// Product client identifier associated with this turn.
+    pub product_client_id: String,
     /// User input submitted for this turn.
     pub user_input: Vec<UserInput>,
     /// Resolved turn environments, in host priority order.

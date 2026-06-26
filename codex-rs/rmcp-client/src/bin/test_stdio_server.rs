@@ -57,6 +57,18 @@ pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
 
 impl TestToolServer {
     fn new() -> Self {
+        let mut echo_tool = Self::echo_tool();
+        if let Ok(email) = std::env::var("MCP_TEST_APPROVAL_CONTEXT_EMAIL") {
+            let mut meta = Meta::new();
+            meta.insert(
+                codex_protocol::mcp::MCP_APPROVAL_CONTEXT_META_KEY.to_string(),
+                json!({
+                    (codex_protocol::mcp::MCP_APPROVAL_CONTEXT_CONNECTED_ACCOUNT_EMAIL_KEY): email,
+                }),
+            );
+            echo_tool.meta = Some(meta);
+        }
+
         #[expect(clippy::expect_used)]
         let sandbox_meta_schema: JsonObject = serde_json::from_value(serde_json::json!({
             "type": "object",
@@ -89,7 +101,7 @@ impl TestToolServer {
         thread_hint_tool.meta = Some(thread_hint_meta);
 
         let tools = vec![
-            Self::echo_tool(),
+            echo_tool,
             Self::echo_dash_tool(),
             thread_hint_tool,
             Self::client_capabilities_tool(),

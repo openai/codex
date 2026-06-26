@@ -4,6 +4,7 @@ use codex_analytics::GuardianReviewedAction;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::mcp_approval_meta::McpToolSource;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -61,9 +62,7 @@ pub(crate) enum GuardianApprovalRequest {
         server: String,
         tool_name: String,
         arguments: Option<Value>,
-        connector_id: Option<String>,
-        connector_name: Option<String>,
-        connector_description: Option<String>,
+        approval_source: Option<McpToolSource>,
         connected_account_email: Option<String>,
         tool_title: Option<String>,
         tool_description: Option<String>,
@@ -135,12 +134,8 @@ struct McpToolCallApprovalAction<'a> {
     tool_name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     arguments: Option<&'a Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    connector_id: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    connector_name: Option<&'a String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    connector_description: Option<&'a String>,
+    #[serde(flatten)]
+    approval_source: Option<&'a McpToolSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     connected_account_email: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,9 +338,7 @@ pub(crate) fn guardian_approval_request_to_json(
             server,
             tool_name,
             arguments,
-            connector_id,
-            connector_name,
-            connector_description,
+            approval_source,
             connected_account_email,
             tool_title,
             tool_description,
@@ -355,9 +348,7 @@ pub(crate) fn guardian_approval_request_to_json(
             server,
             tool_name,
             arguments: arguments.as_ref(),
-            connector_id: connector_id.as_ref(),
-            connector_name: connector_name.as_ref(),
-            connector_description: connector_description.as_ref(),
+            approval_source: approval_source.as_ref(),
             connected_account_email: connected_account_email.as_ref(),
             tool_title: tool_title.as_ref(),
             tool_description: tool_description.as_ref(),
@@ -423,17 +414,15 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::McpToolCall {
             server,
             tool_name,
-            connector_id,
-            connector_name,
+            approval_source,
             tool_title,
             ..
-        } => GuardianAssessmentAction::McpToolCall {
-            server: server.clone(),
-            tool_name: tool_name.clone(),
-            connector_id: connector_id.clone(),
-            connector_name: connector_name.clone(),
-            tool_title: tool_title.clone(),
-        },
+        } => GuardianAssessmentAction::mcp_tool_call(
+            server.clone(),
+            tool_name.clone(),
+            tool_title.clone(),
+            approval_source.as_ref(),
+        ),
         GuardianApprovalRequest::RequestPermissions {
             reason,
             permissions,
@@ -488,17 +477,15 @@ pub(crate) fn guardian_reviewed_action(
         GuardianApprovalRequest::McpToolCall {
             server,
             tool_name,
-            connector_id,
-            connector_name,
+            approval_source,
             tool_title,
             ..
-        } => GuardianReviewedAction::McpToolCall {
-            server: server.clone(),
-            tool_name: tool_name.clone(),
-            connector_id: connector_id.clone(),
-            connector_name: connector_name.clone(),
-            tool_title: tool_title.clone(),
-        },
+        } => GuardianReviewedAction::mcp_tool_call(
+            server.clone(),
+            tool_name.clone(),
+            tool_title.clone(),
+            approval_source.as_ref(),
+        ),
         GuardianApprovalRequest::RequestPermissions { .. } => {
             GuardianReviewedAction::RequestPermissions {}
         }

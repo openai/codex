@@ -3,9 +3,8 @@
 
 use anyhow::Result;
 use codex_config::types::ToolSuggestDisabledTool;
-use codex_config::types::ToolSuggestDiscoverable;
-use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core::config::Config;
+use codex_core_plugins::PluginInstallRequest;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -21,7 +20,10 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::apps_test_server::APPS_RESOURCE_MCP_SERVER_NAME;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -31,15 +33,19 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_mcp_server_registration;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockGuard;
 use wiremock::ResponseTemplate;
@@ -47,10 +53,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
 const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";
-const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 const REMOTE_CALENDAR_PLUGIN_CONFIG_ID: &str = "calendar@openai-curated-remote";
 const REMOTE_CALENDAR_PLUGIN_ID: &str = "plugin_calendar";
 const CALENDAR_CONNECTOR_ID: &str = "calendar";
@@ -95,12 +99,77 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
         .expect("gpt-5.4 exists in bundled models.json");
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5.4".to_string());
-    config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
-        kind: ToolSuggestDiscoverableType::Connector,
-        id: DISCOVERABLE_GMAIL_ID.to_string(),
-    }];
     model.supports_search_tool = false;
     config.model_catalog = Some(model_catalog);
+}
+
+fn configure_plugin_discovery_without_search_tool(config: &mut Config) {
+    for feature in [Feature::Plugins, Feature::ToolSuggest] {
+        config
+            .features
+            .enable(feature)
+            .expect("test config should allow feature update");
+    }
+    config
+        .features
+        .disable(Feature::RemotePlugin)
+        .expect("test config should allow feature update");
+    let mut model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    model.supports_search_tool = false;
+    config.model = Some("gpt-5.4".to_string());
+    config.model_catalog = Some(model_catalog);
+}
+
+fn write_legacy_plugin_catalog(codex_home: &std::path::Path) {
+    let catalog_root = codex_home.join(".tmp/plugins");
+    let plugin_root = catalog_root.join("plugins/slack");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .expect("create plugin manifest directory");
+    std::fs::create_dir_all(catalog_root.join(".agents/plugins"))
+        .expect("create marketplace directory");
+    std::fs::write(
+        catalog_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "plugins": [{
+    "name": "slack",
+    "source": {"source": "local", "path": "./plugins/slack"}
+  }]
+}"#,
+    )
+    .expect("write marketplace");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"slack","description":"Work with Slack messages"}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(codex_home.join(".tmp/plugins.sha"), "test-revision\n")
+        .expect("write curated plugin revision");
+}
+
+fn write_legacy_plugin_catalog_with_mcp(codex_home: &std::path::Path, command: &str) {
+    write_legacy_plugin_catalog(codex_home);
+    let plugin_root = codex_home.join(".tmp/plugins/plugins/slack");
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                "installed_plugin": {
+                    "command": command,
+                    "cwd": ".",
+                    "startup_timeout_sec": 10
+                }
+            }
+        }))
+        .expect("serialize plugin MCP config"),
+    )
+    .expect("write plugin MCP config");
 }
 
 async fn mount_recommendations(server: &wiremock::MockServer, response: ResponseTemplate) {
@@ -112,33 +181,14 @@ async fn mount_recommendations(server: &wiremock::MockServer, response: Response
         .await;
 }
 
-fn assert_legacy_tools(body: &Value) {
-    let tools = tool_names(body);
-    assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
-    assert!(
-        tools
-            .iter()
-            .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME),
-        "legacy mode should expose {LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}: {tools:?}"
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
-        "legacy mode should expose {REQUEST_PLUGIN_INSTALL_TOOL_NAME}: {tools:?}"
-    );
-}
-
 async fn build_test(
     server: &wiremock::MockServer,
     apps_server: &AppsTestServer,
 ) -> Result<TestCodex> {
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config({
-            let apps_base_url = apps_server.chatgpt_base_url.clone();
-            move |config| configure_apps_without_search_tool(config, apps_base_url.as_str())
-        });
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config({
+        let apps_base_url = apps_server.chatgpt_base_url.clone();
+        move |config| configure_apps_without_search_tool(config, apps_base_url.as_str())
+    });
     builder.build(server).await
 }
 
@@ -271,17 +321,11 @@ async fn mount_remote_calendar_installed_plugins(server: &wiremock::MockServer) 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
+async fn legacy_mode_discovers_plugins_and_uses_legacy_wire_shape() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    mount_recommendations(
-        &server,
-        ResponseTemplate::new(200).set_body_json(json!({"enabled": false, "plugins": []})),
-    )
-    .await;
-    let call_id = "list-installable-tools";
+    let call_id = "list-installable-plugins";
     let mock = mount_sse_sequence(
         &server,
         vec![
@@ -298,33 +342,124 @@ async fn explicit_false_preserves_legacy_workflow() -> Result<()> {
         ],
     )
     .await;
-    let test = build_test(&server, &apps_server).await?;
-    test.submit_turn_with_approval_and_permission_profile(
-        "list tools",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
+    let home = Arc::new(TempDir::new()?);
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_pre_build_hook(write_legacy_plugin_catalog)
+        .with_config(configure_plugin_discovery_without_search_tool);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("use the Slack plugin").await?;
 
     let requests = mock.requests();
     assert_eq!(requests.len(), 2);
-    let request = &requests[0];
+    let request_body = requests[0].body_json();
+    let tools = request_body["tools"].as_array().expect("tools array");
+    let names = tool_names(&request_body);
     assert!(
-        !request
-            .message_input_texts("user")
-            .join("\n")
-            .contains("<recommended_plugins>")
-    );
-    assert_legacy_tools(&request.body_json());
-    let output = requests[1]
-        .function_call_output_text(call_id)
-        .expect("list tool output");
-    let output: Value = serde_json::from_str(&output)?;
-    assert!(output["tools"].as_array().is_some_and(|tools| {
-        tools
+        names
             .iter()
-            .any(|tool| tool["id"] == DISCOVERABLE_GMAIL_ID && tool["tool_type"] == "connector")
+            .any(|name| name == LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME)
+    );
+    let request_install = tools
+        .iter()
+        .find(|tool| tool["name"] == REQUEST_PLUGIN_INSTALL_TOOL_NAME)
+        .expect("request install tool");
+    assert_eq!(
+        request_install["parameters"]["required"],
+        json!(["tool_type", "action_type", "tool_id", "suggest_reason"])
+    );
+    let output: Value = serde_json::from_str(
+        &requests[1]
+            .function_call_output_text(call_id)
+            .expect("list tool output"),
+    )?;
+    assert!(output["tools"].as_array().is_some_and(|plugins| {
+        plugins.iter().any(|plugin| {
+            plugin["id"] == "slack@openai-curated"
+                && plugin["name"] == "slack"
+                && plugin["tool_type"] == "plugin"
+        })
     }));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_local_plugin_install_refreshes_its_mcp_server_in_the_same_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "install-slack";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    &serde_json::to_string(&json!({
+                        "tool_type": "plugin",
+                        "action_type": "install",
+                        "tool_id": "slack@openai-curated",
+                        "suggest_reason": "Use Slack for this request"
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let command = stdio_server_bin()?;
+    let command_for_hook = command.clone();
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_pre_build_hook(move |codex_home| {
+            write_legacy_plugin_catalog_with_mcp(codex_home, &command_for_hook);
+        })
+        .with_config(configure_plugin_discovery_without_search_tool);
+    let test = builder.build(&server).await?;
+
+    let elicitation = start_install_turn(&test, "install the Slack plugin").await?;
+    test.thread_manager
+        .plugins_manager()
+        .install_plugin(
+            &test.config.config_layer_stack,
+            PluginInstallRequest {
+                plugin_name: "slack".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    home.path()
+                        .join(".tmp/plugins/.agents/plugins/marketplace.json"),
+                )?,
+            },
+        )
+        .await?;
+    resolve_install_elicitation(&test, elicitation, ElicitationAction::Accept).await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .tool_by_name("mcp__installed_plugin", "echo")
+            .is_some(),
+        "the resumed router must include the newly installed plugin MCP server"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            &requests[1]
+                .function_call_output_text(call_id)
+                .expect("install tool output")
+        )?["completed"],
+        true
+    );
     Ok(())
 }
 
@@ -537,6 +672,7 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
 #[derive(Clone, Copy)]
 enum RefreshedAppsTools {
     Available,
+    SyntheticOnly,
     Missing,
 }
 
@@ -545,6 +681,7 @@ async fn remote_plugin_install_refreshes_plugin_and_apps_tool_caches() -> Result
     skip_if_no_network!(Ok(()));
 
     run_remote_plugin_install_refresh_case(RefreshedAppsTools::Available).await?;
+    run_remote_plugin_install_refresh_case(RefreshedAppsTools::SyntheticOnly).await?;
     run_remote_plugin_install_refresh_case(RefreshedAppsTools::Missing).await
 }
 
@@ -553,6 +690,9 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
     let apps_server = match refreshed_tools {
         RefreshedAppsTools::Available => {
             AppsTestServer::mount_with_tools_available_after_initial_list(&server).await?
+        }
+        RefreshedAppsTools::SyntheticOnly => {
+            AppsTestServer::mount_with_synthetic_tools_available_after_initial_list(&server).await?
         }
         RefreshedAppsTools::Missing => AppsTestServer::mount_without_tools(&server).await?,
     };
@@ -585,6 +725,7 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
     )
     .await;
     let test = build_test(&server, &apps_server).await?;
+    wait_for_mcp_server_registration(&test.codex, APPS_RESOURCE_MCP_SERVER_NAME).await?;
 
     let elicitation = start_install_turn(&test, "use Calendar").await?;
     mount_remote_calendar_installed_plugins(&server).await;
@@ -599,7 +740,6 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
             .is_none(),
         "calendar tool should be absent before the remote install"
     );
-    let completed = matches!(refreshed_tools, RefreshedAppsTools::Available);
     assert_eq!(
         serde_json::from_str::<Value>(
             &requests[1]
@@ -607,7 +747,7 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
                 .expect("install tool output")
         )?,
         json!({
-            "completed": completed,
+            "completed": !matches!(refreshed_tools, RefreshedAppsTools::Missing),
             "user_confirmed": true,
             "tool_type": "plugin",
             "action_type": "install",
@@ -620,7 +760,7 @@ async fn run_remote_plugin_install_refresh_case(refreshed_tools: RefreshedAppsTo
         requests[1]
             .tool_by_name(CALENDAR_NAMESPACE, CALENDAR_CREATE_EVENT_TOOL)
             .is_some(),
-        completed,
+        !matches!(refreshed_tools, RefreshedAppsTools::Missing),
         "the resumed router should reflect the refreshed Apps tools"
     );
     assert!(
@@ -659,17 +799,15 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
         ]),
     )
     .await;
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config({
-            let apps_base_url = apps_server.chatgpt_base_url.clone();
-            move |config| {
-                configure_apps_without_search_tool(config, apps_base_url.as_str());
-                config.tool_suggest.disabled_tools = vec![ToolSuggestDisabledTool::plugin(
-                    "google-calendar@openai-curated-remote",
-                )];
-            }
-        });
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config({
+        let apps_base_url = apps_server.chatgpt_base_url.clone();
+        move |config| {
+            configure_apps_without_search_tool(config, apps_base_url.as_str());
+            config.tool_suggest.disabled_tools = vec![ToolSuggestDisabledTool::plugin(
+                "google-calendar@openai-curated-remote",
+            )];
+        }
+    });
     let test = builder.build(&server).await?;
 
     test.submit_turn("list tools").await?;

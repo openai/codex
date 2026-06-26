@@ -7,35 +7,6 @@ use codex_protocol::protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-// Verifies connector merging deduplicates repeated IDs.
-async fn merge_connector_selection_deduplicates_entries() {
-    let session_configuration = make_session_configuration_for_tests().await;
-    let mut state = SessionState::new(session_configuration);
-    let merged = state.merge_connector_selection([
-        "calendar".to_string(),
-        "calendar".to_string(),
-        "drive".to_string(),
-    ]);
-
-    assert_eq!(
-        merged,
-        HashSet::from(["calendar".to_string(), "drive".to_string()])
-    );
-}
-
-#[tokio::test]
-// Verifies clearing connector selection removes all saved IDs.
-async fn clear_connector_selection_removes_entries() {
-    let session_configuration = make_session_configuration_for_tests().await;
-    let mut state = SessionState::new(session_configuration);
-    state.merge_connector_selection(["calendar".to_string()]);
-
-    state.clear_connector_selection();
-
-    assert_eq!(state.get_connector_selection(), HashSet::new());
-}
-
-#[tokio::test]
 async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);

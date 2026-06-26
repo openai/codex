@@ -39,6 +39,8 @@ type TurnEnvironmentResolution = Shared<BoxFuture<'static, TurnEnvironmentResult
 #[derive(Clone)]
 struct SelectedTurnEnvironment {
     selection: TurnEnvironmentSelection,
+    environment: Arc<Environment>,
+    retain_inherited_handle: bool,
     resolution: TurnEnvironmentResolution,
 }
 
@@ -78,6 +80,7 @@ impl ThreadEnvironments {
         local_shell: Shell,
         shell_snapshot: ShellSnapshot,
         current: TurnEnvironmentSnapshot,
+        retain_initial_handles: bool,
         non_blocking_snapshots: bool,
     ) -> Self {
         // Reuse only attached environments from the supplied snapshot; drop starting entries.
@@ -86,10 +89,13 @@ impl ThreadEnvironments {
             .into_iter()
             .map(|environment| {
                 let selection = environment.selection();
+                let retained_environment = Arc::clone(&environment.environment);
                 let resolution: TurnEnvironmentResolution =
                     futures::future::ready(Ok(environment)).boxed().shared();
                 SelectedTurnEnvironment {
                     selection,
+                    environment: retained_environment,
+                    retain_inherited_handle: retain_initial_handles,
                     resolution,
                 }
             })
@@ -111,23 +117,28 @@ impl ThreadEnvironments {
             if !seen_environment_ids.insert(selected_environment.environment_id.as_str()) {
                 continue;
             }
-            if let Some(environment) = previous
-                .iter()
-                .find(|environment| environment.selection == *selected_environment)
-                && !matches!(environment.resolution.clone().now_or_never(), Some(Err(_)))
-            {
-                next.push(environment.clone());
-                continue;
-            }
-
             let environment_id = &selected_environment.environment_id;
             let Some(environment) = self.environment_manager.get_environment(environment_id) else {
                 tracing::warn!("skipping unknown turn environment `{environment_id}`");
                 continue;
             };
+            if let Some(previous_environment) = previous
+                .iter()
+                .find(|environment| environment.selection == *selected_environment)
+                && (previous_environment.retain_inherited_handle
+                    || Arc::ptr_eq(&previous_environment.environment, &environment))
+                && !matches!(
+                    previous_environment.resolution.clone().now_or_never(),
+                    Some(Err(_))
+                )
+            {
+                next.push(previous_environment.clone());
+                continue;
+            }
+
             let (resolution_task, resolution) = Self::resolve_environment(
                 selected_environment.clone(),
-                environment,
+                Arc::clone(&environment),
                 self.local_shell.clone(),
                 self.shell_snapshot.clone(),
             )
@@ -136,6 +147,8 @@ impl ThreadEnvironments {
             let resolution = resolution.boxed().shared();
             next.push(SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
+                environment,
+                retain_inherited_handle: false,
                 resolution,
             });
         }
@@ -325,6 +338,7 @@ mod tests {
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ false,
         ));
         turn_environments.update_selections(selections);
@@ -471,6 +485,7 @@ url = "ws://127.0.0.1:8765"
             local_shell.clone(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ false,
         );
         turn_environments.update_selections(&[TurnEnvironmentSelection {
@@ -603,6 +618,7 @@ url = "ws://127.0.0.1:8765"
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ false,
         ));
         environments.update_selections(std::slice::from_ref(&selection));
@@ -654,6 +670,7 @@ url = "ws://127.0.0.1:8765"
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ true,
         );
         turn_environments.update_selections(&[remote.clone(), local.clone()]);
@@ -712,6 +729,7 @@ url = "ws://127.0.0.1:8765"
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ true,
         );
         environments.update_selections(std::slice::from_ref(&selection));
@@ -739,7 +757,7 @@ url = "ws://127.0.0.1:8765"
     }
 
     #[tokio::test]
-    async fn matching_environment_id_and_cwd_reuse_resolution() {
+    async fn matching_selection_replaces_resolution_when_environment_instance_changes() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let first_listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -763,9 +781,11 @@ url = "ws://127.0.0.1:8765"
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot::default(),
+            /*retain_initial_handles*/ false,
             /*non_blocking_snapshots*/ true,
         );
         environments.update_selections(std::slice::from_ref(&selection));
+        let initial_environment = Arc::clone(&environments.environments.load()[0].environment);
         let initial_snapshot = environments.snapshot().await;
         let second_listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -784,6 +804,7 @@ url = "ws://127.0.0.1:8765"
             .expect("replace environment");
 
         environments.update_selections(std::slice::from_ref(&selection));
+        let replacement_environment = Arc::clone(&environments.environments.load()[0].environment);
         let reused_snapshot = environments.snapshot().await;
         environments.update_selections(&[TurnEnvironmentSelection {
             cwd: PathUri::from_abs_path(&cwd.join("changed")),
@@ -803,12 +824,13 @@ url = "ws://127.0.0.1:8765"
             .starting
             .first()
             .expect("changed environment");
-        assert!(initial.resolution.ptr_eq(&reused.resolution));
+        assert!(!Arc::ptr_eq(&initial_environment, &replacement_environment));
+        assert!(!initial.resolution.ptr_eq(&reused.resolution));
         assert!(!reused.resolution.ptr_eq(&changed.resolution));
     }
 
     #[tokio::test]
-    async fn inherited_environment_reuses_parent_handle() {
+    async fn inherited_environment_keeps_parent_handle() {
         let cwd = AbsolutePathBuf::current_dir().expect("cwd");
         let selection = TurnEnvironmentSelection {
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
@@ -833,13 +855,14 @@ url = "ws://127.0.0.1:8765"
             )
             .expect("replacement environment");
         let environments = ThreadEnvironments::new(
-            manager,
+            Arc::clone(&manager),
             crate::shell::default_user_shell(),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot {
                 turn_environments: vec![inherited],
                 starting: Vec::new(),
             },
+            /*retain_initial_handles*/ true,
             /*non_blocking_snapshots*/ false,
         );
 
@@ -853,6 +876,10 @@ url = "ws://127.0.0.1:8765"
                 .environment,
             &inherited_environment,
         ));
+
+        environments.update_selections(std::slice::from_ref(&selection));
+        let retained_environment = Arc::clone(&environments.environments.load()[0].environment);
+        assert!(Arc::ptr_eq(&retained_environment, &inherited_environment,));
     }
 
     #[tokio::test]

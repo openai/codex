@@ -89,10 +89,10 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         let source_name = self
             .tool_info
-            .connector_name
+            .namespace_title
             .as_deref()
             .map(str::trim)
-            .filter(|connector_name| !connector_name.is_empty())
+            .filter(|title| !title.is_empty())
             .unwrap_or_else(|| self.tool_info.server_name.trim());
         let source_info = (!source_name.is_empty()).then(|| ToolSearchSourceInfo {
             name: source_name.to_string(),
@@ -141,7 +141,6 @@ impl McpHandler {
         };
 
         let started = Instant::now();
-        // TODO(sayan): Use StepContext for MCP file arguments when MCP follows dynamic environments.
         let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &step_context,
@@ -239,14 +238,6 @@ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error>
         .map(str::trim)
         .filter(|description| !description.is_empty())
         .map(str::to_string)
-        .or_else(|| {
-            tool_info
-                .connector_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-                .map(|connector_name| format!("Tools for working with {connector_name}."))
-        })
         .unwrap_or_default();
 
     Ok(ToolSpec::Namespace(ResponsesApiNamespace {
@@ -278,7 +269,7 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
         flat_tool_name(&tool_name).into_owned(),
         info.callable_name.clone(),
         info.tool.name.to_string(),
-        info.server_name.clone(),
+        info.callable_namespace.clone(),
     ];
     if let Some(title) = info.tool.title.as_deref().map(str::trim)
         && !title.is_empty()
@@ -290,16 +281,24 @@ fn build_mcp_search_text(info: &ToolInfo) -> String {
     {
         parts.push(description.to_string());
     }
-    if let Some(connector_name) = info.connector_name.as_deref().map(str::trim)
-        && !connector_name.is_empty()
+    if let Some(namespace_title) = info.namespace_title.as_deref().map(str::trim)
+        && !namespace_title.is_empty()
     {
-        parts.push(connector_name.to_string());
+        parts.push(namespace_title.to_string());
     }
     if let Some(namespace_description) = info.namespace_description.as_deref().map(str::trim)
         && !namespace_description.is_empty()
     {
         parts.push(namespace_description.to_string());
     }
+    parts.extend(
+        info.search_aliases
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|alias| !alias.is_empty())
+            .map(str::to_string),
+    );
     parts.extend(
         info.plugin_display_names
             .iter()
@@ -538,6 +537,8 @@ mod tests {
             callable_name: tool_name.to_string(),
             callable_namespace: callable_namespace.to_string(),
             namespace_description: None,
+            namespace_title: None,
+            search_aliases: Vec::new(),
             tool: rmcp::model::Tool::new_with_raw(
                 tool_name.to_string(),
                 None,
@@ -545,8 +546,6 @@ mod tests {
                     "type": "object",
                 }))),
             ),
-            connector_id: None,
-            connector_name: None,
             plugin_display_names: Vec::new(),
         }
     }

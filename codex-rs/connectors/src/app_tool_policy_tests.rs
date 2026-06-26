@@ -256,6 +256,11 @@ fn managed_enable_does_not_override_disabled_app() {
 #[test]
 fn managed_disable_applies_without_apps_config() {
     let requirements = app_enabled_requirement("connector_123123", /*enabled*/ false);
+    let evaluator =
+        AppToolPolicyEvaluator::from_parts(/*apps_config*/ None, Some(&requirements));
+
+    assert!(!evaluator.app_is_enabled("connector_123123"));
+    assert!(evaluator.app_is_enabled("other"));
 
     assert_eq!(
         policy_from_config_parts(

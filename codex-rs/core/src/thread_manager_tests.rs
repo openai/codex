@@ -442,9 +442,18 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 
 #[tokio::test]
 async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
+    struct ThreadDataSeed;
+
     struct InitialDataRecorder {
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
         mcp_observed: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl codex_extension_api::ThreadDataInitializer for InitialDataRecorder {
+        fn initialize(&self, thread_data: &mut codex_extension_api::ExtensionDataInit) {
+            assert!(thread_data.get::<ThreadDataSeed>().is_none());
+            thread_data.insert(ThreadDataSeed);
+        }
     }
 
     impl codex_extension_api::ThreadLifecycleContributor<Config> for InitialDataRecorder {
@@ -453,6 +462,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             input: codex_extension_api::ThreadStartInput<'a, Config>,
         ) -> codex_extension_api::ExtensionFuture<'a, ()> {
             Box::pin(async move {
+                assert!(input.thread_store.get::<ThreadDataSeed>().is_some());
                 let selected_root = input
                     .thread_store
                     .get::<Vec<SelectedCapabilityRoot>>()
@@ -483,6 +493,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 let thread_init = context
                     .thread_init()
                     .expect("initial MCP resolution should be thread-scoped");
+                assert!(thread_init.get::<ThreadDataSeed>().is_some());
                 let selected_root = thread_init
                     .get::<Vec<SelectedCapabilityRoot>>()
                     .and_then(|roots| roots.first().cloned())
@@ -491,10 +502,29 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(selected_root.id.clone());
-                let mut server = codex_mcp::codex_apps_mcp_server_config(
-                    "https://selected.invalid",
-                    /*apps_mcp_product_sku*/ None,
-                );
+                let mut server = codex_config::McpServerConfig {
+                    transport: codex_config::McpServerTransportConfig::StreamableHttp {
+                        url: "https://selected.invalid".to_string(),
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    },
+                    auth: Default::default(),
+                    environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                };
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;
                 server.environment_id = environment_id.clone();
@@ -524,11 +554,17 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         mcp_observed: Arc::clone(&mcp_observed),
     });
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.thread_data_initializer(recorder.clone());
     extensions.thread_lifecycle_contributor(recorder.clone());
     extensions.mcp_server_contributor(recorder);
-    let manager = ThreadManager::new(
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let plugins_manager =
+        build_plugins_manager(&config, auth_manager.as_ref(), &SessionSource::Exec);
+    let manager = ThreadManager::new_with_plugins_manager(
         &config,
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        auth_manager,
+        Arc::clone(&plugins_manager),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         Arc::new(extensions.build()),
@@ -540,6 +576,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );
+    assert!(Arc::ptr_eq(&plugins_manager, &manager.plugins_manager()));
     let selected_root_init = |id: &str, environment_id: &str| {
         let mut init = codex_extension_api::ExtensionDataInit::new();
         init.insert(vec![SelectedCapabilityRoot {

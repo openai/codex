@@ -8,6 +8,19 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+/// Request metadata key carrying the originating model tool-call identifier.
+pub const MCP_TOOL_CALL_ID_META_KEY: &str = "codex/toolCallId";
+/// Result metadata key carrying the effective arguments executed by an MCP proxy.
+pub const MCP_TOOL_INPUT_META_KEY: &str = "codex/toolInput";
+/// Result metadata key carrying an error code for host telemetry.
+///
+/// MCP result metadata is not included in model-facing function output.
+pub const MCP_ERROR_CODE_META_KEY: &str = "codex/errorCode";
+/// Listed-tool metadata key carrying private context for a trusted approval reviewer.
+pub const MCP_APPROVAL_CONTEXT_META_KEY: &str = "codex/approvalContext";
+/// Approval-context field identifying the account connected to an MCP service.
+pub const MCP_APPROVAL_CONTEXT_CONNECTED_ACCOUNT_EMAIL_KEY: &str = "connectedAccountEmail";
+
 /// ID of a request, which can be either a string or an integer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(untagged)]

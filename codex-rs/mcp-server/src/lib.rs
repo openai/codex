@@ -1,3 +1,5 @@
+// Composed extension futures require extra trait-solver depth in spawned sessions.
+#![recursion_limit = "256"]
 //! Prototype MCP server.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
@@ -167,6 +169,7 @@ pub async fn run_main(
                 }
             }
 
+            processor.shutdown().await;
             info!("processor task exited (channel closed)");
         }
     });

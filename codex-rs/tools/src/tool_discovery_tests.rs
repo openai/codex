@@ -1,74 +1,27 @@
 use super::*;
-use codex_connectors::AppInfo;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 
 #[test]
-fn discoverable_tool_enums_use_expected_wire_names() {
-    assert_eq!(
-        json!({
-            "tool_type": DiscoverableToolType::Connector,
-            "action_type": DiscoverableToolAction::Install,
-        }),
-        json!({
-            "tool_type": "connector",
-            "action_type": "install",
-        })
-    );
-}
-
-#[test]
-fn filter_request_plugin_install_discoverable_tools_for_codex_tui_omits_plugins() {
-    let discoverable_tools = vec![
-        DiscoverableTool::Connector(Box::new(AppInfo {
-            id: "connector_google_calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events and schedules.".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            icon_assets: None,
-            icon_dark_assets: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some("https://example.test/google-calendar".to_string()),
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        })),
-        DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
-            id: "slack@openai-curated".to_string(),
-            remote_plugin_id: None,
-            name: "Slack".to_string(),
-            description: Some("Search Slack messages".to_string()),
-            has_skills: true,
-            mcp_server_names: vec!["slack".to_string()],
-            app_connector_ids: vec!["connector_slack".to_string()],
-        })),
-    ];
+fn filter_request_plugin_install_candidates_omits_plugins_for_codex_tui() {
+    let plugin = DiscoverablePluginInfo {
+        id: "slack@openai-curated".to_string(),
+        remote_plugin_id: None,
+        name: "Slack".to_string(),
+        description: Some("Search Slack messages".to_string()),
+        has_skills: true,
+        mcp_server_names: vec!["slack".to_string()],
+        app_connector_ids: vec!["connector_slack".to_string()],
+    };
 
     assert_eq!(
-        filter_request_plugin_install_discoverable_tools_for_client(
-            discoverable_tools,
-            Some("codex-tui"),
+        filter_request_plugin_install_candidates_for_client(
+            vec![plugin.clone()],
+            /*app_server_client_name*/ None,
         ),
-        vec![DiscoverableTool::Connector(Box::new(AppInfo {
-            id: "connector_google_calendar".to_string(),
-            name: "Google Calendar".to_string(),
-            description: Some("Plan events and schedules.".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            icon_assets: None,
-            icon_dark_assets: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some("https://example.test/google-calendar".to_string()),
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        }))]
+        vec![plugin.clone()]
+    );
+    assert_eq!(
+        filter_request_plugin_install_candidates_for_client(vec![plugin], Some("codex-tui")),
+        Vec::new()
     );
 }
