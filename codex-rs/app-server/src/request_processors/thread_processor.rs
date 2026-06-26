@@ -1268,6 +1268,7 @@ impl ThreadRequestProcessor {
         let cwd = config_snapshot.cwd().clone();
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        let thread_originator = config_snapshot.originator.clone();
 
         let response = ThreadStartResponse {
             thread: thread.clone(),
@@ -1287,7 +1288,7 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         listener_task_context
             .outgoing
-            .send_response(request_id, response)
+            .send_response_with_thread_originator(request_id, response, thread_originator)
             .instrument(tracing::info_span!(
                 "app_server.thread_start.send_response",
                 otel.name = "app_server.thread_start.send_response",
@@ -2863,6 +2864,7 @@ impl ThreadRequestProcessor {
                     }
                 }
 
+                let thread_originator = config_snapshot.originator.clone();
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
@@ -2881,7 +2883,9 @@ impl ThreadRequestProcessor {
                 };
 
                 let connection_id = request_id.connection_id;
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response_with_thread_originator(request_id, response, thread_originator)
+                    .await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
                 if let Some(token_usage_thread) = token_usage_thread {
@@ -3582,6 +3586,7 @@ impl ThreadRequestProcessor {
         );
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        let thread_originator = config_snapshot.originator.clone();
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -3602,7 +3607,9 @@ impl ThreadRequestProcessor {
         let notif = thread_started_notification(thread);
         let connection_id = request_id.connection_id;
         let token_usage_thread = include_turns.then(|| response.thread.clone());
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response_with_thread_originator(request_id, response, thread_originator)
+            .await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
         if let Some(token_usage_thread) = token_usage_thread {

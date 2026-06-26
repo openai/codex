@@ -107,6 +107,7 @@ use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 use super::analytics::wait_for_goal_event;
+use super::analytics::wait_for_matching_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -573,11 +574,12 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-    set_thread_source_on_fake_rollout(
+    set_session_meta_on_fake_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
         &conversation_id,
         "user",
+        "codex_work_desktop",
     )?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
@@ -607,6 +609,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         event,
         &thread.id,
         &thread.session_id,
+        "codex_work_desktop",
         "gpt-5.3-codex",
         "resumed",
         "user",
@@ -615,11 +618,94 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     Ok(())
 }
 
-fn set_thread_source_on_fake_rollout(
+#[tokio::test]
+async fn thread_resume_running_thread_tracks_thread_originator_in_analytics() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            thread_source: Some(ThreadSource::User),
+            service_name: Some("codex_work_desktop".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "materialize rollout".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_thread_initialized"
+            && event["event_params"]["thread_id"] == resumed.id
+            && event["event_params"]["initialization_mode"] == "resumed"
+    })
+    .await?;
+    assert_basic_thread_initialized_event(
+        &event,
+        &resumed.id,
+        &resumed.session_id,
+        "codex_work_desktop",
+        "mock-model",
+        "resumed",
+        "user",
+    );
+    Ok(())
+}
+
+fn set_session_meta_on_fake_rollout(
     codex_home: &std::path::Path,
     filename_ts: &str,
     thread_id: &str,
     thread_source: &str,
+    originator: &str,
 ) -> Result<()> {
     let path = rollout_path(codex_home, filename_ts, thread_id);
     let contents = std::fs::read_to_string(&path)?;
@@ -629,6 +715,7 @@ fn set_thread_source_on_fake_rollout(
         .ok_or_else(|| anyhow::anyhow!("fake rollout missing session meta"))?;
     let mut session_meta: serde_json::Value = serde_json::from_str(session_meta)?;
     session_meta["payload"]["thread_source"] = serde_json::json!(thread_source);
+    session_meta["payload"]["originator"] = serde_json::json!(originator);
     let remaining = lines.collect::<Vec<_>>().join("\n");
     std::fs::write(&path, format!("{session_meta}\n{remaining}\n"))?;
     Ok(())
