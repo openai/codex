@@ -25,6 +25,7 @@ pub fn apply_rollout_item(
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
         RolloutItem::Compacted(_) => {}
+        RolloutItem::WorldState(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
@@ -42,7 +43,8 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
-        | RolloutItem::Compacted(_) => false,
+        | RolloutItem::Compacted(_)
+        | RolloutItem::WorldState(_) => false,
     }
 }
 
@@ -341,6 +343,7 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
                     multi_agent_version: None,
                     context_window: None,
@@ -533,6 +536,7 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
                     multi_agent_version: None,
                     context_window: None,

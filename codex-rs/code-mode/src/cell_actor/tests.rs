@@ -103,6 +103,18 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
     initial_observe_mode: ObserveMode,
     host: Arc<H>,
 ) -> CellActorHarness {
+    spawn_cell_actor_harness_with_host_and_failure_handler(
+        initial_observe_mode,
+        host,
+        /*task_failure_handler*/ None,
+    )
+}
+
+fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
+    initial_observe_mode: ObserveMode,
+    host: Arc<H>,
+    task_failure_handler: Option<TaskFailureHandler>,
+) -> CellActorHarness {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (initial_event_tx, initial_event_rx) = oneshot::channel();
@@ -118,6 +130,7 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
         },
         runtime_event_tx,
         PendingRuntimeMode::PauseUntilResumed,
+        /*task_failure_handler*/ None,
     )
     .unwrap();
     let (runtime_control_tx, runtime_control_rx) = std_mpsc::channel();
@@ -137,6 +150,7 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
             mode: initial_observe_mode,
             response_tx: initial_event_tx,
         },
+        task_failure_handler,
     ));
 
     CellActorHarness {
@@ -147,6 +161,54 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
         runtime_control_rx,
         _runtime_event_rx: runtime_event_rx,
     }
+}
+
+#[tokio::test]
+async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
+    let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
+    let harness = spawn_cell_actor_harness_with_host_and_failure_handler(
+        ObserveMode::YieldAfter(Duration::from_secs(60)),
+        Arc::new(TestHost),
+        Some(Arc::new(move |reason| {
+            let _ = failure_tx.send(reason);
+        })),
+    );
+    drop(harness.event_tx);
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), failure_rx.recv())
+            .await
+            .expect("runtime failure timeout")
+            .expect("runtime failure"),
+        "code-mode V8 runtime thread ended unexpectedly"
+    );
+    assert!(
+        harness
+            .initial_event_rx
+            .await
+            .expect("initial event")
+            .is_ok()
+    );
+    harness.task.await.expect("cell task");
+}
+
+#[tokio::test]
+async fn runtime_thread_panic_remains_a_cell_error_without_owner_supervision() {
+    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(60)));
+    harness
+        .event_tx
+        .send(RuntimeEvent::ThreadPanicked)
+        .expect("runtime panic event");
+    drop(harness.event_tx);
+
+    assert_eq!(
+        harness.initial_event_rx.await.expect("initial event"),
+        Ok(CellEvent::Completed {
+            content_items: Vec::new(),
+            error_text: Some("exec runtime ended unexpectedly".to_string()),
+        })
+    );
+    harness.task.await.expect("cell task");
 }
 
 async fn wait_for_notification(host: &RecordingHost) {

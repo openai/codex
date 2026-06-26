@@ -1237,6 +1237,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
+        | RolloutItem::WorldState(_)
         | RolloutItem::EventMsg(_) => None,
     })
 }
@@ -2147,6 +2148,7 @@ mod tests {
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,
+                selected_capability_roots: Vec::new(),
                 memory_mode: Some("polluted".to_string()),
                 multi_agent_version: None,
                 context_window: None,
@@ -2210,6 +2212,7 @@ mod tests {
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,
+                selected_capability_roots: Vec::new(),
                 memory_mode: None,
                 multi_agent_version: None,
                 context_window: None,

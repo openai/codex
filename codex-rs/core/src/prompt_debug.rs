@@ -3,7 +3,6 @@ use std::sync::Arc;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_extension_api::UserInstructionsProvider;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -65,7 +64,7 @@ pub async fn build_prompt_input(
     );
     let thread = thread_manager.start_thread(config).await?;
 
-    let output = build_prompt_input_from_session(thread.thread.codex.session.as_ref(), input).await;
+    let output = build_prompt_input_from_session(&thread.thread.codex.session, input).await;
     let shutdown = thread.thread.shutdown_and_wait().await;
     let _removed = thread_manager.remove_thread(&thread.thread_id).await;
 
@@ -74,27 +73,18 @@ pub async fn build_prompt_input(
 }
 
 pub(crate) async fn build_prompt_input_from_session(
-    sess: &Session,
+    sess: &Arc<Session>,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
     let turn_context = sess.new_default_turn().await;
-    let world_state = sess
-        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+    // Prompt debugging builds a standalone request without entering run_turn.
+    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
+    sess.record_context_updates_and_set_reference_context_item(step_context.as_ref())
         .await;
 
     if !input.is_empty() {
         let response_item = sess.response_item_from_user_input(input);
         sess.record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&response_item))
-            .await;
-    }
-
-    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
-    if turn_context
-        .config
-        .features
-        .enabled(Feature::DeferredExecutor)
-    {
-        sess.record_step_environment_context_if_changed(&world_state, step_context.as_ref())
             .await;
     }
 

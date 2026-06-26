@@ -1,0 +1,22 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-connectors-extension"
+version.workspace = true
+
+[lib]
+name = "codex_connectors_extension"
+path = "src/lib.rs"
+doctest = false
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-connectors = { workspace = true }
+codex-core-plugins = { workspace = true }
+codex-plugin = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

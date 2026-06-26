@@ -285,6 +285,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);
@@ -300,6 +301,7 @@ mod tests {
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
+                failure_reason: None,
             });
 
         let target = server_notification_thread_target(&notification);

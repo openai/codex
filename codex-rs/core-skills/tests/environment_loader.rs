@@ -1,5 +1,7 @@
 use std::fs;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use codex_core_skills::loader::EnvironmentSkillMetadata;
 use codex_core_skills::loader::load_environment_skills_from_root;
@@ -13,6 +15,8 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WalkOptions;
+use codex_exec_server::WalkOutcome;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -20,6 +24,15 @@ use tempfile::tempdir;
 struct RecordingFileSystem<'a> {
     inner: &'a dyn ExecutorFileSystem,
     read_files: Mutex<Vec<PathUri>>,
+    metadata_files: Mutex<Vec<PathUri>>,
+    walks: AtomicUsize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FileSystemCalls {
+    walks: usize,
+    read_files: Vec<PathUri>,
+    metadata_files: Vec<PathUri>,
 }
 
 impl<'a> RecordingFileSystem<'a> {
@@ -27,14 +40,29 @@ impl<'a> RecordingFileSystem<'a> {
         Self {
             inner,
             read_files: Mutex::new(Vec::new()),
+            metadata_files: Mutex::new(Vec::new()),
+            walks: AtomicUsize::new(0),
         }
     }
 
-    fn read_files(&self) -> Vec<PathUri> {
-        self.read_files
+    fn calls(&self) -> FileSystemCalls {
+        let mut read_files = self
+            .read_files
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .clone();
+        read_files.sort_by_key(ToString::to_string);
+        let mut metadata_files = self
+            .metadata_files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        metadata_files.sort_by_key(ToString::to_string);
+        FileSystemCalls {
+            walks: self.walks.load(Ordering::Relaxed),
+            read_files,
+            metadata_files,
+        }
     }
 }
 
@@ -90,6 +118,10 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
         path: &'a PathUri,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        self.metadata_files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.clone());
         self.inner.get_metadata(path, sandbox)
     }
 
@@ -99,6 +131,16 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
         self.inner.read_directory(path, sandbox)
+    }
+
+    fn walk<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        self.walks.fetch_add(1, Ordering::Relaxed);
+        self.inner.walk(path, options, sandbox)
     }
 
     fn remove<'a>(
@@ -200,7 +242,8 @@ async fn loads_nearest_plugin_namespaces_without_reading_unused_sibling_manifest
     );
 
     let mut manifest_reads = file_system
-        .read_files()
+        .calls()
+        .read_files
         .into_iter()
         .filter(|path| path.basename().as_deref() == Some("plugin.json"))
         .collect::<Vec<_>>();
@@ -213,4 +256,74 @@ async fn loads_nearest_plugin_namespaces_without_reading_unused_sibling_manifest
         .collect::<Vec<_>>();
     expected_manifest_reads.sort_by_key(ToString::to_string);
     assert_eq!(manifest_reads, expected_manifest_reads);
+}
+
+#[tokio::test]
+async fn reuses_walk_inventory_for_missing_skill_metadata() {
+    const SKILL_COUNT: usize = 66;
+
+    let root = tempdir().expect("tempdir");
+    let manifest_path = root.path().join(".codex-plugin/plugin.json");
+    fs::create_dir_all(manifest_path.parent().expect("manifest parent")).expect("manifest dir");
+    fs::write(&manifest_path, r#"{"name":"inventory"}"#).expect("manifest");
+
+    let mut skill_paths = Vec::new();
+    for index in 0..SKILL_COUNT {
+        let name = format!("skill-{index}");
+        let skill_path = root.path().join(&name).join("SKILL.md");
+        fs::create_dir_all(skill_path.parent().expect("skill parent")).expect("skill dir");
+        fs::write(
+            &skill_path,
+            format!("---\nname: {name}\ndescription: {name} skill.\n---\n"),
+        )
+        .expect("skill");
+        skill_paths.push(skill_path);
+    }
+
+    let file_system = RecordingFileSystem::new(LOCAL_FS.as_ref());
+    let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
+    let outcome = load_environment_skills_from_root(
+        &file_system,
+        &root_uri,
+        /*restriction_product*/ None,
+    )
+    .await;
+
+    let mut expected_skills = skill_paths
+        .iter()
+        .enumerate()
+        .map(|(index, skill_path)| EnvironmentSkillMetadata {
+            path_to_skills_md: PathUri::from_host_native_path(skill_path).unwrap(),
+            name: format!("inventory:skill-{index}"),
+            description: format!("skill-{index} skill."),
+            short_description: None,
+            dependencies: None,
+            policy: None,
+        })
+        .collect::<Vec<_>>();
+    expected_skills.sort_by(|left, right| {
+        left.name.cmp(&right.name).then_with(|| {
+            left.path_to_skills_md
+                .to_string()
+                .cmp(&right.path_to_skills_md.to_string())
+        })
+    });
+    assert_eq!(outcome.skills, expected_skills);
+    assert_eq!(outcome.warnings, Vec::<String>::new());
+
+    let mut expected_read_files = skill_paths
+        .iter()
+        .map(|path| PathUri::from_host_native_path(path).unwrap())
+        .collect::<Vec<_>>();
+    let manifest_uri = PathUri::from_host_native_path(manifest_path).unwrap();
+    expected_read_files.push(manifest_uri.clone());
+    expected_read_files.sort_by_key(ToString::to_string);
+    assert_eq!(
+        file_system.calls(),
+        FileSystemCalls {
+            walks: 1,
+            read_files: expected_read_files,
+            metadata_files: vec![manifest_uri],
+        }
+    );
 }

@@ -14,7 +14,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -40,7 +39,6 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
-use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -59,6 +57,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
+use codex_features::CurrentTimeReminderDeliveryMode;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
@@ -1037,7 +1036,7 @@ pub struct Config {
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
-    /// Current-time reminder configuration, when enabled.
+    /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
@@ -1088,12 +1087,14 @@ pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
     "Your context window is nearly exhausted (only {n_remaining} tokens remaining) and will be automatically reset for you soon. ",
     "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
 );
-const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 1000;
+const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 2000;
+const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
+    pub guidance_message: Option<String>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -1101,6 +1102,7 @@ impl Default for TokenBudgetConfig {
         Self {
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
+            guidance_message: None,
         }
     }
 }
@@ -1117,6 +1119,9 @@ pub struct RolloutBudgetConfig {
 pub struct CurrentTimeReminderConfig {
     pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
+    pub delivery_mode: CurrentTimeReminderDeliveryMode,
+    /// Whether to expose the input-interruptible `clock.sleep` tool.
+    pub sleep_tool: bool,
 }
 
 impl Default for CurrentTimeReminderConfig {
@@ -1124,6 +1129,8 @@ impl Default for CurrentTimeReminderConfig {
         Self {
             reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
+            delivery_mode: CurrentTimeReminderDeliveryMode::AnyInference,
+            sleep_tool: false,
         }
     }
 }
@@ -1881,7 +1888,7 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1910,7 +1917,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = plugin_mcp_requirements
             .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1971,26 +1978,6 @@ where
     }
 
     Ok(false)
-}
-
-fn mcp_server_matches_requirement(
-    requirement: &McpServerRequirement,
-    server: &McpServerConfig,
-) -> bool {
-    match &requirement.identity {
-        McpServerIdentity::Command {
-            command: want_command,
-        } => matches!(
-            &server.transport,
-            McpServerTransportConfig::Stdio { command: got_command, .. }
-                if got_command == want_command
-        ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
-    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -2575,9 +2562,25 @@ fn resolve_token_budget_config(
         ));
     }
 
+    let guidance_message = token_budget_config
+        .and_then(|config| config.guidance_message.clone())
+        .filter(|message| !message.trim().is_empty());
+    if guidance_message
+        .as_ref()
+        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+
     Ok(Some(TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
+        guidance_message,
     }))
 }
 
@@ -2663,18 +2666,18 @@ fn resolve_current_time_reminder_config(
     let reminder_interval_seconds = base
         .and_then(|config| config.reminder_interval_seconds)
         .unwrap_or(default.reminder_interval_seconds);
-    if reminder_interval_seconds == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.current_time_reminder.reminder_interval_seconds must be positive",
-        ));
-    }
 
     Ok(Some(CurrentTimeReminderConfig {
         reminder_interval_seconds,
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
+        delivery_mode: base
+            .and_then(|config| config.delivery_mode)
+            .unwrap_or(default.delivery_mode),
+        sleep_tool: base
+            .and_then(|config| config.sleep_tool)
+            .unwrap_or(default.sleep_tool),
     }))
 }
 

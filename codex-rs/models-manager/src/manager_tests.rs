@@ -240,6 +240,105 @@ c2ln",
 }
 
 #[tokio::test]
+async fn static_manager_preserves_supported_requested_model_when_fallback_is_allowed() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            remote_model("provider-default", "Default", /*priority*/ 0),
+            remote_model("provider-supported", "Supported", /*priority*/ 1),
+        ],
+    });
+    let requested_model = Some("provider-supported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "provider-supported");
+}
+
+#[tokio::test]
+async fn static_manager_falls_back_from_unsupported_requested_model_when_allowed() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            remote_model("provider-default", "Default", /*priority*/ 0),
+            remote_model("provider-supported", "Supported", /*priority*/ 1),
+        ],
+    });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "provider-default");
+}
+
+#[tokio::test]
+async fn static_manager_preserves_unsupported_requested_model_when_fallback_is_disabled() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![remote_model(
+            "provider-default",
+            "Default",
+            /*priority*/ 0,
+        )],
+    });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ false,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "unsupported");
+}
+
+#[tokio::test]
+async fn static_manager_uses_empty_default_when_fallback_is_allowed_and_catalog_is_empty() {
+    let manager = static_manager_for_tests(ModelsResponse { models: Vec::new() });
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Offline,
+        )
+        .await;
+
+    assert_eq!(model, "");
+}
+
+#[tokio::test]
+async fn dynamic_manager_preserves_requested_model_when_fallback_is_allowed() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(Vec::new());
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+    let requested_model = Some("unsupported".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ true,
+            RefreshStrategy::Online,
+        )
+        .await;
+
+    assert_eq!(model, "unsupported");
+    assert_eq!(endpoint.fetch_count(), 0);
+}
+
+#[tokio::test]
 async fn get_model_info_tracks_fallback_usage() {
     let codex_home = tempdir().expect("temp dir");
     let config = ModelsManagerConfig::default();

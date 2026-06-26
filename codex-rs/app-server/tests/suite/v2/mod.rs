@@ -56,6 +56,8 @@ mod request_user_input;
 mod request_validation;
 mod review;
 mod safety_check_downgrade;
+#[cfg(not(target_os = "windows"))]
+mod selected_capability_stack;
 mod skills_list;
 mod sleep;
 mod thread_archive;
