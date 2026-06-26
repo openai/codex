@@ -1,4 +1,4 @@
-name: ci
+name: repo-checks
 
 on:
   workflow_call:

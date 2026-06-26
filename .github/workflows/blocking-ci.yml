@@ -19,9 +19,9 @@ jobs:
     uses: ./.github/workflows/cargo-deny.yml
     secrets: inherit
 
-  ci:
-    name: ci
-    uses: ./.github/workflows/ci.yml
+  repo-checks:
+    name: repo-checks
+    uses: ./.github/workflows/repo-checks.yml
     secrets: inherit
 
   codespell:
@@ -46,7 +46,7 @@ jobs:
       - bazel
       - blob-size-policy
       - cargo-deny
-      - ci
+      - repo-checks
       - codespell
       - rust-ci
       - sdk
