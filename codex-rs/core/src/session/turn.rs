@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -65,6 +64,7 @@ use crate::tools::router::extension_tool_executors;
 use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::turn_diff_tracker::refresh_environment_display_roots;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -79,7 +79,6 @@ use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
-use codex_git_utils::get_git_repo_root_with_fs;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -209,10 +208,7 @@ pub(crate) async fn run_turn(
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let display_roots = turn_diff_display_roots(turn_context.as_ref()).await;
-    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
-        TurnDiffTracker::with_environment_display_roots(display_roots),
-    ));
+    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -249,6 +245,8 @@ pub(crate) async fn run_turn(
             Some(step_context) => step_context,
             None => sess.capture_step_context(Arc::clone(&turn_context)).await,
         };
+        refresh_environment_display_roots(turn_diff_tracker.as_ref(), &step_context.environments)
+            .await;
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
@@ -456,25 +454,6 @@ pub(crate) async fn run_turn(
     }
 
     Ok(last_agent_message)
-}
-
-#[instrument(level = "trace", skip_all)]
-async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
-    let mut display_roots = Vec::new();
-    for turn_environment in &turn_context.environments.turn_environments {
-        // TODO(anp): Migrate git-root discovery and diff display roots to PathUri so foreign
-        // environment roots can participate without host-native conversion.
-        let Ok(cwd) = turn_environment.cwd().to_abs_path() else {
-            continue;
-        };
-        let root =
-            get_git_repo_root_with_fs(turn_environment.environment.get_filesystem().as_ref(), &cwd)
-                .await
-                .unwrap_or(cwd)
-                .into_path_buf();
-        display_roots.push((turn_environment.environment_id.clone(), root));
-    }
-    display_roots
 }
 
 #[instrument(level = "trace", skip_all)]

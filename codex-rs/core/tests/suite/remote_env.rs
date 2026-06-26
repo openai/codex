@@ -410,9 +410,33 @@ async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
         .expect("environment info response");
 }
 
-async fn serve_environment_info(listener: TcpListener) {
+async fn serve_environment_info_with_git_root(listener: TcpListener) {
     let mut websocket = accept_initialized_exec_server(listener).await;
     send_environment_info(&mut websocket).await;
+
+    // A ready environment also serves the cwd and nearest `.git` metadata probes.
+    for _ in 0..2 {
+        let request = read_exec_server_json(&mut websocket).await;
+        assert_eq!(request["method"], "fs/getMetadata");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "id": request["id"],
+                    "result": {
+                        "isDirectory": true,
+                        "isFile": false,
+                        "isSymlink": false,
+                        "size": 0,
+                        "createdAtMs": 0,
+                        "modifiedAtMs": 0,
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("filesystem metadata response");
+    }
 }
 
 async fn serve_environment_with_agents_md(
@@ -564,7 +588,7 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
         .await?;
     wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
     assert_eq!(response_mock.requests().len(), 1);
-    serve_environment_info(listener).await;
+    let exec_server = tokio::spawn(serve_environment_info_with_git_root(listener));
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -593,6 +617,7 @@ async fn deferred_executor_updates_context_and_tools_after_startup() -> Result<(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    exec_server.await?;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
@@ -905,7 +930,7 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
     })
     .await;
 
-    serve_environment_info(listener).await;
+    let exec_server = tokio::spawn(serve_environment_info_with_git_root(listener));
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id,
@@ -923,6 +948,7 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    exec_server.await?;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
