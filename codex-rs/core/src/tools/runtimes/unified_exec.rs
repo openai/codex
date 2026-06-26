@@ -74,6 +74,7 @@ pub struct UnifiedExecRequest {
     pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
+    pub ingress: Option<u16>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     #[cfg(unix)]
@@ -90,6 +91,7 @@ pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathUri,
     pub tty: bool,
+    pub ingress: Option<u16>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
 }
@@ -163,6 +165,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             tty: req.tty,
+            ingress: req.ingress,
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
         }]
@@ -409,6 +412,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                     command,
                     options,
                     managed_network,
+                    req.ingress,
                     Some(&req.turn_environment.environment_id),
                 )
                 .map_err(ToolError::Codex)?;
@@ -477,6 +481,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 options,
                 attempt,
                 managed_network,
+                req.ingress,
                 /*environment_id*/ Some(&req.turn_environment.environment_id),
                 req.exec_server_env_config.clone(),
                 req.tty,
@@ -574,6 +579,7 @@ mod tests {
             explicit_env_overrides: HashMap::new(),
             network: None,
             tty: false,
+            ingress: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,
             #[cfg(unix)]
@@ -676,6 +682,7 @@ mod tests {
             explicit_env_overrides: HashMap::new(),
             network: None,
             tty: false,
+            ingress: None,
             sandbox_permissions,
             additional_permissions: None,
             #[cfg(unix)]

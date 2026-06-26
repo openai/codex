@@ -506,6 +506,7 @@ impl ExecutorStdioServerLauncher {
                 env,
                 tty: false,
                 pipe_stdin: true,
+                ingress: None,
                 arg0: None,
                 sandbox: None,
                 enforce_managed_network: false,

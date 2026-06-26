@@ -563,7 +563,7 @@ fn bind_local_loopback_listener() -> io::Result<TcpListener> {
     }
 }
 
-fn ensure_loopback_interface_up() -> io::Result<()> {
+pub(crate) fn ensure_loopback_interface_up() -> io::Result<()> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -636,7 +636,7 @@ fn set_parent_death_signal() -> io::Result<()> {
     }
 }
 
-fn harden_bridge_process() -> io::Result<()> {
+pub(crate) fn harden_bridge_process() -> io::Result<()> {
     set_parent_death_signal()?;
     codex_process_hardening::disable_process_dumping()
 }

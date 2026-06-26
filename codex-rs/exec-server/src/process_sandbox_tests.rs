@@ -43,6 +43,7 @@ fn sandbox_request_wraps_native_argv_on_executor() {
         env: HashMap::new(),
         tty: false,
         pipe_stdin: false,
+        ingress: None,
         arg0: None,
         sandbox: Some(sandbox),
         enforce_managed_network: false,
@@ -81,6 +82,47 @@ fn sandbox_request_wraps_native_argv_on_executor() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_request_forwards_ingress_to_linux_sandbox() {
+    let cwd: AbsolutePathBuf = std::env::current_dir()
+        .expect("current directory")
+        .try_into()
+        .expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let self_exe = std::env::current_exe().expect("current executable");
+    let runtime_paths =
+        ExecServerRuntimePaths::new(self_exe.clone(), Some(self_exe)).expect("runtime paths");
+    let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::workspace_write(),
+        cwd_uri.clone(),
+    );
+    let params = ExecParams {
+        process_id: ProcessId::from("ingress"),
+        argv: vec!["/usr/bin/true".to_string()],
+        cwd: cwd_uri,
+        env_policy: None,
+        env: HashMap::new(),
+        tty: false,
+        pipe_stdin: false,
+        ingress: Some(4173),
+        arg0: None,
+        sandbox: Some(sandbox),
+        enforce_managed_network: false,
+        managed_network: None,
+    };
+
+    let prepared = prepare_exec_request(&params, HashMap::new(), Some(&runtime_paths))
+        .expect("prepare ingress sandbox request");
+
+    assert!(
+        prepared
+            .command
+            .windows(2)
+            .any(|args| args[0] == "--ingress" && args[1] == "4173")
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_request_allows_prepared_managed_proxy_port() {
@@ -104,6 +146,7 @@ fn sandbox_request_allows_prepared_managed_proxy_port() {
         env: HashMap::new(),
         tty: false,
         pipe_stdin: false,
+        ingress: None,
         arg0: None,
         sandbox: Some(sandbox),
         enforce_managed_network: true,
@@ -140,6 +183,7 @@ fn native_request_preserves_native_launch_fields() {
         env: HashMap::new(),
         tty: false,
         pipe_stdin: false,
+        ingress: None,
         arg0: Some("custom-arg0".to_string()),
         sandbox: None,
         enforce_managed_network: false,

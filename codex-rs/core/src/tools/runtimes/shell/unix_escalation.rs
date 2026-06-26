@@ -144,6 +144,7 @@ pub(super) async fn try_run_zsh_fork(
             command,
             options,
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions),
+            /*ingress*/ None,
             Some(&req.turn_environment.environment_id),
         )
         .map_err(ToolError::Codex)?;
@@ -152,6 +153,7 @@ pub(super) async fn try_run_zsh_fork(
         cwd: sandbox_cwd,
         env: sandbox_env,
         exec_server_env_config: _,
+        ingress: _,
         network: sandbox_network,
         network_environment_id,
         expiration: _sandbox_expiration,
@@ -887,6 +889,7 @@ impl CoreShellCommandExecutor {
                 cwd: self.cwd.clone().into(),
                 env: exec_env,
                 exec_server_env_config: None,
+                ingress: None,
                 network: self.network.clone(),
                 network_environment_id: self.network_environment_id.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
@@ -1026,6 +1029,7 @@ impl CoreShellCommandExecutor {
             enforce_managed_network: self.network.is_some(),
             environment_id: self.network_environment_id.as_deref(),
             network: self.network.as_ref(),
+            ingress: None,
             sandbox_policy_cwd: &sandbox_policy_cwd,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: self.use_legacy_landlock,

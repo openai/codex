@@ -20,6 +20,8 @@ use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
+#[cfg(unix)]
+use codex_sandboxing::ingress::INGRESS_LISTENER_FD_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
@@ -28,6 +30,10 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::net::Ipv4Addr;
+#[cfg(unix)]
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -199,6 +205,78 @@ async fn exec_command_with_tty(
         original_token_count: Some(approx_token_count(&text)),
         hook_command: Some(cmd.to_string()),
     })
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_ingress_passes_inherited_listener_to_child() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        r#"test -n "$CODEX_INGRESS_LISTENER_FD" && eval "true <&${CODEX_INGRESS_LISTENER_FD}" && echo ingress-ready"#
+            .to_string(),
+    ];
+    let mut env = shell_env();
+    env.remove(INGRESS_LISTENER_FD_ENV_VAR);
+    let mut request = test_exec_request(turn.as_ref(), command, cwd, env);
+    request.ingress = Some(unused_ingress_port());
+
+    let process = manager
+        .open_session_with_prepared_exec_env(
+            process_id,
+            &request,
+            /*tty*/ false,
+            Box::new(NoopSpawnLifecycle),
+            turn.environments
+                .primary()
+                .expect("turn environment")
+                .environment
+                .as_ref(),
+        )
+        .await?;
+    let OutputHandles {
+        output_buffer,
+        output_notify,
+        output_closed,
+        output_closed_notify,
+        cancellation_token,
+    } = process.output_handles();
+    let output = UnifiedExecProcessManager::collect_output_until_deadline(
+        &output_buffer,
+        &output_notify,
+        &output_closed,
+        &output_closed_notify,
+        &cancellation_token,
+        Some(session.subscribe_out_of_band_elicitation_pause_state()),
+        Instant::now() + Duration::from_secs(2),
+    )
+    .await;
+
+    assert_eq!(process.exit_code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output).contains("ingress-ready"),
+        "expected ingress child output, got: {}",
+        String::from_utf8_lossy(&output),
+    );
+    manager.release_process_id(process_id).await;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unused_ingress_port() -> u16 {
+    TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .expect("bind ephemeral ingress listener")
+        .local_addr()
+        .expect("read ephemeral ingress listener address")
+        .port()
 }
 
 #[derive(Debug)]

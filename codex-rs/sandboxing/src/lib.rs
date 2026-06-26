@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 mod denial;
+#[cfg(unix)]
+pub mod ingress;
 pub mod landlock;
 mod manager;
 pub mod policy_transforms;
@@ -53,6 +55,15 @@ impl From<SandboxTransformError> for CodexErr {
             }
             SandboxTransformError::EnvironmentNetworkProxy(message) => {
                 CodexErr::UnsupportedOperation(message)
+            }
+            SandboxTransformError::IngressRequiresLinuxSandbox => {
+                CodexErr::UnsupportedOperation("ingress requires the Linux sandbox".to_string())
+            }
+            #[cfg(target_os = "linux")]
+            SandboxTransformError::IngressRequiresIsolatedNetwork => {
+                CodexErr::UnsupportedOperation(
+                    "ingress requires isolated or managed-proxy Linux networking".to_string(),
+                )
             }
             #[cfg(target_os = "linux")]
             SandboxTransformError::Wsl1UnsupportedForBubblewrap => {

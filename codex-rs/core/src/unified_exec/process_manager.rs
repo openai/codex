@@ -62,6 +62,10 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_sandboxing::SandboxCommand;
+#[cfg(unix)]
+use codex_sandboxing::ingress::IngressListener;
+#[cfg(unix)]
+use codex_sandboxing::ingress::IngressListenerError;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
@@ -188,6 +192,7 @@ fn exec_server_params_for_request(
         env,
         tty,
         pipe_stdin: false,
+        ingress: request.ingress,
         arg0: request.arg0.clone(),
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
@@ -920,6 +925,7 @@ impl UnifiedExecProcessManager {
         options: ExecOptions,
         attempt: &SandboxAttempt<'_>,
         network: Option<&NetworkProxy>,
+        ingress: Option<u16>,
         environment_id: Option<&str>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         tty: bool,
@@ -927,9 +933,9 @@ impl UnifiedExecProcessManager {
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let mut request = if environment.is_remote() {
-            attempt.env_for_exec_server(command, options, network, environment_id)
+            attempt.env_for_exec_server(command, options, network, ingress, environment_id)
         } else {
-            attempt.env_for(command, options, network, environment_id)
+            attempt.env_for(command, options, network, ingress, environment_id)
         }
         .map_err(ToolError::Codex)?;
         request.exec_server_env_config = exec_server_env_config;
@@ -960,8 +966,6 @@ impl UnifiedExecProcessManager {
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let inherited_fds = spawn_lifecycle.inherited_fds();
-
         #[cfg(target_os = "windows")]
         if request.sandbox == codex_sandboxing::SandboxType::WindowsRestrictedToken {
             // TODO(anp): Keep PathUri through the Windows sandbox launch boundary.
@@ -1049,6 +1053,7 @@ impl UnifiedExecProcessManager {
             .await;
         }
         if environment.is_remote() {
+            let inherited_fds = spawn_lifecycle.inherited_fds();
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
                     "remote exec-server does not support inherited file descriptors".to_string(),
@@ -1062,6 +1067,22 @@ impl UnifiedExecProcessManager {
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_exec_server_started(started).await;
+        }
+
+        let mut env = request.env.clone();
+        let mut inherited_fds = spawn_lifecycle.inherited_fds();
+        #[cfg(unix)]
+        let ingress = IngressListener::prepare(request.ingress).map_err(ingress_error)?;
+        #[cfg(unix)]
+        if let Some(ingress) = ingress.as_ref() {
+            ingress.add_to_child_env(&mut env);
+            inherited_fds.push(ingress.inherited_fd());
+        }
+        #[cfg(not(unix))]
+        if request.ingress.is_some() {
+            return Err(UnifiedExecError::create_process(
+                "ingress is only supported on Unix hosts".to_string(),
+            ));
         }
 
         // TODO(anp): Keep PathUri through the local PTY/process launch boundary.
@@ -1081,7 +1102,7 @@ impl UnifiedExecProcessManager {
                 program,
                 args,
                 native_cwd.as_path(),
-                &request.env,
+                &env,
                 &request.arg0,
                 codex_utils_pty::TerminalSize::default(),
                 &inherited_fds,
@@ -1092,7 +1113,7 @@ impl UnifiedExecProcessManager {
                 program,
                 args,
                 native_cwd.as_path(),
-                &request.env,
+                &env,
                 &request.arg0,
                 &inherited_fds,
             )
@@ -1100,6 +1121,8 @@ impl UnifiedExecProcessManager {
         };
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        #[cfg(unix)]
+        drop(ingress);
         spawn_lifecycle.after_spawn();
         UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
     }
@@ -1166,6 +1189,7 @@ impl UnifiedExecProcessManager {
                 .clone(),
             network: request.network.clone(),
             tty: request.tty,
+            ingress: request.ingress,
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
             #[cfg(unix)]
@@ -1445,6 +1469,21 @@ impl UnifiedExecProcessManager {
 
         unregister_network_approval_for_entry(&entry).await;
         true
+    }
+}
+
+#[cfg(unix)]
+fn ingress_error(error: IngressListenerError) -> UnifiedExecError {
+    match error {
+        IngressListenerError::InvalidPort => {
+            UnifiedExecError::create_process("ingress port must be between 1 and 65535".to_string())
+        }
+        IngressListenerError::PortInUse(port) => UnifiedExecError::create_process(format!(
+            "ingress port {port} is already in use by another process"
+        )),
+        IngressListenerError::Io(error) => {
+            UnifiedExecError::create_process(format!("failed to prepare ingress listener: {error}"))
+        }
     }
 }
 

@@ -32,6 +32,11 @@ pub(crate) fn prepare_exec_request(
     runtime_paths: Option<&ExecServerRuntimePaths>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     let Some(sandbox_context) = params.sandbox.as_ref() else {
+        if params.ingress.is_some() {
+            return Err(invalid_params(
+                "ingress requires sandbox intent on exec-server".to_string(),
+            ));
+        }
         return Ok(PreparedExecRequest {
             command: params.argv.clone(),
             cwd: native_path(&params.cwd, "cwd")?,
@@ -125,6 +130,7 @@ pub(crate) fn prepare_exec_request(
                 enforce_managed_network: params.enforce_managed_network,
                 environment_id: None,
                 network: None,
+                ingress: params.ingress,
                 sandbox_policy_cwd,
                 codex_linux_sandbox_exe: runtime_paths.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,

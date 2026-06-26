@@ -418,6 +418,7 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
                 allow_network_for_proxy(enforce_managed_network),
+                /*ingress*/ None,
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,

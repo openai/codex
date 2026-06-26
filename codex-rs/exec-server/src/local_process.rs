@@ -14,6 +14,10 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::shell_environment;
 use codex_sandboxing::SandboxType;
+#[cfg(unix)]
+use codex_sandboxing::ingress::IngressListener;
+#[cfg(unix)]
+use codex_sandboxing::ingress::IngressListenerError;
 use codex_sandboxing::is_likely_sandbox_denied;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
@@ -234,8 +238,30 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let mut env = child_env(&params);
+        #[cfg(unix)]
+        let ingress = match IngressListener::prepare(params.ingress) {
+            Ok(ingress) => ingress,
+            Err(error) => return Err(ingress_error(error)),
+        };
+        #[cfg(unix)]
+        let inherited_fds = ingress
+            .as_ref()
+            .map(|ingress| vec![ingress.inherited_fd()])
+            .unwrap_or_default();
+        #[cfg(unix)]
+        if let Some(ingress) = ingress.as_ref() {
+            ingress.add_to_child_env(&mut env);
+        }
+        #[cfg(not(unix))]
+        if params.ingress.is_some() {
+            return Err(invalid_params(
+                "ingress is only supported on Unix exec-server hosts".to_string(),
+            ));
+        }
+        #[cfg(not(unix))]
+        let inherited_fds = Vec::new();
+        let prepared = prepare_exec_request(&params, env, self.runtime_paths.as_ref())?;
         let (program, args) = prepared
             .command
             .split_first()
@@ -256,31 +282,34 @@ impl LocalProcess {
         }
 
         let spawned_result = if params.tty {
-            codex_utils_pty::spawn_pty_process(
+            codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
                 args,
                 prepared.cwd.as_path(),
                 &prepared.env,
                 &prepared.arg0,
                 TerminalSize::default(),
+                &inherited_fds,
             )
             .await
         } else if params.pipe_stdin {
-            codex_utils_pty::spawn_pipe_process(
+            codex_utils_pty::pipe::spawn_process_with_inherited_fds(
                 program,
                 args,
                 prepared.cwd.as_path(),
                 &prepared.env,
                 &prepared.arg0,
+                &inherited_fds,
             )
             .await
         } else {
-            codex_utils_pty::spawn_pipe_process_no_stdin(
+            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
                 program,
                 args,
                 prepared.cwd.as_path(),
                 &prepared.env,
                 &prepared.arg0,
+                &inherited_fds,
             )
             .await
         };
@@ -297,6 +326,8 @@ impl LocalProcess {
                 return Err(internal_error(err.to_string()));
             }
         };
+        #[cfg(unix)]
+        drop(ingress);
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
@@ -582,6 +613,21 @@ fn child_env(params: &ExecParams) -> HashMap<String, String> {
     let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
     env.extend(params.env.clone());
     env
+}
+
+#[cfg(unix)]
+fn ingress_error(error: IngressListenerError) -> JSONRPCErrorError {
+    match error {
+        IngressListenerError::InvalidPort => {
+            invalid_request("ingress port must be between 1 and 65535".to_string())
+        }
+        IngressListenerError::PortInUse(port) => invalid_request(format!(
+            "ingress port {port} is already in use by another process"
+        )),
+        IngressListenerError::Io(error) => {
+            internal_error(format!("failed to prepare ingress listener: {error}"))
+        }
+    }
 }
 
 fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
@@ -995,6 +1041,7 @@ mod tests {
             env,
             tty: false,
             pipe_stdin: false,
+            ingress: None,
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,

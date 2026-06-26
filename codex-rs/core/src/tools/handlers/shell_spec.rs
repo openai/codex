@@ -55,6 +55,13 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             )),
         ),
     ]);
+    #[cfg(unix)]
+    properties.insert(
+        "ingress".to_string(),
+        JsonSchema::integer(Some(
+            "Expose a TCP port from the Linux sandbox through the parent host.".to_string(),
+        )),
+    );
     if include_shell_parameter {
         properties.insert(
             "shell".to_string(),

@@ -392,6 +392,7 @@ pub fn build_exec_request(
             enforce_managed_network,
             environment_id: network_environment_id.as_deref(),
             network: network.as_ref(),
+            ingress: None,
             sandbox_policy_cwd: &sandbox_policy_cwd_uri,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
@@ -444,6 +445,7 @@ pub(crate) async fn execute_exec_request(
         cwd,
         env,
         exec_server_env_config: _,
+        ingress,
         network,
         expiration,
         capture_policy,
@@ -462,6 +464,11 @@ pub(crate) async fn execute_exec_request(
         exec_server_enforce_managed_network: _,
         exec_server_managed_network: _,
     } = exec_request;
+    if ingress.is_some() {
+        return Err(CodexErr::UnsupportedOperation(
+            "ingress requires unified exec".to_string(),
+        ));
+    }
 
     // TODO(anp): Keep PathUri through the local process launch boundary.
     let cwd = cwd

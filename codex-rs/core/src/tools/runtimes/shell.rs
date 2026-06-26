@@ -326,6 +326,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 command,
                 options,
                 managed_network,
+                /*ingress*/ None,
                 Some(&req.turn_environment.environment_id),
             )
             .map_err(ToolError::Codex)?;

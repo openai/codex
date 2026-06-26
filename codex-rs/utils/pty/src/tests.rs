@@ -833,6 +833,7 @@ async fn pty_spawn_can_preserve_inherited_fds() -> anyhow::Result<()> {
 
     let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
     let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    set_close_on_exec(write_end.as_raw_fd())?;
 
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert(
@@ -1071,6 +1072,7 @@ async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> 
 
     let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
     let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    set_close_on_exec(write_end.as_raw_fd())?;
 
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     env_map.insert(
@@ -1098,6 +1100,23 @@ async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> 
     let mut pipe_output = String::new();
     read_end.read_to_string(&mut pipe_output)?;
     assert_eq!(pipe_output, "__pipe_preserved__");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_close_on_exec(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    // SAFETY: `fd` comes from a live file descriptor owned by the current test.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // SAFETY: `fd` comes from a live file descriptor owned by the current test.
+    let result = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
 
     Ok(())
 }

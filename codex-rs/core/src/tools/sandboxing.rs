@@ -431,6 +431,7 @@ impl<'a> SandboxAttempt<'a> {
         command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
+        ingress: Option<u16>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
         let request = self
@@ -442,6 +443,7 @@ impl<'a> SandboxAttempt<'a> {
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id,
                 network,
+                ingress,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self
                     .codex_linux_sandbox_exe
@@ -463,6 +465,7 @@ impl<'a> SandboxAttempt<'a> {
         command: SandboxCommand,
         options: ExecOptions,
         network: Option<&NetworkProxy>,
+        ingress: Option<u16>,
         environment_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
         let managed_network = command.managed_network.clone();
@@ -480,6 +483,7 @@ impl<'a> SandboxAttempt<'a> {
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id,
                 network,
+                ingress: None,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: None,
                 use_legacy_landlock: self.use_legacy_landlock,
@@ -492,6 +496,7 @@ impl<'a> SandboxAttempt<'a> {
             options,
             self.workspace_roots.to_vec(),
         );
+        exec_request.ingress = ingress;
         exec_request.exec_server_managed_network = managed_network;
         if self.sandbox_requested {
             exec_request.exec_server_sandbox = Some(FileSystemSandboxContext {

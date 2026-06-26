@@ -468,6 +468,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+        ingress: None,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -484,6 +485,7 @@ fn inner_command_includes_permission_profile_flag() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        ingress: None,
         command: vec!["/bin/true".to_string()],
     });
 
@@ -503,10 +505,30 @@ fn non_managed_inner_command_omits_route_spec() {
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
+        ingress: None,
         command: vec!["/bin/true".to_string()],
     });
 
     assert!(!args.iter().any(|arg| arg == "--proxy-route-spec"));
+}
+
+#[test]
+fn ingress_inner_command_includes_bridge_flag() {
+    let permission_profile = read_only_permission_profile();
+    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+        sandbox_policy_cwd: Path::new("/tmp"),
+        command_cwd: Some(Path::new("/tmp/link")),
+        permission_profile: &permission_profile,
+        allow_network_for_proxy: false,
+        proxy_route_spec: None,
+        ingress: Some(4173),
+        command: vec!["/bin/true".to_string()],
+    });
+
+    assert!(
+        args.windows(2)
+            .any(|args| args[0] == "--ingress" && args[1] == "4173")
+    );
 }
 
 #[test]
@@ -519,6 +541,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             permission_profile: &permission_profile,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
+            ingress: None,
             command: vec!["/bin/true".to_string()],
         })
     });

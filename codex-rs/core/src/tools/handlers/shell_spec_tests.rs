@@ -74,6 +74,13 @@ fn exec_command_tool_matches_expected_spec() {
                 )),
         ),
     ]);
+    #[cfg(unix)]
+    properties.insert(
+        "ingress".to_string(),
+        JsonSchema::integer(Some(
+            "Expose a TCP port from the Linux sandbox through the parent host.".to_string(),
+        )),
+    );
     properties.extend(create_approval_parameters(
         /*exec_permission_approvals_enabled*/ false,
     ));

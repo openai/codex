@@ -140,6 +140,7 @@ impl FileSystemSandboxRunner {
                     enforce_managed_network: false,
                     environment_id: None,
                     network: None,
+                    ingress: None,
                     sandbox_policy_cwd: &cwd.uri,
                     codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
                     use_legacy_landlock: sandbox_context.use_legacy_landlock,

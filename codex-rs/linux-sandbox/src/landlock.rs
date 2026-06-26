@@ -44,14 +44,14 @@ pub(crate) fn apply_permission_profile_to_current_thread(
     cwd: &Path,
     apply_landlock_fs: bool,
     allow_network_for_proxy: bool,
-    proxy_routed_network: bool,
+    allow_ip_sockets_in_isolated_network: bool,
 ) -> Result<()> {
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
     let network_seccomp_mode = network_seccomp_mode(
         network_sandbox_policy,
         allow_network_for_proxy,
-        proxy_routed_network,
+        allow_ip_sockets_in_isolated_network,
     );
 
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
@@ -90,7 +90,7 @@ pub(crate) fn apply_permission_profile_to_current_thread(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NetworkSeccompMode {
     Restricted,
-    ProxyRouted,
+    LocalIpSockets,
 }
 
 fn should_install_network_seccomp(
@@ -105,12 +105,12 @@ fn should_install_network_seccomp(
 fn network_seccomp_mode(
     network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
-    proxy_routed_network: bool,
+    allow_ip_sockets_in_isolated_network: bool,
 ) -> Option<NetworkSeccompMode> {
     if !should_install_network_seccomp(network_sandbox_policy, allow_network_for_proxy) {
         None
-    } else if proxy_routed_network {
-        Some(NetworkSeccompMode::ProxyRouted)
+    } else if allow_ip_sockets_in_isolated_network {
+        Some(NetworkSeccompMode::LocalIpSockets)
     } else {
         Some(NetworkSeccompMode::Restricted)
     }
@@ -215,13 +215,10 @@ fn install_network_seccomp_filter_on_current_thread(
             rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
             rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
         }
-        NetworkSeccompMode::ProxyRouted => {
-            // In proxy-routed mode we allow IP sockets in the isolated
-            // namespace (used to reach the local TCP bridge) but deny socket()
-            // for all other families, including AF_UNIX. Only AF_UNIX
-            // socketpair() remains available for process-local IPC because it
-            // cannot connect to a socket outside the sandbox or bypass the
-            // bridge.
+        NetworkSeccompMode::LocalIpSockets => {
+            // Local bridges and ingress servers need IP sockets inside
+            // the isolated namespace. Other socket families remain blocked,
+            // except AF_UNIX socketpair() for process-local IPC.
             let deny_non_ip_socket = SeccompRule::new(vec![
                 SeccompCondition::new(
                     0,
@@ -310,14 +307,26 @@ mod tests {
     }
 
     #[test]
-    fn managed_proxy_routes_use_proxy_routed_seccomp_mode() {
+    fn managed_proxy_routes_allow_local_ip_sockets() {
         assert_eq!(
             network_seccomp_mode(
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ true,
-                /*proxy_routed_network*/ true,
+                /*allow_ip_sockets_in_isolated_network*/ true,
             ),
-            Some(NetworkSeccompMode::ProxyRouted)
+            Some(NetworkSeccompMode::LocalIpSockets)
+        );
+    }
+
+    #[test]
+    fn ingress_allows_local_ip_sockets_without_proxy() {
+        assert_eq!(
+            network_seccomp_mode(
+                NetworkSandboxPolicy::Restricted,
+                /*allow_network_for_proxy*/ false,
+                /*allow_ip_sockets_in_isolated_network*/ true,
+            ),
+            Some(NetworkSeccompMode::LocalIpSockets)
         );
     }
 
@@ -327,7 +336,7 @@ mod tests {
             network_seccomp_mode(
                 NetworkSandboxPolicy::Restricted,
                 /*allow_network_for_proxy*/ false,
-                /*proxy_routed_network*/ false,
+                /*allow_ip_sockets_in_isolated_network*/ false,
             ),
             Some(NetworkSeccompMode::Restricted)
         );
@@ -339,7 +348,7 @@ mod tests {
             network_seccomp_mode(
                 NetworkSandboxPolicy::Enabled,
                 /*allow_network_for_proxy*/ false,
-                /*proxy_routed_network*/ false,
+                /*allow_ip_sockets_in_isolated_network*/ false,
             ),
             None
         );

@@ -590,6 +590,7 @@ mod tests {
             env,
             tty: false,
             pipe_stdin: false,
+            ingress: None,
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,

@@ -129,6 +129,9 @@ pub struct ExecParams {
     /// Keep non-tty stdin writable through `process/write`.
     #[serde(default)]
     pub pipe_stdin: bool,
+    /// Expose a TCP port from the Linux sandbox through the executor host.
+    #[serde(default)]
+    pub ingress: Option<u16>,
     /// Optional process-visible argv0 override. Values such as `codex-linux-sandbox` are command
     /// names rather than paths, so this is not a [`PathUri`].
     pub arg0: Option<String>,
@@ -591,6 +594,7 @@ mod tests {
             pipe_stdin: false,
             arg0: None,
             sandbox: None,
+            ingress: None,
             enforce_managed_network: true,
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
