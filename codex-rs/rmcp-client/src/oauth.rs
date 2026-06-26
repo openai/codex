@@ -65,6 +65,7 @@ use codex_keyring_store::KeyringStore;
 use codex_utils_home_dir::find_codex_home;
 
 pub(crate) use self::persistor::OAuthPersistor;
+pub(crate) use self::persistor::request_oauth_token_response;
 use self::refresh_lock::RefreshCredentialLock;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
@@ -73,7 +74,8 @@ pub(crate) use self::resolved_store::resolve_oauth_tokens;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
-const REFRESH_SKEW_MILLIS: u64 = 30_000;
+// Refresh proactively so ordinary requests do not race token expiry.
+const REFRESH_SKEW_MILLIS: u64 = 60_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
