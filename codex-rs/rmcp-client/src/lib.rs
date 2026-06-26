@@ -23,6 +23,7 @@ pub use in_process_transport::InProcessTransportFactory;
 pub use oauth::StoredOAuthTokens;
 pub use oauth::WrappedOAuthTokenResponse;
 pub use oauth::delete_oauth_tokens;
+pub use oauth::delete_oauth_tokens_locked;
 pub use oauth::save_oauth_tokens;
 pub use perform_oauth_login::OAuthProviderError;
 pub use perform_oauth_login::OauthLoginHandle;
