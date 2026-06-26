@@ -87,7 +87,10 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 # This test is compiled through `#[path]` inside the inline `oauth::tests` module. Cargo-shear
 # cannot resolve that nested module path and otherwise reports the linked file as unlinked.
 [package.metadata.cargo-shear]
-ignored-paths = ["src/oauth/tests/store_lock_tests.rs"]
+ignored-paths = [
+    "src/oauth/tests/persistor_tests.rs",
+    "src/oauth/tests/store_lock_tests.rs",
+]
 
 [lib]
 doctest = false
