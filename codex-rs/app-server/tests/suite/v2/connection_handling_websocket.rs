@@ -7,6 +7,7 @@ use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -14,10 +15,29 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
+use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
+use codex_core::RolloutRecorder;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
+use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use futures::SinkExt;
 use futures::StreamExt;
 use hmac::Hmac;
@@ -34,6 +54,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
+use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -372,6 +393,263 @@ async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_tim
         .kill()
         .await
         .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_reconnect_recovers_in_progress_and_terminal_turn_state() -> Result<()> {
+    let (emit_deltas_tx, emit_deltas_rx) = oneshot::channel();
+    let (complete_turn_tx, complete_turn_rx) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_message_item_added("msg-1", ""),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(emit_deltas_rx),
+            body: responses::sse(vec![
+                responses::ev_output_text_delta("hello "),
+                responses::ev_output_text_delta("world"),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(complete_turn_rx),
+            body: responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "hello world"),
+                responses::ev_completed("resp-1"),
+            ]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let mut ws1 = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws1, /*id*/ 1, "ws_thread_owner").await?;
+    read_response_for_id(&mut ws1, /*id*/ 1).await?;
+    send_request(
+        &mut ws1,
+        "thread/start",
+        /*id*/ 2,
+        Some(serde_json::to_value(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let response = read_response_for_id(&mut ws1, /*id*/ 2).await?;
+    let ThreadStartResponse { thread, .. } = to_response(response)?;
+    let thread_id = thread.id;
+    let rollout_path = thread
+        .path
+        .context("started thread should have a rollout path")?;
+
+    send_request(
+        &mut ws1,
+        "turn/start",
+        /*id*/ 3,
+        Some(serde_json::to_value(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![UserInput::Text {
+                text: "Stream while disconnected".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let response = read_response_for_id(&mut ws1, /*id*/ 3).await?;
+    let TurnStartResponse { turn } = to_response(response)?;
+    let turn_id = turn.id;
+    read_notification_for_method(&mut ws1, "item/started").await?;
+
+    drop(ws1);
+    emit_deltas_tx
+        .send(())
+        .expect("streaming response should still be waiting to emit deltas");
+
+    let mut ws2 = connect_websocket(bind_addr).await?;
+    send_request(
+        &mut ws2,
+        "initialize",
+        /*id*/ 4,
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: "codex_chatgpt_ios_remote".to_string(),
+                title: Some("WebSocket Test Client".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        })?),
+    )
+    .await?;
+    read_response_for_id(&mut ws2, /*id*/ 4).await?;
+
+    let mut request_id = 5;
+    loop {
+        send_request(
+            &mut ws2,
+            "thread/turns/list",
+            request_id,
+            Some(serde_json::to_value(ThreadTurnsListParams {
+                thread_id: thread_id.clone(),
+                cursor: None,
+                limit: Some(5),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::Full),
+            })?),
+        )
+        .await?;
+        let response = read_response_for_id(&mut ws2, request_id).await?;
+        let ThreadTurnsListResponse { data, .. } = to_response(response)?;
+        request_id += 1;
+        if data.iter().any(|turn| {
+            turn.id == turn_id
+                && turn.status == TurnStatus::InProgress
+                && turn.items.iter().any(|item| {
+                    matches!(item, ThreadItem::AgentMessage { text, .. } if text == "hello world")
+                })
+        }) {
+            break;
+        }
+        if request_id == 25 {
+            bail!("thread never reflected deltas emitted with no subscribed client");
+        }
+    }
+
+    send_request(
+        &mut ws2,
+        "thread/resume",
+        request_id,
+        Some(serde_json::to_value(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(5),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::Full),
+            }),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let response = read_response_for_id(&mut ws2, request_id).await?;
+    let ThreadResumeResponse {
+        initial_turns_page, ..
+    } = to_response(response)?;
+    let active_turn = initial_turns_page
+        .expect("resume should include the requested initial turns page")
+        .data
+        .into_iter()
+        .find(|turn| turn.id == turn_id && turn.status == TurnStatus::InProgress)
+        .expect("resume should include the in-progress turn updated while disconnected");
+    assert_eq!(
+        active_turn
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec!["hello world"]
+    );
+
+    drop(ws2);
+    complete_turn_tx
+        .send(())
+        .expect("streaming response should still be waiting for completion");
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let InitialHistory::Resumed(history) =
+                RolloutRecorder::get_rollout_history(&rollout_path).await?
+            else {
+                bail!("started thread should have resumable rollout history");
+            };
+            if history.history.iter().any(|item| {
+                matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(event))
+                        if event.turn_id == turn_id
+                )
+            }) {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("turn did not finish persisting while the websocket was disconnected")??;
+
+    let mut ws3 = connect_websocket(bind_addr).await?;
+    send_request(
+        &mut ws3,
+        "initialize",
+        /*id*/ 6,
+        Some(serde_json::to_value(InitializeParams {
+            client_info: ClientInfo {
+                name: "codex_chatgpt_ios_remote".to_string(),
+                title: Some("WebSocket Test Client".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        })?),
+    )
+    .await?;
+    read_response_for_id(&mut ws3, /*id*/ 6).await?;
+    send_request(
+        &mut ws3,
+        "thread/resume",
+        /*id*/ 7,
+        Some(serde_json::to_value(ThreadResumeParams {
+            thread_id: thread_id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(5),
+                sort_direction: Some(SortDirection::Desc),
+                items_view: Some(TurnItemsView::Full),
+            }),
+            ..Default::default()
+        })?),
+    )
+    .await?;
+    let response = read_response_for_id(&mut ws3, /*id*/ 7).await?;
+    let ThreadResumeResponse {
+        initial_turns_page, ..
+    } = to_response(response)?;
+    let completed_turn = initial_turns_page
+        .expect("resume should include the requested initial turns page")
+        .data
+        .into_iter()
+        .find(|turn| turn.id == turn_id && turn.status == TurnStatus::Completed)
+        .expect("resume should include the turn completed while disconnected");
+    assert_eq!(
+        completed_turn
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec!["hello world"]
+    );
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    server.shutdown().await;
     Ok(())
 }
 

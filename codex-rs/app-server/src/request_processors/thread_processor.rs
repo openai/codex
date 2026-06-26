@@ -2965,7 +2965,7 @@ impl ThreadRequestProcessor {
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     /*path*/ None,
-                    /*include_history*/ true,
+                    /*include_history*/ false,
                 )
                 .await?;
             Some((existing_thread_id, existing_thread, source_thread))
@@ -2988,7 +2988,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3048,16 +3048,6 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
-            let history_items = source_thread
-                .history
-                .take()
-                .map(|history| history.items)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "thread {existing_thread_id} did not include persisted history"
-                    ))
-                })?;
-
             let thread_state = self
                 .thread_state_manager
                 .thread_state(existing_thread_id)
@@ -3101,7 +3091,6 @@ impl ThreadRequestProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    history_items,
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
@@ -4028,15 +4017,16 @@ fn reconstruct_thread_turns_for_turns_list(
     has_live_running_thread: bool,
     active_turn: Option<Turn>,
 ) -> Vec<Turn> {
-    let has_live_in_progress_turn = has_live_running_thread
-        || active_turn
-            .as_ref()
-            .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
     let mut turns = build_api_turns_from_rollout_items(items);
+    let active_turn_is_current = active_turn.as_ref().is_none_or(|active_turn| {
+        merge_turn_history_with_active_turn(&mut turns, active_turn.clone())
+    });
+    let has_live_in_progress_turn = active_turn_is_current
+        && (has_live_running_thread
+            || active_turn
+                .as_ref()
+                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress)));
     normalize_thread_turns_status(&mut turns, loaded_status, has_live_in_progress_turn);
-    if let Some(active_turn) = active_turn {
-        merge_turn_history_with_active_turn(&mut turns, active_turn);
-    }
     turns
 }
 
@@ -4046,14 +4036,7 @@ fn normalize_thread_turns_status(
     has_live_in_progress_turn: bool,
 ) {
     let status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
-    if matches!(status, ThreadStatus::Active { .. }) {
-        return;
-    }
-    for turn in turns {
-        if matches!(turn.status, TurnStatus::InProgress) {
-            turn.status = TurnStatus::Interrupted;
-        }
-    }
+    interrupt_stale_in_progress_turns(turns, matches!(status, ThreadStatus::Active { .. }));
 }
 
 enum ThreadReadViewError {
@@ -4086,7 +4069,7 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
+pub(super) fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {
@@ -4527,3 +4510,7 @@ fn build_thread_from_loaded_snapshot(
 #[cfg(test)]
 #[path = "thread_processor_tests.rs"]
 mod thread_processor_tests;
+
+#[cfg(test)]
+#[path = "thread_resume_reconciliation_tests.rs"]
+mod thread_resume_reconciliation_tests;

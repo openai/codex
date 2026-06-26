@@ -56,6 +56,8 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -232,6 +234,11 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
+    /// Legacy events generated after typed item completion, retained across unrelated live events.
+    pending_completed_item_legacy_events: VecDeque<EventMsg>,
+    completed_item_ids_by_turn: HashMap<String, HashSet<String>>,
+    command_turn_ids: HashMap<String, String>,
+    pending_command_output: HashMap<String, Vec<u8>>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -249,6 +256,10 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
+            pending_completed_item_legacy_events: VecDeque::new(),
+            completed_item_ids_by_turn: HashMap::new(),
+            command_turn_ids: HashMap::new(),
+            pending_command_output: HashMap::new(),
         }
     }
 
@@ -312,7 +323,11 @@ impl ThreadHistoryBuilder {
     ///
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
     /// See `should_persist_event_msg` in `codex-rs/core/rollout/policy.rs`.
+    /// It also handles transient typed item lifecycle and delta events used by live resume.
     pub fn handle_event(&mut self, event: &EventMsg) {
+        if self.consume_completed_item_legacy_event(event) {
+            return;
+        }
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(
@@ -367,6 +382,19 @@ impl ThreadHistoryBuilder {
             EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
+            EventMsg::AgentMessageContentDelta(payload) => {
+                self.handle_agent_message_content_delta(payload)
+            }
+            EventMsg::PlanDelta(payload) => self.handle_plan_delta(payload),
+            EventMsg::ReasoningContentDelta(payload) => {
+                self.handle_reasoning_content_delta(payload)
+            }
+            EventMsg::ReasoningRawContentDelta(payload) => {
+                self.handle_reasoning_raw_content_delta(payload)
+            }
+            EventMsg::ExecCommandOutputDelta(payload) => {
+                self.handle_exec_command_output_delta(payload)
+            }
             EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
             EventMsg::Error(payload) => self.handle_error(payload),
             EventMsg::TokenCount(_) => {}
@@ -574,17 +602,15 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_item_started(&mut self, payload: &ItemStartedEvent) {
+        let item_id = payload.item.id();
+        if self.is_item_completed(&payload.turn_id, &item_id) {
+            return;
+        }
         match &payload.item {
-            codex_protocol::items::TurnItem::Plan(plan) => {
-                if plan.text.is_empty() {
-                    return;
-                }
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::Sleep(_) => {
+            codex_protocol::items::TurnItem::AgentMessage(_)
+            | codex_protocol::items::TurnItem::Plan(_)
+            | codex_protocol::items::TurnItem::Reasoning(_)
+            | codex_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -592,8 +618,6 @@ impl ThreadHistoryBuilder {
             }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
-            | codex_protocol::items::TurnItem::AgentMessage(_)
-            | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
@@ -603,8 +627,117 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    fn handle_agent_message_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::AgentMessageContentDeltaEvent,
+    ) {
+        if self.is_item_completed(&payload.turn_id, &payload.item_id) {
+            return;
+        }
+        self.update_item_in_turn_id(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::AgentMessage { text, .. } = item else {
+                return false;
+            };
+            text.push_str(&payload.delta);
+            true
+        });
+    }
+
+    fn handle_plan_delta(&mut self, payload: &codex_protocol::protocol::PlanDeltaEvent) {
+        if self.is_item_completed(&payload.turn_id, &payload.item_id) {
+            return;
+        }
+        self.update_item_in_turn_id(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Plan { text, .. } = item else {
+                return false;
+            };
+            text.push_str(&payload.delta);
+            true
+        });
+    }
+
+    fn handle_reasoning_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ReasoningContentDeltaEvent,
+    ) {
+        if self.is_item_completed(&payload.turn_id, &payload.item_id) {
+            return;
+        }
+        self.update_item_in_turn_id(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Reasoning { summary, .. } = item else {
+                return false;
+            };
+            append_indexed_delta(summary, payload.summary_index, &payload.delta)
+        });
+    }
+
+    fn handle_reasoning_raw_content_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ReasoningRawContentDeltaEvent,
+    ) {
+        if self.is_item_completed(&payload.turn_id, &payload.item_id) {
+            return;
+        }
+        self.update_item_in_turn_id(&payload.turn_id, &payload.item_id, |item| {
+            let ThreadItem::Reasoning { content, .. } = item else {
+                return false;
+            };
+            append_indexed_delta(content, payload.content_index, &payload.delta)
+        });
+    }
+
+    fn handle_exec_command_output_delta(
+        &mut self,
+        payload: &codex_protocol::protocol::ExecCommandOutputDeltaEvent,
+    ) {
+        let Some(turn_id) = self.command_turn_ids.get(&payload.call_id).cloned() else {
+            return;
+        };
+        if self.is_item_completed(&turn_id, &payload.call_id) {
+            return;
+        }
+        let output = {
+            let pending = self
+                .pending_command_output
+                .entry(payload.call_id.clone())
+                .or_default();
+            pending.extend_from_slice(&payload.chunk);
+            take_decodable_utf8(pending)
+        };
+        let Some(output) = output else {
+            return;
+        };
+        self.update_item_in_turn_id(&turn_id, &payload.call_id, |item| {
+            let ThreadItem::CommandExecution {
+                aggregated_output, ..
+            } = item
+            else {
+                return false;
+            };
+            aggregated_output.get_or_insert_default().push_str(&output);
+            true
+        });
+    }
+
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
+        let item_id = payload.item.id();
+        if self.is_item_completed(&payload.turn_id, &item_id) {
+            return;
+        }
         match &payload.item {
+            codex_protocol::items::TurnItem::AgentMessage(_)
+            | codex_protocol::items::TurnItem::Reasoning(_) => {
+                self.upsert_item_in_turn_id(
+                    &payload.turn_id,
+                    ThreadItem::from(payload.item.clone()),
+                );
+                self.pending_completed_item_legacy_events.extend(
+                    payload
+                        .item
+                        .as_legacy_events(/*show_raw_agent_reasoning*/ true),
+                );
+                self.mark_item_completed(&payload.turn_id, &item_id);
+            }
             codex_protocol::items::TurnItem::Plan(plan) => {
                 if plan.text.is_empty() {
                     return;
@@ -613,17 +746,17 @@ impl ThreadHistoryBuilder {
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
                 );
+                self.mark_item_completed(&payload.turn_id, &item_id);
             }
             codex_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
                 );
+                self.mark_item_completed(&payload.turn_id, &item_id);
             }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
-            | codex_protocol::items::TurnItem::AgentMessage(_)
-            | codex_protocol::items::TurnItem::Reasoning(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
@@ -631,6 +764,18 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::McpToolCall(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
         }
+    }
+
+    fn consume_completed_item_legacy_event(&mut self, event: &EventMsg) -> bool {
+        let Some(index) = self
+            .pending_completed_item_legacy_events
+            .iter()
+            .position(|expected| completed_item_legacy_events_match(expected, event))
+        else {
+            return false;
+        };
+        self.pending_completed_item_legacy_events.remove(index);
+        true
     }
 
     fn handle_web_search_begin(&mut self, payload: &WebSearchBeginEvent) {
@@ -652,11 +797,20 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_exec_command_begin(&mut self, payload: &ExecCommandBeginEvent) {
+        if self.is_item_completed(&payload.turn_id, &payload.call_id) {
+            return;
+        }
+        self.command_turn_ids
+            .insert(payload.call_id.clone(), payload.turn_id.clone());
+        self.pending_command_output.remove(&payload.call_id);
         let item = build_command_execution_begin_item(payload);
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
 
     fn handle_exec_command_end(&mut self, payload: &ExecCommandEndEvent) {
+        if self.is_item_completed(&payload.turn_id, &payload.call_id) {
+            return;
+        }
         let item = build_command_execution_end_item(payload);
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
@@ -664,6 +818,10 @@ impl ThreadHistoryBuilder {
         // newer user turn may already have started. Route by event turn_id so
         // replay preserves the original turn association.
         self.upsert_item_in_turn_id(&payload.turn_id, item);
+        self.command_turn_ids
+            .insert(payload.call_id.clone(), payload.turn_id.clone());
+        self.pending_command_output.remove(&payload.call_id);
+        self.mark_item_completed(&payload.turn_id, &payload.call_id);
     }
 
     fn handle_guardian_assessment(&mut self, payload: &GuardianAssessmentEvent) {
@@ -1293,6 +1451,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn finish_current_turn(&mut self) {
+        self.pending_completed_item_legacy_events.clear();
         if let Some(turn) = self.current_turn.take() {
             if turn.items.is_empty() && !turn.opened_explicitly && !turn.saw_compaction {
                 return;
@@ -1394,6 +1553,51 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    fn update_item_in_turn_id(
+        &mut self,
+        turn_id: &str,
+        item_id: &str,
+        update: impl FnOnce(&mut ThreadItem) -> bool,
+    ) {
+        let tracking_changes = self.is_tracking_changes();
+        let changed_item =
+            if let Some(turn) = self.current_turn.as_mut().filter(|turn| turn.id == turn_id) {
+                let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id) else {
+                    return;
+                };
+                if !update(item) {
+                    return;
+                }
+                tracking_changes.then(|| (turn.id.clone(), item.clone()))
+            } else if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
+                let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id) else {
+                    return;
+                };
+                if !update(item) {
+                    return;
+                }
+                tracking_changes.then(|| (turn.id.clone(), item.clone()))
+            } else {
+                return;
+            };
+        if let Some((turn_id, item)) = changed_item {
+            self.record_changed_item(turn_id, item);
+        }
+    }
+
+    fn is_item_completed(&self, turn_id: &str, item_id: &str) -> bool {
+        self.completed_item_ids_by_turn
+            .get(turn_id)
+            .is_some_and(|item_ids| item_ids.contains(item_id))
+    }
+
+    fn mark_item_completed(&mut self, turn_id: &str, item_id: &str) {
+        self.completed_item_ids_by_turn
+            .entry(turn_id.to_string())
+            .or_default()
+            .insert(item_id.to_string());
+    }
+
     fn is_tracking_changes(&self) -> bool {
         self.active_change_set.is_some()
     }
@@ -1458,6 +1662,64 @@ impl ThreadHistoryBuilder {
             });
         }
         content
+    }
+}
+
+fn append_indexed_delta(parts: &mut Vec<String>, index: i64, delta: &str) -> bool {
+    let Ok(index) = usize::try_from(index) else {
+        return false;
+    };
+    if index > parts.len() {
+        return false;
+    }
+    if index == parts.len() {
+        parts.push(String::new());
+    }
+    parts[index].push_str(delta);
+    true
+}
+
+fn take_decodable_utf8(bytes: &mut Vec<u8>) -> Option<String> {
+    let mut output = String::new();
+    loop {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                output.push_str(text);
+                bytes.clear();
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    output.push_str(&String::from_utf8_lossy(&bytes[..valid_up_to]));
+                    bytes.drain(..valid_up_to);
+                }
+                let Some(error_len) = error.error_len() else {
+                    break;
+                };
+                output.push('\u{FFFD}');
+                bytes.drain(..error_len);
+            }
+        }
+    }
+    (!output.is_empty()).then_some(output)
+}
+
+fn completed_item_legacy_events_match(expected: &EventMsg, actual: &EventMsg) -> bool {
+    match (expected, actual) {
+        (EventMsg::AgentMessage(expected), EventMsg::AgentMessage(actual)) => {
+            expected.message == actual.message
+                && expected.phase == actual.phase
+                && expected.memory_citation == actual.memory_citation
+        }
+        (EventMsg::AgentReasoning(expected), EventMsg::AgentReasoning(actual)) => {
+            expected.text == actual.text
+        }
+        (
+            EventMsg::AgentReasoningRawContent(expected),
+            EventMsg::AgentReasoningRawContent(actual),
+        ) => expected.text == actual.text,
+        _ => false,
     }
 }
 
@@ -1566,6 +1828,10 @@ impl From<&PendingTurn> for Turn {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "thread_history_live_tests.rs"]
+mod live_tests;
 
 #[cfg(test)]
 mod tests {

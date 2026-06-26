@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
+use tokio::sync::oneshot;
 
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -233,6 +234,11 @@ pub struct InMemoryThreadStore {
     state: tokio::sync::Mutex<InMemoryThreadStoreState>,
 }
 
+struct PendingReadThreadSnapshotPause {
+    snapshot_taken: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
 #[derive(Default)]
 struct InMemoryThreadStoreState {
     calls: InMemoryThreadStoreCalls,
@@ -241,6 +247,7 @@ struct InMemoryThreadStoreState {
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
+    pending_read_thread_snapshot_pause: Option<PendingReadThreadSnapshotPause>,
 }
 
 impl InMemoryThreadStore {
@@ -262,6 +269,24 @@ impl InMemoryThreadStore {
     /// Returns the calls observed by this store.
     pub async fn calls(&self) -> InMemoryThreadStoreCalls {
         self.state.lock().await.calls.clone()
+    }
+
+    /// Pauses the next `read_thread` call after it captures a snapshot.
+    pub async fn pause_next_read_thread_after_snapshot(
+        &self,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (snapshot_taken_tx, snapshot_taken) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        let mut state = self.state.lock().await;
+        assert!(
+            state.pending_read_thread_snapshot_pause.is_none(),
+            "only one in-memory thread read may be paused at a time"
+        );
+        state.pending_read_thread_snapshot_pause = Some(PendingReadThreadSnapshotPause {
+            snapshot_taken: snapshot_taken_tx,
+            release: release_rx,
+        });
+        (snapshot_taken, release)
     }
 
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
@@ -350,12 +375,21 @@ impl InMemoryThreadStore {
     }
 
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
-        let mut state = self.state.lock().await;
-        state.calls.read_thread += 1;
-        if params.include_history {
-            state.calls.read_thread_with_history += 1;
+        let (thread, pause) = {
+            let mut state = self.state.lock().await;
+            state.calls.read_thread += 1;
+            if params.include_history {
+                state.calls.read_thread_with_history += 1;
+            }
+            let thread = stored_thread_from_state(&state, params.thread_id, params.include_history);
+            let pause = state.pending_read_thread_snapshot_pause.take();
+            (thread, pause)
+        };
+        if let Some(pause) = pause {
+            let _ = pause.snapshot_taken.send(());
+            let _ = pause.release.await;
         }
-        stored_thread_from_state(&state, params.thread_id, params.include_history)
+        thread
     }
 
     async fn read_thread_by_rollout_path(

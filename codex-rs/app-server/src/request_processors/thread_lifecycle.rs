@@ -538,10 +538,33 @@ pub(super) async fn handle_pending_thread_resume_request(
     pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
+    // Read persisted history in listener order so the resume snapshot cannot be older than a
+    // terminal event that already reached the rollout writer.
+    let history_items = if pending.include_turns || pending.initial_turns_page.is_some() {
+        match conversation.load_history(/*include_archived*/ true).await {
+            Ok(history) => history.items,
+            Err(err) => {
+                outgoing
+                    .send_error(
+                        pending.request_id,
+                        super::thread_processor::thread_store_resume_read_error(err),
+                    )
+                    .await;
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let active_turn = {
         let state = thread_state.lock().await;
         state.active_turn_snapshot()
     };
+    let mut reconstructed_turns = build_api_turns_from_rollout_items(&history_items);
+    let active_turn_is_current = active_turn.as_ref().is_none_or(|active_turn| {
+        merge_turn_history_with_active_turn(&mut reconstructed_turns, active_turn.clone())
+    });
+    let active_turn = active_turn.filter(|_| active_turn_is_current);
     tracing::debug!(
         thread_id = %conversation_id,
         request_id = ?pending.request_id,
@@ -550,21 +573,17 @@ pub(super) async fn handle_pending_thread_resume_request(
         active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
         "composing running thread resume response"
     );
-    let has_live_in_progress_turn =
-        matches!(conversation.agent_status().await, AgentStatus::Running)
+    let has_live_in_progress_turn = active_turn_is_current
+        && (matches!(conversation.agent_status().await, AgentStatus::Running)
             || active_turn
                 .as_ref()
-                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
+                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress)));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
     if pending.include_turns {
-        populate_thread_turns_from_history(
-            &mut thread,
-            &pending.history_items,
-            active_turn.as_ref(),
-        );
+        thread.turns = reconstructed_turns;
     }
 
     let thread_status = thread_watch_manager
@@ -579,7 +598,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     let token_usage_thread = pending.include_turns.then(|| thread.clone());
     let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
         match super::thread_processor::build_thread_resume_initial_turns_page(
-            &pending.history_items,
+            &history_items,
             thread.status.clone(),
             has_live_in_progress_turn,
             active_turn,
@@ -673,7 +692,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {
         let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
-            &pending.history_items,
+            &history_items,
             token_usage_thread.turns.as_slice(),
         );
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
@@ -780,9 +799,22 @@ pub(super) async fn resolve_pending_server_request(
         .await;
 }
 
-pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
+/// Merges a current listener snapshot unless persisted terminal state proves it is stale.
+/// Returns whether the active snapshot was accepted.
+pub(super) fn merge_turn_history_with_active_turn(
+    turns: &mut Vec<Turn>,
+    active_turn: Turn,
+) -> bool {
+    if matches!(active_turn.status, TurnStatus::InProgress)
+        && turns
+            .iter()
+            .any(|turn| turn.id == active_turn.id && !matches!(turn.status, TurnStatus::InProgress))
+    {
+        return false;
+    }
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
+    true
 }
 
 pub(super) fn set_thread_status_and_interrupt_stale_turns(
@@ -790,13 +822,31 @@ pub(super) fn set_thread_status_and_interrupt_stale_turns(
     loaded_status: ThreadStatus,
     has_live_in_progress_turn: bool,
 ) {
-    let status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
-    if !matches!(status, ThreadStatus::Active { .. }) {
-        for turn in &mut thread.turns {
-            if matches!(turn.status, TurnStatus::InProgress) {
-                turn.status = TurnStatus::Interrupted;
-            }
+    let mut status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
+    if !has_live_in_progress_turn
+        && matches!(&status, ThreadStatus::Active { active_flags } if active_flags.is_empty())
+    {
+        status = ThreadStatus::Idle;
+    }
+
+    interrupt_stale_in_progress_turns(
+        &mut thread.turns,
+        matches!(status, ThreadStatus::Active { .. }),
+    );
+    thread.status = status;
+}
+
+pub(super) fn interrupt_stale_in_progress_turns(turns: &mut [Turn], preserve_latest: bool) {
+    let current_turn_index = preserve_latest
+        .then(|| {
+            turns
+                .iter()
+                .rposition(|turn| matches!(turn.status, TurnStatus::InProgress))
+        })
+        .flatten();
+    for (index, turn) in turns.iter_mut().enumerate() {
+        if matches!(turn.status, TurnStatus::InProgress) && Some(index) != current_turn_index {
+            turn.status = TurnStatus::Interrupted;
         }
     }
-    thread.status = status;
 }

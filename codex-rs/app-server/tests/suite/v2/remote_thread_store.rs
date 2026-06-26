@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use codex_app_server::in_process;
@@ -25,17 +26,24 @@ use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadDeleteResponse;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
@@ -53,8 +61,12 @@ use codex_thread_store::CreateThreadParams as StoreCreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
+use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -279,6 +291,262 @@ async fn cold_thread_resume_reuses_non_local_history_probe() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn running_thread_resume_includes_completion_after_initial_history_snapshot() -> Result<()> {
+    let (complete_turn_tx, complete_turn_rx) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(complete_turn_rx),
+            body: responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-1"),
+            ]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), server.uri(), &store_id)?;
+
+    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let mut client = start_in_process_server(codex_home.path()).await?;
+
+    let response = client
+        .request(ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: ThreadStartParams::default(),
+        })
+        .await?
+        .expect("thread/start should succeed");
+    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
+
+    client
+        .request(ClientRequest::TurnStart {
+            request_id: RequestId::Integer(2),
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Complete after resume starts".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?
+        .expect("turn/start should succeed");
+    let _ = wait_for_thread_notification(&mut client, &thread.id, |notification| {
+        matches!(notification, ServerNotification::TurnStarted(_))
+    })
+    .await
+    .context("waiting for turn/started before pausing resume history")?;
+
+    let (snapshot_taken, release_snapshot) =
+        thread_store.pause_next_read_thread_after_snapshot().await;
+    let resume = tokio::spawn({
+        let sender = client.sender();
+        let thread_id = thread.id.clone();
+        async move {
+            sender
+                .request(ClientRequest::ThreadResume {
+                    request_id: RequestId::Integer(3),
+                    params: ThreadResumeParams {
+                        thread_id,
+                        exclude_turns: false,
+                        initial_turns_page: None,
+                        ..Default::default()
+                    },
+                })
+                .await
+        }
+    });
+
+    timeout(DEFAULT_READ_TIMEOUT, snapshot_taken)
+        .await
+        .context("waiting for thread/resume to capture its initial history")??;
+    complete_turn_tx
+        .send(())
+        .expect("streaming response should still be waiting for completion");
+    let _ = wait_for_thread_notification(&mut client, &thread.id, |notification| {
+        matches!(notification, ServerNotification::TurnCompleted(_))
+    })
+    .await
+    .context("waiting for turn/completed while the resume history read is paused")?;
+    release_snapshot
+        .send(())
+        .expect("paused history read should still be waiting for release");
+
+    let response = timeout(DEFAULT_READ_TIMEOUT, resume)
+        .await
+        .context("waiting for thread/resume after releasing its initial history read")??
+        .expect("thread/resume transport should succeed")
+        .expect("thread/resume should succeed");
+    let ThreadResumeResponse { thread, .. } = serde_json::from_value(response)?;
+    let resumed_turn = thread
+        .turns
+        .into_iter()
+        .find(|turn| {
+            turn.items.iter().any(|item| {
+                matches!(item, ThreadItem::UserMessage { content, .. } if content.iter().any(|input| matches!(input, V2UserInput::Text { text, .. } if text == "Complete after resume starts")))
+            })
+        })
+        .expect("resume should include the turn that completed during the request");
+    assert_eq!(resumed_turn.status, TurnStatus::Completed);
+    assert!(
+        resumed_turn
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::AgentMessage { text, .. } if text == "Done")),
+        "resume must include the final assistant item persisted while its initial history read was paused"
+    );
+
+    client.shutdown().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn running_thread_resume_reads_history_for_every_response_shape_that_needs_it() -> Result<()>
+{
+    struct Case {
+        exclude_turns: bool,
+        include_initial_page: bool,
+        expected_history_reads: usize,
+    }
+
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let store_id = Uuid::new_v4().to_string();
+    create_config_toml_with_thread_store(codex_home.path(), &server.uri(), &store_id)?;
+
+    let thread_store = InMemoryThreadStore::for_id(store_id.clone());
+    let _in_memory_store = InMemoryThreadStoreId { store_id };
+    let mut client = start_in_process_server(codex_home.path()).await?;
+    let response = client
+        .request(ClientRequest::ThreadStart {
+            request_id: RequestId::Integer(1),
+            params: ThreadStartParams::default(),
+        })
+        .await?
+        .expect("thread/start should succeed");
+    let ThreadStartResponse { thread, .. } = serde_json::from_value(response)?;
+    client
+        .request(ClientRequest::TurnStart {
+            request_id: RequestId::Integer(2),
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                client_user_message_id: None,
+                input: vec![V2UserInput::Text {
+                    text: "Materialize one completed turn".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?
+        .expect("turn/start should succeed");
+    wait_for_thread_notification(&mut client, &thread.id, |notification| {
+        matches!(notification, ServerNotification::TurnCompleted(_))
+    })
+    .await?;
+
+    let cases = [
+        Case {
+            exclude_turns: true,
+            include_initial_page: false,
+            expected_history_reads: 0,
+        },
+        Case {
+            exclude_turns: false,
+            include_initial_page: false,
+            expected_history_reads: 1,
+        },
+        Case {
+            exclude_turns: true,
+            include_initial_page: true,
+            expected_history_reads: 1,
+        },
+        Case {
+            exclude_turns: false,
+            include_initial_page: true,
+            expected_history_reads: 1,
+        },
+    ];
+
+    for (index, case) in cases.into_iter().enumerate() {
+        let reads_before = thread_store.calls().await.load_history;
+        let response = client
+            .request(ClientRequest::ThreadResume {
+                request_id: RequestId::Integer(3 + index as i64),
+                params: ThreadResumeParams {
+                    thread_id: thread.id.clone(),
+                    exclude_turns: case.exclude_turns,
+                    initial_turns_page: case.include_initial_page.then_some(
+                        ThreadResumeInitialTurnsPageParams {
+                            limit: None,
+                            sort_direction: Some(SortDirection::Asc),
+                            items_view: Some(TurnItemsView::Full),
+                        },
+                    ),
+                    ..Default::default()
+                },
+            })
+            .await?
+            .expect("thread/resume should succeed");
+        let response: ThreadResumeResponse = serde_json::from_value(response)?;
+
+        assert_eq!(
+            thread_store.calls().await.load_history,
+            reads_before + case.expected_history_reads
+        );
+        assert_eq!(response.thread.turns.is_empty(), case.exclude_turns);
+        assert_eq!(
+            response.initial_turns_page.is_some(),
+            case.include_initial_page
+        );
+        if let Some(page) = response.initial_turns_page {
+            assert!(!page.data.is_empty());
+            if !case.exclude_turns {
+                assert_eq!(page.data, response.thread.turns);
+            }
+        }
+    }
+
+    client.shutdown().await?;
+    Ok(())
+}
+
+async fn wait_for_thread_notification(
+    client: &mut InProcessClientHandle,
+    thread_id: &str,
+    predicate: impl Fn(&ServerNotification) -> bool,
+) -> Result<ServerNotification> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(event) = client.next_event().await else {
+                anyhow::bail!("in-process app-server stopped before the expected notification");
+            };
+            let InProcessServerEvent::ServerNotification(notification) = event else {
+                continue;
+            };
+            let belongs_to_thread = match &notification {
+                ServerNotification::TurnStarted(payload) => payload.thread_id == thread_id,
+                ServerNotification::TurnCompleted(payload) => payload.thread_id == thread_id,
+                _ => false,
+            };
+            if belongs_to_thread && predicate(&notification) {
+                return Ok::<ServerNotification, anyhow::Error>(notification);
+            }
+        }
+    })
+    .await?
+}
+
 async fn start_in_process_server(codex_home: &Path) -> Result<InProcessClientHandle> {
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     let config = Arc::new(
@@ -318,7 +586,10 @@ async fn start_in_process_client(
                 title: None,
                 version: "0.1.0".to_string(),
             },
-            capabilities: None,
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
