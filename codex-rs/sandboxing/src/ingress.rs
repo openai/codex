@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn listener_exports_inherited_fd_to_child_env() {
-        let listener = IngressListener::bind(0).expect("bind ingress listener");
+        let listener = IngressListener::bind(/*port*/ 0).expect("bind ingress listener");
         let mut env = HashMap::new();
 
         listener.add_to_child_env(&mut env);
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn listener_keeps_close_on_exec_in_parent() {
-        let listener = IngressListener::bind(0).expect("bind ingress listener");
+        let listener = IngressListener::bind(/*port*/ 0).expect("bind ingress listener");
 
         assert_ne!(fd_flags(listener.inherited_fd()) & libc::FD_CLOEXEC, 0);
     }
