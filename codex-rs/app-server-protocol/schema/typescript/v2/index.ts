@@ -238,6 +238,7 @@ export type { McpServerOauthLoginCompletedNotification } from "./McpServerOauthL
 export type { McpServerOauthLoginParams } from "./McpServerOauthLoginParams";
 export type { McpServerOauthLoginResponse } from "./McpServerOauthLoginResponse";
 export type { McpServerRefreshResponse } from "./McpServerRefreshResponse";
+export type { McpServerStartupFailureReason } from "./McpServerStartupFailureReason";
 export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";
 export type { McpServerStatusDetail } from "./McpServerStatusDetail";
@@ -409,6 +410,7 @@ export type { ThreadGoalSetParams } from "./ThreadGoalSetParams";
 export type { ThreadGoalSetResponse } from "./ThreadGoalSetResponse";
 export type { ThreadGoalStatus } from "./ThreadGoalStatus";
 export type { ThreadGoalUpdatedNotification } from "./ThreadGoalUpdatedNotification";
+export type { ThreadHistoryMode } from "./ThreadHistoryMode";
 export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams";
 export type { ThreadInjectItemsResponse } from "./ThreadInjectItemsResponse";
 export type { ThreadItem } from "./ThreadItem";

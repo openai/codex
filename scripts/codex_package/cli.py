@@ -91,6 +91,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--zsh-manifest",
+        type=Path,
+        help=(
+            "Optional DotSlash manifest for the patched zsh fork instead of "
+            "scripts/codex_package/codex-zsh."
+        ),
+    )
+    parser.add_argument(
         "--codex-command-runner-bin",
         type=Path,
         help=(
@@ -160,7 +168,7 @@ def main() -> int:
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
-        zsh_bin=resolve_zsh_bin(spec),
+        zsh_bin=resolve_zsh_bin(spec, args.zsh_manifest),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
         codex_windows_sandbox_setup_bin=source_outputs.codex_windows_sandbox_setup_bin,

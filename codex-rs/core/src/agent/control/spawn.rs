@@ -1,13 +1,12 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
-use codex_protocol::config_types::MultiAgentMode;
+use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
 struct SpawnAgentThreadInheritance {
     environments: Option<TurnEnvironmentSnapshot>,
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-    inherited_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 fn default_agent_nickname_list() -> Vec<&'static str> {
@@ -63,7 +62,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
-        RolloutItem::TurnContext(_) => preserve_reference_context_item,
+        RolloutItem::TurnContext(_) | RolloutItem::WorldState(_) => preserve_reference_context_item,
         RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
     }
 }
@@ -241,7 +240,6 @@ impl AgentControl {
             exec_policy: self
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
-            inherited_multi_agent_mode: options.initial_multi_agent_mode,
         };
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -288,7 +286,6 @@ impl AgentControl {
                     /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*metrics_service_name*/ None,
-                    inheritance.inherited_multi_agent_mode,
                     inheritance.environments,
                     inheritance.exec_policy,
                     options.environments.clone(),
@@ -394,7 +391,6 @@ impl AgentControl {
         let SpawnAgentThreadInheritance {
             environments: inherited_environments,
             exec_policy: inherited_exec_policy,
-            inherited_multi_agent_mode,
         } = inheritance;
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -438,6 +434,16 @@ impl AgentControl {
                 ))
             })?;
 
+        let selected_capability_roots = parent_history
+            .items
+            .iter()
+            .find_map(|item| {
+                let RolloutItem::SessionMeta(meta_line) = item else {
+                    return None;
+                };
+                Some(meta_line.meta.selected_capability_roots.clone())
+            })
+            .unwrap_or_default();
         let mut forked_rollout_items = parent_history.items;
         if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
             forked_rollout_items =
@@ -509,6 +515,8 @@ impl AgentControl {
         {
             forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
         }
+        let mut thread_extension_init = ExtensionDataInit::new();
+        thread_extension_init.insert(selected_capability_roots);
 
         state
             .fork_thread_with_source(
@@ -519,10 +527,10 @@ impl AgentControl {
                 /*thread_source*/ Some(ThreadSource::Subagent),
                 /*parent_thread_id*/ Some(parent_thread_id),
                 /*forked_from_thread_id*/ Some(parent_thread_id),
-                inherited_multi_agent_mode,
                 inherited_environments,
                 inherited_exec_policy,
                 options.environments.clone(),
+                thread_extension_init,
             )
             .await
     }

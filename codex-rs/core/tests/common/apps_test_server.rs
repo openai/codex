@@ -7,6 +7,7 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use wiremock::Mock;
@@ -53,6 +54,23 @@ pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
 #[derive(Clone)]
 pub struct AppsTestServer {
     pub chatgpt_base_url: String,
+}
+
+#[derive(Clone)]
+pub struct AppsTestServerStartupControl {
+    initialize_attempts: Arc<AtomicUsize>,
+    remaining_initialize_failures: Arc<AtomicUsize>,
+}
+
+impl AppsTestServerStartupControl {
+    pub fn fail_next_initialize_attempts(&self, attempts: usize) {
+        self.remaining_initialize_failures
+            .store(attempts, Ordering::SeqCst);
+    }
+
+    pub fn initialize_attempts(&self) -> usize {
+        self.initialize_attempts.load(Ordering::SeqCst)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +146,34 @@ impl AppsTestServer {
         Ok(Self {
             chatgpt_base_url: server.uri(),
         })
+    }
+
+    pub async fn mount_with_startup_control(
+        server: &MockServer,
+    ) -> Result<(Self, AppsTestServerStartupControl)> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        let control = AppsTestServerStartupControl {
+            initialize_attempts: Arc::new(AtomicUsize::new(0)),
+            remaining_initialize_failures: Arc::new(AtomicUsize::new(0)),
+        };
+        mount_streamable_http_json_rpc_with_startup_control(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ true,
+            /*include_app_only_tool*/ false,
+            AppsTestToolsListBehavior::AlwaysAvailable,
+            Some(Arc::clone(&control.initialize_attempts)),
+            Some(Arc::clone(&control.remaining_initialize_failures)),
+        )
+        .await;
+        Ok((
+            Self {
+                chatgpt_base_url: server.uri(),
+            },
+            control,
+        ))
     }
 
     pub async fn mount_with_tools_available_after_initial_list(
@@ -313,6 +359,30 @@ async fn mount_streamable_http_json_rpc(
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
 ) {
+    mount_streamable_http_json_rpc_with_startup_control(
+        server,
+        connector_name,
+        connector_description,
+        searchable,
+        include_app_only_tool,
+        tools_list_behavior,
+        /*initialize_attempts*/ None,
+        /*remaining_initialize_failures*/ None,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mount_streamable_http_json_rpc_with_startup_control(
+    server: &MockServer,
+    connector_name: String,
+    connector_description: String,
+    searchable: bool,
+    include_app_only_tool: bool,
+    tools_list_behavior: AppsTestToolsListBehavior,
+    initialize_attempts: Option<Arc<AtomicUsize>>,
+    remaining_initialize_failures: Option<Arc<AtomicUsize>>,
+) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
         .respond_with(CodexAppsJsonRpcResponder {
@@ -322,6 +392,8 @@ async fn mount_streamable_http_json_rpc(
             include_app_only_tool,
             tools_list_behavior,
             tools_list_calls: AtomicUsize::new(0),
+            initialize_attempts,
+            remaining_initialize_failures,
         })
         .mount(server)
         .await;
@@ -334,6 +406,8 @@ struct CodexAppsJsonRpcResponder {
     include_app_only_tool: bool,
     tools_list_behavior: AppsTestToolsListBehavior,
     tools_list_calls: AtomicUsize,
+    initialize_attempts: Option<Arc<AtomicUsize>>,
+    remaining_initialize_failures: Option<Arc<AtomicUsize>>,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -355,6 +429,24 @@ impl Respond for CodexAppsJsonRpcResponder {
 
         match method {
             "initialize" => {
+                if let Some(initialize_attempts) = &self.initialize_attempts {
+                    initialize_attempts.fetch_add(1, Ordering::SeqCst);
+                }
+                if self
+                    .remaining_initialize_failures
+                    .as_ref()
+                    .is_some_and(|remaining| {
+                        remaining
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                                remaining.checked_sub(1)
+                            })
+                            .is_ok()
+                    })
+                {
+                    return ResponseTemplate::new(400).set_body_json(json!({
+                        "error": "simulated non-retryable Apps MCP startup failure",
+                    }));
+                }
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
                 let protocol_version = body
                     .pointer("/params/protocolVersion")

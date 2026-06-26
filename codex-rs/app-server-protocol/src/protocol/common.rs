@@ -1913,6 +1913,7 @@ mod tests {
             request_id: request_id(),
             params: v2::McpServerOauthLoginParams {
                 name: "server-a".to_string(),
+                thread_id: None,
                 scopes: None,
                 timeout_secs: None,
             },
@@ -2579,6 +2580,7 @@ mod tests {
                     parent_thread_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
+                    history_mode: Default::default(),
                     model_provider: "openai".to_string(),
                     created_at: 1,
                     updated_at: 2,
@@ -2629,6 +2631,7 @@ mod tests {
                         "parentThreadId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
+                        "historyMode": "legacy",
                         "modelProvider": "openai",
                         "createdAt": 1,
                         "updatedAt": 2,

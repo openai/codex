@@ -12026,6 +12026,12 @@
           },
           "success": {
             "type": "boolean"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12047,6 +12053,12 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -12081,6 +12093,12 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "McpServerRefreshResponse",
         "type": "object"
+      },
+      "McpServerStartupFailureReason": {
+        "enum": [
+          "reauthenticationRequired"
+        ],
+        "type": "string"
       },
       "McpServerStartupState": {
         "enum": [
@@ -12153,6 +12171,16 @@
               "null"
             ]
           },
+          "failureReason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerStartupFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -12220,6 +12248,18 @@
       },
       "McpToolCallAppContext": {
         "properties": {
+          "actionName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "connectorId": {
             "type": "string"
           },
@@ -12230,6 +12270,12 @@
             ]
           },
           "resourceUri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "templateId": {
             "type": [
               "string",
               "null"
@@ -17466,6 +17512,13 @@
         "title": "ThreadGoalUpdatedNotification",
         "type": "object"
       },
+      "ThreadHistoryMode": {
+        "enum": [
+          "legacy",
+          "paginated"
+        ],
+        "type": "string"
+      },
       "ThreadId": {
         "type": "string"
       },
@@ -18985,6 +19038,7 @@
       },
       "ThreadRollbackParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "DEPRECATED: `thread/rollback` will be removed soon.",
         "properties": {
           "numTurns": {
             "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",

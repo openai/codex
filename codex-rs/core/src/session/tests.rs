@@ -1,5 +1,6 @@
 use super::turn_context::TurnEnvironment;
 use super::*;
+use crate::agents_md_manager::AgentsMdManager;
 use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
@@ -17,6 +18,7 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_config::LoaderOverrides;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
@@ -24,12 +26,15 @@ use codex_config::NetworkDomainPermissionsToml;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_skills::HostSkillsSnapshot;
 use core_test_support::test_codex::local_selections;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -185,7 +190,13 @@ use std::time::Duration as StdDuration;
 impl StepContext {
     pub(crate) fn for_test(turn: Arc<TurnContext>) -> Arc<Self> {
         let environments = turn.environments.clone();
-        Arc::new(Self::new(turn, environments))
+        Arc::new(Self::new(
+            Arc::clone(&turn),
+            environments,
+            Vec::new(),
+            crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+            /*loaded_agents_md*/ None,
+        ))
     }
 }
 
@@ -372,8 +383,8 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     session
         .services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager()
         .set_elicitations_auto_deny(/*auto_deny*/ true);
 
     let response = session
@@ -469,6 +480,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         .expect("test thread id should be valid");
     crate::client::ModelClient::new(
         /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
@@ -2080,6 +2092,7 @@ fn session_meta_item(
 #[tokio::test]
 async fn resumed_history_injects_initial_context_on_first_context_update_only() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
     let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
     session
@@ -2093,8 +2106,9 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, history_before_seed.raw_items());
 
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     let initial_context = build_initial_context(&session, &turn_context).await;
     expected.extend(initial_context);
@@ -2102,7 +2116,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     assert_eq!(expected, history_after_seed.raw_items());
 
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
@@ -2713,9 +2727,8 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
     .await;
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("unique session")).await;
-    let world_state = Arc::new(
-        build_world_state_from_turn_context(session.as_ref(), turn_context.as_ref()).await,
-    );
+    let world_state =
+        Arc::new(build_world_state_from_turn_context(session.as_ref(), &turn_context).await);
 
     session
         .start_new_context_window(turn_context.as_ref(), world_state)
@@ -2744,6 +2757,7 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::TurnContext(_)
+        | RolloutItem::WorldState(_)
         | RolloutItem::EventMsg(_) => None,
     });
     assert_eq!(
@@ -2802,6 +2816,7 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
+        | RolloutItem::WorldState(_)
         | RolloutItem::EventMsg(_) => None,
     });
     assert_eq!(persisted_item_id, Some(live_item_id.as_str()));
@@ -3087,7 +3102,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     )
     .await;
 
-    let initial_context = build_initial_context(&sess, tc.as_ref()).await;
+    let initial_context = build_initial_context(&sess, &tc).await;
     let turn_1 = vec![
         user_message("turn 1 user"),
         assistant_message("turn 1 assistant"),
@@ -3155,7 +3170,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
     )
     .await;
 
-    let initial_context = build_initial_context(&sess, tc.as_ref()).await;
+    let initial_context = build_initial_context(&sess, &tc).await;
     let turn_1 = vec![user_message("turn 1 user")];
     let mut full_history = Vec::new();
     full_history.extend(initial_context.clone());
@@ -3181,7 +3196,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
 async fn thread_rollback_fails_without_persisted_thread_history() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = build_initial_context(&sess, tc.as_ref()).await;
+    let initial_context = build_initial_context(&sess, &tc).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
 
@@ -3591,7 +3606,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
 async fn thread_rollback_fails_when_turn_in_progress() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = build_initial_context(&sess, tc.as_ref()).await;
+    let initial_context = build_initial_context(&sess, &tc).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
 
@@ -3612,7 +3627,7 @@ async fn thread_rollback_fails_when_turn_in_progress() {
 async fn thread_rollback_fails_when_num_turns_is_zero() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-    let initial_context = build_initial_context(&sess, tc.as_ref()).await;
+    let initial_context = build_initial_context(&sess, &tc).await;
     sess.record_conversation_items(tc.as_ref(), &initial_context)
         .await;
 
@@ -3649,10 +3664,8 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3673,6 +3686,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -3757,10 +3771,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3781,6 +3793,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -4037,7 +4050,9 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
@@ -4289,10 +4304,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4313,6 +4326,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -5161,10 +5175,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5185,6 +5197,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -5217,6 +5230,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         skills_service,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
@@ -5243,20 +5257,22 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     assert!(msg.contains("zsh fork feature enabled, but no packaged zsh fork is available"));
 }
 
-async fn build_initial_context(session: &Session, turn_context: &TurnContext) -> Vec<ResponseItem> {
+async fn build_initial_context(
+    session: &Session,
+    turn_context: &Arc<TurnContext>,
+) -> Vec<ResponseItem> {
     let world_state = build_world_state_from_turn_context(session, turn_context).await;
     session
-        .build_initial_context_with_world_state(turn_context, &world_state)
+        .build_initial_context_with_world_state(turn_context.as_ref(), &world_state)
         .await
 }
 
 pub(crate) async fn build_world_state_from_turn_context(
     session: &Session,
-    turn_context: &TurnContext,
+    turn_context: &Arc<TurnContext>,
 ) -> WorldState {
-    session
-        .build_world_state_for_environments(turn_context, &turn_context.environments)
-        .await
+    let step_context = StepContext::for_test(Arc::clone(turn_context));
+    session.build_world_state_for_step(&step_context).await
 }
 
 // todo: use online model info
@@ -5291,10 +5307,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5315,6 +5329,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -5359,14 +5374,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
+    let mcp_runtime =
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
-        )),
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
+        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -5394,6 +5407,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
         skills_service,
+        agents_md_manager: Arc::new(AgentsMdManager::new(/*user_instructions*/ None)),
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -5401,6 +5415,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             agent_control.session_id().to_string(),
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
+        selected_capability_roots: Vec::new(),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
@@ -5418,6 +5433,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
+            AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
@@ -5429,7 +5445,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
-        code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
+            codex_code_mode::InProcessCodeModeSessionProvider,
+        )),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
@@ -5471,7 +5489,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_snapshot,
     );
-
     let session = Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -5539,10 +5556,8 @@ async fn make_session_with_config_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5563,6 +5578,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -5596,6 +5612,7 @@ async fn make_session_with_config_and_rx(
         skills_service,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
@@ -5647,10 +5664,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5671,6 +5686,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: session_source.clone(),
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -5704,6 +5720,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_service,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
@@ -6920,7 +6937,9 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(config.cwd.to_path_buf()),
@@ -7372,10 +7391,8 @@ where
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -7396,6 +7413,7 @@ where
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -7439,14 +7457,12 @@ where
         /*bundled_skills_enabled*/ true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
+    let mcp_runtime =
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(config.as_ref());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from_pointee(
-            McpConnectionManager::new_uninitialized_with_permission_profile(
-                &config.permissions.approval_policy,
-                config.permissions.permission_profile(),
-                config.prefix_mcp_tool_names(),
-            ),
-        )),
+        mcp_connection_manager: Arc::new(arc_swap::ArcSwap::from(mcp_runtime.manager_arc())),
+        mcp_runtime: arc_swap::ArcSwapOption::from(Some(mcp_runtime)),
+        mcp_projection_lock: Mutex::new(()),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -7474,6 +7490,7 @@ where
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
         skills_service,
+        agents_md_manager: Arc::new(AgentsMdManager::new(/*user_instructions*/ None)),
         plugins_manager,
         mcp_manager,
         extensions: Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
@@ -7481,6 +7498,7 @@ where
             agent_control.session_id().to_string(),
         ),
         thread_extension_data: codex_extension_api::ExtensionData::new(thread_id.to_string()),
+        selected_capability_roots: Vec::new(),
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         supports_openai_form_elicitation: std::sync::atomic::AtomicBool::new(false),
         agent_control,
@@ -7498,6 +7516,7 @@ where
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
+            AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
             session_configuration.provider.clone(),
             session_configuration.session_source.clone(),
@@ -7509,7 +7528,9 @@ where
             /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
             /*attestation_provider*/ None,
         ),
-        code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(Arc::new(
+            codex_code_mode::InProcessCodeModeSessionProvider,
+        )),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
@@ -7551,7 +7572,6 @@ where
         "turn_id".to_string(),
         skills_snapshot,
     ));
-
     let session = Arc::new(Session {
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -7600,8 +7620,15 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn refresh_mcp_servers_is_deferred_until_next_turn() {
+async fn refresh_mcp_servers_keeps_the_previous_runtime_alive() {
     let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let old_runtime = session.services.latest_mcp_runtime();
+    let step_context = session
+        .capture_step_context(Arc::clone(&turn_context))
+        .await;
+    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
     let old_token = session.mcp_startup_cancellation_token().await;
     assert!(!old_token.is_cancelled());
 
@@ -7609,8 +7636,16 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
         serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
     let auth_keyring_backend_kind =
         serde_json::to_value(AuthKeyringBackendKind::Secrets).expect("serialize keyring backend");
+    let refreshed_mcp_servers = serde_json::from_value::<HashMap<String, McpServerConfig>>(json!({
+        "refreshed": {
+            "url": "https://refreshed.example/mcp",
+            "enabled": false
+        }
+    }))
+    .expect("parse refreshed MCP servers");
     let refresh_config = McpServerRefreshConfig {
-        mcp_servers: json!({}),
+        mcp_servers: serde_json::to_value(&refreshed_mcp_servers)
+            .expect("serialize refreshed MCP servers"),
         mcp_oauth_credentials_store_mode,
         auth_keyring_backend_kind,
     };
@@ -7632,7 +7667,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
         .refresh_mcp_servers_if_requested(&turn_context, /*elicitation_reviewer*/ None)
         .await;
 
-    assert!(old_token.is_cancelled());
+    assert!(!old_token.is_cancelled());
     assert!(
         session
             .pending_mcp_server_refresh_config
@@ -7642,6 +7677,71 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
+    let new_runtime = session.services.latest_mcp_runtime();
+    assert!(!Arc::ptr_eq(&old_runtime, &new_runtime));
+    assert!(Arc::ptr_eq(&step_context.mcp, &old_runtime));
+    assert_eq!(
+        codex_mcp::configured_mcp_servers(new_runtime.config()),
+        refreshed_mcp_servers
+    );
+}
+
+#[tokio::test]
+async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let step_context = session.capture_step_context(turn_context).await;
+
+    let mut refresh_config = step_context.turn.config.as_ref().clone();
+    refresh_config.mcp_servers.set(HashMap::from([(
+        "newer".to_string(),
+        McpServerConfig {
+            auth: Default::default(),
+            transport: McpServerTransportConfig::Stdio {
+                command: "missing-test-mcp-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
+            },
+            environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]))?;
+    session
+        .refresh_mcp_servers_now(
+            step_context.turn.as_ref(),
+            &refresh_config,
+            /*elicitation_reviewer*/ None,
+        )
+        .await;
+
+    let router = crate::session::turn::built_tools(
+        session.as_ref(),
+        step_context.as_ref(),
+        &CancellationToken::new(),
+    )
+    .await?;
+    assert!(
+        !router
+            .registered_tool_names_for_test()
+            .iter()
+            .any(|name| name.to_string() == "list_mcp_resources")
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -7720,7 +7820,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
     current_context.config = Arc::new(config);
 
     let update_items =
-        record_context_update_items(&session, &previous_context, &current_context).await;
+        record_context_update_items(&session, previous_context, current_context).await;
 
     let environment_update = user_input_texts(&update_items)
         .into_iter()
@@ -7751,7 +7851,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
     );
 
     let update_items =
-        record_context_update_items(&session, &previous_context, &current_context).await;
+        record_context_update_items(&session, previous_context, current_context).await;
 
     let environment_update = user_input_texts(&update_items)
         .into_iter()
@@ -7778,7 +7878,7 @@ async fn record_context_updates_emits_environment_item_for_time_changes() {
     current_context.timezone = Some("Europe/Berlin".to_string());
 
     let update_items =
-        record_context_update_items(&session, &previous_context, &current_context).await;
+        record_context_update_items(&session, previous_context, current_context).await;
 
     let environment_update = user_input_texts(&update_items)
         .into_iter()
@@ -7810,7 +7910,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     );
 
     let update_items =
-        record_context_update_items(&session, &previous_context, &current_context).await;
+        record_context_update_items(&session, previous_context, current_context).await;
 
     let user_texts = user_input_texts(&update_items);
     assert!(
@@ -7823,16 +7923,18 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
 
 async fn record_context_update_items(
     session: &Session,
-    previous_context: &TurnContext,
-    current_context: &TurnContext,
+    previous_context: Arc<TurnContext>,
+    current_context: TurnContext,
 ) -> Vec<ResponseItem> {
+    let previous_step = StepContext::for_test(previous_context);
     session
-        .record_context_updates_and_set_reference_context_item(previous_context)
+        .record_context_updates_and_set_reference_context_item(&previous_step)
         .await;
     let previous_len = session.clone_history().await.raw_items().len();
 
+    let current_step = StepContext::for_test(Arc::new(current_context));
     session
-        .record_context_updates_and_set_reference_context_item(current_context)
+        .record_context_updates_and_set_reference_context_item(&current_step)
         .await;
     let history = session.clone_history().await;
     history.raw_items()[previous_len..].to_vec()
@@ -7932,6 +8034,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
 async fn build_initial_context_uses_previous_realtime_state() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -8045,6 +8148,7 @@ async fn build_initial_context_includes_prompt_fragments_from_extensions() {
         .services
         .thread_extension_data
         .insert(PromptExtensionTestState);
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -8071,6 +8175,7 @@ async fn build_initial_context_includes_turn_context_fragments_from_extensions()
         .insert(TurnContextExtensionTestState {
             expected_model_context_window: Some(50),
         });
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -8099,6 +8204,7 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
         });
     let mut previous_context_item = turn_context.to_turn_context_item();
     previous_context_item.turn_id = Some("previous-turn-id".to_string());
+    let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     {
         let mut state = session.state.lock().await;
@@ -8108,8 +8214,9 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
             .set_world_state_baseline(world_state.snapshot());
     }
 
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
 
     let history = session.clone_history().await;
@@ -8127,6 +8234,7 @@ async fn record_context_updates_includes_turn_context_fragments_on_steady_state_
 async fn build_initial_context_omits_prompt_fragments_without_extension_state() {
     let (mut session, turn_context) = make_session_and_context().await;
     session.services.extensions = prompt_extension_test_registry();
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_messages = developer_message_texts(&initial_context);
@@ -8145,7 +8253,7 @@ async fn build_initial_context_adds_multi_agent_v2_root_usage_hint_as_developer_
     let (session, turn_context) =
         make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ true).await;
 
-    let initial_context = build_initial_context(&session, turn_context.as_ref()).await;
+    let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
     assert!(
@@ -8183,7 +8291,7 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
         .expect("thread settings should not be shared")
         .session_source = session_source;
 
-    let initial_context = build_initial_context(&session, turn_context.as_ref()).await;
+    let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
     assert!(
@@ -8205,7 +8313,7 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_dis
     let (session, turn_context) =
         make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
 
-    let initial_context = build_initial_context(&session, turn_context.as_ref()).await;
+    let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
     assert!(
@@ -8232,7 +8340,7 @@ async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_hint_is_emp
     )
     .await;
 
-    let initial_context = build_initial_context(&session, turn_context.as_ref()).await;
+    let initial_context = build_initial_context(&session, &turn_context).await;
 
     let developer_messages = developer_message_texts(&initial_context);
     assert!(
@@ -8261,6 +8369,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
             /*reference_context_item*/ None,
         )
         .await;
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -8275,6 +8384,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
 #[tokio::test]
 async fn build_initial_context_omits_default_image_save_location_without_image_history() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -8317,6 +8427,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     ];
     turn_context.model_info.context_window = Some(100);
     turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
+    let turn_context = Arc::new(turn_context);
 
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -8468,6 +8579,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     ];
     turn_context.model_info.context_window = Some(100);
     turn_context.turn_skills = TurnSkillsContext::new(HostSkillsSnapshot::new(Arc::new(outcome)));
+    let turn_context = Arc::new(turn_context);
 
     let _ = build_initial_context(&session, &turn_context).await;
     let warning_event = timeout(Duration::from_secs(1), rx.recv())
@@ -8600,6 +8712,7 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     session
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
+    let turn_context = Arc::new(turn_context);
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -8623,6 +8736,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
     session
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
+    let turn_context = Arc::new(turn_context);
     let initial_context = build_initial_context(&session, &turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -8706,8 +8820,10 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
 async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
  {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     let history = session.clone_history().await;
     let initial_context = build_initial_context(&session, &turn_context).await;
@@ -8725,6 +8841,8 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
 async fn record_context_updates_and_set_reference_context_item_reinjects_full_context_after_clear()
 {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let compacted_summary = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -8738,7 +8856,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .record_conversation_items(&turn_context, std::slice::from_ref(&compacted_summary))
         .await;
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     {
         let mut state = session.state.lock().await;
@@ -8752,7 +8870,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
 
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
 
     let history = session.clone_history().await;
@@ -8775,6 +8893,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .with_model(next_model.to_string(), &session.services.models_manager)
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
+    let previous_context = Arc::new(previous_context);
     let world_state = build_world_state_from_turn_context(&session, &previous_context).await;
     {
         let mut state = session.state.lock().await;
@@ -8790,8 +8909,10 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .await;
     assert_eq!(update_items, Vec::new());
 
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
 
     assert_eq!(
@@ -8837,8 +8958,10 @@ async fn record_context_updates_and_set_reference_context_item_persists_split_fi
     );
     let rollout_path = attach_thread_persistence(&mut session).await;
 
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -8871,6 +8994,7 @@ async fn build_initial_context_prepends_model_switch_message() {
     session
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
+    let turn_context = Arc::new(turn_context);
     let initial_context = build_initial_context(&session, &turn_context).await;
 
     let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
@@ -8921,8 +9045,10 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
             realtime_active: Some(previous_context.realtime_active),
         }))
         .await;
+    let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     session
-        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .record_context_updates_and_set_reference_context_item(&step_context)
         .await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await.expect("rollout should flush");
@@ -9042,6 +9168,90 @@ impl SessionTask for CompletingTask {
     ) -> SessionTaskResult {
         Ok(None)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalEventKind {
+    TurnComplete,
+    TurnAborted,
+}
+
+async fn attach_in_memory_thread_store(
+    session: &mut Session,
+) -> Arc<codex_thread_store::InMemoryThreadStore> {
+    let store = Arc::new(codex_thread_store::InMemoryThreadStore::default());
+    let thread_store: Arc<dyn codex_thread_store::ThreadStore> = store.clone();
+    let config = session.get_config().await;
+    let live_thread = LiveThread::create(
+        Arc::clone(&thread_store),
+        CreateThreadParams {
+            session_id: session.session_id(),
+            thread_id: session.thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            source: SessionSource::Exec,
+            thread_source: None,
+            originator: "test_originator".to_string(),
+            base_instructions: BaseInstructions::default(),
+            dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
+            multi_agent_version: None,
+            initial_window_id: Uuid::now_v7().to_string(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(config.cwd.to_path_buf()),
+                model_provider: config.model_provider_id.clone(),
+                memory_mode: if config.memories.generate_memories {
+                    ThreadMemoryMode::Enabled
+                } else {
+                    ThreadMemoryMode::Disabled
+                },
+            },
+        },
+    )
+    .await
+    .expect("create thread persistence");
+    session.services.thread_store = thread_store;
+    session.services.live_thread = Some(live_thread);
+    store
+}
+
+async fn wait_for_flush_count(
+    store: &codex_thread_store::InMemoryThreadStore,
+    expected_flushes: usize,
+) -> codex_thread_store::InMemoryThreadStoreCalls {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let calls = store.calls().await;
+            if calls.flush_thread >= expected_flushes {
+                return calls;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("store should observe expected flush count")
+}
+
+async fn recv_terminal_event(
+    rx: &async_channel::Receiver<Event>,
+    expected: TerminalEventKind,
+) -> Event {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            match (&event.msg, expected) {
+                (EventMsg::TurnComplete(_), TerminalEventKind::TurnComplete)
+                | (EventMsg::TurnAborted(_), TerminalEventKind::TurnAborted) => return event,
+                (EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_), _) => {
+                    panic!("unexpected terminal event: {:?}", event.msg)
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("terminal event should be delivered")
 }
 
 #[derive(Clone, Copy)]
@@ -9199,6 +9409,79 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
         )
     });
     assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_complete_flushes_terminal_event_after_delivery() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let store = attach_in_memory_thread_store(
+        Arc::get_mut(&mut sess).expect("session should be uniquely owned"),
+    )
+    .await;
+
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "complete normally".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
+    sess.spawn_task(Arc::clone(&tc), input, CompletingTask)
+        .await;
+
+    let event = recv_terminal_event(&rx, TerminalEventKind::TurnComplete).await;
+    assert!(matches!(event.msg, EventMsg::TurnComplete(_)));
+    // Expected flushes:
+    // 1. Task-runner flush after the task body finishes, before TurnComplete is emitted.
+    // 2. Terminal-event flush after TurnComplete is appended.
+    let calls = wait_for_flush_count(&store, /*expected_flushes*/ 2).await;
+    assert_eq!(2, calls.flush_thread);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_aborted_flushes_terminal_event_after_delivery() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let store = attach_in_memory_thread_store(
+        Arc::get_mut(&mut sess).expect("session should be uniquely owned"),
+    )
+    .await;
+
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "interrupt me".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    let abort_task = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        async move {
+            sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        }
+    });
+
+    let event = recv_terminal_event(&rx, TerminalEventKind::TurnAborted).await;
+    match event.msg {
+        EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+        other => panic!("unexpected event: {other:?}"),
+    }
+    abort_task.await.expect("abort task should finish");
+    // Expected flushes:
+    // 1. Task-runner flush after the task body observes cancellation.
+    // 2. Interrupted-marker flush before TurnAborted so abort observers can reread it.
+    // 3. Terminal-event flush after TurnAborted is appended.
+    let calls = wait_for_flush_count(&store, /*expected_flushes*/ 3).await;
+    assert_eq!(3, calls.flush_thread);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -10132,8 +10415,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let tools = {
         session
             .services
-            .mcp_connection_manager
-            .load_full()
+            .latest_mcp_runtime()
+            .manager()
             .list_all_tools()
             .await
     };
@@ -10197,7 +10480,7 @@ async fn sample_rollout(
     // Use the same turn_context source as record_initial_history so model_info (and thus
     // personality_spec) matches reconstruction.
     let reconstruction_turn = session.new_default_turn().await;
-    let mut initial_context = build_initial_context(session, reconstruction_turn.as_ref()).await;
+    let mut initial_context = build_initial_context(session, &reconstruction_turn).await;
     // Ensure personality_spec is present when Personality is enabled, so expected matches
     // what reconstruction produces (build_initial_context may omit it when baked into model).
     if !initial_context.iter().any(|m| {

@@ -18,8 +18,10 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core_plugins::PluginsManager;
+use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
+use codex_mcp::McpRuntimeContext;
 use codex_mcp::ResolvedMcpOAuthScopes;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::discover_supported_scopes;
@@ -558,6 +560,10 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        &McpRuntimeContext::new(
+            Arc::new(EnvironmentManager::without_environments()),
+            config.cwd.to_path_buf(),
+        ),
     )
     .await;
 
@@ -567,7 +573,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             .map(|(name, cfg)| {
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
                     McpServerTransportConfig::Stdio {
@@ -651,7 +657,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
                 stdio_rows.push([
@@ -672,7 +678,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
-                    .map(|entry| entry.auth_status)
+                    .map(|entry| McpAuthStatus::from(entry.auth_state))
                     .unwrap_or(McpAuthStatus::Unsupported)
                     .to_string();
                 let bearer_token_display =

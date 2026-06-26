@@ -1,5 +1,6 @@
 use super::*;
 
+use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -12,7 +13,9 @@ use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::WorldStateItem;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -59,6 +62,49 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn completed_user_turn_rollout(
+    turn_context_item: TurnContextItem,
+    items: Vec<RolloutItem>,
+) -> Vec<RolloutItem> {
+    let turn_id = turn_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let mut rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
+                message: "seed".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            },
+        )),
+        RolloutItem::TurnContext(turn_context_item),
+    ];
+    rollout_items.extend(items);
+    rollout_items.push(RolloutItem::EventMsg(EventMsg::TurnComplete(
+        codex_protocol::protocol::TurnCompleteEvent {
+            turn_id,
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        },
+    )));
+    rollout_items
+}
+
 #[tokio::test]
 async fn record_initial_history_reconstructs_typed_inter_agent_message() {
     let (session, _turn_context) = make_session_and_context().await;
@@ -84,6 +130,33 @@ async fn record_initial_history_reconstructs_typed_inter_agent_message() {
         session.state.lock().await.clone_history().raw_items(),
         &[communication.to_model_input_item()]
     );
+}
+
+#[tokio::test]
+async fn record_initial_history_restores_world_state_baseline() {
+    let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
+    let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let rollout_items = completed_user_turn_rollout(
+        turn_context.to_turn_context_item(),
+        vec![RolloutItem::WorldState(WorldStateItem::full(
+            world_state.snapshot().into_value(),
+        ))],
+    );
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: Arc::new(rollout_items),
+            rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
+        }))
+        .await;
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    session
+        .record_context_updates_and_set_reference_context_item(&step_context)
+        .await;
+
+    assert_eq!(session.clone_history().await.raw_items(), &[]);
 }
 
 #[tokio::test]
@@ -114,6 +187,11 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(reconstructed.world_state_baseline, None);
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -251,6 +329,9 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             },
         )),
         RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::WorldState(WorldStateItem::full(json!({
+            "test": {"environment": "first"}
+        }))),
         RolloutItem::ResponseItem(turn_one_user.clone()),
         RolloutItem::ResponseItem(turn_one_assistant.clone()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
@@ -282,6 +363,9 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             },
         )),
         RolloutItem::TurnContext(rolled_back_context_item),
+        RolloutItem::WorldState(WorldStateItem::patch(json!({
+            "test": {"environment": "rolled-back"}
+        }))),
         RolloutItem::ResponseItem(turn_two_user),
         RolloutItem::ResponseItem(turn_two_assistant),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
@@ -319,6 +403,11 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.world_state_baseline)
+            .expect("serialize reconstructed world state"),
+        json!({"test": {"environment": "first"}})
     );
 }
 
@@ -984,6 +1073,45 @@ async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
         Some(compacted_previous_window_id)
     );
     assert_eq!(reconstructed.window_id, Some(compacted_window_id));
+}
+
+#[tokio::test]
+async fn reconstruct_history_replays_world_state_from_latest_compaction_window() {
+    let (session, turn_context) = make_session_and_context().await;
+    let rollout_items = completed_user_turn_rollout(
+        turn_context.to_turn_context_item(),
+        vec![
+            RolloutItem::WorldState(WorldStateItem::full(json!({
+                "environment": {"status": "old"}
+            }))),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(Vec::new()),
+                window_number: Some(1),
+                first_window_id: None,
+                previous_window_id: None,
+                window_id: None,
+            }),
+            RolloutItem::WorldState(WorldStateItem::full(json!({
+                "environment": {"status": "starting", "cwd": "/workspace"}
+            }))),
+            RolloutItem::WorldState(WorldStateItem::patch(json!({
+                "environment": {"status": "ready"}
+            }))),
+        ],
+    );
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        serde_json::to_value(reconstructed.world_state_baseline)
+            .expect("serialize reconstructed world state"),
+        json!({
+            "environment": {"status": "ready", "cwd": "/workspace"}
+        })
+    );
 }
 
 #[tokio::test]

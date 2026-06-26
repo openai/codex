@@ -25,6 +25,7 @@ pub fn apply_rollout_item(
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
         RolloutItem::Compacted(_) => {}
+        RolloutItem::WorldState(_) => {}
     }
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
@@ -42,7 +43,8 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
-        | RolloutItem::Compacted(_) => false,
+        | RolloutItem::Compacted(_)
+        | RolloutItem::WorldState(_) => false,
     }
 }
 
@@ -54,6 +56,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
+    metadata.history_mode = meta_line.meta.history_mode;
     metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
@@ -341,7 +344,9 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
+                    history_mode: Default::default(),
                     multi_agent_version: None,
                     context_window: None,
                 },
@@ -533,7 +538,9 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    selected_capability_roots: Vec::new(),
                     memory_mode: None,
+                    history_mode: Default::default(),
                     multi_agent_version: None,
                     context_window: None,
                 },
@@ -556,6 +563,7 @@ mod tests {
             updated_at: created_at,
             recency_at: created_at,
             source: "cli".to_string(),
+            history_mode: Default::default(),
             thread_source: None,
             agent_path: None,
             agent_nickname: None,

@@ -248,7 +248,6 @@ async fn guardian_test_session_turn_and_rx(
     turn_mut.config = Arc::clone(&config);
     turn_mut.provider =
         create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
-    turn_mut.user_instructions = None;
 
     (session, turn, rx)
 }
@@ -280,7 +279,6 @@ async fn guardian_test_session_and_turn_with_base_url(
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
-    turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
 }
@@ -2305,7 +2303,6 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     turn_mut.config = Arc::clone(&config);
     turn_mut.provider =
         create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
-    turn_mut.user_instructions = None;
 
     seed_guardian_parent_history(&session, &turn).await;
 

@@ -183,6 +183,14 @@ impl SessionStartupPrewarmHandle {
 impl Session {
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
         if !self.services.model_client.responses_websocket_enabled() {
+            // Without websocket prewarm, resolve auth once so Agent Identity bootstrap can
+            // register or engage this session's bearer fallback before the first user request.
+            let model_client = self.services.model_client.clone();
+            tokio::spawn(async move {
+                if let Err(err) = model_client.prewarm_auth().await {
+                    warn!("startup auth prewarm failed: {err:#}");
+                }
+            });
             return;
         }
 
@@ -258,6 +266,7 @@ async fn schedule_startup_prewarm_inner(
     }
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
+    // Startup prewarm runs before run_turn and needs its own tool-building snapshot.
     let step_context = session
         .capture_step_context(Arc::clone(&startup_turn_context))
         .await;

@@ -419,6 +419,17 @@ pub struct HttpHeader {
     pub value: String,
 }
 
+/// Redirect behavior for an executor-side HTTP request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HttpRedirectPolicy {
+    /// Follow redirects using the HTTP client's normal limits.
+    #[default]
+    Follow,
+    /// Return the redirect response without following its location.
+    Stop,
+}
+
 /// Executor-side HTTP request envelope.
 ///
 /// This intentionally stays transport-shaped rather than MCP-shaped so callers
@@ -443,6 +454,9 @@ pub struct HttpRequestParams {
     /// millisecond deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Whether the executor should follow HTTP redirects.
+    #[serde(default)]
+    pub redirect_policy: HttpRedirectPolicy,
     /// Caller-chosen stream id for `http/request/bodyDelta` notifications.
     ///
     /// The id must remain unique on a connection until the terminal body delta
