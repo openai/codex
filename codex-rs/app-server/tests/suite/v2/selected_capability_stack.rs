@@ -122,9 +122,17 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
                 responses::ev_completed("unchanged-step"),
             ]),
             responses::sse(vec![
-                responses::ev_response_created("resumed-step"),
-                responses::ev_assistant_message("resumed-message", "Ready after resume"),
-                responses::ev_completed("resumed-step"),
+                responses::ev_response_created("resumed-unavailable-step"),
+                responses::ev_assistant_message(
+                    "resumed-unavailable-message",
+                    "Unavailable after resume",
+                ),
+                responses::ev_completed("resumed-unavailable-step"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("reattached-step"),
+                responses::ev_assistant_message("reattached-message", "Ready after reattach"),
+                responses::ev_completed("reattached-step"),
             ]),
         ],
     )
@@ -172,6 +180,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await?;
     assert_eq!(first_mcp_pid, wait_for_pid_file(&fixture.pid_file).await?);
 
+    exec_server.kill().await?;
     drop(app_server);
     std::fs::remove_file(&fixture.pid_file)?;
 
@@ -190,12 +199,32 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response(response)?;
     assert_eq!(thread_id, thread.id);
+
+    run_turn(
+        &mut app_server,
+        &thread_id,
+        "Inspect capabilities while the selected executor is unavailable",
+        fixture.environment_cwd.clone(),
+    )
+    .await?;
+    let requests = response_mock.requests();
+    assert_eq!(5, requests.len());
+    assert_selected_capabilities_absent(&requests[4]);
+    assert!(
+        requests[4]
+            .message_input_texts("developer")
+            .into_iter()
+            .any(|text| text.contains("No selected-environment skills are currently available."))
+    );
+
+    exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+    add_environment(&mut app_server, &fixture.exec_server_url).await?;
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
         &mut app_server,
         &thread_id,
-        &format!("Use ${SKILL_NAME} after resuming the thread"),
+        &format!("Use ${SKILL_NAME} after reattaching the selected executor"),
         fixture.environment_cwd,
     )
     .await?;
@@ -203,13 +232,13 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     assert_ne!(first_mcp_pid, resumed_mcp_pid);
 
     let requests = response_mock.requests();
-    assert_eq!(5, requests.len());
+    assert_eq!(6, requests.len());
     for request in &requests[1..4] {
         assert_selected_skill_is_injected(request, /*expected_count*/ 1);
         assert_selected_plugin_tools(request);
     }
-    assert_selected_skill_is_injected(&requests[4], /*expected_count*/ 2);
-    assert_selected_plugin_tools(&requests[4]);
+    assert_selected_skill_is_injected(&requests[5], /*expected_count*/ 2);
+    assert_selected_plugin_tools(&requests[5]);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
