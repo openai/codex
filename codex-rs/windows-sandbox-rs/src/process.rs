@@ -36,7 +36,6 @@ use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
 pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
-    pub startup_info: STARTUPINFOW,
     _desktop: LaunchDesktop,
 }
 
@@ -179,7 +178,6 @@ pub(crate) unsafe fn create_process_as_user(
             }
             Ok(CreatedProcess {
                 process_info: pi,
-                startup_info: si.StartupInfo,
                 _desktop: desktop,
             })
         }
@@ -220,7 +218,6 @@ pub(crate) unsafe fn create_process_as_user(
             }
             Ok(CreatedProcess {
                 process_info: pi,
-                startup_info: si,
                 _desktop: desktop,
             })
         }
