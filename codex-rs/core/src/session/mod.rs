@@ -1773,6 +1773,9 @@ impl Session {
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
+            self.services
+                .rollout_thread_trace
+                .record_tool_call_event(turn_context.sub_id.clone(), &legacy);
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
