@@ -8,6 +8,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 #[test]
 fn renders_full_environment_state() -> Result<()> {
@@ -95,7 +96,7 @@ fn renders_only_changed_environments() -> Result<()> {
   </environments>
 </environment_context>"#,
         )],
-        render_fragments(current.render_diff(&previous)),
+        render_fragments(current.render_diff(&previous.snapshot())),
     );
     Ok(())
 }
@@ -151,7 +152,42 @@ fn persisted_turn_context_values_render_a_diff() -> Result<()> {
   <filesystem><permission_profile type="external"><file_system type="external" /></permission_profile></filesystem>
 </environment_context>"#,
         )],
-        render_fragments(current.render_diff(&previous)),
+        render_fragments(current.render_diff(&previous.snapshot())),
+    );
+    Ok(())
+}
+
+#[test]
+fn persisted_snapshot_uses_model_visible_path_and_context_values() -> Result<()> {
+    let mut world_state = WorldState::default();
+    world_state.add_section(EnvironmentsState {
+        environments: [(
+            "remote".to_string(),
+            available("file:///C:/windows", "powershell")?,
+        )]
+        .into_iter()
+        .collect(),
+        filesystem: Some(FileSystemContext::from_permission_profile(
+            &PermissionProfile::Disabled,
+            &[],
+        )),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        serde_json::to_value(world_state.snapshot())?,
+        json!({
+            "environments": {
+                "environments": {
+                    "remote": {
+                        "cwd": "C:\\windows",
+                        "status": "available",
+                        "shell": "powershell"
+                    }
+                },
+                "filesystem": "<filesystem><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>"
+            }
+        }),
     );
     Ok(())
 }
@@ -180,10 +216,14 @@ fn single_environment_diff_ignores_unknown_shell() -> Result<()> {
         .collect(),
         ..Default::default()
     };
+    let previous = WorldStateSection::snapshot(&previous);
 
     assert_eq!(
         None,
-        render_fragment(WorldStateSection::render_diff(&current, Some(&previous)))
+        render_fragment(WorldStateSection::render_diff(
+            &current,
+            PreviousSectionState::Known(&previous),
+        ))
     );
     Ok(())
 }
@@ -199,6 +239,7 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
         .collect(),
         ..Default::default()
     };
+    let previous = WorldStateSection::snapshot(&previous);
 
     assert_eq!(
         Some(user_message(
@@ -210,7 +251,7 @@ fn removed_legacy_environment_renders_unavailable() -> Result<()> {
         )),
         render_fragment(WorldStateSection::render_diff(
             &EnvironmentsState::default(),
-            Some(&previous),
+            PreviousSectionState::Known(&previous),
         )),
     );
     Ok(())

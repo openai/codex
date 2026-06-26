@@ -655,12 +655,12 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -946,12 +946,12 @@ async fn realtime_start_can_skip_startup_context() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -1044,12 +1044,12 @@ async fn realtime_text_output_modality_requests_text_output_and_final_transcript
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -1225,12 +1225,12 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -1328,12 +1328,12 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -2683,13 +2683,13 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
         StartupContextConfig::Override("startup context"),
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     login_with_api_key(&mut mcp, "sk-test-key").await?;
 
     // Phase 2: start a normal app-server thread and request realtime over WebRTC.
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -2751,11 +2751,11 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         StartupContextConfig::Generated,
     )?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_request_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
         .await?;
     let thread_start_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,

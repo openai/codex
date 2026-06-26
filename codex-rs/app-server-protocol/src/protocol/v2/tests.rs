@@ -1,4 +1,5 @@
 use super::*;
+use crate::ServerNotification;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
@@ -224,10 +225,10 @@ fn thread_resume_response_round_trips_initial_turns_page() {
 }
 
 #[test]
-fn thread_turns_items_list_round_trips() {
-    let params = ThreadTurnsItemsListParams {
+fn thread_items_list_round_trips() {
+    let params = ThreadItemsListParams {
         thread_id: "thr_123".to_string(),
-        turn_id: "turn_456".to_string(),
+        turn_id: Some("turn_456".to_string()),
         cursor: Some("cursor_1".to_string()),
         limit: Some(50),
         sort_direction: Some(SortDirection::Asc),
@@ -243,7 +244,7 @@ fn thread_turns_items_list_round_trips() {
             "sortDirection": "asc",
         })
     );
-    let response = ThreadTurnsItemsListResponse {
+    let response = ThreadItemsListResponse {
         data: vec![ThreadItem::ContextCompaction {
             id: "item_1".to_string(),
         }],
@@ -258,6 +259,32 @@ fn thread_turns_items_list_round_trips() {
             "nextCursor": null,
             "backwardsCursor": "cursor_0",
         })
+    );
+
+    let params_without_turn = ThreadItemsListParams {
+        thread_id: "thr_123".to_string(),
+        turn_id: None,
+        cursor: None,
+        limit: None,
+        sort_direction: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&params_without_turn).expect("serialize params without turn"),
+        json!({
+            "threadId": "thr_123",
+            "turnId": null,
+            "cursor": null,
+            "limit": null,
+            "sortDirection": null,
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ThreadItemsListParams>(json!({
+            "threadId": "thr_123",
+        }))
+        .expect("deserialize params without turn"),
+        params_without_turn
     );
 }
 
@@ -2129,6 +2156,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
         name: "optional_broken".to_string(),
         status: McpServerStartupState::Failed,
         error: Some("handshake failed".to_string()),
+        failure_reason: None,
     };
     assert_eq!(notification, expected);
     assert_eq!(
@@ -2138,6 +2166,33 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
             "name": "optional_broken",
             "status": "failed",
             "error": "handshake failed",
+            "failureReason": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_updated_serializes_failure_reason() {
+    let notification =
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some("thread-1".to_string()),
+            name: "expired-oauth".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("OAuth credentials expired".to_string()),
+            failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
+        });
+
+    assert_eq!(
+        serde_json::to_value(notification).expect("notification should serialize"),
+        json!({
+            "method": "mcpServer/startupStatus/updated",
+            "params": {
+                "threadId": "thread-1",
+                "name": "expired-oauth",
+                "status": "failed",
+                "error": "OAuth credentials expired",
+                "failureReason": "reauthenticationRequired",
+            },
         })
     );
 }

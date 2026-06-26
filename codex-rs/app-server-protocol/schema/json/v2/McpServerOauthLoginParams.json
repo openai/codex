@@ -13,6 +13,12 @@
         "null"
       ]
     },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "timeoutSecs": {
       "format": "int64",
       "type": [

@@ -184,7 +184,7 @@ async fn next_event(events_rx: &mut mpsc::UnboundedReceiver<DelegateEvent>) -> D
 
 #[tokio::test]
 async fn yields_and_resumes() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
     let cell = service
         .execute(ExecuteRequest {
             source: r#"text("before"); yield_control(); text("after");"#.to_string(),
@@ -224,7 +224,7 @@ async fn yields_and_resumes() {
 #[tokio::test]
 async fn returns_and_resumes_from_the_pending_frontier() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = CodeModeService::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
 
     assert_eq!(
         service
@@ -271,7 +271,7 @@ text("after");
 
 #[tokio::test]
 async fn observed_natural_completion_wins_over_termination() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
     let cell = service
         .execute(execute_request(
             r#"yield_control(); store("finished", true); text("done");"#,
@@ -328,7 +328,7 @@ async fn observed_natural_completion_wins_over_termination() {
 #[tokio::test]
 async fn termination_cancels_pending_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = CodeModeService::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
     let cell = service
         .execute(execute_request(
             r#"notify("pending"); await new Promise(() => {});"#,
@@ -368,7 +368,7 @@ async fn termination_cancels_pending_callbacks_before_responding() {
 #[tokio::test]
 async fn shutdown_cancels_notifications_while_natural_completion_is_draining() {
     let (delegate, mut events_rx) = HeldNotificationDelegate::new();
-    let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
+    let service = Arc::new(InProcessCodeModeSession::with_delegate(delegate.clone()));
     service
         .execute(execute_request(r#"notify("pending");"#))
         .await
@@ -398,7 +398,7 @@ async fn shutdown_cancels_notifications_while_natural_completion_is_draining() {
 #[tokio::test]
 async fn repeated_termination_is_rejected_while_callback_cleanup_is_pending() {
     let (delegate, mut events_rx) = HeldNotificationDelegate::new();
-    let service = Arc::new(CodeModeService::with_delegate(delegate.clone()));
+    let service = Arc::new(InProcessCodeModeSession::with_delegate(delegate.clone()));
     let cell = service
         .execute(execute_request(
             r#"notify("pending"); await new Promise(() => {});"#,
@@ -448,7 +448,7 @@ async fn repeated_termination_is_rejected_while_callback_cleanup_is_pending() {
 
 #[tokio::test]
 async fn second_observer_is_rejected_without_displacing_the_first() {
-    let service = CodeModeService::new();
+    let service = InProcessCodeModeSession::new();
     let cell = service
         .execute(execute_request("await new Promise(() => {});"))
         .await
@@ -496,7 +496,7 @@ async fn second_observer_is_rejected_without_displacing_the_first() {
 #[tokio::test]
 async fn natural_completion_cleans_up_callbacks_before_responding() {
     let (delegate, mut events_rx) = BlockingDelegate::new();
-    let service = CodeModeService::with_delegate(delegate.clone());
+    let service = InProcessCodeModeSession::with_delegate(delegate.clone());
     let cell = service
         .execute(ExecuteRequest {
             enabled_tools: vec![blocking_tool()],

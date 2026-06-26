@@ -1,6 +1,8 @@
 use super::ContextualUserFragment;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
+use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
+use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use uuid::Uuid;
 
@@ -60,6 +62,40 @@ impl ContextualUserFragment for TokenBudgetContext {
             lines.push(mcp_result.clone());
         }
         format!("\n{}\n", lines.join("\n"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContextWindowGuidance {
+    message: String,
+}
+
+impl ContextWindowGuidance {
+    pub(crate) fn new(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+        }
+    }
+}
+
+impl ContextualUserFragment for ContextWindowGuidance {
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            CONTEXT_WINDOW_GUIDANCE_OPEN_TAG,
+            CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG,
+        )
+    }
+
+    fn body(&self) -> String {
+        format!("\n{}\n", self.message)
     }
 }
 

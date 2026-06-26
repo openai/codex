@@ -166,6 +166,7 @@ pub struct RemoteInstalledPlugin {
 pub struct RemotePluginSummary {
     pub id: String,
     pub remote_plugin_id: String,
+    pub local_version: Option<String>,
     pub name: String,
     pub share_context: Option<RemotePluginShareContext>,
     pub installed: bool,
@@ -1045,6 +1046,7 @@ pub fn group_remote_installed_plugins_by_marketplaces(
         let plugin_summary = RemotePluginSummary {
             id: plugin_id.as_key(),
             remote_plugin_id: plugin.id.clone(),
+            local_version: None,
             name: plugin.name.clone(),
             share_context: None,
             installed: true,
@@ -1475,6 +1477,8 @@ fn build_remote_plugin_summary(
     Ok(RemotePluginSummary {
         id: plugin_id.as_key(),
         remote_plugin_id: plugin.id.clone(),
+        local_version: installed_plugin
+            .and_then(|installed| installed.plugin.release.version.clone()),
         name: plugin.name.clone(),
         share_context: remote_plugin_share_context(plugin)?,
         installed: installed_plugin.is_some(),

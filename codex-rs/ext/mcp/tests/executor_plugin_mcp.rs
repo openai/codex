@@ -3,12 +3,14 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -59,7 +61,7 @@ command = "expected-command"
         .build()
         .await?;
 
-    let contributions = selected_plugin_contributions(&config, plugin_root.path()).await;
+    let contributions = selected_plugin_contributions(&config, plugin_root.path()).await?;
 
     assert_eq!(
         contributions,
@@ -93,7 +95,7 @@ command = "expected-command"
 async fn selected_plugin_contributions(
     config: &Config,
     plugin_root: &std::path::Path,
-) -> Vec<ContributionSummary> {
+) -> Result<Vec<ContributionSummary>, Box<dyn std::error::Error>> {
     let mut builder = ExtensionRegistryBuilder::new();
     codex_mcp_extension::install_executor_plugins(
         &mut builder,
@@ -105,15 +107,18 @@ async fn selected_plugin_contributions(
         id: "selected-root".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            path: plugin_root.to_string_lossy().into_owned(),
+            path: PathUri::from_host_native_path(plugin_root)?,
         },
     }]);
-    codex_mcp_extension::initialize_executor_plugin_thread_data(&mut thread_init);
+    let thread_store = ExtensionData::new_with_init("test-thread", thread_init.clone());
+    let available_environment_ids = vec![LOCAL_ENVIRONMENT_ID.to_string()];
 
-    registry.mcp_server_contributors()[0]
-        .contribute(McpServerContributionContext::for_thread(
+    Ok(registry.mcp_server_contributors()[0]
+        .contribute(McpServerContributionContext::for_step(
             config,
             &thread_init,
+            &thread_store,
+            &available_environment_ids,
         ))
         .await
         .into_iter()
@@ -131,9 +136,11 @@ async fn selected_plugin_contributions(
                 selection_order,
                 enabled: config.enabled,
             },
-            McpServerContribution::Set { .. } | McpServerContribution::Remove { .. } => {
+            McpServerContribution::Set { .. }
+            | McpServerContribution::SelectedPluginConnectors { .. }
+            | McpServerContribution::Remove { .. } => {
                 panic!("expected selected plugin contribution")
             }
         })
-        .collect()
+        .collect())
 }

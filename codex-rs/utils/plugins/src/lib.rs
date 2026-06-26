@@ -10,7 +10,9 @@ pub mod plugin_service_routing;
 
 pub use plugin_namespace::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 pub use plugin_namespace::find_plugin_manifest_path;
+pub use plugin_namespace::plugin_namespace_for_root_uri;
 pub use plugin_namespace::plugin_namespace_for_skill_path;
+pub use plugin_namespace::plugin_namespace_for_skill_uri;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginSkillRoot {

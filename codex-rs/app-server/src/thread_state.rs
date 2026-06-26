@@ -10,6 +10,8 @@ use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
+#[cfg(test)]
+use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::state_db::StateDbHandle;
@@ -241,7 +243,7 @@ mod tests {
                     developer_instructions: None,
                 },
             },
-            multi_agent_mode: Default::default(),
+            multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
             personality: None,
         }
     }

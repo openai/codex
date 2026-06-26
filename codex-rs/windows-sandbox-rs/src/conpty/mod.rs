@@ -11,6 +11,7 @@ use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
+use anyhow::Context;
 use anyhow::Result;
 use codex_utils_pty::PsuedoCon;
 use codex_utils_pty::RawConPty;
@@ -145,14 +146,15 @@ pub fn spawn_conpty_process_as_user(
     };
     if ok == 0 {
         let err = unsafe { GetLastError() } as i32;
-        return Err(anyhow::anyhow!(
+        let message = format!(
             "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={}",
             err,
             format_last_error(err),
             cwd.display(),
             cmdline_str,
             env_block.len()
-        ));
+        );
+        return Err(std::io::Error::from_raw_os_error(err)).context(message);
     }
     Ok((pi, conpty))
 }

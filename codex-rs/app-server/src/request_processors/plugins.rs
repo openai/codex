@@ -24,6 +24,7 @@ use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::auth::AuthMode as DomainAuthMode;
 use codex_rmcp_client::perform_oauth_login_silent;
 
 #[derive(Clone)]
@@ -574,7 +575,7 @@ impl PluginRequestProcessor {
         let include_global_remote =
             !explicit_marketplace_kinds && config.features.enabled(Feature::RemotePlugin);
         let use_remote_global_catalog =
-            include_global_remote && auth_mode.is_some_and(AuthMode::uses_codex_backend);
+            include_global_remote && auth_mode.is_some_and(DomainAuthMode::uses_codex_backend);
         let remote_plugin_service_config = remote_plugin_service_config(&config);
         let refresh_global_remote_catalog_cache = use_remote_global_catalog
             && codex_core_plugins::remote::has_cached_global_remote_plugin_catalog(
@@ -1437,7 +1438,10 @@ impl PluginRequestProcessor {
             marketplace_path,
         };
 
-        let result = match plugins_manager.install_plugin(request).await {
+        let result = match plugins_manager
+            .install_plugin(&config.config_layer_stack, request)
+            .await
+        {
             Ok(result) => result,
             Err(err) => {
                 warn!(
@@ -1866,6 +1870,7 @@ impl PluginRequestProcessor {
                 let notification = ServerNotification::McpServerOauthLoginCompleted(
                     McpServerOauthLoginCompletedNotification {
                         name: notification_name,
+                        thread_id: None,
                         success,
                         error,
                     },
@@ -2139,7 +2144,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
     PluginSummary {
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
-        local_version: None,
+        local_version: summary.local_version,
         name: summary.name,
         share_context: summary
             .share_context

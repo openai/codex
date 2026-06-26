@@ -7,6 +7,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -167,6 +168,7 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context);
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let mut items = session
         .build_initial_context_with_world_state(&turn_context, &world_state)
@@ -239,6 +241,46 @@ fn fork_turn_positions_use_inter_agent_delivery_metadata() {
     ];
 
     assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 3, 5]);
+}
+
+#[test]
+fn fork_turn_positions_use_canonical_agent_messages_and_delivery_metadata() {
+    let queued = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "queued during user turn".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let triggered = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "follow-up task".to_string(),
+        /*trigger_turn*/ true,
+    );
+    let mut rollout = vec![
+        RolloutItem::ResponseItem(user_msg("user task")),
+        RolloutItem::InterAgentCommunicationMetadata {
+            trigger_turn: false,
+        },
+        RolloutItem::ResponseItem(queued.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("first answer")),
+        RolloutItem::InterAgentCommunicationMetadata { trigger_turn: true },
+        RolloutItem::ResponseItem(triggered.to_model_input_item()),
+        RolloutItem::ResponseItem(assistant_msg("second answer")),
+        RolloutItem::ResponseItem(user_msg("next user task")),
+    ];
+
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 4, 7]);
+
+    rollout.insert(
+        7,
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    );
+    assert_eq!(fork_turn_positions_in_rollout(&rollout), vec![0, 8]);
 }
 
 #[test]

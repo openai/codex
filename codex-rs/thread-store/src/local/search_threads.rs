@@ -98,7 +98,7 @@ pub(super) async fn search_threads(
         cwd_filters: None,
         archived: params.archived,
         search_term: None,
-        parent_thread_id: None,
+        relation_filter: None,
         use_state_db_only: state_db.is_some(),
     };
     let mut remaining_rollouts = matching_rollouts;

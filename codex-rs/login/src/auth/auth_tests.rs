@@ -2,8 +2,8 @@ use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::protocol::SessionSource;
@@ -162,7 +162,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
     save_auth(
         codex_home.path(),
         &AuthDotJson {
-            auth_mode: Some(ApiAuthMode::AgentIdentity),
+            auth_mode: Some(AuthMode::AgentIdentity),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -584,7 +584,7 @@ async fn chatgpt_auth_registration_retry_exhaustion_is_fallback_eligible() -> an
         .await
         .expect_err("retry exhaustion should return an error");
 
-    assert!(AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_some());
     assert!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123")
             .is_none()
@@ -648,7 +648,7 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
         .await
         .expect_err("task retry exhaustion should return an error");
 
-    assert!(AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_some());
     record.task_id = None;
     assert_eq!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123"),
@@ -701,7 +701,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
         .await
         .expect_err("hard registration failure should return an error");
 
-    assert!(!AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_none());
     assert!(
         auth.stored_managed_chatgpt_agent_identity_record("account-123")
             .is_none()
@@ -742,7 +742,7 @@ async fn agent_identity_jwt_task_registration_retry_exhaustion_is_strict() -> an
     .await
     .expect_err("agent identity jwt task retry exhaustion should fail");
 
-    assert!(!AgentIdentityAuthError::is_bootstrap_unavailable(&err));
+    assert!(AgentIdentityAuthError::bootstrap_unavailable(&err).is_none());
     Ok(())
 }
 
@@ -897,7 +897,7 @@ async fn loads_api_key_from_auth_json() {
 fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {
-        auth_mode: Some(ApiAuthMode::ApiKey),
+        auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
@@ -1045,7 +1045,7 @@ async fn external_bearer_only_auth_manager_uses_cached_provider_token() {
     assert_eq!(first.as_deref(), Some("provider-token"));
     assert_eq!(second.as_deref(), Some("provider-token"));
     assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
-    assert_eq!(manager.get_api_auth_mode(), Some(ApiAuthMode::ApiKey));
+    assert_eq!(manager.get_api_auth_mode(), Some(AuthMode::ApiKey));
 }
 
 #[tokio::test]
@@ -1822,7 +1822,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
     save_auth(
         codex_home.path(),
         &AuthDotJson {
-            auth_mode: Some(ApiAuthMode::AgentIdentity),
+            auth_mode: Some(AuthMode::AgentIdentity),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,

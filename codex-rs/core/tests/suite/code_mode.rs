@@ -395,6 +395,7 @@ async fn run_code_mode_turn_with_rmcp_config(
         servers.insert(
             "rmcp".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
@@ -856,7 +857,7 @@ text(JSON.stringify(result));
     assert_eq!(
         parsed,
         serde_json::json!({
-            "tokens_left": 9500,
+            "tokens_left": 9000,
         })
     );
 
@@ -883,6 +884,7 @@ text(JSON.stringify(result));
             config.current_time_reminder = Some(CurrentTimeReminderConfig {
                 reminder_interval_seconds: 3_000,
                 clock_source: CurrentTimeSource::System,
+                ..CurrentTimeReminderConfig::default()
             });
         },
     )

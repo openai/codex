@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::HttpClient;
+use codex_exec_server::ReqwestHttpClient;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
-
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -82,6 +83,20 @@ impl McpRuntimeContext {
             config.environment_id
         ))
     }
+
+    /// Resolves the HTTP capability owned by the server's configured environment.
+    pub fn resolve_http_client(
+        &self,
+        server_name: &str,
+        config: &codex_config::McpServerConfig,
+    ) -> Result<Arc<dyn HttpClient>, String> {
+        Ok(self
+            .resolve_server_environment(server_name, config)?
+            .map_or_else(
+                || Arc::new(ReqwestHttpClient) as Arc<dyn HttpClient>,
+                |environment| environment.get_http_client(),
+            ))
+    }
 }
 
 pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
@@ -105,6 +120,7 @@ mod tests {
 
     fn stdio_server(environment_id: &str) -> McpServerConfig {
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: Vec::new(),
@@ -131,6 +147,7 @@ mod tests {
 
     fn http_server(environment_id: &str) -> McpServerConfig {
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "http://127.0.0.1:1".to_string(),
                 bearer_token_env_var: None,
@@ -223,6 +240,36 @@ mod tests {
             };
             assert!(resolved_runtime.is_some());
         }
+    }
+
+    #[tokio::test]
+    async fn remote_stdio_accepts_foreign_absolute_cwd() {
+        let runtime_context = McpRuntimeContext::new(
+            Arc::new(
+                EnvironmentManager::create_for_tests(
+                    Some("ws://127.0.0.1:8765".to_string()),
+                    /*local_runtime_paths*/ None,
+                )
+                .await,
+            ),
+            PathBuf::from("/tmp"),
+        );
+        let mut remote_stdio = stdio_server("remote");
+        let McpServerTransportConfig::Stdio { cwd, .. } = &mut remote_stdio.transport else {
+            unreachable!("stdio helper should build stdio transport");
+        };
+        *cwd = Some(
+            PathUri::parse("file:///C:/plugins/demo")
+                .expect("foreign cwd URI")
+                .into(),
+        );
+
+        let resolved_runtime =
+            match runtime_context.resolve_server_environment("stdio", &remote_stdio) {
+                Ok(resolved_runtime) => resolved_runtime,
+                Err(error) => panic!("foreign cwd should resolve: {error}"),
+            };
+        assert!(resolved_runtime.is_some());
     }
 
     #[tokio::test]

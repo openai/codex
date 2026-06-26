@@ -49,8 +49,10 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         model_provider: Some("openai".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        selected_capability_roots: Vec::new(),
         memory_mode: None,
         multi_agent_version: None,
+        context_window: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
@@ -105,8 +107,10 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         model_provider: Some("openai".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        selected_capability_roots: Vec::new(),
         memory_mode: None,
         multi_agent_version: None,
+        context_window: None,
     };
     let polluted_meta = SessionMeta {
         memory_mode: Some("polluted".to_string()),
@@ -373,8 +377,10 @@ fn write_rollout_in_sessions_with_cwd(
         model_provider: Some("test-provider".to_string()),
         base_instructions: None,
         dynamic_tools: None,
+        selected_capability_roots: Vec::new(),
         memory_mode: None,
         multi_agent_version: None,
+        context_window: None,
     };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,

@@ -195,6 +195,8 @@ pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;
 #[cfg(target_os = "windows")]
+pub use ipc_framed::ErrorStage;
+#[cfg(target_os = "windows")]
 pub use ipc_framed::ExitPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::FramedMessage;

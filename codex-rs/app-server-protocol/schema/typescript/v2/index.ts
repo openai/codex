@@ -238,6 +238,7 @@ export type { McpServerOauthLoginCompletedNotification } from "./McpServerOauthL
 export type { McpServerOauthLoginParams } from "./McpServerOauthLoginParams";
 export type { McpServerOauthLoginResponse } from "./McpServerOauthLoginResponse";
 export type { McpServerRefreshResponse } from "./McpServerRefreshResponse";
+export type { McpServerStartupFailureReason } from "./McpServerStartupFailureReason";
 export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";
 export type { McpServerStatusDetail } from "./McpServerStatusDetail";
@@ -363,6 +364,7 @@ export type { SkillDependencies } from "./SkillDependencies";
 export type { SkillErrorInfo } from "./SkillErrorInfo";
 export type { SkillInterface } from "./SkillInterface";
 export type { SkillMetadata } from "./SkillMetadata";
+export type { SkillMigration } from "./SkillMigration";
 export type { SkillScope } from "./SkillScope";
 export type { SkillSummary } from "./SkillSummary";
 export type { SkillToolDependency } from "./SkillToolDependency";

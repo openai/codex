@@ -35,7 +35,7 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         prefix_mcp_tool_names: true,
         client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
-        plugin_capability_summaries: Vec::new(),
+        connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
     }
 }
 
@@ -138,25 +138,26 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
         ),
     ));
     config.mcp_server_catalog = catalog.build();
-    config.plugin_capability_summaries = vec![
-        PluginCapabilitySummary {
-            config_name: "alpha@test".to_string(),
-            display_name: "alpha-plugin".to_string(),
-            app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
-            mcp_server_names: vec!["alpha".to_string()],
-            ..PluginCapabilitySummary::default()
-        },
-        PluginCapabilitySummary {
-            config_name: "beta@test".to_string(),
-            display_name: "beta-plugin".to_string(),
-            app_connector_ids: vec![
-                AppConnectorId("connector_example".to_string()),
-                AppConnectorId("connector_gmail".to_string()),
-            ],
-            mcp_server_names: vec!["beta".to_string()],
-            ..PluginCapabilitySummary::default()
-        },
-    ];
+    config.connector_snapshot =
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(&[
+            PluginCapabilitySummary {
+                config_name: "alpha@test".to_string(),
+                display_name: "alpha-plugin".to_string(),
+                app_connector_ids: vec![AppConnectorId("connector_example".to_string())],
+                mcp_server_names: vec!["alpha".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+            PluginCapabilitySummary {
+                config_name: "beta@test".to_string(),
+                display_name: "beta-plugin".to_string(),
+                app_connector_ids: vec![
+                    AppConnectorId("connector_example".to_string()),
+                    AppConnectorId("connector_gmail".to_string()),
+                ],
+                mcp_server_names: vec!["beta".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+        ]);
     let provenance = tool_plugin_provenance(&config);
 
     assert_eq!(
@@ -208,12 +209,15 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
         ),
     ));
     config.mcp_server_catalog = catalog.build();
-    config.plugin_capability_summaries = vec![PluginCapabilitySummary {
-        config_name: "shared-plugin-id".to_string(),
-        display_name: "Local GitHub".to_string(),
-        mcp_server_names: vec!["github".to_string()],
-        ..PluginCapabilitySummary::default()
-    }];
+    config.connector_snapshot =
+        codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(&[
+            PluginCapabilitySummary {
+                config_name: "shared-plugin-id".to_string(),
+                display_name: "Local GitHub".to_string(),
+                mcp_server_names: vec!["github".to_string()],
+                ..PluginCapabilitySummary::default()
+            },
+        ]);
 
     let provenance = tool_plugin_provenance(&config);
 
@@ -275,6 +279,7 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
     let config = mcp_server_config_for_url(
         codex_apps_mcp_url_for_base_url("https://chatgpt.com"),
         Some("tpp"),
+        McpServerAuth::ChatGpt,
         /*preview_enabled*/ false,
     );
 
@@ -302,11 +307,13 @@ fn built_in_plugin_service_mcp_config_only_adds_preview_cookie_when_enabled() {
     let disabled = mcp_server_config_for_url(
         "https://chatgpt.com/backend-api/ps/mcp".to_string(),
         /*apps_mcp_product_sku*/ None,
+        McpServerAuth::ChatGpt,
         /*preview_enabled*/ false,
     );
     let enabled = mcp_server_config_for_url(
         "https://chatgpt.com/backend-api/ps/mcp".to_string(),
         /*apps_mcp_product_sku*/ None,
+        McpServerAuth::ChatGpt,
         /*preview_enabled*/ true,
     );
 
@@ -326,6 +333,7 @@ fn built_in_plugin_service_mcp_config_only_adds_preview_cookie_when_enabled() {
     );
 
     let unrelated_server = McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: "https://third-party.example/mcp".to_string(),
             bearer_token_env_var: None,
@@ -361,6 +369,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     catalog.register(McpServerRegistration::from_config(
         "sample".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://user.example/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -386,6 +395,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     catalog.register(McpServerRegistration::from_config(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://docs.example/mcp".to_string(),
                 bearer_token_env_var: None,

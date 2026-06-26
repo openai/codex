@@ -1151,7 +1151,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .get_or_insert_with(|| rollout_line.timestamp.clone());
             }
+            RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             RolloutItem::TurnContext(_) => {
+                // Not included in `head`; skip.
+            }
+            RolloutItem::WorldState(_) => {
                 // Not included in `head`; skip.
             }
             RolloutItem::Compacted(_) => {
@@ -1213,8 +1217,10 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                         head.push(value);
                     }
                 }
-                RolloutItem::Compacted(_)
+                RolloutItem::InterAgentCommunicationMetadata { .. }
+                | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
+                | RolloutItem::WorldState(_)
                 | RolloutItem::EventMsg(_) => {}
             }
         }

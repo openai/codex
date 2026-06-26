@@ -2,8 +2,8 @@ use super::cache::ModelsCacheManager;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
-use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
@@ -144,11 +144,13 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
-    /// If `model` is provided, returns it directly. Otherwise selects the default based on
-    /// auth mode and available models.
+    /// If `model` is provided, preserves it unless the implementation supports and the policy
+    /// allows provider fallback. Otherwise selects the default based on auth mode and available
+    /// models.
     fn get_default_model<'a>(
         &'a self,
         model: &'a Option<String>,
+        allow_provider_model_fallback: bool,
         refresh_strategy: RefreshStrategy,
     ) -> ModelsManagerFuture<'a, String> {
         Box::pin(
@@ -161,6 +163,7 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
             .instrument(tracing::info_span!(
                 "get_default_model",
                 model.provided = model.is_some(),
+                allow_provider_model_fallback,
                 refresh_strategy = %refresh_strategy
             )),
         )
@@ -408,6 +411,39 @@ impl OpenAiModelsManager {
 }
 
 impl ModelsManager for StaticModelsManager {
+    fn get_default_model<'a>(
+        &'a self,
+        model: &'a Option<String>,
+        allow_provider_model_fallback: bool,
+        refresh_strategy: RefreshStrategy,
+    ) -> ModelsManagerFuture<'a, String> {
+        Box::pin(
+            async move {
+                let available_models = self.list_models(refresh_strategy).await;
+                let requested_model = model.as_deref();
+
+                if allow_provider_model_fallback {
+                    if requested_model_is_available(requested_model, &available_models)
+                        && let Some(requested_model) = requested_model
+                    {
+                        return requested_model.to_string();
+                    }
+                    return default_model_from_available(available_models);
+                }
+
+                model
+                    .clone()
+                    .unwrap_or_else(|| default_model_from_available(available_models))
+            }
+            .instrument(tracing::info_span!(
+                "get_default_model",
+                model.provided = model.is_some(),
+                allow_provider_model_fallback,
+                refresh_strategy = %refresh_strategy
+            )),
+        )
+    }
+
     fn raw_model_catalog(
         &self,
         _refresh_strategy: RefreshStrategy,
@@ -451,6 +487,17 @@ fn default_model_from_available(available: Vec<ModelPreset>) -> String {
         .or_else(|| available.first())
         .map(|model| model.model.clone())
         .unwrap_or_default()
+}
+
+fn requested_model_is_available(
+    requested_model: Option<&str>,
+    available_models: &[ModelPreset],
+) -> bool {
+    requested_model.is_some_and(|requested_model| {
+        available_models
+            .iter()
+            .any(|available_model| available_model.model == requested_model)
+    })
 }
 
 fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {

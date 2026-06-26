@@ -1,10 +1,11 @@
 use codex_config::HooksFile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
+use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
-use std::path::Component;
 use std::path::Path;
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
@@ -15,6 +16,8 @@ pub type PluginManifestInterface = codex_plugin::manifest::PluginManifestInterfa
 pub type PluginManifestMcpServers =
     codex_plugin::manifest::PluginManifestMcpServers<AbsolutePathBuf>;
 pub type PluginManifestPaths = codex_plugin::manifest::PluginManifestPaths<AbsolutePathBuf>;
+
+pub(crate) type UriPluginManifest = codex_plugin::manifest::PluginManifest<PathUri>;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +144,19 @@ pub(crate) fn parse_plugin_manifest(
     manifest_path: &Path,
     contents: &str,
 ) -> Result<PluginManifest, serde_json::Error> {
+    let plugin_root_uri =
+        PathUri::from_host_native_path(plugin_root).map_err(serde_json::Error::io)?;
+    let manifest_path_uri =
+        PathUri::from_host_native_path(manifest_path).map_err(serde_json::Error::io)?;
+    parse_plugin_manifest_uri(&plugin_root_uri, &manifest_path_uri, contents)?
+        .try_map_resources(|path| path.to_abs_path().map_err(serde_json::Error::io))
+}
+
+pub(crate) fn parse_plugin_manifest_uri(
+    plugin_root: &PathUri,
+    manifest_path: &PathUri,
+    contents: &str,
+) -> Result<UriPluginManifest, serde_json::Error> {
     let RawPluginManifest {
         name: raw_name,
         version,
@@ -153,11 +169,10 @@ pub(crate) fn parse_plugin_manifest(
         interface,
     } = serde_json::from_str::<RawPluginManifest>(contents)?;
     let name = plugin_root
-        .file_name()
-        .and_then(|entry| entry.to_str())
+        .basename()
         .filter(|_| raw_name.trim().is_empty())
-        .unwrap_or(&raw_name)
-        .to_string();
+        .unwrap_or(raw_name);
+    let manifest_path_for_warning = manifest_path.to_string();
     let version = version.and_then(|version| {
         let version = version.trim();
         (!version.is_empty()).then(|| version.to_string())
@@ -181,7 +196,7 @@ pub(crate) fn parse_plugin_manifest(
             screenshots,
         } = interface;
 
-        let interface = PluginManifestInterface {
+        let interface = codex_plugin::manifest::PluginManifestInterface {
             display_name,
             short_description,
             long_description,
@@ -191,7 +206,10 @@ pub(crate) fn parse_plugin_manifest(
             website_url,
             privacy_policy_url,
             terms_of_service_url,
-            default_prompt: resolve_default_prompts(manifest_path, default_prompt.as_ref()),
+            default_prompt: resolve_default_prompts(
+                &manifest_path_for_warning,
+                default_prompt.as_ref(),
+            ),
             brand_color,
             composer_icon: resolve_interface_asset_path(
                 plugin_root,
@@ -234,12 +252,12 @@ pub(crate) fn parse_plugin_manifest(
 
         has_fields.then_some(interface)
     });
-    Ok(PluginManifest {
+    Ok(codex_plugin::manifest::PluginManifest {
         name,
         version,
         description,
         keywords,
-        paths: PluginManifestPaths {
+        paths: codex_plugin::manifest::PluginManifestPaths {
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
             apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
@@ -250,25 +268,28 @@ pub(crate) fn parse_plugin_manifest(
 }
 
 fn resolve_manifest_hooks(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     hooks: Option<RawPluginManifestHooks>,
-) -> Option<PluginManifestHooks> {
+) -> Option<codex_plugin::manifest::PluginManifestHooks<PathUri>> {
     match hooks? {
         RawPluginManifestHooks::Path(path) => {
             resolve_manifest_path(plugin_root, "hooks", Some(&path))
-                .map(|path| PluginManifestHooks::Paths(vec![path]))
+                .map(|path| codex_plugin::manifest::PluginManifestHooks::Paths(vec![path]))
         }
         RawPluginManifestHooks::Paths(paths) => {
             let hooks = paths
                 .iter()
                 .filter_map(|path| resolve_manifest_path(plugin_root, "hooks", Some(path)))
                 .collect::<Vec<_>>();
-            (!hooks.is_empty()).then_some(PluginManifestHooks::Paths(hooks))
+            (!hooks.is_empty()).then_some(codex_plugin::manifest::PluginManifestHooks::Paths(hooks))
         }
-        RawPluginManifestHooks::Inline(hooks) => Some(PluginManifestHooks::Inline(vec![hooks])),
-        RawPluginManifestHooks::InlineList(hooks) => {
-            (!hooks.is_empty()).then_some(PluginManifestHooks::Inline(hooks))
+        RawPluginManifestHooks::Inline(hooks) => {
+            Some(codex_plugin::manifest::PluginManifestHooks::Inline(vec![
+                hooks,
+            ]))
         }
+        RawPluginManifestHooks::InlineList(hooks) => (!hooks.is_empty())
+            .then_some(codex_plugin::manifest::PluginManifestHooks::Inline(hooks)),
         RawPluginManifestHooks::Invalid(value) => {
             tracing::warn!(
                 "ignoring hooks: expected a string, string array, object, or object array; found {}",
@@ -280,16 +301,18 @@ fn resolve_manifest_hooks(
 }
 
 fn resolve_manifest_mcp_servers(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     mcp_servers: Option<RawPluginManifestMcpServers>,
-) -> Option<PluginManifestMcpServers> {
+) -> Option<codex_plugin::manifest::PluginManifestMcpServers<PathUri>> {
     match mcp_servers? {
         RawPluginManifestMcpServers::Path(path) => {
             resolve_manifest_path(plugin_root, "mcpServers", Some(&path))
-                .map(PluginManifestMcpServers::Path)
+                .map(codex_plugin::manifest::PluginManifestMcpServers::Path)
         }
         RawPluginManifestMcpServers::Object(servers) => match serde_json::to_string(&servers) {
-            Ok(servers) => Some(PluginManifestMcpServers::Object(servers)),
+            Ok(servers) => Some(codex_plugin::manifest::PluginManifestMcpServers::Object(
+                servers,
+            )),
             Err(err) => {
                 tracing::warn!("ignoring mcpServers: failed to serialize object: {err}");
                 None
@@ -306,15 +329,15 @@ fn resolve_manifest_mcp_servers(
 }
 
 fn resolve_interface_asset_path(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     field: &'static str,
     path: Option<&str>,
-) -> Option<AbsolutePathBuf> {
+) -> Option<PathUri> {
     resolve_manifest_path(plugin_root, field, path)
 }
 
 fn resolve_default_prompts(
-    manifest_path: &Path,
+    manifest_path: &str,
     value: Option<&RawPluginManifestDefaultPrompt>,
 ) -> Option<Vec<String>> {
     match value? {
@@ -370,7 +393,7 @@ fn resolve_default_prompts(
     }
 }
 
-fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -> Option<String> {
+fn resolve_default_prompt_str(manifest_path: &str, field: &str, prompt: &str) -> Option<String> {
     let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     if prompt.is_empty() {
         warn_invalid_default_prompt(manifest_path, field, "prompt must not be empty");
@@ -387,11 +410,8 @@ fn resolve_default_prompt_str(manifest_path: &Path, field: &str, prompt: &str) -
     Some(prompt)
 }
 
-fn warn_invalid_default_prompt(manifest_path: &Path, field: &str, message: &str) {
-    tracing::warn!(
-        path = %manifest_path.display(),
-        "ignoring {field}: {message}"
-    );
+fn warn_invalid_default_prompt(manifest_path: &str, field: &str, message: &str) {
+    tracing::warn!(path = %manifest_path, "ignoring {field}: {message}");
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
@@ -406,10 +426,10 @@ fn json_value_type(value: &JsonValue) -> &'static str {
 }
 
 fn resolve_manifest_paths(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     field: &'static str,
     paths: Option<&RawPluginManifestPaths>,
-) -> Vec<AbsolutePathBuf> {
+) -> Vec<PathUri> {
     match paths {
         Some(RawPluginManifestPaths::Path(path)) => {
             resolve_manifest_path(plugin_root, field, Some(path))
@@ -432,12 +452,10 @@ fn resolve_manifest_paths(
 }
 
 fn resolve_manifest_path(
-    plugin_root: &Path,
+    plugin_root: &PathUri,
     field: &'static str,
     path: Option<&str>,
-) -> Option<AbsolutePathBuf> {
-    // `plugin.json` paths are required to be relative to the plugin root and we return the
-    // normalized absolute path to the rest of the system.
+) -> Option<PathUri> {
     let path = path?;
     if path.is_empty() {
         return None;
@@ -451,27 +469,40 @@ fn resolve_manifest_path(
         return None;
     }
 
-    let mut normalized = std::path::PathBuf::new();
-    for component in Path::new(relative_path).components() {
-        match component {
-            Component::Normal(component) => normalized.push(component),
-            Component::ParentDir => {
-                tracing::warn!("ignoring {field}: path must not contain '..'");
-                return None;
-            }
-            _ => {
-                tracing::warn!("ignoring {field}: path must stay within the plugin root");
-                return None;
-            }
+    let convention = plugin_root.infer_path_convention();
+    let has_parent_component = match convention {
+        Some(PathConvention::Windows) => relative_path
+            .split(['/', '\\'])
+            .any(|component| component == ".."),
+        Some(PathConvention::Posix) | None => {
+            relative_path.split('/').any(|component| component == "..")
         }
+    };
+    if has_parent_component {
+        tracing::warn!("ignoring {field}: path must not contain '..'");
+        return None;
     }
 
-    AbsolutePathBuf::try_from(plugin_root.join(normalized))
-        .map_err(|err| {
-            tracing::warn!("ignoring {field}: path must resolve to an absolute path: {err}");
-            err
-        })
-        .ok()
+    let has_windows_root = convention == Some(PathConvention::Windows)
+        && (relative_path.starts_with('\\')
+            || matches!(relative_path.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic()));
+    if relative_path.starts_with('/') || has_windows_root {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+
+    let resolved = match plugin_root.join(relative_path) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            tracing::warn!("ignoring {field}: path must resolve under plugin root: {err}");
+            return None;
+        }
+    };
+    if !resolved.starts_with(plugin_root) {
+        tracing::warn!("ignoring {field}: path must stay within the plugin root");
+        return None;
+    }
+    Some(resolved)
 }
 
 #[cfg(test)]
@@ -483,9 +514,15 @@ mod tests {
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
+    use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
+    use codex_plugin::manifest::PluginManifestHooks;
+    use codex_plugin::manifest::PluginManifestInterface;
+    use codex_plugin::manifest::PluginManifestMcpServers;
+    use codex_plugin::manifest::PluginManifestPaths;
     use codex_protocol::capabilities::CapabilityRootLocation;
     use codex_protocol::capabilities::SelectedCapabilityRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -695,6 +732,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn uri_manifest_uses_the_root_path_convention() {
+        let windows_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("Windows plugin root URI");
+        let posix_root =
+            PathUri::parse("file:///plugins/demo-plugin").expect("POSIX plugin root URI");
+        let composer_icon = r"./assets\..\icon.svg";
+
+        assert_eq!(parse_uri_composer_icon(&windows_root, composer_icon), None);
+        assert_eq!(
+            parse_uri_composer_icon(&posix_root, composer_icon),
+            Some(
+                posix_root
+                    .join(r"assets\..\icon.svg")
+                    .expect("composer icon URI")
+            )
+        );
+    }
+
+    fn parse_uri_composer_icon(plugin_root: &PathUri, composer_icon: &str) -> Option<PathUri> {
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let composer_icon_json =
+            serde_json::to_string(composer_icon).expect("serialize composer icon");
+        let contents = format!(
+            r#"{{
+  "name": "demo-plugin",
+  "interface": {{
+    "displayName": "Demo Plugin",
+    "composerIcon": {composer_icon_json}
+  }}
+}}"#
+        );
+        super::parse_plugin_manifest_uri(plugin_root, &manifest_path, &contents)
+            .expect("URI manifest")
+            .interface
+            .and_then(|interface| interface.composer_icon)
+    }
+
     #[tokio::test]
     async fn host_and_executor_sources_parse_the_same_manifest() {
         let temp_dir = tempdir().expect("tempdir");
@@ -707,14 +784,16 @@ mod tests {
     "composerIcon": "./assets/icon.svg"
   }"#,
         );
-        let host_manifest = load_plugin_manifest(&plugin_root).expect("host manifest");
+        let plugin_root =
+            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
         let provider =
             ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
         let selected_root = SelectedCapabilityRoot {
             id: "selected-demo".to_string(),
             location: CapabilityRootLocation::Environment {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                path: plugin_root.to_string_lossy().into_owned(),
+                path: plugin_root_uri.clone(),
             },
         };
 
@@ -723,17 +802,77 @@ mod tests {
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
-        let plugin_root =
-            AbsolutePathBuf::from_absolute_path_checked(plugin_root).expect("absolute plugin root");
+        let manifest_path = plugin_root_uri
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest_contents =
+            fs::read_to_string(plugin_root.join(".codex-plugin/plugin.json")).expect("manifest");
+        let expected_manifest =
+            super::parse_plugin_manifest_uri(&plugin_root_uri, &manifest_path, &manifest_contents)
+                .expect("URI manifest");
         let expected_plugin = ResolvedPlugin::from_environment(
             "selected-demo".to_string(),
             LOCAL_ENVIRONMENT_ID.to_string(),
-            plugin_root.clone(),
-            plugin_root.join(".codex-plugin/plugin.json"),
-            host_manifest,
+            plugin_root_uri,
+            manifest_path,
+            expected_manifest,
         )
         .expect("valid expected descriptor");
 
         assert_eq!(executor_plugin, expected_plugin);
+    }
+
+    #[test]
+    fn uri_manifest_resolves_resources_below_foreign_root() {
+        let plugin_root =
+            PathUri::parse("file:///C:/plugins/demo-plugin").expect("plugin root URI");
+        let manifest_path = plugin_root
+            .join(".codex-plugin/plugin.json")
+            .expect("manifest URI");
+        let manifest = super::parse_plugin_manifest_uri(
+            &plugin_root,
+            &manifest_path,
+            r#"{
+  "name": "demo-plugin",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "apps": "./apps",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Demo Plugin",
+    "composerIcon": "./assets/icon.svg"
+  }
+}"#,
+        )
+        .expect("URI manifest");
+
+        assert_eq!(
+            manifest,
+            GenericPluginManifest {
+                name: "demo-plugin".to_string(),
+                version: None,
+                description: None,
+                keywords: Vec::new(),
+                paths: PluginManifestPaths {
+                    skills: vec![plugin_root.join("skills").expect("skills URI")],
+                    mcp_servers: Some(PluginManifestMcpServers::Path(
+                        plugin_root.join(".mcp.json").expect("MCP URI"),
+                    )),
+                    apps: Some(plugin_root.join("apps").expect("apps URI")),
+                    hooks: Some(PluginManifestHooks::Paths(vec![
+                        plugin_root.join("hooks.json").expect("hooks URI"),
+                    ])),
+                },
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("Demo Plugin".to_string()),
+                    composer_icon: Some(
+                        plugin_root
+                            .join("assets/icon.svg")
+                            .expect("composer icon URI"),
+                    ),
+                    ..PluginManifestInterface::default()
+                }),
+            }
+        );
     }
 }

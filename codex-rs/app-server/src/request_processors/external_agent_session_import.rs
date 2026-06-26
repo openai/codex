@@ -184,7 +184,11 @@ impl ExternalAgentSessionImporter {
             .map_err(|err| format!("failed to load imported session config: {err}"))?;
         let models_manager = self.thread_manager.get_models_manager();
         let model = models_manager
-            .get_default_model(&config.model, RefreshStrategy::Offline)
+            .get_default_model(
+                &config.model,
+                /*allow_provider_model_fallback*/ false,
+                RefreshStrategy::Offline,
+            )
             .await;
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
@@ -207,6 +211,7 @@ impl ExternalAgentSessionImporter {
             parent_thread_id: None,
             source: source.clone(),
             thread_source: None,
+            originator: codex_login::default_client::originator().value,
             base_instructions: BaseInstructions {
                 text: config
                     .base_instructions
@@ -214,7 +219,9 @@ impl ExternalAgentSessionImporter {
                     .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             },
             dynamic_tools: Vec::new(),
+            selected_capability_roots: Vec::new(),
             multi_agent_version: Some(MultiAgentVersion::V1),
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(cwd.clone()),
                 model_provider: model_provider.clone(),
