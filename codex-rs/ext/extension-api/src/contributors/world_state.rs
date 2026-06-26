@@ -75,6 +75,7 @@ pub struct WorldStateSectionContribution {
     snapshot: Value,
     render_diff: Arc<RenderDiff>,
     matches_legacy_fragment: Arc<LegacyFragmentMatcher>,
+    matches_retained_fragment: Option<Arc<LegacyFragmentMatcher>>,
 }
 
 impl WorldStateSectionContribution {
@@ -93,6 +94,7 @@ impl WorldStateSectionContribution {
             snapshot,
             render_diff: Arc::new(render_diff),
             matches_legacy_fragment: Arc::new(|_, _| false),
+            matches_retained_fragment: None,
         }
     }
 
@@ -101,6 +103,15 @@ impl WorldStateSectionContribution {
         matcher: impl Fn(&str, &str) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.matches_legacy_fragment = Arc::new(matcher);
+        self
+    }
+
+    /// Requires a matching model-visible fragment whenever a persisted snapshot is reused.
+    pub fn with_retained_fragment_matcher(
+        mut self,
+        matcher: impl Fn(&str, &str) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.matches_retained_fragment = Some(Arc::new(matcher));
         self
     }
 
@@ -121,5 +132,15 @@ impl WorldStateSectionContribution {
 
     pub fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
         (self.matches_legacy_fragment)(role, text)
+    }
+
+    pub fn has_retained_fragment_matcher(&self) -> bool {
+        self.matches_retained_fragment.is_some()
+    }
+
+    pub fn matches_retained_fragment(&self, role: &str, text: &str) -> bool {
+        self.matches_retained_fragment
+            .as_ref()
+            .is_some_and(|matcher| matcher(role, text))
     }
 }
