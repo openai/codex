@@ -20,7 +20,6 @@ use crate::CreateThreadParams;
 use crate::GitInfoPatch;
 use crate::ResumeThreadParams;
 use crate::ThreadMetadataPatch;
-use crate::types::canonical_history_mode_from_rollout_items;
 
 const IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER: &str = "[Image]";
 #[cfg(not(test))]
@@ -77,7 +76,6 @@ impl ThreadMetadataSync {
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             git_info: git_info.map(git_info_patch_from_observation),
             memory_mode: Some(params.metadata.memory_mode),
-            history_mode: Some(params.history_mode),
             ..Default::default()
         };
         Self {
@@ -199,10 +197,7 @@ impl ThreadMetadataSync {
     }
 
     fn observe_resume_history(&mut self, items: &[RolloutItem]) -> Option<ThreadMetadataPatch> {
-        let mut update = self.observe_items_with_update(items, ThreadMetadataPatch::default())?;
-        // Later SessionMeta lines do not redefine the canonical history_mode.
-        update.history_mode = Some(canonical_history_mode_from_rollout_items(items));
-        Some(update)
+        self.observe_items_with_update(items, ThreadMetadataPatch::default())
     }
 
     fn observe_items_with_update(
@@ -380,7 +375,6 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.first_user_message.is_some()
         || update.git_info.is_some()
         || update.memory_mode.is_some()
-        || update.history_mode.is_some()
 }
 
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
@@ -400,7 +394,6 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
-    use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
@@ -411,12 +404,9 @@ mod tests {
     #[test]
     fn resume_history_keeps_derived_metadata_pending_until_applied() {
         let thread_id = ThreadId::new();
-        let mut canonical_session_meta = session_meta(thread_id);
-        canonical_session_meta.meta.history_mode = ThreadHistoryMode::Paginated;
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(
             thread_id,
             vec![
-                RolloutItem::SessionMeta(canonical_session_meta),
                 RolloutItem::SessionMeta(session_meta(thread_id)),
                 RolloutItem::EventMsg(EventMsg::UserMessage(user_message("hello metadata"))),
             ],
@@ -436,10 +426,6 @@ mod tests {
         assert_eq!(
             update.patch.first_user_message.as_deref(),
             Some("hello metadata")
-        );
-        assert_eq!(
-            update.patch.history_mode,
-            Some(ThreadHistoryMode::Paginated)
         );
         assert_eq!(update.patch.updated_at, None);
         assert!(

@@ -225,31 +225,27 @@ async fn apply_metadata_update(
                 rollout_path_archived = resolved.archived;
                 rollout_path = Some(resolved.path);
             }
-            let mut metadata = existing.clone().unwrap_or_else(|| {
-                let created_at = patch
-                    .created_at
-                    .or(patch.updated_at)
-                    .unwrap_or_else(Utc::now);
-                let mut builder = ThreadMetadataBuilder::new(
-                    thread_id,
-                    rollout_path.clone().unwrap_or_default(),
-                    created_at,
-                    patch.source.clone().unwrap_or(SessionSource::Unknown),
-                );
-                builder.model_provider = patch.model_provider.clone();
-                builder.history_mode = patch.history_mode.unwrap_or_default();
-                builder.thread_source = patch.thread_source.clone().flatten();
-                builder.agent_nickname = patch.agent_nickname.clone().flatten();
-                builder.agent_role = patch.agent_role.clone().flatten();
-                builder.agent_path = patch.agent_path.clone().flatten();
-                builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
-                builder.cli_version = patch.cli_version.clone();
-                let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
-                if rollout_path_archived {
-                    metadata.archived_at = Some(metadata.updated_at);
+            let mut metadata = match existing.clone() {
+                Some(metadata) => metadata,
+                None => {
+                    let rollout_path =
+                        rollout_path
+                            .as_deref()
+                            .ok_or_else(|| ThreadStoreError::Internal {
+                                message: format!(
+                                    "thread metadata missing rollout path for {thread_id}"
+                                ),
+                            })?;
+                    metadata_for_missing_sqlite_row(
+                        store,
+                        thread_id,
+                        rollout_path,
+                        rollout_path_archived,
+                        &patch,
+                    )
+                    .await?
                 }
-                metadata
-            });
+            };
             if let Some(rollout_path) = rollout_path {
                 metadata.rollout_path = rollout_path;
             }
@@ -284,9 +280,6 @@ async fn apply_metadata_update(
             }
             if let Some(source) = patch.source {
                 metadata.source = enum_to_string(&source);
-            }
-            if let Some(history_mode) = patch.history_mode {
-                metadata.history_mode = history_mode;
             }
             if let Some(thread_source) = patch.thread_source {
                 metadata.thread_source = thread_source;
@@ -389,6 +382,57 @@ async fn apply_metadata_update(
     .await
 }
 
+async fn metadata_for_missing_sqlite_row(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+    rollout_path_archived: bool,
+    patch: &ThreadMetadataPatch,
+) -> ThreadStoreResult<codex_state::ThreadMetadata> {
+    let session_meta =
+        read_session_meta_line(rollout_path)
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!(
+                    "failed to read canonical session metadata for {thread_id}: {err}"
+                ),
+            })?;
+    if session_meta.meta.id != thread_id {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "failed to rebuild thread metadata: rollout session metadata id mismatch: expected {thread_id}, found {}",
+                session_meta.meta.id
+            ),
+        });
+    }
+
+    let created_at = patch
+        .created_at
+        .or(patch.updated_at)
+        .unwrap_or_else(Utc::now);
+    let mut builder = ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path.to_path_buf(),
+        created_at,
+        patch.source.clone().unwrap_or(SessionSource::Unknown),
+    );
+    builder.model_provider = patch.model_provider.clone();
+    // history_mode is immutable thread metadata, so recover it from the canonical SessionMeta
+    // instead of the mutable metadata patch that happened to notice this missing SQLite row.
+    builder.history_mode = session_meta.meta.history_mode;
+    builder.thread_source = patch.thread_source.clone().flatten();
+    builder.agent_nickname = patch.agent_nickname.clone().flatten();
+    builder.agent_role = patch.agent_role.clone().flatten();
+    builder.agent_path = patch.agent_path.clone().flatten();
+    builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
+    builder.cli_version = patch.cli_version.clone();
+    let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
+    if rollout_path_archived {
+        metadata.archived_at = Some(metadata.updated_at);
+    }
+    Ok(metadata)
+}
+
 fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
     if patch.name.is_some() {
         return true;
@@ -431,7 +475,6 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.permission_profile.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
-        || patch.history_mode.is_some()
 }
 
 fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
@@ -1473,6 +1516,51 @@ mod tests {
             .await
             .expect("sqlite metadata read");
         assert!(metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn observed_metadata_rebuilds_history_mode_from_canonical_session_meta() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(317);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T19-15-00",
+            uuid,
+            ThreadHistoryMode::Paginated,
+        )
+        .expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    preview: Some("Paginated preview".to_string()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("update paginated thread without sqlite row");
+
+        assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sqlite metadata read")
+                .expect("sqlite metadata")
+                .history_mode,
+            ThreadHistoryMode::Paginated
+        );
     }
 
     #[tokio::test]
