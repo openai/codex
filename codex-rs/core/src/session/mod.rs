@@ -2729,6 +2729,31 @@ impl Session {
         }
     }
 
+    /// Returns normalized history for a model request. When item IDs are
+    /// enabled, this also assigns IDs to prompt-only items synthesized during
+    /// normalization.
+    pub(crate) async fn prompt_input_from_history(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        let items = self
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        Self::assign_missing_prompt_item_ids(turn_context, items)
+    }
+
+    pub(crate) fn assign_missing_prompt_item_ids(
+        turn_context: &TurnContext,
+        items: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        if turn_context.config.features.enabled(Feature::ItemIds) {
+            Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
+        } else {
+            items
+        }
+    }
+
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
         if items.iter().all(|item| item.id().is_some()) {
             return items;

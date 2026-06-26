@@ -232,6 +232,7 @@ async fn run_remote_compact_task_inner_impl(
 
     let trace_input_history = history.raw_items().to_vec();
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
+    let prompt_input = Session::assign_missing_prompt_item_ids(turn_context.as_ref(), prompt_input);
     let tool_router = built_tools(
         sess.as_ref(),
         step_context.as_ref(),

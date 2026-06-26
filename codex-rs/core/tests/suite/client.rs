@@ -364,6 +364,73 @@ async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn normalized_call_outputs_receive_item_ids() -> anyhow::Result<()> {
+    let function_call_id = "missing-output-call";
+    let thread_id = ThreadId::default();
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    parent_thread_id: None,
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: Some("fc_existing".to_string()),
+                name: "do_it".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: function_call_id.to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+    ];
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir.path().join("normalized-call-output-item-id.jsonl");
+    let mut file = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let test = builder.resume(&server, codex_home, session_path).await?;
+
+    test.submit_turn("after resume").await?;
+
+    let output = response_mock
+        .single_request()
+        .function_call_output(function_call_id);
+    let output_id = output
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .expect("normalized output should have an item ID");
+    assert!(output_id.starts_with("fco_"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(
