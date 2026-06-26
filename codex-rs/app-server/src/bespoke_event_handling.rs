@@ -6,7 +6,6 @@ use crate::request_processors::populate_thread_turns_from_history;
 use crate::request_processors::thread_from_stored_thread;
 use crate::request_processors::thread_settings_from_core_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
-use crate::thread_state::LegacyItemLifecycle;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -23,7 +22,6 @@ use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
-use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
@@ -91,6 +89,7 @@ use codex_core::ThreadManager;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
@@ -824,55 +823,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 on_request_permissions_response(pending_response, conversation, thread_state).await;
             });
         }
-        EventMsg::DynamicToolCallRequest(request) => {
-            let call_id = request.call_id;
-            let turn_id = request.turn_id;
-            let namespace = request.namespace;
-            let tool = request.tool;
-            let arguments = request.arguments;
-            if !take_legacy_item_suppression(&thread_state, LegacyItemLifecycle::Started, &call_id)
-                .await
-            {
-                let item = ThreadItem::DynamicToolCall {
-                    id: call_id.clone(),
-                    namespace: namespace.clone(),
-                    tool: tool.clone(),
-                    arguments: arguments.clone(),
-                    status: DynamicToolCallStatus::InProgress,
-                    content_items: None,
-                    success: None,
-                    duration_ms: None,
-                };
-                let notification = ItemStartedNotification {
-                    thread_id: conversation_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    started_at_ms: request.started_at_ms,
-                    item,
-                };
-                outgoing
-                    .send_server_notification(ServerNotification::ItemStarted(notification))
-                    .await;
-            }
-            let params = DynamicToolCallParams {
-                thread_id: conversation_id.to_string(),
-                turn_id: turn_id.clone(),
-                call_id: call_id.clone(),
-                namespace,
-                tool: tool.clone(),
-                arguments: arguments.clone(),
-            };
-            let (_pending_request_id, rx) = outgoing
-                .send_request(ServerRequestPayload::DynamicToolCall(params))
-                .await;
-            tokio::spawn(async move {
-                crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
-            });
-        }
-        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
-            // Deprecated MCP tool-call events are still fanned out for legacy clients.
-            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
-        }
-        msg @ (EventMsg::DynamicToolCallResponse(_)
+        EventMsg::DynamicToolCallRequest(_)
+        | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionBegin(_)
@@ -880,16 +832,19 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
+        | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_)) => {
-            maybe_send_legacy_item_notification(
-                msg,
-                &conversation_id,
-                &event_turn_id,
-                &outgoing,
-                &thread_state,
-            )
-            .await;
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::SubAgentActivity(_)
+        | EventMsg::ExecCommandBegin(_)
+        | EventMsg::ExecCommandEnd(_) => {
+            // Deprecated item lifecycle events are still fanned out for legacy clients.
+            // App-server v2 receives canonical TurnItem lifecycle instead, and dispatches
+            // dynamic tool requests from canonical DynamicToolCall starts.
+        }
+        EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
+            // Deprecated MCP tool-call events are still fanned out for legacy clients.
+            // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
         }
         msg @ (EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
@@ -902,45 +857,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &event_turn_id,
             );
             outgoing.send_server_notification(notification).await;
-        }
-        EventMsg::SubAgentActivity(activity) => {
-            if activity.kind == SubAgentActivityKind::Interrupted
-                && thread_manager
-                    .get_thread(activity.agent_thread_id)
-                    .await
-                    .is_err()
-            {
-                thread_watch_manager
-                    .remove_thread(&activity.agent_thread_id.to_string())
-                    .await;
-            }
-            maybe_send_legacy_item_notification(
-                EventMsg::SubAgentActivity(activity),
-                &conversation_id,
-                &event_turn_id,
-                &outgoing,
-                &thread_state,
-            )
-            .await;
-        }
-        EventMsg::CollabCloseEnd(end_event) => {
-            if thread_manager
-                .get_thread(end_event.receiver_thread_id)
-                .await
-                .is_err()
-            {
-                thread_watch_manager
-                    .remove_thread(&end_event.receiver_thread_id.to_string())
-                    .await;
-            }
-            maybe_send_legacy_item_notification(
-                EventMsg::CollabCloseEnd(end_event),
-                &conversation_id,
-                &event_turn_id,
-                &outgoing,
-                &thread_state,
-            )
-            .await;
         }
         EventMsg::ContextCompacted(..) => {
             // Core still fans out this deprecated event for legacy clients;
@@ -1047,16 +963,52 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ItemStarted(event) => {
-            note_canonical_item_started(&thread_state, &event.item).await;
-            let notification = item_event_to_server_notification(
-                EventMsg::ItemStarted(event),
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
+            let should_emit = match &event.item {
+                CoreTurnItem::CommandExecution(item) => thread_state
+                    .lock()
+                    .await
+                    .turn_summary
+                    .command_execution_started
+                    .insert(item.id.clone()),
+                _ => true,
+            };
+            let dynamic_tool_call_params = match &event.item {
+                CoreTurnItem::DynamicToolCall(item) => Some(DynamicToolCallParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id.clone(),
+                    call_id: item.id.clone(),
+                    namespace: item.namespace.clone(),
+                    tool: item.tool.clone(),
+                    arguments: item.arguments.clone(),
+                }),
+                _ => None,
+            };
+            if should_emit {
+                let notification = item_event_to_server_notification(
+                    EventMsg::ItemStarted(event),
+                    &conversation_id.to_string(),
+                    &event_turn_id,
+                );
+                outgoing.send_server_notification(notification).await;
+            }
+            if let Some(params) = dynamic_tool_call_params {
+                let call_id = params.call_id.clone();
+                let (_pending_request_id, rx) = outgoing
+                    .send_request(ServerRequestPayload::DynamicToolCall(params))
+                    .await;
+                tokio::spawn(async move {
+                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                });
+            }
         }
         EventMsg::ItemCompleted(event) => {
-            note_canonical_item_completed(&thread_state, &event.item).await;
+            apply_canonical_item_completed_side_effects(
+                &thread_manager,
+                &thread_watch_manager,
+                &thread_state,
+                &event.item,
+            )
+            .await;
             let notification = item_event_to_server_notification(
                 EventMsg::ItemCompleted(event),
                 &conversation_id.to_string(),
@@ -1140,73 +1092,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             // Core still fans out these deprecated events for legacy clients;
             // v2 clients receive the canonical FileChange item instead.
         }
-        EventMsg::ExecCommandBegin(exec_command_begin_event) => {
-            if matches!(
-                exec_command_begin_event.source,
-                codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
-            ) {
-                // TerminalInteraction is the v2 surface for unified exec
-                // stdin/poll events. Suppress the legacy CommandExecution
-                // item so clients do not render the same wait twice.
-                return;
-            }
-            let item_id = exec_command_begin_event.call_id.clone();
-            let suppress_notification =
-                take_legacy_item_suppression(&thread_state, LegacyItemLifecycle::Started, &item_id)
-                    .await;
-            let first_start = {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .insert(item_id.clone())
-            };
-            if first_start && !suppress_notification {
-                let notification = item_event_to_server_notification(
-                    EventMsg::ExecCommandBegin(exec_command_begin_event),
-                    &conversation_id.to_string(),
-                    &event_turn_id,
-                );
-                outgoing.send_server_notification(notification).await;
-            }
-        }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let notification = item_event_to_server_notification(
                 EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event),
-                &conversation_id.to_string(),
-                &event_turn_id,
-            );
-            outgoing.send_server_notification(notification).await;
-        }
-        EventMsg::ExecCommandEnd(exec_command_end_event) => {
-            let call_id = exec_command_end_event.call_id.clone();
-            let suppress_notification = take_legacy_item_suppression(
-                &thread_state,
-                LegacyItemLifecycle::Completed,
-                &call_id,
-            )
-            .await;
-            {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .remove(&call_id);
-            }
-            if matches!(
-                exec_command_end_event.source,
-                codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
-            ) {
-                // The paired begin event is suppressed above; keep the
-                // completion out of v2 as well so no orphan legacy item is
-                // emitted for unified exec interactions.
-                return;
-            }
-            if suppress_notification {
-                return;
-            }
-            let notification = item_event_to_server_notification(
-                EventMsg::ExecCommandEnd(exec_command_end_event),
                 &conversation_id.to_string(),
                 &event_turn_id,
             );
@@ -1415,119 +1303,49 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
-async fn note_canonical_item_started(thread_state: &Arc<Mutex<ThreadState>>, item: &CoreTurnItem) {
-    let mut state = thread_state.lock().await;
-    let item_id = item.id();
-    match item {
-        CoreTurnItem::CommandExecution(_) => {
-            state
-                .turn_summary
-                .command_execution_started
-                .insert(item_id.clone());
-            state
-                .turn_summary
-                .suppress_next_legacy_item(LegacyItemLifecycle::Started, &item_id);
-        }
-        CoreTurnItem::DynamicToolCall(_) | CoreTurnItem::CollabAgentToolCall(_) => {
-            state
-                .turn_summary
-                .suppress_next_legacy_item(LegacyItemLifecycle::Started, &item_id);
-        }
-        _ => {}
-    }
-}
-
-async fn note_canonical_item_completed(
+async fn apply_canonical_item_completed_side_effects(
+    thread_manager: &Arc<ThreadManager>,
+    thread_watch_manager: &ThreadWatchManager,
     thread_state: &Arc<Mutex<ThreadState>>,
     item: &CoreTurnItem,
 ) {
-    let mut state = thread_state.lock().await;
-    let item_id = item.id();
     match item {
-        CoreTurnItem::CommandExecution(_) => {
-            state
+        CoreTurnItem::CommandExecution(item) => {
+            thread_state
+                .lock()
+                .await
                 .turn_summary
                 .command_execution_started
-                .remove(&item_id);
-            state
-                .turn_summary
-                .suppress_next_legacy_item(LegacyItemLifecycle::Completed, &item_id);
+                .remove(&item.id);
         }
-        CoreTurnItem::DynamicToolCall(_)
-        | CoreTurnItem::CollabAgentToolCall(_)
-        | CoreTurnItem::SubAgentActivity(_) => {
-            state
-                .turn_summary
-                .suppress_next_legacy_item(LegacyItemLifecycle::Completed, &item_id);
+        CoreTurnItem::SubAgentActivity(activity)
+            if activity.kind == SubAgentActivityKind::Interrupted =>
+        {
+            remove_missing_thread_watch(
+                thread_manager,
+                thread_watch_manager,
+                activity.agent_thread_id,
+            )
+            .await;
+        }
+        CoreTurnItem::CollabAgentToolCall(item) if item.tool == CoreCollabAgentTool::CloseAgent => {
+            for thread_id in &item.receiver_thread_ids {
+                remove_missing_thread_watch(thread_manager, thread_watch_manager, *thread_id).await;
+            }
         }
         _ => {}
     }
 }
 
-async fn maybe_send_legacy_item_notification(
-    msg: EventMsg,
-    conversation_id: &ThreadId,
-    event_turn_id: &str,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-    thread_state: &Arc<Mutex<ThreadState>>,
+async fn remove_missing_thread_watch(
+    thread_manager: &Arc<ThreadManager>,
+    thread_watch_manager: &ThreadWatchManager,
+    thread_id: ThreadId,
 ) {
-    let Some((lifecycle, item_id)) = legacy_item_notification_dedupe_key(&msg)
-        .map(|(lifecycle, item_id)| (lifecycle, item_id.to_string()))
-    else {
-        return;
-    };
-    if take_legacy_item_suppression(thread_state, lifecycle, &item_id).await {
-        return;
-    }
-
-    let notification =
-        item_event_to_server_notification(msg, &conversation_id.to_string(), event_turn_id);
-    outgoing.send_server_notification(notification).await;
-}
-
-async fn take_legacy_item_suppression(
-    thread_state: &Arc<Mutex<ThreadState>>,
-    lifecycle: LegacyItemLifecycle,
-    item_id: &str,
-) -> bool {
-    let mut state = thread_state.lock().await;
-    state
-        .turn_summary
-        .take_legacy_item_suppression(lifecycle, item_id)
-}
-
-fn legacy_item_notification_dedupe_key(msg: &EventMsg) -> Option<(LegacyItemLifecycle, &str)> {
-    match msg {
-        EventMsg::DynamicToolCallRequest(event) => {
-            Some((LegacyItemLifecycle::Started, &event.call_id))
-        }
-        EventMsg::DynamicToolCallResponse(event) => {
-            Some((LegacyItemLifecycle::Completed, &event.call_id))
-        }
-        EventMsg::CollabAgentSpawnBegin(event) => {
-            Some((LegacyItemLifecycle::Started, &event.call_id))
-        }
-        EventMsg::CollabAgentSpawnEnd(event) => {
-            Some((LegacyItemLifecycle::Completed, &event.call_id))
-        }
-        EventMsg::CollabAgentInteractionBegin(event) => {
-            Some((LegacyItemLifecycle::Started, &event.call_id))
-        }
-        EventMsg::CollabAgentInteractionEnd(event) => {
-            Some((LegacyItemLifecycle::Completed, &event.call_id))
-        }
-        EventMsg::CollabWaitingBegin(event) => Some((LegacyItemLifecycle::Started, &event.call_id)),
-        EventMsg::CollabWaitingEnd(event) => Some((LegacyItemLifecycle::Completed, &event.call_id)),
-        EventMsg::CollabCloseBegin(event) => Some((LegacyItemLifecycle::Started, &event.call_id)),
-        EventMsg::CollabCloseEnd(event) => Some((LegacyItemLifecycle::Completed, &event.call_id)),
-        EventMsg::CollabResumeBegin(event) => Some((LegacyItemLifecycle::Started, &event.call_id)),
-        EventMsg::CollabResumeEnd(event) => Some((LegacyItemLifecycle::Completed, &event.call_id)),
-        EventMsg::SubAgentActivity(event) => {
-            Some((LegacyItemLifecycle::Completed, &event.event_id))
-        }
-        EventMsg::ExecCommandBegin(event) => Some((LegacyItemLifecycle::Started, &event.call_id)),
-        EventMsg::ExecCommandEnd(event) => Some((LegacyItemLifecycle::Completed, &event.call_id)),
-        _ => None,
+    if thread_manager.get_thread(thread_id).await.is_err() {
+        thread_watch_manager
+            .remove_thread(&thread_id.to_string())
+            .await;
     }
 }
 
@@ -2352,9 +2170,12 @@ mod tests {
     use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_login::CodexAuth;
     use codex_protocol::AgentPath;
+    use codex_protocol::items::DynamicToolCallItem;
+    use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
     use codex_protocol::items::HookPromptFragment;
     use codex_protocol::items::SubAgentActivityItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -2375,11 +2196,11 @@ mod tests {
     use codex_protocol::protocol::GuardianAssessmentEvent;
     use codex_protocol::protocol::GuardianAssessmentStatus;
     use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentActivityEvent;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_protocol::protocol::UserMessageEvent;
@@ -3602,13 +3423,17 @@ mod tests {
         apply_bespoke_event_handling(
             Event {
                 id: "turn-1".to_string(),
-                msg: EventMsg::SubAgentActivity(SubAgentActivityEvent {
-                    event_id: "activity-1".to_string(),
-                    occurred_at_ms: 42,
-                    agent_thread_id: child_thread_id,
-                    agent_path: AgentPath::try_from("/root/worker")
-                        .expect("agent path should parse"),
-                    kind: SubAgentActivityKind::Interrupted,
+                msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: conversation_id,
+                    turn_id: "turn-1".to_string(),
+                    item: CoreTurnItem::SubAgentActivity(SubAgentActivityItem {
+                        id: "activity-1".to_string(),
+                        kind: SubAgentActivityKind::Interrupted,
+                        agent_thread_id: child_thread_id,
+                        agent_path: AgentPath::try_from("/root/worker")
+                            .expect("agent path should parse"),
+                    }),
+                    completed_at_ms: 42,
                 }),
             },
             conversation_id,
@@ -3653,7 +3478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_subagent_activity_suppresses_fanned_out_legacy_notification() -> Result<()> {
+    async fn canonical_dynamic_tool_start_emits_item_and_requests_client() -> Result<()> {
         let codex_home = TempDir::new()?;
         let config = load_default_config_for_test(&codex_home).await;
         let thread_manager = Arc::new(
@@ -3669,13 +3494,6 @@ mod tests {
             thread: conversation,
             ..
         } = thread_manager.start_thread(config).await?;
-        let child_thread_id = ThreadId::new();
-        let activity = SubAgentActivityItem {
-            id: "activity-1".to_string(),
-            kind: SubAgentActivityKind::Interrupted,
-            agent_thread_id: child_thread_id,
-            agent_path: AgentPath::try_from("/root/worker").expect("agent path should parse"),
-        };
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             tx,
@@ -3686,54 +3504,62 @@ mod tests {
             vec![ConnectionId(1)],
             conversation_id,
         );
-        let thread_state = new_thread_state();
-        let thread_watch_manager = ThreadWatchManager::new();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1));
 
         apply_bespoke_event_handling(
             Event {
                 id: "turn-1".to_string(),
-                msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                msg: EventMsg::ItemStarted(ItemStartedEvent {
                     thread_id: conversation_id,
                     turn_id: "turn-1".to_string(),
-                    item: CoreTurnItem::SubAgentActivity(activity.clone()),
-                    completed_at_ms: 42,
+                    item: CoreTurnItem::DynamicToolCall(DynamicToolCallItem {
+                        id: "dynamic-1".to_string(),
+                        namespace: Some("apps".to_string()),
+                        tool: "lookup".to_string(),
+                        arguments: json!({"id": "123"}),
+                        status: CoreDynamicToolCallStatus::InProgress,
+                        content_items: None,
+                        success: None,
+                        error: None,
+                        duration: None,
+                    }),
+                    started_at_ms: 42,
                 }),
-            },
-            conversation_id,
-            Arc::clone(&conversation),
-            Arc::clone(&thread_manager),
-            outgoing.clone(),
-            Arc::clone(&thread_state),
-            thread_watch_manager.clone(),
-            Arc::clone(&semaphore),
-            "test-provider".to_string(),
-        )
-        .await;
-        apply_bespoke_event_handling(
-            Event {
-                id: "turn-1".to_string(),
-                msg: activity.as_legacy_event(42),
             },
             conversation_id,
             conversation,
             thread_manager,
             outgoing,
-            thread_state,
-            thread_watch_manager,
-            semaphore,
+            new_thread_state(),
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
             "test-provider".to_string(),
         )
         .await;
 
-        let message = recv_broadcast_message(&mut rx).await?;
-        let OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(payload)) =
-            message
+        let item_started = recv_broadcast_message(&mut rx).await?;
+        let OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(payload)) =
+            item_started
         else {
-            bail!("unexpected message: {message:?}");
+            bail!("unexpected message: {item_started:?}");
         };
-        assert_eq!(payload.item.id(), "activity-1");
-        assert!(rx.try_recv().is_err());
+        assert_eq!(payload.item.id(), "dynamic-1");
+
+        let request = recv_broadcast_message(&mut rx).await?;
+        let OutgoingMessage::Request(ServerRequest::DynamicToolCall { params, .. }) = request
+        else {
+            bail!("unexpected message: {request:?}");
+        };
+        assert_eq!(
+            params,
+            DynamicToolCallParams {
+                thread_id: conversation_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                call_id: "dynamic-1".to_string(),
+                namespace: Some("apps".to_string()),
+                tool: "lookup".to_string(),
+                arguments: json!({"id": "123"}),
+            }
+        );
         Ok(())
     }
 

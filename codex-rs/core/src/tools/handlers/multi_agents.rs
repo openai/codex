@@ -20,21 +20,13 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::ThreadId;
+use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
+use codex_protocol::items::CollabAgentToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
-use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
-use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
-use codex_protocol::protocol::CollabAgentSpawnEndEvent;
-use codex_protocol::protocol::CollabCloseBeginEvent;
-use codex_protocol::protocol::CollabCloseEndEvent;
-use codex_protocol::protocol::CollabResumeBeginEvent;
-use codex_protocol::protocol::CollabResumeEndEvent;
-use codex_protocol::protocol::CollabWaitingBeginEvent;
-use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
@@ -111,6 +103,17 @@ pub(crate) async fn emit_collab_tool_call_completed(
     session
         .emit_turn_item_completed(turn, TurnItem::CollabAgentToolCall(item))
         .await;
+}
+
+pub(crate) fn collab_tool_call_status(
+    status: &AgentStatus,
+    receiver_thread_id: Option<ThreadId>,
+) -> CollabAgentToolCallStatus {
+    match status {
+        AgentStatus::Errored(_) | AgentStatus::NotFound => CollabAgentToolCallStatus::Failed,
+        _ if receiver_thread_id.is_some() => CollabAgentToolCallStatus::Completed,
+        _ => CollabAgentToolCallStatus::Failed,
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,6 @@
 use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
-use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
-use codex_protocol::items::CollabAgentToolCallItem;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -47,12 +45,18 @@ async fn handle_close_agent(
     emit_collab_tool_call_started(
         &session,
         &turn,
-        CollabAgentToolCallItem::from_collab_close_begin_event(CollabCloseBeginEvent {
-            call_id: call_id.clone(),
-            started_at_ms: now_unix_timestamp_ms(),
+        CollabAgentToolCallItem {
+            id: call_id.clone(),
+            tool: CollabAgentTool::CloseAgent,
+            status: CollabAgentToolCallStatus::InProgress,
             sender_thread_id: session.thread_id,
-            receiver_thread_id: agent_id,
-        }),
+            receiver_thread_ids: vec![agent_id],
+            receiver_agents: Vec::new(),
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: Default::default(),
+        },
     )
     .await;
     let status = match session
@@ -70,15 +74,22 @@ async fn handle_close_agent(
             emit_collab_tool_call_completed(
                 &session,
                 &turn,
-                CollabAgentToolCallItem::from_collab_close_end_event(CollabCloseEndEvent {
-                    call_id: call_id.clone(),
-                    completed_at_ms: now_unix_timestamp_ms(),
+                CollabAgentToolCallItem {
+                    id: call_id.clone(),
+                    tool: CollabAgentTool::CloseAgent,
+                    status: collab_tool_call_status(&status, Some(agent_id)),
                     sender_thread_id: session.thread_id(),
-                    receiver_thread_id: agent_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                    receiver_agent_role: receiver_agent.agent_role.clone(),
-                    status,
-                }),
+                    receiver_thread_ids: vec![agent_id],
+                    receiver_agents: vec![CollabAgentRef {
+                        thread_id: agent_id,
+                        agent_nickname: receiver_agent.agent_nickname.clone(),
+                        agent_role: receiver_agent.agent_role.clone(),
+                    }],
+                    prompt: None,
+                    model: None,
+                    reasoning_effort: None,
+                    agents_states: [(agent_id, status)].into_iter().collect(),
+                },
             )
             .await;
             return Err(collab_agent_error(agent_id, err));
@@ -91,15 +102,22 @@ async fn handle_close_agent(
     emit_collab_tool_call_completed(
         &session,
         &turn,
-        CollabAgentToolCallItem::from_collab_close_end_event(CollabCloseEndEvent {
-            call_id,
-            completed_at_ms: now_unix_timestamp_ms(),
+        CollabAgentToolCallItem {
+            id: call_id,
+            tool: CollabAgentTool::CloseAgent,
+            status: collab_tool_call_status(&status, Some(agent_id)),
             sender_thread_id: session.thread_id,
-            receiver_thread_id: agent_id,
-            receiver_agent_nickname: receiver_agent.agent_nickname,
-            receiver_agent_role: receiver_agent.agent_role,
-            status: status.clone(),
-        }),
+            receiver_thread_ids: vec![agent_id],
+            receiver_agents: vec![CollabAgentRef {
+                thread_id: agent_id,
+                agent_nickname: receiver_agent.agent_nickname,
+                agent_role: receiver_agent.agent_role,
+            }],
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            agents_states: [(agent_id, status.clone())].into_iter().collect(),
+        },
     )
     .await;
     result?;
