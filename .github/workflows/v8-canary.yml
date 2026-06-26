@@ -1,5 +1,9 @@
 name: v8-canary
 
+# Do not use trigger-level path filters here. This workflow is also called by
+# postmerge-ci, and GitHub cannot share a path filter between pull_request and
+# workflow_call. v8_canary_changes.py is the single source of truth instead;
+# unrelated events run only the cheap metadata job below.
 on:
   workflow_call:
   pull_request: {}
@@ -18,7 +22,10 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
-      canary_required: ${{ steps.changes.outputs.canary_required }}
+      # A stale PR head can contain the old detector, which does not emit this
+      # output. Missing must mean "run" so older branches cannot silently skip
+      # the expensive V8 coverage while reporting success.
+      canary_required: ${{ steps.changes.outputs.canary_required || 'true' }}
       v8_version: ${{ steps.v8_version.outputs.version }}
       windows_source_required: ${{ steps.changes.outputs.windows_source_required }}
 
@@ -52,6 +59,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Manual runs have no meaningful before/after range. Force every V8
+          # variant so workflow_dispatch remains a reliable retry path.
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             output="$(python3 .github/scripts/v8_canary_changes.py --force)"
           else
@@ -69,6 +78,7 @@ jobs:
   build:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
+    # Metadata always runs; only relevant changes pay for the large matrix.
     if: ${{ needs.metadata.outputs.canary_required == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:

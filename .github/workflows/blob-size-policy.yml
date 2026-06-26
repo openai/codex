@@ -20,6 +20,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # PRs inspect the proposed diff; main pushes inspect only the commit
+          # range that just landed. Both paths feed the same blob-size checker.
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base='${{ github.event.pull_request.base.sha }}'
             head='${{ github.event.pull_request.head.sha }}'

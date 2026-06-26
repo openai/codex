@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+"""Decide which V8 canary work is needed for a commit range.
+
+The workflow deliberately has no trigger-level path filters because it is both
+directly triggered for pull requests and called by postmerge-ci. Keeping the
+patterns here gives those entrypoints one source of truth; unrelated events
+still run metadata but skip the expensive build matrices.
+"""
+
 import argparse
 import subprocess
 import tomllib
@@ -8,6 +16,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+# These patterns replace the old pull_request/push path filters. Include parent
+# workflow changes because they can alter whether the canary is invoked.
 CANARY_PATH_PATTERNS = {
     ".bazelrc",
     ".github/actions/setup-bazel-ci/**",
@@ -27,6 +37,8 @@ CANARY_PATH_PATTERNS = {
     "patches/v8_*.patch",
     "third_party/v8/**",
 }
+# Windows source builds are a narrower, more expensive subset of the canary.
+# A V8 version change also requires them even when no path below changed.
 WINDOWS_SOURCE_BUILD_PATHS = {
     ".github/scripts/rusty_v8_bazel.py",
     ".github/scripts/rusty_v8_module_bazel.py",
@@ -37,6 +49,7 @@ WINDOWS_SOURCE_BUILD_PATHS = {
 
 
 def matching_canary_paths(changed_files: set[str]) -> set[str]:
+    """Return changed paths that require the general V8 build matrix."""
     return {
         path
         for path in changed_files
@@ -51,6 +64,7 @@ def canary_required(
     *,
     force: bool = False,
 ) -> bool:
+    """Return whether the general V8 build matrix should run."""
     return (
         force
         or base_v8_version != head_v8_version
@@ -78,6 +92,7 @@ def windows_source_required(
     *,
     force: bool = False,
 ) -> bool:
+    """Return whether Windows must rebuild rusty_v8 from source."""
     return (
         force
         or base_v8_version != head_v8_version
@@ -100,6 +115,8 @@ def merge_base(base: str, head: str, *, root: Path = ROOT) -> str:
 
 
 def changed_files(base: str, head: str, *, root: Path = ROOT) -> set[str]:
+    # Three-dot diff gives PRs merge-base semantics while remaining equivalent
+    # to before/after for ordinary linear pushes to main.
     output = git_output(
         "diff",
         "--name-only",
@@ -121,6 +138,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.force:
+        # workflow_dispatch has no comparison range, and callers use it as a
+        # manual retry path, so it intentionally runs every variant.
         canary = True
         canary_reason = "manual workflow dispatch"
         windows_source = True
