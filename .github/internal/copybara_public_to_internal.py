@@ -314,6 +314,10 @@ def migrate_change(
     message_file: Path,
     internal_cargo_lockfile: Path | None,
 ) -> None:
+    if not public_change_touched_paths(change.rev):
+        create_empty_import_marker_commit(change, message_file)
+        return
+
     migration = run_copybara_migrate(
         [
             "java",
