@@ -156,16 +156,6 @@ impl ExecProcessEventReceiver {
         }
     }
 
-    #[doc(hidden)]
-    pub fn from_events(events: Vec<ExecProcessEvent>) -> Self {
-        let (live_tx, live_rx) = broadcast::channel(1);
-        Self {
-            replay: events.into(),
-            live_rx,
-            _keepalive: Some(live_tx),
-        }
-    }
-
     /// Returns the next replayed or live event.
     ///
     /// `Lagged` means this receiver fell behind the bounded live channel. The
