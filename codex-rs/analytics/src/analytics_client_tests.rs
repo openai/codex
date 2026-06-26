@@ -3160,6 +3160,40 @@ fn hook_run_event_serializes_expected_shape() {
 }
 
 #[test]
+fn user_instructions_hook_run_event_serializes_expected_shape() {
+    let tracking = test_tracking_context("thread-4", "turn-4");
+    let event = TrackEventRequest::HookRun(CodexHookRunEventRequest {
+        event_type: "codex_hook_run",
+        event_params: codex_hook_run_metadata(
+            &tracking,
+            HookRunFact {
+                event_name: HookEventName::UserInstructions,
+                hook_source: HookSource::User,
+                status: HookRunStatus::Completed,
+            },
+        ),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize UserInstructions hook run event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_hook_run",
+            "event_params": {
+                "thread_id": "thread-4",
+                "turn_id": null,
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
+                "model_slug": "gpt-5",
+                "hook_name": "UserInstructions",
+                "hook_source": "user",
+                "status": "completed"
+            }
+        })
+    );
+}
+
+#[test]
 fn hook_run_metadata_maps_sources_and_statuses() {
     let tracking = test_tracking_context("thread-1", "turn-1");
 

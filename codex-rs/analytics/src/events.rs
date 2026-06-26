@@ -1215,7 +1215,8 @@ pub(crate) fn codex_hook_run_metadata(
 ) -> CodexHookRunMetadata {
     CodexHookRunMetadata {
         thread_id: Some(tracking.thread_id.clone()),
-        turn_id: Some(tracking.turn_id.clone()),
+        turn_id: (hook.event_name != HookEventName::UserInstructions)
+            .then(|| tracking.turn_id.clone()),
         product_client_id: Some(tracking.product_client_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
