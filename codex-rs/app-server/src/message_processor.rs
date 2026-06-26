@@ -38,6 +38,7 @@ use crate::request_processors::RemoteControlRequestProcessor;
 use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
+use crate::request_processors::ToolSearchRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_serialization::QueuedInitializedRequest;
@@ -206,6 +207,7 @@ pub(crate) struct MessageProcessor {
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_processor: ThreadRequestProcessor,
+    tool_search_processor: ToolSearchRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
@@ -471,6 +473,7 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
+        let tool_search_processor = ToolSearchRequestProcessor::new(Arc::clone(&thread_manager));
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),
@@ -576,6 +579,7 @@ impl MessageProcessor {
             search_processor,
             thread_goal_processor,
             thread_processor,
+            tool_search_processor,
             turn_processor,
             windows_sandbox_processor,
             request_serialization_queues: RequestSerializationQueues::default(),
@@ -1387,7 +1391,7 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::ToolSearchSearch { params, .. } => {
-                self.mcp_processor.tool_search_search(params).await
+                self.tool_search_processor.tool_search_search(params).await
             }
             ClientRequest::McpResourceRead { params, .. } => {
                 self.mcp_processor
