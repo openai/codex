@@ -218,17 +218,22 @@ mod tests {
             })
             .await
             .expect("register rollout path");
-        store
-            .update_thread_metadata(UpdateThreadMetadataParams {
-                thread_id,
-                patch: ThreadMetadataPatch {
-                    history_mode: Some(ThreadHistoryMode::Paginated),
-                    ..Default::default()
-                },
-                include_archived: false,
-            })
-            .await
-            .expect("seed paginated metadata");
+        {
+            let mut state = store.state.lock().await;
+            state
+                .created_threads
+                .get_mut(&thread_id)
+                .expect("created thread")
+                .history_mode = ThreadHistoryMode::Paginated;
+            let Some(RolloutItem::SessionMeta(meta_line)) = state
+                .histories
+                .get_mut(&thread_id)
+                .and_then(|history| history.first_mut())
+            else {
+                panic!("canonical session meta");
+            };
+            meta_line.meta.history_mode = ThreadHistoryMode::Paginated;
+        }
 
         let thread = store
             .read_thread(ReadThreadParams {
@@ -784,9 +789,7 @@ fn stored_thread_from_state(
         source: metadata
             .and_then(|metadata| metadata.source.clone())
             .unwrap_or_else(|| created.source.clone()),
-        history_mode: metadata
-            .and_then(|metadata| metadata.history_mode)
-            .unwrap_or(created.history_mode),
+        history_mode: created.history_mode,
         thread_source: metadata
             .and_then(|metadata| metadata.thread_source.clone())
             .unwrap_or_else(|| created.thread_source.clone()),
@@ -811,15 +814,9 @@ fn history_mode_from_state(
     thread_id: ThreadId,
 ) -> ThreadHistoryMode {
     state
-        .metadata_updates
+        .created_threads
         .get(&thread_id)
-        .and_then(|metadata| metadata.history_mode)
-        .or_else(|| {
-            state
-                .created_threads
-                .get(&thread_id)
-                .map(|thread| thread.history_mode)
-        })
+        .map(|thread| thread.history_mode)
         .unwrap_or_default()
 }
 

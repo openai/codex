@@ -26,9 +26,12 @@ pub(super) async fn create_thread(
     params: CreateThreadParams,
 ) -> ThreadStoreResult<()> {
     let thread_id = params.thread_id;
+    let history_mode = params.history_mode;
     store.ensure_live_recorder_absent(thread_id).await?;
     let recorder = create_thread::create_thread(store, params).await?;
-    store.insert_live_recorder(thread_id, recorder).await
+    store
+        .insert_live_recorder(thread_id, recorder, history_mode)
+        .await
 }
 
 pub(super) async fn resume_thread(
@@ -98,7 +101,9 @@ pub(super) async fn resume_thread(
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to resume local thread recorder: {err}"),
         })?;
-    store.insert_live_recorder(params.thread_id, recorder).await
+    store
+        .insert_live_recorder(params.thread_id, recorder, history_mode)
+        .await
 }
 
 #[tracing::instrument(
@@ -191,6 +196,7 @@ pub(super) async fn rollout_path(
         .await
         .get(&thread_id)
         .ok_or(ThreadStoreError::ThreadNotFound { thread_id })?
+        .recorder
         .rollout_path()
         .to_path_buf())
 }

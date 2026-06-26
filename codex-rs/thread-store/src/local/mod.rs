@@ -13,6 +13,7 @@ mod update_thread_metadata;
 mod test_support;
 
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
@@ -57,8 +58,16 @@ use crate::UpdateThreadMetadataParams;
 #[derive(Clone)]
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
-    live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
+    live_recorders: Arc<Mutex<HashMap<ThreadId, LiveRecorderEntry>>>,
     state_db: Option<StateDbHandle>,
+}
+
+struct LiveRecorderEntry {
+    recorder: RolloutRecorder,
+    // Local rollout files are materialized lazily, but metadata updates can arrive before the
+    // canonical SessionMeta is durable. Retain the mode captured when live persistence was opened
+    // so missing SQLite rows can still be seeded.
+    history_mode: ThreadHistoryMode,
 }
 
 /// Process-scoped configuration for local thread storage.
@@ -135,7 +144,7 @@ impl LocalThreadStore {
             .lock()
             .await
             .get(&thread_id)
-            .cloned()
+            .map(|entry| entry.recorder.clone())
             .ok_or(ThreadStoreError::ThreadNotFound { thread_id })
     }
 
@@ -155,13 +164,17 @@ impl LocalThreadStore {
         &self,
         thread_id: ThreadId,
         recorder: RolloutRecorder,
+        history_mode: ThreadHistoryMode,
     ) -> ThreadStoreResult<()> {
         match self.live_recorders.lock().await.entry(thread_id) {
             Entry::Occupied(entry) => Err(ThreadStoreError::InvalidRequest {
                 message: format!("thread {} already has a live local writer", entry.key()),
             }),
             Entry::Vacant(entry) => {
-                entry.insert(recorder);
+                entry.insert(LiveRecorderEntry {
+                    recorder,
+                    history_mode,
+                });
                 Ok(())
             }
         }
@@ -577,6 +590,46 @@ mod tests {
                 .await
                 .expect("sqlite metadata read"),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn live_thread_memory_mode_update_before_rollout_materializes_keeps_history_mode() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .update_memory_mode(ThreadMemoryMode::Disabled, /*include_archived*/ false)
+            .await
+            .expect("update memory mode");
+
+        assert_eq!(
+            runtime
+                .get_thread(thread_id)
+                .await
+                .expect("sqlite metadata read")
+                .expect("sqlite metadata")
+                .history_mode,
+            ThreadHistoryMode::Legacy
+        );
+        assert_eq!(
+            runtime
+                .get_thread_memory_mode(thread_id)
+                .await
+                .expect("thread memory mode should be readable")
+                .as_deref(),
+            Some("disabled")
         );
     }
 
