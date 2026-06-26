@@ -542,6 +542,7 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
             .all(|text| !text.contains(SKILL_DESCRIPTION))
     );
     assert_selected_plugin_tools_absent(request);
+    assert_plugin_guidance_count(request, 0);
 }
 
 fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {
@@ -558,7 +559,6 @@ fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {
             .as_str()
             .is_some_and(|description| !description.contains(PLUGIN_DISPLAY_NAME))
     );
-    assert_plugin_guidance_count(request, 0);
 }
 
 fn assert_plugin_guidance_count(request: &ResponsesRequest, expected_count: usize) {
