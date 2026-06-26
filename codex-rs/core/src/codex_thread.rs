@@ -6,6 +6,7 @@ use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -620,6 +621,35 @@ impl CodexThread {
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.codex.thread_environment_selections().await
+    }
+
+    /// Returns one typed value owned by a thread extension.
+    pub fn extension_thread_data<T>(&self) -> Option<Arc<T>>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.codex.session.services.thread_extension_data.get::<T>()
+    }
+
+    /// Returns the selected capability roots persisted for this thread.
+    pub fn selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
+        self.codex
+            .session
+            .services
+            .selected_capability_roots
+            .clone()
+    }
+
+    /// Resolves the selected capability roots whose environments are ready now.
+    pub async fn ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
+        let turn_context = self.codex.session.new_default_turn().await;
+        self.codex
+            .session
+            .resolve_selected_capability_roots_for_step(&turn_context.environments)
+            .await
+            .into_iter()
+            .map(|root| root.selected_root().clone())
+            .collect()
     }
 
     pub async fn read_mcp_resource(

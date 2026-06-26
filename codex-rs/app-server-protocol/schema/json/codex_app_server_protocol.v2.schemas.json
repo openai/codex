@@ -14386,7 +14386,16 @@
     },
     "SkillsChangedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "description": "Notification emitted when the available skills catalog changes.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "properties": {
+        "threadId": {
+          "description": "The affected thread, or `None` for a process-wide local skill change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "title": "SkillsChangedNotification",
       "type": "object"
     },
@@ -14506,10 +14515,18 @@
             "$ref": "#/definitions/SkillsListEntry"
           },
           "type": "array"
+        },
+        "threadSkills": {
+          "description": "Skills contributed by selected capability roots for the requested thread.",
+          "items": {
+            "$ref": "#/definitions/ThreadSkillMetadata"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "data"
+        "data",
+        "threadSkills"
       ],
       "title": "SkillsListResponse",
       "type": "object"
@@ -17109,6 +17126,36 @@
     "ThreadShellCommandResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadShellCommandResponse",
+      "type": "object"
+    },
+    "ThreadSkillMetadata": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resource": {
+          "description": "Stable executor-owned locator used for display and deduplication.",
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "enabled",
+        "name",
+        "resource"
+      ],
       "type": "object"
     },
     "ThreadSortKey": {

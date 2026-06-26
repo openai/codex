@@ -25,10 +25,11 @@ use crate::sources::SkillProviders;
 const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
 const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
-pub(crate) struct SkillsThreadState {
+pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     orchestrator_skills_available: bool,
     executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
+    projected_executor_catalog: Mutex<Option<SkillCatalog>>,
     orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
 }
 
@@ -38,6 +39,7 @@ impl SkillsThreadState {
             config: Mutex::new(config),
             orchestrator_skills_available,
             executor_cache: Mutex::new(Vec::new()),
+            projected_executor_catalog: Mutex::new(None),
             orchestrator_cache: Mutex::new(None),
         }
     }
@@ -66,11 +68,11 @@ impl SkillsThreadState {
     /// Environment availability only controls whether the root is projected into the current
     /// step; it never invalidates the cache. There is intentionally no filesystem watcher or
     /// content-based invalidation because selected environment roots are treated as stable.
-    pub(crate) async fn executor_catalog_snapshot(
+    pub async fn project_executor_catalog(
         &self,
         providers: &SkillProviders,
         mut query: SkillListQuery,
-    ) -> SkillCatalog {
+    ) -> (SkillCatalog, bool) {
         let roots = std::mem::take(&mut query.executor_roots);
         let mut catalog = SkillCatalog::default();
         for root in roots {
@@ -80,7 +82,15 @@ impl SkillsThreadState {
                     .await,
             );
         }
-        catalog
+        let mut projected = self
+            .projected_executor_catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let changed = projected
+            .as_ref()
+            .is_some_and(|previous| previous != &catalog);
+        *projected = Some(catalog.clone());
+        (catalog, changed)
     }
 
     pub(crate) async fn orchestrator_catalog_snapshot(

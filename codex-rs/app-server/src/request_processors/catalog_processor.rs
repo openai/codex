@@ -11,6 +11,7 @@ pub(crate) struct CatalogRequestProcessor {
     pub(super) config: Arc<Config>,
     pub(super) config_manager: ConfigManager,
     pub(super) workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    executor_skill_providers: codex_skills_extension::SkillProviders,
 }
 
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
@@ -105,6 +106,7 @@ impl CatalogRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider>,
     ) -> Self {
         Self {
             outgoing,
@@ -114,6 +116,8 @@ impl CatalogRequestProcessor {
             config,
             config_manager,
             workspace_settings_cache,
+            executor_skill_providers: codex_skills_extension::SkillProviders::new()
+                .with_executor_provider(executor_skill_provider),
         }
     }
 
@@ -479,7 +483,11 @@ impl CatalogRequestProcessor {
         &self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            force_reload,
+            thread_id,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.to_path_buf()]
         } else {
@@ -560,7 +568,61 @@ impl CatalogRequestProcessor {
             .await;
         data.sort_unstable_by_key(|(index, _)| *index);
         let data = data.into_iter().map(|(_, entry)| entry).collect();
-        Ok(SkillsListResponse { data })
+        let thread_skills = match thread_id.as_deref() {
+            Some(thread_id) => self.thread_skills(thread_id).await?,
+            None => Vec::new(),
+        };
+        Ok(SkillsListResponse {
+            data,
+            thread_skills,
+        })
+    }
+
+    async fn thread_skills(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<codex_app_server_protocol::ThreadSkillMetadata>, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        let thread = self
+            .thread_manager
+            .get_thread(thread_id)
+            .await
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
+        let Some(state) =
+            thread.extension_thread_data::<codex_skills_extension::SkillsThreadState>()
+        else {
+            return Ok(Vec::new());
+        };
+        let roots = thread.ready_selected_capability_roots().await;
+        let (catalog, _) = state
+            .project_executor_catalog(
+                &self.executor_skill_providers,
+                codex_skills_extension::provider::SkillListQuery {
+                    turn_id: thread_id.to_string(),
+                    executor_roots: roots,
+                    host_snapshot: None,
+                    include_host_skills: false,
+                    include_bundled_skills: false,
+                    include_orchestrator_skills: false,
+                    mcp_resources: None,
+                },
+            )
+            .await;
+        Ok(catalog
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let resource = entry.rendered_path().to_string();
+                codex_app_server_protocol::ThreadSkillMetadata {
+                    name: entry.name,
+                    description: entry.description,
+                    short_description: entry.short_description,
+                    resource,
+                    enabled: entry.enabled,
+                }
+            })
+            .collect())
     }
 
     async fn skills_extra_roots_set_response(
@@ -575,7 +637,7 @@ impl CatalogRequestProcessor {
             .set_extra_roots(extra_roots);
         self.outgoing
             .send_server_notification(ServerNotification::SkillsChanged(
-                codex_app_server_protocol::SkillsChangedNotification {},
+                codex_app_server_protocol::SkillsChangedNotification { thread_id: None },
             ))
             .await;
         Ok(SkillsExtraRootsSetResponse {})

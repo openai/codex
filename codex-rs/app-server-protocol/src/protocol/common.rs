@@ -656,6 +656,7 @@ client_request_definitions! {
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
+        inspect_params: true,
         serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
@@ -1859,6 +1860,7 @@ mod tests {
             params: v2::SkillsListParams {
                 cwds: Vec::new(),
                 force_reload: false,
+                thread_id: None,
             },
         };
         assert_eq!(

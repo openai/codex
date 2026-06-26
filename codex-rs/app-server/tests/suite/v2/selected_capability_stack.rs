@@ -16,8 +16,12 @@ use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillsChangedNotification;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSkillMetadata;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnEnvironmentParams;
@@ -157,10 +161,19 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await?;
     let initial_requests = response_mock.requests();
     assert_selected_capabilities_absent(&initial_requests[0]);
+    assert_eq!(
+        list_thread_skills(&mut app_server, &thread_id).await?,
+        Vec::new()
+    );
 
     let mut exec_server =
         spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    wait_for_thread_skills_changed(&mut app_server, &thread_id).await?;
+    assert_eq!(
+        list_thread_skills(&mut app_server, &thread_id).await?,
+        vec![fixture.thread_skill.clone()]
+    );
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
@@ -215,9 +228,18 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         latest_selected_skill_update(&requests[4])
             .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
+    assert_eq!(
+        list_thread_skills(&mut app_server, &thread_id).await?,
+        Vec::new()
+    );
 
     exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
+    wait_for_thread_skills_changed(&mut app_server, &thread_id).await?;
+    assert_eq!(
+        list_thread_skills(&mut app_server, &thread_id).await?,
+        vec![fixture.thread_skill.clone()]
+    );
     wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
@@ -419,6 +441,7 @@ struct SelectedCapabilityFixture {
     pid_file: std::path::PathBuf,
     exec_server_url: String,
     selected_root: SelectedCapabilityRoot,
+    thread_skill: ThreadSkillMetadata,
     environment_cwd: AbsolutePathBuf,
 }
 
@@ -485,8 +508,9 @@ fn selected_capability_fixture(
         manifest_dir.join("plugin.json"),
         r#"{"name":"executor-demo","apps":"./.app.json","interface":{"displayName":"Executor Demo"}}"#,
     )?;
+    let skill_path = skill_dir.join("SKILL.md");
     std::fs::write(
-        skill_dir.join("SKILL.md"),
+        &skill_path,
         format!(
             "---\nname: deploy\ndescription: {SKILL_DESCRIPTION}\n---\n\n{SKILL_BODY_MARKER}\n"
         ),
@@ -518,6 +542,17 @@ fn selected_capability_fixture(
             path: PathUri::from_host_native_path(plugin.path())?,
         },
     };
+    let normalized_skill_path = skill_path.to_string_lossy().replace('\\', "/");
+    let thread_skill = ThreadSkillMetadata {
+        name: SKILL_NAME.to_string(),
+        description: SKILL_DESCRIPTION.to_string(),
+        short_description: None,
+        resource: format!(
+            "skill://{PLUGIN_ID}/{}",
+            normalized_skill_path.trim_start_matches('/')
+        ),
+        enabled: true,
+    };
     let environment_cwd = AbsolutePathBuf::try_from(plugin.path().to_path_buf())?;
     Ok(SelectedCapabilityFixture {
         codex_home,
@@ -525,6 +560,7 @@ fn selected_capability_fixture(
         pid_file,
         exec_server_url,
         selected_root,
+        thread_skill,
         environment_cwd,
     })
 }
@@ -676,6 +712,60 @@ async fn add_environment(app_server: &mut TestAppServer, exec_server_url: &str) 
     )
     .await??;
     let _: EnvironmentAddResponse = to_response(response)?;
+    Ok(())
+}
+
+async fn list_thread_skills(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<Vec<ThreadSkillMetadata>> {
+    let request_id = app_server
+        .send_skills_list_request(SkillsListParams {
+            cwds: Vec::new(),
+            force_reload: false,
+            thread_id: Some(thread_id.to_string()),
+        })
+        .await?;
+    let response = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let SkillsListResponse { thread_skills, .. } = to_response(response)?;
+    Ok(thread_skills)
+}
+
+async fn wait_for_thread_skills_changed(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    let notification = timeout(
+        READ_TIMEOUT,
+        app_server.read_stream_until_matching_notification(
+            "thread-scoped skills/changed",
+            |notification| {
+                notification.method == "skills/changed"
+                    && notification
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("threadId"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(thread_id)
+            },
+        ),
+    )
+    .await??;
+    let notification: SkillsChangedNotification = serde_json::from_value(
+        notification
+            .params
+            .context("skills/changed params missing")?,
+    )?;
+    assert_eq!(
+        notification,
+        SkillsChangedNotification {
+            thread_id: Some(thread_id.to_string())
+        }
+    );
     Ok(())
 }
 

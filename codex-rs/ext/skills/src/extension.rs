@@ -21,6 +21,7 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -51,6 +52,7 @@ struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
+    catalog_changed: Arc<dyn Fn(ThreadId) + Send + Sync>,
 }
 
 impl<C> ThreadLifecycleContributor<C> for SkillsExtension<C>
@@ -145,8 +147,8 @@ where
                 return Vec::new();
             };
             let config = thread_state.config();
-            let catalog = thread_state
-                .executor_catalog_snapshot(
+            let (catalog, changed) = thread_state
+                .project_executor_catalog(
                     &self.providers,
                     SkillListQuery {
                         turn_id: input.turn_id.to_string(),
@@ -159,6 +161,9 @@ where
                     },
                 )
                 .await;
+            if changed {
+                (self.catalog_changed)(input.thread_id);
+            }
             input
                 .turn_store
                 .insert(ExecutorSkillsStepState(catalog.clone()));
@@ -395,10 +400,22 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_with_providers_and_catalog_updates(registry, providers, config_from_host, |_| {});
+}
+
+pub fn install_with_providers_and_catalog_updates<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    providers: SkillProviders,
+    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
+    catalog_changed: impl Fn(ThreadId) + Send + Sync + 'static,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
+        catalog_changed: Arc::new(catalog_changed),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
