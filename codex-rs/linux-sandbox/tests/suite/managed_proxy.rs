@@ -417,20 +417,23 @@ async fn ingress_routes_parent_connection_into_sandbox_local_server() {
         listener.as_raw_fd().to_string(),
     );
 
-    let server_script = format!(concat!(
-        "import http.server\n",
-        "class Handler(http.server.BaseHTTPRequestHandler):\n",
-        "    def do_GET(self):\n",
-        "        body = b'ingress-ok'\n",
-        "        self.send_response(200)\n",
-        "        self.send_header('Content-Length', str(len(body)))\n",
-        "        self.end_headers()\n",
-        "        self.wfile.write(body)\n",
-        "    def log_message(self, format, *args):\n",
-        "        pass\n",
-        "server = http.server.ThreadingHTTPServer(('127.0.0.1', {ingress_port}), Handler)\n",
-        "server.handle_request()\n",
-    ));
+    let server_script = format!(
+        concat!(
+            "import http.server\n",
+            "class Handler(http.server.BaseHTTPRequestHandler):\n",
+            "    def do_GET(self):\n",
+            "        body = b'ingress-ok'\n",
+            "        self.send_response(200)\n",
+            "        self.send_header('Content-Length', str(len(body)))\n",
+            "        self.end_headers()\n",
+            "        self.wfile.write(body)\n",
+            "    def log_message(self, format, *args):\n",
+            "        pass\n",
+            "server = http.server.ThreadingHTTPServer(('127.0.0.1', {ingress_port}), Handler)\n",
+            "server.handle_request()\n",
+        ),
+        ingress_port = ingress_port,
+    );
     let command = ["python3", "-c", server_script.as_str()];
     let mut cmd = linux_sandbox_command(
         &command,
