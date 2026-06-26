@@ -561,7 +561,7 @@ async fn connect_rendezvous(
         connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
-            /*disable_nagle*/ false,
+            /*disable_nagle*/ true,
         )
         .await
         .map(|(websocket, _)| websocket)
