@@ -143,8 +143,7 @@ pub struct ReasoningItem {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum CommandExecutionStatus {
     InProgress,
     Completed,
@@ -153,8 +152,6 @@ pub enum CommandExecutionStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CommandExecutionItem {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,8 +186,7 @@ pub struct CommandExecutionItem {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum DynamicToolCallStatus {
     InProgress,
     Completed,
@@ -198,8 +194,6 @@ pub enum DynamicToolCallStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct DynamicToolCallItem {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,8 +217,7 @@ pub struct DynamicToolCallItem {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum CollabAgentTool {
     SpawnAgent,
     SendInput,
@@ -234,8 +227,7 @@ pub enum CollabAgentTool {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum CollabAgentToolCallStatus {
     InProgress,
     Completed,
@@ -243,8 +235,6 @@ pub enum CollabAgentToolCallStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CollabAgentToolCallItem {
     pub id: String,
     pub tool: CollabAgentTool,
@@ -268,8 +258,6 @@ pub struct CollabAgentToolCallItem {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct SubAgentActivityItem {
     pub id: String,
     pub kind: SubAgentActivityKind,
