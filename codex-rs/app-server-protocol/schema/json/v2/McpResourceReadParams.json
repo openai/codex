@@ -1,10 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
-    "_meta": {
-      "additionalProperties": true,
+    "originCallId": {
+      "description": "The MCP tool call whose app context identifies the resource provider. Requires `threadId`.",
       "type": [
-        "object",
+        "string",
         "null"
       ]
     },

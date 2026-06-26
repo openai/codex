@@ -1575,10 +1575,10 @@
     },
     "McpResourceReadParams": {
       "properties": {
-        "_meta": {
-          "additionalProperties": true,
+        "originCallId": {
+          "description": "The MCP tool call whose app context identifies the resource provider. Requires `threadId`.",
           "type": [
-            "object",
+            "string",
             "null"
           ]
         },
