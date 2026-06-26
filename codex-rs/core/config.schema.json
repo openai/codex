@@ -448,6 +448,9 @@
             "code_mode": {
               "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
             },
+            "code_mode_host": {
+              "type": "boolean"
+            },
             "code_mode_only": {
               "type": "boolean"
             },
@@ -4810,6 +4813,9 @@
         },
         "code_mode": {
           "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
+        },
+        "code_mode_host": {
+          "type": "boolean"
         },
         "code_mode_only": {
           "type": "boolean"
