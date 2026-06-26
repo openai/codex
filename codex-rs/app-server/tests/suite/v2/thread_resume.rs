@@ -748,6 +748,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
                     link_id: Some("link_calendar".to_string()),
                     resource_uri: Some("ui://widget/lookup.html".to_string()),
                     app_name: Some("Calendar".to_string()),
+                    template_id: Some("calendar_template".to_string()),
                     action_name: Some("lookup".to_string()),
                 })
             );
@@ -800,6 +801,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
             link_id: Some("link_calendar".to_string()),
             resource_uri: Some("ui://widget/lookup.html".to_string()),
             app_name: Some("Calendar".to_string()),
+            template_id: Some("calendar_template".to_string()),
             action_name: Some("lookup".to_string()),
         })
     );
@@ -908,6 +910,7 @@ fn append_resume_redaction_history(
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
             link_id: Some("link_calendar".to_string()),
             app_name: Some("Calendar".to_string()),
+            template_id: Some("calendar_template".to_string()),
             action_name: Some("lookup".to_string()),
             plugin_id: None,
             duration: Duration::from_millis(8),

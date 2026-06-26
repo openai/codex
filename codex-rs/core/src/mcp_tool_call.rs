@@ -314,6 +314,7 @@ struct McpToolCallItemMetadata {
     link_id: Option<String>,
     mcp_app_resource_uri: Option<String>,
     app_name: Option<String>,
+    template_id: Option<String>,
     action_name: Option<String>,
     plugin_id: Option<String>,
 }
@@ -332,6 +333,7 @@ impl McpToolCallItemMetadata {
             mcp_app_resource_uri: metadata
                 .and_then(|metadata| metadata.mcp_app_resource_uri.clone()),
             app_name: trusted_mcp_app_metadata.and_then(|metadata| metadata.connector_name.clone()),
+            template_id: trusted_mcp_app_metadata.and_then(|metadata| metadata.template_id.clone()),
             action_name: trusted_mcp_app_metadata
                 .and_then(|metadata| metadata.codex_apps_meta.as_ref())
                 .and_then(|meta| meta.get(MCP_TOOL_RESOURCE_URI_META_KEY))
@@ -894,6 +896,7 @@ async fn notify_mcp_tool_call_started(
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
         link_id: item_metadata.link_id,
         app_name: item_metadata.app_name,
+        template_id: item_metadata.template_id,
         action_name: item_metadata.action_name,
         plugin_id: item_metadata.plugin_id,
         status: McpToolCallStatus::InProgress,
@@ -938,6 +941,7 @@ async fn notify_mcp_tool_call_completed(
         mcp_app_resource_uri: item_metadata.mcp_app_resource_uri,
         link_id: item_metadata.link_id,
         app_name: item_metadata.app_name,
+        template_id: item_metadata.template_id,
         action_name: item_metadata.action_name,
         plugin_id: item_metadata.plugin_id,
         status,
@@ -1013,6 +1017,7 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_title: Option<String>,
     tool_description: Option<String>,
     mcp_app_resource_uri: Option<String>,
+    template_id: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
 }
@@ -1023,6 +1028,7 @@ const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 const MCP_TOOL_CONNECTED_ACCOUNT_EMAIL_META_KEY: &str = "connected_account_email";
+const MCP_TOOL_TEMPLATE_ID_META_KEY: &str = "template_id";
 const MCP_TOOL_RESOURCE_URI_META_KEY: &str = "resource_uri";
 
 async fn custom_mcp_tool_approval_mode(
@@ -1543,6 +1549,11 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
+        template_id: codex_apps_meta
+            .as_ref()
+            .and_then(|meta| meta.get(MCP_TOOL_TEMPLATE_ID_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         codex_apps_meta,
         // Disallow custom MCPs from uploading files via fileParams.
         openai_file_input_params: openai_file_input_params_for_server(
