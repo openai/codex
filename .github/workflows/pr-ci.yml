@@ -1,0 +1,76 @@
+name: pr-ci
+
+on:
+  pull_request: {}
+
+jobs:
+  bazel:
+    name: Bazel
+    uses: ./.github/workflows/bazel.yml
+    secrets: inherit
+
+  blob-size-policy:
+    name: Blob size policy
+    uses: ./.github/workflows/blob-size-policy.yml
+    secrets: inherit
+
+  cargo-deny:
+    name: cargo-deny
+    uses: ./.github/workflows/cargo-deny.yml
+    secrets: inherit
+
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  codespell:
+    name: Codespell
+    uses: ./.github/workflows/codespell.yml
+    secrets: inherit
+
+  rust-ci:
+    name: rust-ci
+    uses: ./.github/workflows/rust-ci.yml
+    secrets: inherit
+
+  sdk:
+    name: sdk
+    uses: ./.github/workflows/sdk.yml
+    secrets: inherit
+
+  required:
+    name: CI required
+    if: ${{ always() }}
+    needs:
+      - bazel
+      - blob-size-policy
+      - cargo-deny
+      - ci
+      - codespell
+      - rust-ci
+      - sdk
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require successful dependencies
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          failures="$(
+            jq --raw-output '
+              to_entries[]
+              | select(.value.result != "success")
+              | "\(.key): \(.value.result)"
+            ' <<<"$NEEDS"
+          )"
+
+          if [[ -n "$failures" ]]; then
+            echo 'Required CI dependencies did not succeed:' >&2
+            echo "$failures" >&2
+            exit 1
+          fi
+
+          echo 'All required CI dependencies succeeded.'

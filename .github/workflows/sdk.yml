@@ -1,9 +1,9 @@
 name: sdk
 
 on:
+  workflow_call:
   push:
     branches: [main]
-  pull_request: {}
 
 jobs:
   python-sdk:

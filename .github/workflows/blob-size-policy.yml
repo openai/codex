@@ -1,7 +1,7 @@
 name: blob-size-policy
 
 on:
-  pull_request: {}
+  workflow_call:
 
 jobs:
   check:

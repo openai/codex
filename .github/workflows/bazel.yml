@@ -4,7 +4,7 @@ name: Bazel
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
 
 on:
-  pull_request: {}
+  workflow_call:
   push:
     branches:
       - main
