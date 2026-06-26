@@ -24,7 +24,6 @@ pub use render::AvailableSkills;
 pub use render::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 pub use render::SKILLS_HOW_TO_USE_WITH_ALIASES;
 pub use render::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
-pub use render::SKILLS_INTRO_WITH_ALIASES;
 pub use render::SkillMetadataBudget;
 pub use render::SkillRenderReport;
 pub use render::build_available_skills;
