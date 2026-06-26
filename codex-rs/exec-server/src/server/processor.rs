@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::mpsc;
 use tracing::Instrument;
@@ -17,28 +18,50 @@ use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
 use crate::server::session_registry::SessionRegistry;
+use crate::telemetry::ConnectionTransport;
+use crate::telemetry::ExecServerTelemetry;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
+    telemetry: ExecServerTelemetry,
 }
 
 impl ConnectionProcessor {
+    #[cfg(test)]
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
+        Self::new_with_telemetry(runtime_paths, ExecServerTelemetry::default())
+    }
+
+    pub(crate) fn new_with_telemetry(
+        runtime_paths: ExecServerRuntimePaths,
+        telemetry: ExecServerTelemetry,
+    ) -> Self {
         Self {
-            session_registry: SessionRegistry::new(),
+            session_registry: SessionRegistry::new(telemetry.clone()),
             runtime_paths,
+            telemetry,
         }
     }
 
-    pub(crate) async fn run_connection(&self, connection: JsonRpcConnection) {
+    pub(crate) async fn run_connection(
+        &self,
+        connection: JsonRpcConnection,
+        transport: ConnectionTransport,
+    ) {
         run_connection(
             connection,
             Arc::clone(&self.session_registry),
             self.runtime_paths.clone(),
+            self.telemetry.clone(),
+            transport,
         )
         .await;
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.session_registry.shutdown().await;
     }
 }
 
@@ -46,7 +69,10 @@ async fn run_connection(
     connection: JsonRpcConnection,
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimePaths,
+    telemetry: ExecServerTelemetry,
+    transport: ConnectionTransport,
 ) {
+    let _connection_metrics = telemetry.connection_started(transport);
     let router = Arc::new(build_router());
     let JsonRpcConnection {
         outgoing_tx: json_outgoing_tx,
@@ -101,12 +127,18 @@ async fn run_connection(
             }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
-                    if let Some(route) = router.request_route(request.method.as_str()) {
-                        let request_span = request_span(request.method.as_str(), &request);
+                    let request_started_at = Instant::now();
+                    if let Some((method, route)) = router.request_route(request.method.as_str()) {
+                        let request_span = request_span(method, &request);
                         let message = tokio::select! {
                             message = route(Arc::clone(&handler), request).instrument(request_span.clone()) => message,
                             _ = disconnected_rx.changed() => {
                                 request_span.record("result", "disconnected");
+                                telemetry.request_completed(
+                                    method,
+                                    "disconnected",
+                                    request_started_at.elapsed(),
+                                );
                                 debug!("exec-server transport disconnected while handling request");
                                 break;
                             }
@@ -116,11 +148,19 @@ async fn run_connection(
                             && outgoing_tx.send(message).await.is_err()
                         {
                             request_span.record("result", "disconnected");
+                            telemetry.request_completed(
+                                method,
+                                "disconnected",
+                                request_started_at.elapsed(),
+                            );
                             break;
                         }
                         request_span.record("result", result);
+                        telemetry.request_completed(method, result, request_started_at.elapsed());
+                        drop(request_span);
                     } else {
-                        let request_span = request_span("unknown", &request);
+                        let method = "unknown";
+                        let request_span = request_span(method, &request);
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
@@ -133,9 +173,15 @@ async fn run_connection(
                             .is_err()
                         {
                             request_span.record("result", "disconnected");
+                            telemetry.request_completed(
+                                method,
+                                "disconnected",
+                                request_started_at.elapsed(),
+                            );
                             break;
                         }
                         request_span.record("result", "error");
+                        telemetry.request_completed(method, "error", request_started_at.elapsed());
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
@@ -330,7 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_accepts_pipelined_scalar_requests() {
-        let registry = SessionRegistry::new();
+        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
         let (mut writer, mut lines, task) = spawn_test_connection(registry, "pipelined-scalar");
 
         send_request(
@@ -362,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new();
+        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
 
@@ -458,7 +504,13 @@ mod tests {
         let (server_writer, client_reader) = duplex(1 << 20);
         let connection =
             JsonRpcConnection::from_stdio(server_reader, server_writer, label.to_string());
-        let task = tokio::spawn(run_connection(connection, registry, test_runtime_paths()));
+        let task = tokio::spawn(run_connection(
+            connection,
+            registry,
+            test_runtime_paths(),
+            crate::ExecServerTelemetry::default(),
+            crate::telemetry::ConnectionTransport::Stdio,
+        ));
         (client_writer, BufReader::new(client_reader).lines(), task)
     }
 

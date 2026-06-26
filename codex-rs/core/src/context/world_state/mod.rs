@@ -2,6 +2,9 @@ mod agents_md;
 mod environment;
 
 use crate::context::ContextualUserFragment;
+use codex_extension_api::PreviousWorldStateSection;
+use codex_extension_api::RenderedWorldStateFragment;
+use codex_extension_api::WorldStateSectionContribution;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use indexmap::IndexMap;
@@ -80,6 +83,54 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
             PreviousSectionState::Unknown => PreviousSectionState::Unknown,
         };
         WorldStateSection::render_diff(self, previous)
+    }
+}
+
+struct ExtensionWorldStateSection(WorldStateSectionContribution);
+
+impl ErasedWorldStateSection for ExtensionWorldStateSection {
+    fn snapshot(&self) -> Option<Value> {
+        let mut snapshot = self.0.snapshot().clone();
+        remove_null_object_fields(&mut snapshot);
+        (!snapshot.is_null()).then_some(snapshot)
+    }
+
+    fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
+        self.0.matches_legacy_fragment(role, text)
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Value>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
+        let previous = match previous {
+            PreviousSectionState::Absent => PreviousWorldStateSection::Absent,
+            PreviousSectionState::Unknown => PreviousWorldStateSection::Unknown,
+            PreviousSectionState::Known(previous) => PreviousWorldStateSection::Known(previous),
+        };
+        self.0
+            .render_diff(previous)
+            .map(|fragment| Box::new(WorldStateContextFragment(fragment)) as _)
+    }
+}
+
+struct WorldStateContextFragment(RenderedWorldStateFragment);
+
+impl ContextualUserFragment for WorldStateContextFragment {
+    fn role(&self) -> &'static str {
+        self.0.role()
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        self.0.markers()
+    }
+
+    fn body(&self) -> String {
+        self.0.body().to_string()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
     }
 }
 
@@ -167,6 +218,16 @@ impl WorldState {
             "duplicate world-state section ID: {id}"
         );
         self.sections.insert(id, Box::new(section));
+    }
+
+    pub(crate) fn add_extension_section(&mut self, section: WorldStateSectionContribution) {
+        let id = section.id();
+        assert!(
+            !self.sections.contains_key(id),
+            "duplicate world-state section ID: {id}"
+        );
+        self.sections
+            .insert(id, Box::new(ExtensionWorldStateSection(section)));
     }
 
     pub(crate) fn snapshot(&self) -> WorldStateSnapshot {

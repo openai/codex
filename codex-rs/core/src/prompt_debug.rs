@@ -64,7 +64,7 @@ pub async fn build_prompt_input(
     );
     let thread = thread_manager.start_thread(config).await?;
 
-    let output = build_prompt_input_from_session(thread.thread.codex.session.as_ref(), input).await;
+    let output = build_prompt_input_from_session(&thread.thread.codex.session, input).await;
     let shutdown = thread.thread.shutdown_and_wait().await;
     let _removed = thread_manager.remove_thread(&thread.thread_id).await;
 
@@ -73,7 +73,7 @@ pub async fn build_prompt_input(
 }
 
 pub(crate) async fn build_prompt_input_from_session(
-    sess: &Session,
+    sess: &Arc<Session>,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
     let turn_context = sess.new_default_turn().await;

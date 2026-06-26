@@ -35,7 +35,7 @@ mode = "full"
         .env("CODEX_HOME", codex_home.path())
         .args([
             "sandbox",
-            "--permissions-profile",
+            "--permission-profile",
             "network-test",
             "--",
             "curl",

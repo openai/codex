@@ -12,6 +12,7 @@ use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_core::config::CurrentTimeReminderConfig;
+use codex_features::CurrentTimeReminderDeliveryMode;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
@@ -39,6 +40,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 const FIRST_REMINDER: &str = "It is 2026-06-17 17:34:15 UTC.";
+const EARLIER_REMINDER: &str = "It is 2026-06-17 17:33:15 UTC.";
 const SECOND_REMINDER: &str = "It is 2026-06-17 17:35:15 UTC.";
 const THIRD_REMINDER: &str = "It is 2026-06-17 17:36:15 UTC.";
 const FIRST_TIME_UNIX_SECONDS: i64 = 1_781_717_655;
@@ -163,6 +165,107 @@ async fn current_time_reminders_follow_time_interval_and_persist_in_history() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_current_time_reminder_interval_delivers_when_time_moves_backward() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let time_provider = Arc::new(TestTimeProvider::default());
+    let test = test_codex()
+        .with_config(|config| {
+            enable_current_time_reminder(config, /*interval*/ 0, CurrentTimeSource::External)
+        })
+        .with_external_time_provider(time_provider.clone())
+        .build(&server)
+        .await?;
+
+    test.submit_turn("first turn").await?;
+    time_provider
+        .current_time
+        .store(FIRST_TIME_UNIX_SECONDS - 60, Ordering::Relaxed);
+    test.submit_turn("second turn").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
+    assert_eq!(
+        current_time_reminders(&requests[1]),
+        vec![FIRST_REMINDER, EARLIER_REMINDER]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn current_time_reminders_can_follow_only_user_or_tool_outputs() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let tool_args = json!({
+        "command": "echo current time",
+        "timeout_ms": 1_000,
+    });
+    let mut continue_response = ev_completed("resp-2");
+    // Ask for another inference without recording a new user message or tool output.
+    continue_response["response"]["end_turn"] = json!(false);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "current-time-tool-call",
+                    "shell_command",
+                    &serde_json::to_string(&tool_args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "continue"),
+                continue_response,
+            ]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            enable_current_time_reminder(config, /*interval*/ 0, CurrentTimeSource::External);
+            config
+                .current_time_reminder
+                .as_mut()
+                .expect("current-time reminder should be configured")
+                .delivery_mode = CurrentTimeReminderDeliveryMode::AfterUserOrToolOutput;
+        })
+        .with_external_time_provider(Arc::new(TestTimeProvider::default()))
+        .build(&server)
+        .await?;
+
+    test.submit_turn_with_permission_profile("first turn", PermissionProfile::Disabled)
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(current_time_reminders(&requests[0]), vec![FIRST_REMINDER]);
+    assert_eq!(
+        current_time_reminders(&requests[1]),
+        vec![FIRST_REMINDER, SECOND_REMINDER]
+    );
+    assert_eq!(
+        current_time_reminders(&requests[2]),
+        vec![FIRST_REMINDER, SECOND_REMINDER]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn system_time_source_adds_current_time_reminder() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -221,6 +324,11 @@ async fn current_time_reminder_is_refreshed_after_compaction() -> Result<()> {
                 /*interval*/ 3_000,
                 CurrentTimeSource::External,
             );
+            config
+                .current_time_reminder
+                .as_mut()
+                .expect("current-time reminder should be configured")
+                .delivery_mode = CurrentTimeReminderDeliveryMode::AfterUserOrToolOutput;
         })
         .with_external_time_provider(Arc::new(TestTimeProvider::default()))
         .build(&server)

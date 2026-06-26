@@ -170,8 +170,13 @@ pub(crate) async fn run_turn(
         .record_context_updates_and_set_reference_context_item(first_step_context.as_ref())
         .await;
 
-    let Some((injection_items, explicitly_enabled_connectors)) =
-        build_skills_and_plugins(&sess, turn_context.as_ref(), &input, &cancellation_token).await
+    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+        &sess,
+        first_step_context.as_ref(),
+        &input,
+        &cancellation_token,
+    )
+    .await
     else {
         return Ok(None);
     };
@@ -483,10 +488,11 @@ async fn run_hooks_and_record_inputs(
 #[instrument(level = "trace", skip_all)]
 async fn build_skills_and_plugins(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     input: &[TurnInput],
     cancellation_token: &CancellationToken,
 ) -> Option<(Vec<ResponseItem>, HashSet<String>)> {
+    let turn_context = step_context.turn.as_ref();
     // Guardian input embeds the parent transcript as untrusted evidence. Do not interpret skill or
     // plugin mentions from that generated prompt as requests to inject additional instructions.
     if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
@@ -517,17 +523,14 @@ async fn build_skills_and_plugins(
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
+    let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
-        match sess
-            .services
-            .mcp_connection_manager
-            .load_full()
+        match step_context
+            .mcp
+            .manager_arc()
             .list_all_tools()
             .or_cancel(cancellation_token)
             .await
@@ -1156,7 +1159,7 @@ pub(crate) async fn built_tools(
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
-    let mcp_connection_manager = sess.services.mcp_connection_manager.load_full();
+    let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
         .list_all_tools()
@@ -1168,9 +1171,7 @@ pub(crate) async fn built_tools(
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .instrument(trace_span!("built_tools.load_plugins"))
         .await;
-    let connector_snapshot = codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
-        loaded_plugins.capability_summaries(),
-    );
+    let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
 
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =

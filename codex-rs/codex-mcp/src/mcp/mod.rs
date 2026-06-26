@@ -5,7 +5,9 @@ pub use auth::McpOAuthScopesSource;
 pub use auth::ResolvedMcpOAuthScopes;
 pub use auth::compute_auth_statuses;
 pub use auth::discover_supported_scopes;
+pub use auth::discover_supported_scopes_with_http_client;
 pub use auth::oauth_login_support;
+pub use auth::oauth_login_support_with_http_client;
 pub use auth::resolve_oauth_scopes;
 pub use auth::should_retry_without_scopes;
 
@@ -42,7 +44,8 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::ResolvedMcpCatalog;
-use crate::codex_apps::codex_apps_tools_cache_key;
+use crate::codex_apps_cache::CodexAppsToolsCache;
+use crate::codex_apps_cache::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
@@ -299,6 +302,7 @@ pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     runtime_context: McpRuntimeContext,
+    codex_apps_tools_cache: CodexAppsToolsCache,
     server: &str,
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
@@ -309,6 +313,7 @@ pub async fn read_mcp_resource(
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
         auth,
+        &runtime_context,
     )
     .await;
     let (tx_event, rx_event) = unbounded();
@@ -326,6 +331,7 @@ pub async fn read_mcp_resource(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
+        codex_apps_tools_cache,
         codex_apps_tools_cache_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
@@ -358,6 +364,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     auth: Option<&CodexAuth>,
     submit_id: String,
     runtime_context: McpRuntimeContext,
+    codex_apps_tools_cache: CodexAppsToolsCache,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -378,6 +385,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
         auth,
+        &runtime_context,
     )
     .await;
 
@@ -399,6 +407,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
+        codex_apps_tools_cache,
         codex_apps_tools_cache_key(auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
@@ -558,7 +567,7 @@ fn auth_statuses_from_entries(
 ) -> HashMap<String, McpAuthStatus> {
     auth_status_entries
         .iter()
-        .map(|(name, entry)| (name.clone(), entry.auth_status))
+        .map(|(name, entry)| (name.clone(), McpAuthStatus::from(entry.auth_state)))
         .collect::<HashMap<_, _>>()
 }
 

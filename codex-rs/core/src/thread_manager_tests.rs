@@ -20,6 +20,8 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -119,6 +121,18 @@ fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
             Some("persisted_originator"),
             Some("inherited_originator"),
             "codex_work_desktop",
+        ),
+        (
+            Some("codex_work_web"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_web",
+        ),
+        (
+            Some("codex_work_mobile"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_mobile",
         ),
         (
             None,
@@ -398,6 +412,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let thread = manager
         .start_thread_with_options(StartThreadOptions {
             config,
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
@@ -540,6 +555,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let first_thread = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
@@ -555,6 +571,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let second_thread = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
@@ -567,8 +584,28 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start second thread");
-    let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
-    let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
+    let first_session = &first_thread.thread.codex.session;
+    let first_resolved = first_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &first_session.services.mcp_thread_init,
+            &first_session.services.thread_extension_data,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
+    let second_session = &second_thread.thread.codex.session;
+    let second_resolved = second_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &second_session.services.mcp_thread_init,
+            &second_session.services.thread_extension_data,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
 
     assert_eq!(
         *lifecycle_observed
@@ -611,6 +648,72 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
 }
 
 #[tokio::test]
+async fn selected_capability_roots_round_trip_through_fork() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "demo@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "build".to_string(),
+            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
+        },
+    }];
+    let inherited = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                SessionMetaLine {
+                    meta: SessionMeta {
+                        selected_capability_roots: selected_roots.clone(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                },
+            )]),
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start inherited fork");
+    inherited.thread.ensure_rollout_materialized().await;
+    inherited
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush inherited fork");
+    let inherited_history = RolloutRecorder::get_rollout_history(
+        &inherited
+            .thread
+            .rollout_path()
+            .expect("inherited fork rollout path"),
+    )
+    .await
+    .expect("read inherited fork rollout");
+
+    assert_eq!(
+        inherited_history.get_selected_capability_roots(),
+        selected_roots
+    );
+}
+
+#[tokio::test]
 async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
@@ -647,6 +750,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: source_config,
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
@@ -930,6 +1034,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),

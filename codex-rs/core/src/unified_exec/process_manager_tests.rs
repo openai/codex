@@ -42,12 +42,20 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
         ("HOME".to_string(), "/client-home".to_string()),
         ("PATH".to_string(), "/client-path".to_string()),
         ("SHELL_SET".to_string(), "policy".to_string()),
+        (
+            CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+            "current-profile".to_string(),
+        ),
     ]);
     let request_env = HashMap::from([
         ("HOME".to_string(), "/client-home".to_string()),
         ("PATH".to_string(), "/sandbox-path".to_string()),
         ("SHELL_SET".to_string(), "policy".to_string()),
         ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
+        (
+            CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+            "current-profile".to_string(),
+        ),
         (
             "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
             "1".to_string(),
@@ -60,10 +68,39 @@ fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
             ("PATH".to_string(), "/sandbox-path".to_string()),
             ("CODEX_THREAD_ID".to_string(), "thread-1".to_string()),
             (
+                CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
+                "current-profile".to_string(),
+            ),
+            (
                 "CODEX_SANDBOX_NETWORK_DISABLED".to_string(),
                 "1".to_string()
             ),
         ])
+    );
+}
+
+#[test]
+fn exec_env_policy_excludes_runtime_permission_profile() {
+    let policy = ShellEnvironmentPolicy {
+        r#set: HashMap::from([
+            (
+                "codex_permission_profile".to_string(),
+                "stale-profile".to_string(),
+            ),
+            ("KEEP".to_string(), "value".to_string()),
+        ]),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        exec_env_policy_from_shell_policy(&policy),
+        codex_exec_server::ExecEnvPolicy {
+            inherit: policy.inherit,
+            ignore_default_excludes: policy.ignore_default_excludes,
+            exclude: vec![CODEX_PERMISSION_PROFILE_ENV_VAR.to_string()],
+            r#set: HashMap::from([("KEEP".to_string(), "value".to_string())]),
+            include_only: Vec::new(),
+        }
     );
 }
 
