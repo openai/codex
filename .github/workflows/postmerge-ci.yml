@@ -1,0 +1,97 @@
+name: postmerge-ci
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  changes:
+    name: Detect postmerge changes
+    runs-on: ubuntu-24.04
+    outputs:
+      v8_canary: ${{ steps.detect.outputs.v8_canary }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect V8 canary changes
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          v8_canary=false
+          while IFS= read -r file; do
+            case "$file" in
+              .bazelrc \
+                | .github/actions/setup-bazel-ci/* \
+                | .github/scripts/run_bazel_with_buildbuddy.py \
+                | .github/scripts/rusty_v8_bazel.py \
+                | .github/scripts/rusty_v8_module_bazel.py \
+                | .github/scripts/v8_canary_changes.py \
+                | .github/workflows/postmerge-ci.yml \
+                | .github/workflows/rusty-v8-release.yml \
+                | .github/workflows/v8-canary.yml \
+                | MODULE.bazel \
+                | MODULE.bazel.lock \
+                | codex-rs/Cargo.toml \
+                | patches/BUILD.bazel \
+                | patches/llvm_*.patch \
+                | patches/rules_cc_*.patch \
+                | patches/v8_*.patch \
+                | third_party/v8/*)
+                v8_canary=true
+                ;;
+            esac
+          done < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
+
+          echo "v8_canary=$v8_canary" >> "$GITHUB_OUTPUT"
+
+  rust-ci-full:
+    name: rust-ci-full
+    uses: ./.github/workflows/rust-ci-full.yml
+    secrets: inherit
+
+  v8-canary:
+    name: v8-canary
+    needs: changes
+    if: needs.changes.outputs.v8_canary == 'true'
+    uses: ./.github/workflows/v8-canary.yml
+    secrets: inherit
+
+  results:
+    name: Postmerge CI results
+    needs:
+      - changes
+      - rust-ci-full
+      - v8-canary
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require successful dependencies
+        env:
+          V8_CANARY_REQUIRED: ${{ needs.changes.outputs.v8_canary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "changes     : ${{ needs.changes.result }}"
+          echo "rust-ci-full: ${{ needs.rust-ci-full.result }}"
+          echo "v8-canary  : ${{ needs.v8-canary.result }}"
+
+          [[ '${{ needs.changes.result }}' == 'success' ]] || { echo 'change detection failed'; exit 1; }
+          [[ '${{ needs.rust-ci-full.result }}' == 'success' ]] || { echo 'rust-ci-full failed'; exit 1; }
+
+          if [[ "$V8_CANARY_REQUIRED" == 'true' ]]; then
+            [[ '${{ needs.v8-canary.result }}' == 'success' ]] || { echo 'v8-canary failed'; exit 1; }
+          else
+            [[ '${{ needs.v8-canary.result }}' == 'skipped' ]] || { echo 'v8-canary ran unexpectedly'; exit 1; }
+          fi
+
+          echo 'All required postmerge CI dependencies succeeded.'

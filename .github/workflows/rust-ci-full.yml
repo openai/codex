@@ -1,8 +1,8 @@
 name: rust-ci-full
 on:
+  workflow_call:
   push:
     branches:
-      - main
       - "**full-ci**"
   workflow_dispatch:
 

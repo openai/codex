@@ -1,6 +1,7 @@
 name: v8-canary
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - ".bazelrc"
@@ -9,26 +10,7 @@ on:
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/scripts/rusty_v8_module_bazel.py"
       - ".github/scripts/v8_canary_changes.py"
-      - ".github/workflows/rusty-v8-release.yml"
-      - ".github/workflows/v8-canary.yml"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - "codex-rs/Cargo.toml"
-      - "patches/BUILD.bazel"
-      - "patches/llvm_*.patch"
-      - "patches/rules_cc_*.patch"
-      - "patches/v8_*.patch"
-      - "third_party/v8/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".bazelrc"
-      - ".github/actions/setup-bazel-ci/**"
-      - ".github/scripts/run_bazel_with_buildbuddy.py"
-      - ".github/scripts/rusty_v8_bazel.py"
-      - ".github/scripts/rusty_v8_module_bazel.py"
-      - ".github/scripts/v8_canary_changes.py"
+      - ".github/workflows/postmerge-ci.yml"
       - ".github/workflows/rusty-v8-release.yml"
       - ".github/workflows/v8-canary.yml"
       - "MODULE.bazel"
