@@ -5,6 +5,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
+use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
 use keyring::Error as KeyringError;
 use oauth2::AccessToken;
 use oauth2::TokenResponse;
@@ -12,6 +14,13 @@ use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::OAuthState;
 use tokio::sync::Mutex as TokioMutex;
+use tracing::Event;
+use tracing::Id;
+use tracing::Metadata;
+use tracing::Subscriber;
+use tracing::span::Attributes;
+use tracing::span::Record;
+use tracing::subscriber::Interest;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -27,6 +36,7 @@ use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::compute_store_key;
+use crate::oauth::delete_oauth_tokens_locked;
 use crate::oauth::fallback_file_path;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::load_oauth_tokens_from_keyring;
@@ -34,6 +44,51 @@ use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::refresh_transaction::RefreshReason;
 use crate::oauth::save_oauth_tokens_to_file;
 use crate::oauth::save_oauth_tokens_with_keyring;
+
+const REFRESH_LOCK_CONTENTION_EVENT_TARGET: &str =
+    "codex_rmcp_client::oauth::refresh_lock::contention";
+
+struct LockContentionSubscriber {
+    contended_tx: mpsc::Sender<()>,
+}
+
+impl Subscriber for LockContentionSubscriber {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target() == REFRESH_LOCK_CONTENTION_EVENT_TARGET
+    }
+
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        if self.enabled(metadata) {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::DEBUG)
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        Id::from_u64(/*u*/ 1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows_from: &Id) {}
+
+    fn event(&self, event: &Event<'_>) {
+        if self.enabled(event.metadata()) {
+            self.contended_tx
+                .send(())
+                .expect("signal actual OAuth credential-lock contention");
+        }
+    }
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> Result<()> {
@@ -119,6 +174,130 @@ async fn delayed_unauthorized_retries_adopt_the_winning_token() -> Result<()> {
     let adopted = tokens_from_manager(&second_manager).await?;
     assert_eq!(adopted.0.access_token().secret(), "refreshed-access-token");
     assert!(adopted.0.refresh_token().is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oauth_callback_waits_for_refresh_and_then_becomes_authoritative() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "login-access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "login-refresh-token",
+            "scope": "scope-a scope-b",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let server_name = "callback-lock-test";
+    let server_url = format!("{}/mcp", server.uri());
+    let held_lock = RefreshCredentialLock::acquire_for_server(server_name, &server_url).await?;
+    let (contended_tx, contended_rx) = mpsc::channel();
+    let _subscriber_guard =
+        tracing::subscriber::set_default(LockContentionSubscriber { contended_tx });
+    let handle = crate::perform_oauth_login_return_url_with_http_client(
+        server_name,
+        &server_url,
+        OAuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        &["scope-a".to_string(), "scope-b".to_string()],
+        Some("test-client-id"),
+        /*oauth_resource*/ None,
+        Some(/*timeout_secs*/ 5),
+        /*callback_port*/ None,
+        /*callback_url*/ None,
+        Environment::default_for_tests().get_http_client(),
+    )
+    .await?;
+    let authorization_url = reqwest::Url::parse(handle.authorization_url())?;
+    let query = authorization_url
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    let redirect_uri = query
+        .get("redirect_uri")
+        .context("authorization URL omitted redirect_uri")?;
+    let state = query
+        .get("state")
+        .context("authorization URL omitted state")?;
+    let mut callback_url = reqwest::Url::parse(redirect_uri)?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "authorization-code")
+        .append_pair("state", state);
+    let (_authorization_url, completion) = handle.into_parts();
+    reqwest::Client::new()
+        .get(callback_url)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    // This event is emitted only after the callback's real persistence path observes WouldBlock.
+    // Writing while the lock is held models a refresh that started first; login must overwrite it
+    // after the transaction finishes.
+    wait_for_signal(contended_rx).await?;
+    let mut refresh_winner = sample_tokens();
+    refresh_winner.server_name = server_name.to_string();
+    refresh_winner.url.clone_from(&server_url);
+    refresh_winner
+        .token_response
+        .0
+        .set_access_token(AccessToken::new("refresh-winner".to_string()));
+    save_oauth_tokens_to_file(&refresh_winner)?;
+    drop(held_lock);
+    completion
+        .await
+        .context("OAuth login task was cancelled")??;
+
+    let stored = load_oauth_tokens_from_file(server_name, &server_url)?
+        .expect("callback credentials should be persisted");
+    assert_eq!(
+        stored.token_response.0.access_token().secret(),
+        "login-access-token"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn locked_logout_waits_for_refresh_and_removes_its_result() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    let refresh_started = mount_delayed_refresh(&server, "refreshed-before-logout").await;
+    let initial = expired_tokens(&format!("{}/mcp", server.uri()));
+    save_oauth_tokens_to_file(&initial)?;
+    let persistor = persistor_for(&initial).await?;
+    let refresh_task = tokio::spawn(async move { persistor.refresh_if_needed().await });
+    wait_for_signal(refresh_started).await?;
+
+    let (contended_tx, contended_rx) = mpsc::channel();
+    let _subscriber_guard =
+        tracing::subscriber::set_default(LockContentionSubscriber { contended_tx });
+    let server_name = initial.server_name.clone();
+    let url = initial.url.clone();
+    let logout_task = tokio::spawn(async move {
+        delete_oauth_tokens_locked(
+            &server_name,
+            &url,
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .await
+    });
+
+    wait_for_signal(contended_rx).await?;
+    refresh_task.await??;
+    assert!(logout_task.await??);
+    assert!(load_oauth_tokens_from_file(&initial.server_name, &initial.url)?.is_none());
+    server.verify().await;
     Ok(())
 }
 
