@@ -969,8 +969,8 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
-    #[experimental("toolSearch/debug/search")]
-    ToolSearchSearch => "toolSearch/debug/search" {
+    #[experimental("debug/toolSearch/search")]
+    ToolSearchSearch => "debug/toolSearch/search" {
         params: v2::ToolSearchSearchParams,
         serialization: thread_id(params.thread_id),
         response: v2::ToolSearchSearchResponse,
@@ -3024,7 +3024,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "toolSearch/debug/search",
+                "method": "debug/toolSearch/search",
                 "id": 9,
                 "params": {
                     "threadId": "thread-123",
