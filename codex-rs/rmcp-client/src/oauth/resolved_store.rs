@@ -10,13 +10,15 @@ use tracing::warn;
 use super::StoredOAuthTokens;
 use super::load_oauth_tokens_from_file;
 use super::load_oauth_tokens_from_keyring;
+use super::resolution_state::StoreResolutionReason;
+use super::resolution_state::record_store_resolution;
 
 /// Concrete credential store resolved for one MCP OAuth client lifecycle.
 ///
-/// This is intentionally not durable. `Auto` may resolve differently in a later process, but a
-/// client that loaded credentials from one store must reread, refresh, persist, and remove only
-/// through that store. A mid-lifecycle backend failure is unexpected and must return an error
-/// rather than falling back to another possibly stale refresh token.
+/// This selection is intentionally not persisted as credential authority. `Auto` may resolve
+/// differently in a later process, but a client that loaded credentials from one store must
+/// reread, refresh, persist, and remove only through that store. A separate best-effort diagnostic
+/// record warns when later Auto resolution changes; it never influences this selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResolvedOAuthCredentialStore {
     File,
@@ -36,64 +38,93 @@ pub(crate) fn resolve_oauth_tokens<K: KeyringStore + Clone + 'static>(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<ResolvedOAuthTokens>> {
-    match store_mode {
+    let (resolved, reason) = match store_mode {
         OAuthCredentialsStoreMode::Auto => {
             // Auto remains keyring-first at lifecycle startup. The returned source is then pinned
             // by the client transport recipe and OAuth persistor so retries, recovery, and
             // refresh work cannot hot-switch stores.
-            // TODO(stevenlee): Different processes can still resolve Auto to different stores
-            // when keyring availability differs. Solving that safely requires durable backend
-            // selection or reconciliation of legacy entries and is intentionally outside this
-            // stack.
+            // Different processes can still resolve Auto differently when keyring availability
+            // changes. The token-free observation below makes that drift visible without turning
+            // the sidecar into another source of credential authority.
             match load_oauth_tokens_from_keyring(
                 keyring_store,
                 keyring_backend_kind,
                 server_name,
                 url,
             ) {
-                Ok(Some(tokens)) => Ok(Some(ResolvedOAuthTokens {
-                    tokens,
-                    store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
-                })),
-                Ok(None) => Ok(
+                Ok(Some(tokens)) => (
+                    Some(ResolvedOAuthTokens {
+                        tokens,
+                        store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
+                    }),
+                    StoreResolutionReason::AutoLoadFromKeyring,
+                ),
+                Ok(None) => (
                     load_oauth_tokens_from_file(server_name, url)?.map(|tokens| {
                         ResolvedOAuthTokens {
                             tokens,
                             store: ResolvedOAuthCredentialStore::File,
                         }
                     }),
+                    StoreResolutionReason::AutoLoadFromFileAfterMissingKeyring,
                 ),
                 Err(error) => {
                     warn!("failed to read OAuth tokens from keyring: {error}");
-                    Ok(load_oauth_tokens_from_file(server_name, url)
-                        .with_context(|| {
-                            format!("failed to read OAuth tokens from keyring: {error}")
-                        })?
-                        .map(|tokens| ResolvedOAuthTokens {
-                            tokens,
-                            store: ResolvedOAuthCredentialStore::File,
-                        }))
+                    (
+                        load_oauth_tokens_from_file(server_name, url)
+                            .with_context(|| {
+                                format!("failed to read OAuth tokens from keyring: {error}")
+                            })?
+                            .map(|tokens| ResolvedOAuthTokens {
+                                tokens,
+                                store: ResolvedOAuthCredentialStore::File,
+                            }),
+                        StoreResolutionReason::AutoLoadFromFileAfterKeyringError,
+                    )
                 }
             }
         }
-        OAuthCredentialsStoreMode::File => Ok(load_oauth_tokens_from_file(server_name, url)?.map(
-            |tokens| ResolvedOAuthTokens {
+        OAuthCredentialsStoreMode::File => (
+            load_oauth_tokens_from_file(server_name, url)?.map(|tokens| ResolvedOAuthTokens {
                 tokens,
                 store: ResolvedOAuthCredentialStore::File,
-            },
-        )),
-        OAuthCredentialsStoreMode::Keyring => Ok(load_oauth_tokens_from_keyring(
-            keyring_store,
-            keyring_backend_kind,
+            }),
+            StoreResolutionReason::ConfiguredLoad,
+        ),
+        OAuthCredentialsStoreMode::Keyring => (
+            load_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url)
+                .with_context(|| "failed to read OAuth tokens from keyring".to_string())?
+                .map(|tokens| ResolvedOAuthTokens {
+                    tokens,
+                    store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
+                }),
+            StoreResolutionReason::ConfiguredLoad,
+        ),
+    };
+
+    // Explicit modes select their store even when no credential exists. Auto has no concrete
+    // selection until one store returns credentials or login successfully persists them.
+    let resolved_store = resolved
+        .as_ref()
+        .map(|resolved| resolved.store)
+        .or(match store_mode {
+            OAuthCredentialsStoreMode::Auto => None,
+            OAuthCredentialsStoreMode::File => Some(ResolvedOAuthCredentialStore::File),
+            OAuthCredentialsStoreMode::Keyring => {
+                Some(ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind))
+            }
+        });
+    if let Some(resolved_store) = resolved_store {
+        record_store_resolution(
             server_name,
             url,
-        )
-        .with_context(|| "failed to read OAuth tokens from keyring".to_string())?
-        .map(|tokens| ResolvedOAuthTokens {
-            tokens,
-            store: ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
-        })),
+            store_mode,
+            keyring_backend_kind,
+            resolved_store,
+            reason,
+        );
     }
+    Ok(resolved)
 }
 
 pub(crate) fn load_oauth_tokens_from_store<K: KeyringStore + Clone + 'static>(
