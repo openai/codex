@@ -2224,7 +2224,6 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-windows-sandbox",
  "dotenvy",
- "hickory-resolver",
  "pretty_assertions",
  "serde",
  "serde_json",

@@ -14,18 +14,25 @@
 //! second overlay to unset proxy variables when the endpoint is unreachable.
 
 use crate::is_reserved_env_var;
-use hickory_resolver::Resolver;
 use serde::Deserialize;
+use std::ffi::OsString;
+use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
 use std::time::Duration;
+use std::time::Instant;
 use url::Url;
+
+pub(crate) const TCP_CONNECT_HELPER_ARG1: &str = "--codex-run-as-tcp-connect-probe";
 
 const CONDITIONAL_DOTENV_PREFIX: &str = ".env.";
 const CONDITION_DIRECTIVE_PREFIX: &str = "# codex-env-if:";
 const UNSET_DIRECTIVE_PREFIX: &str = "# codex-env-unset:";
 const DEFAULT_TCP_CONNECT_TIMEOUT_MS: u64 = 500;
 const MAX_TCP_CONNECT_TIMEOUT_MS: u64 = 5_000;
+const TCP_CONNECT_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const IGNORED_CONDITIONAL_DOTENV_SUFFIXES: &[&str] = &[
     "bak", "back", "backup", "bkp", "old", "orig", "original", "save", "saved", "disable",
     "disabled", "inactive", "off", "tmp", "temp", "swp", "swo", "example", "sample", "template",
@@ -42,6 +49,29 @@ pub(crate) fn load(codex_home: &Path) {
     {
         eprintln!("WARNING: skipped conditional dotenv overlay: {warning}");
     }
+}
+
+/// Runs an OS-resolved TCP probe in the child process used by [`system_tcp_connect`].
+///
+/// This exits before dotenv loading, so its resolver and connection tasks cannot race with the
+/// parent's environment mutation.
+pub(crate) fn run_tcp_connect_helper(mut args: impl Iterator<Item = OsString>) -> ! {
+    let host = args.next().and_then(|value| value.into_string().ok());
+    let port = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .and_then(|value| value.parse::<u16>().ok());
+    let timeout = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .and_then(|timeout_ms| tcp_connect_timeout(Some(timeout_ms)).ok());
+    let connected = match (host, port, timeout) {
+        (Some(host), Some(port), Some(timeout)) => direct_tcp_connect(&host, port, timeout),
+        _ => false,
+    };
+    let exit_code = if connected { 0 } else { 1 };
+    std::process::exit(exit_code);
 }
 
 fn load_conditional_dotenv_overlays(
@@ -301,34 +331,78 @@ fn parse_endpoint(value: &str) -> Option<(String, u16)> {
 }
 
 fn system_tcp_connect(host: &str, port: u16, timeout: Duration) -> bool {
+    // `getaddrinfo` cannot be cancelled portably. Isolate it in a child that can be killed and
+    // reaped without introducing a resolver thread into the environment-mutating parent.
+    let Ok(current_exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(mut child) = Command::new(current_exe)
+        .arg(TCP_CONNECT_HELPER_ARG1)
+        .arg(host)
+        .arg(port.to_string())
+        .arg(timeout.as_millis().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {}
+            Err(_) => break,
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(remaining.min(TCP_CONNECT_HELPER_POLL_INTERVAL));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    false
+}
+
+fn direct_tcp_connect(host: &str, port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let Ok(addresses) = (host, port)
+        .to_socket_addrs()
+        .map(Iterator::collect::<Vec<_>>)
+    else {
+        return false;
+    };
+    if deadline.saturating_duration_since(Instant::now()).is_zero() {
+        return false;
+    }
+
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     else {
         return false;
     };
-
-    runtime
-        .block_on(tokio::time::timeout(timeout, async {
-            let Ok(resolver_builder) = Resolver::builder_tokio() else {
-                return false;
-            };
-            let resolver = resolver_builder.build();
-            let Ok(addresses) = resolver.lookup_ip(host).await else {
-                return false;
-            };
-
+    runtime.block_on(async move {
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async move {
+            let mut attempts = tokio::task::JoinSet::new();
             for address in addresses {
-                if tokio::net::TcpStream::connect((address, port))
-                    .await
-                    .is_ok()
-                {
+                attempts.spawn(tokio::net::TcpStream::connect(address));
+            }
+            while let Some(result) = attempts.join_next().await {
+                if matches!(result, Ok(Ok(_))) {
                     return true;
                 }
             }
             false
-        }))
+        })
+        .await
         .unwrap_or(false)
+    })
 }
 
 fn is_valid_env_var_name(key: &str) -> bool {

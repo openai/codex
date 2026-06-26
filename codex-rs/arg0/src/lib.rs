@@ -100,6 +100,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
+    if argv1 == conditional_dotenv::TCP_CONNECT_HELPER_ARG1 {
+        conditional_dotenv::run_tcp_connect_helper(args);
+    }
     if argv1 == CODEX_FS_HELPER_ARG1 {
         codex_exec_server::run_fs_helper_main();
     }
