@@ -51,10 +51,3 @@ pub fn install_executor_plugins(
         executor_plugin::SelectedExecutorPluginMcpContributor::new(environment_manager),
     ));
 }
-
-/// Seeds the per-thread snapshot used by selected executor plugin MCP discovery.
-pub fn initialize_executor_plugin_thread_data(
-    thread_init: &mut codex_extension_api::ExtensionDataInit,
-) {
-    executor_plugin::seed_thread_state(thread_init);
-}

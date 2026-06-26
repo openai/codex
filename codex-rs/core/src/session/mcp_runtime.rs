@@ -10,6 +10,7 @@ pub struct McpRuntimeSnapshot {
     config: Arc<McpConfig>,
     manager: Arc<McpConnectionManager>,
     runtime_context: McpRuntimeContext,
+    available_environment_ids: Vec<String>,
 }
 
 impl McpRuntimeSnapshot {
@@ -17,11 +18,13 @@ impl McpRuntimeSnapshot {
         config: Arc<McpConfig>,
         manager: Arc<McpConnectionManager>,
         runtime_context: McpRuntimeContext,
+        available_environment_ids: Vec<String>,
     ) -> Self {
         Self {
             config,
             manager,
             runtime_context,
+            available_environment_ids,
         }
     }
 
@@ -39,6 +42,10 @@ impl McpRuntimeSnapshot {
 
     pub fn runtime_context(&self) -> &McpRuntimeContext {
         &self.runtime_context
+    }
+
+    pub(crate) fn available_environment_ids(&self) -> &[String] {
+        &self.available_environment_ids
     }
 
     #[cfg(test)]
@@ -81,6 +88,7 @@ impl McpRuntimeSnapshot {
             Arc::new(mcp_config),
             Arc::new(manager),
             runtime_context,
+            Vec::new(),
         ))
     }
 }

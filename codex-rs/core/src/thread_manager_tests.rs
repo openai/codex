@@ -584,8 +584,28 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start second thread");
-    let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
-    let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
+    let first_session = &first_thread.thread.codex.session;
+    let first_resolved = first_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &first_session.services.mcp_thread_init,
+            &first_session.services.thread_extension_data,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
+    let second_session = &second_thread.thread.codex.session;
+    let second_resolved = second_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &second_session.services.mcp_thread_init,
+            &second_session.services.thread_extension_data,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
 
     assert_eq!(
         *lifecycle_observed

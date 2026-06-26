@@ -1,7 +1,9 @@
 use super::*;
+use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
@@ -75,9 +77,20 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 
 impl Session {
     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        let environments = self.services.turn_environments.snapshot().await;
+        let selected_capability_roots = self
+            .resolve_selected_capability_roots_for_step(&environments)
+            .await;
+        let available_environment_ids =
+            Self::available_selected_environment_ids(&selected_capability_roots);
         self.services
             .mcp_manager
-            .runtime_config_for_thread(config, &self.services.mcp_thread_init)
+            .runtime_config_for_step(
+                config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+            )
             .await
     }
 
@@ -86,6 +99,62 @@ impl Session {
         config: &Config,
     ) -> HashMap<String, McpServerConfig> {
         codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP runtime comparison and publication must remain serialized"
+    )]
+    pub(crate) async fn mcp_runtime_for_step(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+        selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
+    ) -> Arc<McpRuntimeSnapshot> {
+        let available_environment_ids =
+            Self::available_selected_environment_ids(selected_capability_roots);
+        let current = self.services.latest_mcp_runtime();
+        if current.available_environment_ids() == available_environment_ids {
+            return current;
+        }
+
+        let _guard = self.services.mcp_projection_lock.lock().await;
+        let current = self.services.latest_mcp_runtime();
+        if current.available_environment_ids() == available_environment_ids {
+            return current;
+        }
+        let mcp_config = self
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                &turn_context.config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+            )
+            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_config,
+            environments,
+            &available_environment_ids,
+            Some(self.mcp_elicitation_reviewer()),
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_selected_capability_roots_for_step(
+        &self,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Vec<ResolvedSelectedCapabilityRoot> {
+        self.services
+            .turn_environments
+            .environment_manager()
+            .resolve_selected_capability_roots(
+                &self.services.selected_capability_roots,
+                &environments.captured_environments(),
+            )
+            .await
     }
 
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
@@ -207,51 +276,22 @@ impl Session {
             .await
     }
 
-    pub async fn read_resource(
-        &self,
-        server: &str,
-        params: ReadResourceRequestParams,
-    ) -> anyhow::Result<ReadResourceResult> {
-        self.services
-            .latest_mcp_runtime()
-            .manager_arc()
-            .read_resource(server, params)
-            .await
-    }
-
-    pub async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
-    ) -> anyhow::Result<CallToolResult> {
-        self.services
-            .latest_mcp_runtime()
-            .manager_arc()
-            .call_tool(server, tool, arguments, meta)
-            .await
-    }
-
     async fn refresh_mcp_servers_inner(
         &self,
         turn_context: &TurnContext,
-        mut mcp_config: McpConfig,
-        configured_mcp_servers: HashMap<String, McpServerConfig>,
+        mcp_config: McpConfig,
+        environments: &TurnEnvironmentSnapshot,
+        available_environment_ids: &[String],
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) {
-        mcp_config.mcp_server_catalog = mcp_config
-            .mcp_server_catalog
-            .with_materialized_servers(configured_mcp_servers);
-        let mcp_config = Arc::new(mcp_config);
+    ) -> Arc<McpRuntimeSnapshot> {
         let auth = self.services.auth_manager.auth().await;
+        let mcp_config = Arc::new(mcp_config);
         let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
         let environment_manager = self.services.turn_environments.environment_manager();
         // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
         // values can be used without falling back to the legacy host cwd.
-        let cwd = turn_context
-            .environments
+        let cwd = environments
             .primary()
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .map(|cwd| cwd.to_path_buf())
@@ -305,10 +345,18 @@ impl Session {
             refreshed_manager
                 .set_elicitations_auto_deny(current_manager.manager().elicitations_auto_deny());
         }
-        self.services
-            .publish_mcp_runtime(mcp_config, mcp_runtime_context, refreshed_manager);
+        self.services.publish_mcp_runtime(
+            mcp_config,
+            mcp_runtime_context,
+            available_environment_ids.to_vec(),
+            refreshed_manager,
+        )
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP runtime refresh and publication must remain serialized"
+    )]
     pub(crate) async fn refresh_mcp_servers_if_requested(
         &self,
         turn_context: &TurnContext,
@@ -365,9 +413,33 @@ impl Session {
             return;
         }
 
-        let mcp_config = self.runtime_mcp_config(&refresh_config).await;
-        self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
+        let _guard = self.services.mcp_projection_lock.lock().await;
+        let available_environment_ids = self
+            .services
+            .latest_mcp_runtime()
+            .available_environment_ids()
+            .to_vec();
+        let mut mcp_config = self
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                &refresh_config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+            )
             .await;
+        mcp_config.mcp_server_catalog = mcp_config
+            .mcp_server_catalog
+            .with_materialized_servers(mcp_servers);
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_config,
+            &turn_context.environments,
+            &available_environment_ids,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     pub(crate) async fn set_openai_form_elicitation_support(
@@ -398,16 +470,54 @@ impl Session {
         Ok(())
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP runtime refresh and publication must remain serialized"
+    )]
     pub(crate) async fn refresh_mcp_servers_now(
         &self,
         turn_context: &TurnContext,
         refresh_config: &Config,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let mcp_config = self.runtime_mcp_config(refresh_config).await;
-        let mcp_servers = codex_mcp::configured_mcp_servers(&mcp_config);
-        self.refresh_mcp_servers_inner(turn_context, mcp_config, mcp_servers, elicitation_reviewer)
+        let _guard = self.services.mcp_projection_lock.lock().await;
+        let available_environment_ids = self
+            .services
+            .latest_mcp_runtime()
+            .available_environment_ids()
+            .to_vec();
+        let mcp_config = self
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                refresh_config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+            )
             .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_config,
+            &turn_context.environments,
+            &available_environment_ids,
+            elicitation_reviewer,
+        )
+        .await;
+    }
+
+    fn available_selected_environment_ids(
+        selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
+    ) -> Vec<String> {
+        let mut available = Vec::new();
+        for root in selected_capability_roots {
+            let CapabilityRootLocation::Environment { environment_id, .. } =
+                &root.selected_root().location;
+            if !available.contains(environment_id) {
+                available.push(environment_id.clone());
+            }
+        }
+        available
     }
 
     #[cfg(test)]

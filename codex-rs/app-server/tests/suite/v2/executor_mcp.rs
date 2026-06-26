@@ -191,7 +191,6 @@ HTTP_PROXY = {http_proxy}
     )
     .await?;
 
-    std::fs::write(plugin.path().join(".mcp.json"), r#"{"mcpServers":{}}"#)?;
     let config_path = codex_home.path().join("config.toml");
     let mut config = std::fs::read_to_string(&config_path)?;
     config.push_str(&format!(
