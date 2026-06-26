@@ -574,70 +574,39 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_item_started(&mut self, payload: &ItemStartedEvent) {
-        match &payload.item {
-            codex_protocol::items::TurnItem::Plan(plan) => {
-                if plan.text.is_empty() {
-                    return;
-                }
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::Sleep(_) => {
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::UserMessage(_)
-            | codex_protocol::items::TurnItem::HookPrompt(_)
-            | codex_protocol::items::TurnItem::AgentMessage(_)
-            | codex_protocol::items::TurnItem::Reasoning(_)
-            | codex_protocol::items::TurnItem::CommandExecution(_)
-            | codex_protocol::items::TurnItem::DynamicToolCall(_)
-            | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
-            | codex_protocol::items::TurnItem::SubAgentActivity(_)
-            | codex_protocol::items::TurnItem::WebSearch(_)
-            | codex_protocol::items::TurnItem::ImageView(_)
-            | codex_protocol::items::TurnItem::ImageGeneration(_)
-            | codex_protocol::items::TurnItem::FileChange(_)
-            | codex_protocol::items::TurnItem::McpToolCall(_)
-            | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
-        }
+        self.handle_materialized_item_lifecycle(&payload.turn_id, &payload.item);
     }
 
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
-        match &payload.item {
-            codex_protocol::items::TurnItem::Plan(plan) => {
-                if plan.text.is_empty() {
-                    return;
-                }
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
-            codex_protocol::items::TurnItem::Sleep(_) => {
-                self.upsert_item_in_turn_id(
-                    &payload.turn_id,
-                    ThreadItem::from(payload.item.clone()),
-                );
-            }
+        self.handle_materialized_item_lifecycle(&payload.turn_id, &payload.item);
+    }
+
+    fn handle_materialized_item_lifecycle(
+        &mut self,
+        turn_id: &str,
+        item: &codex_protocol::items::TurnItem,
+    ) {
+        let should_upsert = match item {
+            codex_protocol::items::TurnItem::Plan(plan) => !plan.text.is_empty(),
+            codex_protocol::items::TurnItem::Sleep(_)
+            | codex_protocol::items::TurnItem::CommandExecution(_)
+            | codex_protocol::items::TurnItem::DynamicToolCall(_)
+            | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
+            | codex_protocol::items::TurnItem::SubAgentActivity(_) => true,
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::HookPrompt(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
-            | codex_protocol::items::TurnItem::CommandExecution(_)
-            | codex_protocol::items::TurnItem::DynamicToolCall(_)
-            | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
-            | codex_protocol::items::TurnItem::SubAgentActivity(_)
             | codex_protocol::items::TurnItem::WebSearch(_)
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::FileChange(_)
             | codex_protocol::items::TurnItem::McpToolCall(_)
-            | codex_protocol::items::TurnItem::ContextCompaction(_) => {}
+            | codex_protocol::items::TurnItem::ContextCompaction(_) => false,
+        };
+
+        if should_upsert {
+            self.upsert_item_in_turn_id(turn_id, ThreadItem::from(item.clone()));
         }
     }
 
@@ -1581,6 +1550,8 @@ mod tests {
     use crate::protocol::v2::CommandExecutionSource;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
+    use codex_protocol::items::CommandExecutionItem as CoreCommandExecutionItem;
+    use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
     use codex_protocol::items::SleepItem as CoreSleepItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1871,6 +1842,77 @@ mod tests {
             vec![ThreadItem::Sleep {
                 id: "sleep-1".to_string(),
                 duration_ms: 1_000,
+            }]
+        );
+    }
+
+    #[test]
+    fn rebuilds_command_execution_item_from_persisted_completion() {
+        let turn_id = "turn-1";
+        let thread_id = ThreadId::new();
+        let command_item = CoreTurnItem::CommandExecution(CoreCommandExecutionItem {
+            id: "exec-1".to_string(),
+            process_id: Some("pid-1".to_string()),
+            command: vec!["echo".to_string(), "hello world".to_string()],
+            cwd: test_path_buf("/tmp").abs().into(),
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "echo hello world".to_string(),
+            }],
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            status: CoreCommandExecutionStatus::Completed,
+            stdout: Some("hello world\n".to_string()),
+            stderr: Some(String::new()),
+            aggregated_output: Some("hello world\n".to_string()),
+            exit_code: Some(0),
+            duration: Some(Duration::from_millis(12)),
+            formatted_output: Some("hello world\n".to_string()),
+        });
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: command_item,
+                completed_at_ms: 1_000,
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::CommandExecution {
+                id: "exec-1".to_string(),
+                command: "echo 'hello world'".to_string(),
+                cwd: test_path_buf("/tmp").abs().into(),
+                process_id: Some("pid-1".to_string()),
+                source: CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::Completed,
+                command_actions: vec![CommandAction::Unknown {
+                    command: "echo hello world".to_string(),
+                }],
+                aggregated_output: Some("hello world\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(12),
             }]
         );
     }
