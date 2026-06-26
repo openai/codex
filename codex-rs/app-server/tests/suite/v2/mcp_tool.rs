@@ -410,14 +410,20 @@ url = "{mcp_server_url}/mcp"
         filesystem_request_tx,
         shutdown_rx,
     ));
-    let status_request_id = mcp
-        .send_raw_request("mcpServerStatus/list", Some(json!({"threadId": thread.id})))
-        .await?;
-    timeout(DEFAULT_READ_TIMEOUT, filesystem_request_rx).await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(status_request_id)),
-    )
+    let mut filesystem_request_rx = filesystem_request_rx;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let status_request_id = mcp
+                .send_raw_request("mcpServerStatus/list", Some(json!({"threadId": thread.id})))
+                .await?;
+            mcp.read_stream_until_response_message(RequestId::Integer(status_request_id))
+                .await?;
+            if filesystem_request_rx.try_recv().is_ok() {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await??;
 
     mcp.send_response(
