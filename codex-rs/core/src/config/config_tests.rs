@@ -5152,6 +5152,43 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
 }
 
 #[tokio::test]
+async fn generated_images_dir_defaults_to_codex_home() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.generated_images_dir,
+        codex_home.path().join("generated_images").abs()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn generated_images_dir_uses_configured_path() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let generated_images_dir = codex_home.path().join("custom-images").abs();
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            generated_images_dir: Some(generated_images_dir.clone()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.generated_images_dir, generated_images_dir);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn workspace_write_includes_configured_writable_root_once_without_memories_root()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

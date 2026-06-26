@@ -879,6 +879,10 @@ pub struct Config {
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
 
+    /// Directory where Codex writes generated images (defaults to
+    /// `$CODEX_HOME/generated_images`).
+    pub generated_images_dir: AbsolutePathBuf,
+
     /// Directory where Codex writes effective session config lock files.
     pub config_lock_export_dir: Option<AbsolutePathBuf>,
 
@@ -3635,6 +3639,10 @@ impl Config {
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
             .unwrap_or_else(|| codex_home.join("log").to_path_buf());
+        let generated_images_dir = cfg
+            .generated_images_dir
+            .clone()
+            .unwrap_or_else(|| codex_home.join("generated_images"));
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -3834,6 +3842,7 @@ impl Config {
             codex_home,
             sqlite_home,
             log_dir,
+            generated_images_dir,
             config_lock_export_dir: cfg
                 .debug
                 .as_ref()

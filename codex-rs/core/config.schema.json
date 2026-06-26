@@ -5115,6 +5115,14 @@
       "default": null,
       "description": "When set, restricts the login mechanism users may use."
     },
+    "generated_images_dir": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Directory where Codex writes generated images. Defaults to `$CODEX_HOME/generated_images`."
+    },
     "ghost_snapshot": {
       "allOf": [
         {

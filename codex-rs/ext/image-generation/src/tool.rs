@@ -57,7 +57,7 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
-    save_root: Option<AbsolutePathBuf>,
+    generated_images_dir: Option<AbsolutePathBuf>,
     thread_id: String,
 }
 
@@ -65,12 +65,12 @@ impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
     pub(crate) fn new(
         backend: CodexImagesBackend,
-        save_root: Option<AbsolutePathBuf>,
+        generated_images_dir: Option<AbsolutePathBuf>,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
-            save_root,
+            generated_images_dir,
             thread_id,
         }
     }
@@ -151,10 +151,10 @@ impl ImageGenerationTool {
                 return Err(FunctionCallError::RespondToModel(message));
             }
         };
-        let saved_path = match self.save_root.as_ref() {
-            Some(save_root) => match save_image_generation_result(
+        let saved_path = match self.generated_images_dir.as_ref() {
+            Some(generated_images_dir) => match save_image_generation_result(
                 LOCAL_FS.as_ref(),
-                save_root,
+                generated_images_dir,
                 &self.thread_id,
                 &call.call_id,
                 &result,
@@ -163,9 +163,14 @@ impl ImageGenerationTool {
             {
                 Ok(path) => Some(path),
                 Err(error) => {
-                    let output_path =
-                        image_generation_artifact_path(save_root, &self.thread_id, &call.call_id);
-                    let output_dir = output_path.parent().unwrap_or_else(|| save_root.clone());
+                    let output_path = image_generation_artifact_path(
+                        generated_images_dir,
+                        &self.thread_id,
+                        &call.call_id,
+                    );
+                    let output_dir = output_path
+                        .parent()
+                        .unwrap_or_else(|| generated_images_dir.clone());
                     tracing::warn!(
                         call_id = %call.call_id,
                         output_dir = %output_dir.display(),
@@ -198,7 +203,7 @@ impl ImageGenerationTool {
 
 async fn save_image_generation_result(
     fs: &dyn ExecutorFileSystem,
-    save_root: &AbsolutePathBuf,
+    generated_images_dir: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
     result: &str,
@@ -206,7 +211,7 @@ async fn save_image_generation_result(
     let bytes = BASE64_STANDARD
         .decode(result.trim().as_bytes())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let path = image_generation_artifact_path(save_root, session_id, call_id);
+    let path = image_generation_artifact_path(generated_images_dir, session_id, call_id);
     if let Some(parent) = path.parent() {
         fs.create_directory(
             &PathUri::from_abs_path(&parent),

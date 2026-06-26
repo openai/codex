@@ -21,26 +21,29 @@ use crate::tool::ImageGenerationTool;
 #[derive(Clone)]
 struct ImageGenerationExtension {
     auth_manager: Arc<AuthManager>,
-    resolve_save_root: Arc<SaveRootResolver>,
+    resolve_generated_images_dir: Arc<GeneratedImagesDirResolver>,
 }
 
-type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync;
+type GeneratedImagesDirResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync;
 
 #[derive(Clone)]
 struct ImageGenerationExtensionConfig {
     available: bool,
     provider: ModelProviderInfo,
-    save_root: Option<AbsolutePathBuf>,
+    generated_images_dir: Option<AbsolutePathBuf>,
 }
 
 impl ImageGenerationExtensionConfig {
     /// Resolves whether standalone image generation should be available for a thread.
-    fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
+    fn from_config(
+        config: &Config,
+        resolve_generated_images_dir: &GeneratedImagesDirResolver,
+    ) -> Self {
         Self {
             // Core selects this executor per turn using the feature flag or model metadata.
             available: config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
-            save_root: resolve_save_root(config),
+            generated_images_dir: resolve_generated_images_dir(config),
         }
     }
 }
@@ -56,7 +59,7 @@ impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
                 .thread_store
                 .insert(ImageGenerationExtensionConfig::from_config(
                     input.config,
-                    self.resolve_save_root.as_ref(),
+                    self.resolve_generated_images_dir.as_ref(),
                 ));
         })
     }
@@ -73,7 +76,7 @@ impl ConfigContributor<Config> for ImageGenerationExtension {
     ) {
         thread_store.insert(ImageGenerationExtensionConfig::from_config(
             new_config,
-            self.resolve_save_root.as_ref(),
+            self.resolve_generated_images_dir.as_ref(),
         ));
     }
 }
@@ -97,7 +100,7 @@ impl ToolContributor for ImageGenerationExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             )),
-            config.save_root.clone(),
+            config.generated_images_dir.clone(),
             thread_store.level_id().to_string(),
         ))]
     }
@@ -107,11 +110,11 @@ impl ToolContributor for ImageGenerationExtension {
 pub fn install(
     registry: &mut ExtensionRegistryBuilder<Config>,
     auth_manager: Arc<AuthManager>,
-    resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
+    resolve_generated_images_dir: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
 ) {
     let extension = Arc::new(ImageGenerationExtension {
         auth_manager,
-        resolve_save_root: Arc::new(resolve_save_root),
+        resolve_generated_images_dir: Arc::new(resolve_generated_images_dir),
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
