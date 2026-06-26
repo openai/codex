@@ -202,6 +202,15 @@ pub struct McpToolCallItem {
     pub link_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub plugin_id: Option<String>,
     pub status: McpToolCallStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -560,6 +569,9 @@ impl McpToolCallItem {
             connector_id: self.connector_id.clone(),
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
             link_id: self.link_id.clone(),
+            app_name: self.app_name.clone(),
+            template_id: self.template_id.clone(),
+            action_name: self.action_name.clone(),
             plugin_id: self.plugin_id.clone(),
         })
     }
@@ -581,6 +593,9 @@ impl McpToolCallItem {
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
             connector_id: self.connector_id.clone(),
             link_id: self.link_id.clone(),
+            app_name: self.app_name.clone(),
+            template_id: self.template_id.clone(),
+            action_name: self.action_name.clone(),
             plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
             result,
