@@ -1,4 +1,5 @@
 use super::*;
+use codex_exec_server::Environment;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -14,11 +15,16 @@ impl EnvironmentRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Self {
-        Self {
+        let processor = Self {
             environment_manager,
             thread_manager,
             outgoing,
+        };
+        for (environment_id, environment) in processor.environment_manager.registered_environments()
+        {
+            processor.notify_selected_threads_when_ready(environment_id, environment);
         }
+        processor
     }
 
     pub(crate) async fn environment_add(
@@ -36,7 +42,16 @@ impl EnvironmentRequestProcessor {
         let environment = self
             .environment_manager
             .get_environment(&environment_id)
-            .expect("upserted environment should be available");
+            .ok_or_else(|| internal_error("upserted environment is unavailable"))?;
+        self.notify_selected_threads_when_ready(environment_id, environment);
+        Ok(Some(EnvironmentAddResponse {}.into()))
+    }
+
+    fn notify_selected_threads_when_ready(
+        &self,
+        environment_id: String,
+        environment: Arc<Environment>,
+    ) {
         let thread_manager = Arc::clone(&self.thread_manager);
         let outgoing = Arc::clone(&self.outgoing);
         tokio::spawn(async move {
@@ -61,7 +76,6 @@ impl EnvironmentRequestProcessor {
                 }
             }
         });
-        Ok(Some(EnvironmentAddResponse {}.into()))
     }
 
     pub(crate) async fn environment_info(

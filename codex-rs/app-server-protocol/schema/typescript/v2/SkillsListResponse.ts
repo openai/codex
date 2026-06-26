@@ -8,4 +8,8 @@ export type SkillsListResponse = { data: Array<SkillsListEntry>,
 /**
  * Skills contributed by selected capability roots for the requested thread.
  */
-threadSkills: Array<ThreadSkillMetadata>, };
+threadSkills: Array<ThreadSkillMetadata>,
+/**
+ * Warnings encountered while discovering the requested thread's executor skills.
+ */
+threadSkillWarnings: Array<string>, };

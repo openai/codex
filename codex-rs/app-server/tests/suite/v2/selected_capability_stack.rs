@@ -731,7 +731,12 @@ async fn list_thread_skills(
         app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { thread_skills, .. } = to_response(response)?;
+    let SkillsListResponse {
+        thread_skills,
+        thread_skill_warnings,
+        ..
+    } = to_response(response)?;
+    assert_eq!(thread_skill_warnings, Vec::<String>::new());
     Ok(thread_skills)
 }
 

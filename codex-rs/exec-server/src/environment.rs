@@ -266,6 +266,16 @@ impl EnvironmentManager {
         environment_ids
     }
 
+    /// Returns a snapshot of every currently registered environment.
+    pub fn registered_environments(&self) -> Vec<(String, Arc<Environment>)> {
+        self.environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(environment_id, environment)| (environment_id.clone(), Arc::clone(environment)))
+            .collect()
+    }
+
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)

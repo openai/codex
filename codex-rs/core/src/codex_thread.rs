@@ -642,10 +642,16 @@ impl CodexThread {
 
     /// Resolves the selected capability roots whose environments are ready now.
     pub async fn ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
-        let turn_context = self.codex.session.new_default_turn().await;
+        let environments = self
+            .codex
+            .session
+            .services
+            .turn_environments
+            .snapshot()
+            .await;
         self.codex
             .session
-            .resolve_selected_capability_roots_for_step(&turn_context.environments)
+            .resolve_selected_capability_roots_for_step(&environments)
             .await
             .into_iter()
             .map(|root| root.selected_root().clone())

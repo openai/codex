@@ -3028,7 +3028,7 @@ fn skills_list_params_serialization_uses_force_reload() {
             thread_id: None,
         })
         .unwrap(),
-        json!({}),
+        json!({ "threadId": null }),
     );
 
     assert_eq!(
@@ -3041,6 +3041,7 @@ fn skills_list_params_serialization_uses_force_reload() {
         json!({
             "cwds": ["/repo"],
             "forceReload": true,
+            "threadId": null,
         }),
     );
 }

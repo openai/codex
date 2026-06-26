@@ -98,6 +98,7 @@ fn errors_to_info(
 }
 
 impl CatalogRequestProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         skills_watcher: Arc<SkillsWatcher>,
@@ -568,20 +569,27 @@ impl CatalogRequestProcessor {
             .await;
         data.sort_unstable_by_key(|(index, _)| *index);
         let data = data.into_iter().map(|(_, entry)| entry).collect();
-        let thread_skills = match thread_id.as_deref() {
+        let (thread_skills, thread_skill_warnings) = match thread_id.as_deref() {
             Some(thread_id) => self.thread_skills(thread_id).await?,
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
         Ok(SkillsListResponse {
             data,
             thread_skills,
+            thread_skill_warnings,
         })
     }
 
     async fn thread_skills(
         &self,
         thread_id: &str,
-    ) -> Result<Vec<codex_app_server_protocol::ThreadSkillMetadata>, JSONRPCErrorError> {
+    ) -> Result<
+        (
+            Vec<codex_app_server_protocol::ThreadSkillMetadata>,
+            Vec<String>,
+        ),
+        JSONRPCErrorError,
+    > {
         let thread_id = ThreadId::from_string(thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
         let thread = self
@@ -592,11 +600,11 @@ impl CatalogRequestProcessor {
         let Some(state) =
             thread.extension_thread_data::<codex_skills_extension::SkillsThreadState>()
         else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         };
         let roots = thread.ready_selected_capability_roots().await;
-        let (catalog, _) = state
-            .project_executor_catalog(
+        let catalog = state
+            .executor_catalog_snapshot(
                 &self.executor_skill_providers,
                 codex_skills_extension::provider::SkillListQuery {
                     turn_id: thread_id.to_string(),
@@ -609,7 +617,8 @@ impl CatalogRequestProcessor {
                 },
             )
             .await;
-        Ok(catalog
+        let warnings = catalog.warnings;
+        let skills = catalog
             .entries
             .into_iter()
             .map(|entry| {
@@ -622,7 +631,8 @@ impl CatalogRequestProcessor {
                     enabled: entry.enabled,
                 }
             })
-            .collect())
+            .collect();
+        Ok((skills, warnings))
     }
 
     async fn skills_extra_roots_set_response(

@@ -248,6 +248,13 @@
       },
       "type": "array"
     },
+    "threadSkillWarnings": {
+      "description": "Warnings encountered while discovering the requested thread's executor skills.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "threadSkills": {
       "description": "Skills contributed by selected capability roots for the requested thread.",
       "items": {
@@ -258,6 +265,7 @@
   },
   "required": [
     "data",
+    "threadSkillWarnings",
     "threadSkills"
   ],
   "title": "SkillsListResponse",

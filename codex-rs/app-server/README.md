@@ -1637,7 +1637,7 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`). Pass the experimental `threadId` field to also receive the selected executor skills currently available to that thread in `threadSkills`.
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`). Pass the experimental `threadId` field to also receive the selected executor skills currently available to that thread in `threadSkills`; executor discovery problems are returned in `threadSkillWarnings`.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files or a selected executor catalog changes. A thread-scoped notification includes `threadId`; re-run `skills/list` with that same ID to refresh the invocation UI. A notification with `threadId: null` invalidates process-wide local skill state.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
@@ -1674,7 +1674,8 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
         "shortDescription": null,
         "resource": "skill://executor-plugin@1/workspace/plugin/skills/deploy/SKILL.md",
         "enabled": true
-    }]
+    }],
+    "threadSkillWarnings": []
 } }
 ```
 

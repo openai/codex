@@ -68,11 +68,11 @@ impl SkillsThreadState {
     /// Environment availability only controls whether the root is projected into the current
     /// step; it never invalidates the cache. There is intentionally no filesystem watcher or
     /// content-based invalidation because selected environment roots are treated as stable.
-    pub async fn project_executor_catalog(
+    pub async fn executor_catalog_snapshot(
         &self,
         providers: &SkillProviders,
         mut query: SkillListQuery,
-    ) -> (SkillCatalog, bool) {
+    ) -> SkillCatalog {
         let roots = std::mem::take(&mut query.executor_roots);
         let mut catalog = SkillCatalog::default();
         for root in roots {
@@ -82,6 +82,15 @@ impl SkillsThreadState {
                     .await,
             );
         }
+        catalog
+    }
+
+    pub(crate) async fn project_executor_catalog(
+        &self,
+        providers: &SkillProviders,
+        query: SkillListQuery,
+    ) -> (SkillCatalog, bool) {
+        let catalog = self.executor_catalog_snapshot(providers, query).await;
         let mut projected = self
             .projected_executor_catalog
             .lock()

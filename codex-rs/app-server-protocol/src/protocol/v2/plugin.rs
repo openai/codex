@@ -43,6 +43,8 @@ pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
     /// Skills contributed by selected capability roots for the requested thread.
     pub thread_skills: Vec<ThreadSkillMetadata>,
+    /// Warnings encountered while discovering the requested thread's executor skills.
+    pub thread_skill_warnings: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
