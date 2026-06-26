@@ -11,6 +11,8 @@ use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::EnvironmentAddResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
@@ -22,6 +24,7 @@ use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -133,6 +136,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &mut app_server,
         fixture.selected_root.clone(),
         fixture.environment_cwd.clone(),
+        EXECUTOR_ID,
     )
     .await?;
 
@@ -149,7 +153,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     let mut exec_server =
         spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
         &mut app_server,
@@ -187,12 +191,12 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response(response)?;
     assert_eq!(thread_id, thread.id);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
         &mut app_server,
         &thread_id,
-        "Continue after resuming the thread",
+        &format!("Use ${SKILL_NAME} after resuming the thread"),
         fixture.environment_cwd,
     )
     .await?;
@@ -201,10 +205,12 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     let requests = response_mock.requests();
     assert_eq!(5, requests.len());
-    for request in &requests[1..] {
-        assert_selected_skill_is_injected_once(request);
+    for request in &requests[1..4] {
+        assert_selected_skill_is_injected(request, /*expected_count*/ 1);
         assert_selected_plugin_tools(request);
     }
+    assert_selected_skill_is_injected(&requests[4], /*expected_count*/ 2);
+    assert_selected_plugin_tools(&requests[4]);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
@@ -303,6 +309,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
         &mut app_server,
         fixture.selected_root,
         fixture.environment_cwd.clone(),
+        LOCAL_ENVIRONMENT_ID,
     )
     .await?;
     let turn_start_id = app_server
@@ -313,7 +320,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
                 text_elements: Vec::new(),
             }],
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: EXECUTOR_ID.to_string(),
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: fixture.environment_cwd.into(),
             }]),
             collaboration_mode: Some(CollaborationMode {
@@ -429,7 +436,7 @@ fn selected_capability_fixture(
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
-            "default = \"{EXECUTOR_ID}\"\ninclude_local = false\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nurl = \"{exec_server_url}\"\nconnect_timeout_sec = 0.05\n"
+            "default = \"{EXECUTOR_ID}\"\ninclude_local = true\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nurl = \"{exec_server_url}\"\nconnect_timeout_sec = 0.05\n"
         ),
     )?;
 
@@ -518,7 +525,7 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
     );
 }
 
-fn assert_selected_skill_is_injected_once(request: &ResponsesRequest) {
+fn assert_selected_skill_is_injected(request: &ResponsesRequest, expected_count: usize) {
     assert_selected_skill_catalog_available(request);
 
     let skill_fragments = request
@@ -526,10 +533,12 @@ fn assert_selected_skill_is_injected_once(request: &ResponsesRequest) {
         .into_iter()
         .filter(|text| text.starts_with("<skill>"))
         .collect::<Vec<_>>();
-    assert_eq!(1, skill_fragments.len());
-    assert!(skill_fragments[0].contains(&format!("<name>{SKILL_NAME}</name>")));
-    assert!(skill_fragments[0].contains(SKILL_BODY_MARKER));
-    assert!(!skill_fragments[0].contains(LOCAL_SKILL_BODY_MARKER));
+    assert_eq!(expected_count, skill_fragments.len());
+    for fragment in skill_fragments {
+        assert!(fragment.contains(&format!("<name>{SKILL_NAME}</name>")));
+        assert!(fragment.contains(SKILL_BODY_MARKER));
+        assert!(!fragment.contains(LOCAL_SKILL_BODY_MARKER));
+    }
 }
 
 fn assert_selected_skill_catalog_available(request: &ResponsesRequest) {
@@ -562,12 +571,13 @@ async fn start_thread(
     app_server: &mut TestAppServer,
     selected_root: SelectedCapabilityRoot,
     environment_cwd: AbsolutePathBuf,
+    turn_environment_id: &str,
 ) -> Result<String> {
     let request_id = app_server
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             environments: Some(vec![TurnEnvironmentParams {
-                environment_id: EXECUTOR_ID.to_string(),
+                environment_id: turn_environment_id.to_string(),
                 cwd: environment_cwd.into(),
             }]),
             selected_capability_roots: Some(vec![selected_root]),
@@ -633,6 +643,38 @@ async fn add_environment(app_server: &mut TestAppServer, exec_server_url: &str) 
     )
     .await??;
     let _: EnvironmentAddResponse = to_response(response)?;
+    Ok(())
+}
+
+async fn wait_for_selected_mcp_server(
+    app_server: &mut TestAppServer,
+    thread_id: &str,
+) -> Result<()> {
+    timeout(READ_TIMEOUT, async {
+        loop {
+            let request_id = app_server
+                .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+                    cursor: None,
+                    limit: None,
+                    detail: None,
+                    thread_id: Some(thread_id.to_string()),
+                })
+                .await?;
+            let response = app_server
+                .read_stream_until_response_message(RequestId::Integer(request_id))
+                .await?;
+            let response: ListMcpServerStatusResponse = to_response(response)?;
+            if response
+                .data
+                .iter()
+                .any(|server| server.name == MCP_SERVER_NAME)
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
     Ok(())
 }
 
