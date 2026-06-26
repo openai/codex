@@ -299,8 +299,11 @@ void tool_call_d().then(() => text("D res"), () => {});
 
     let first_frame_request = first_frame_mock.single_request();
     let first_outputs = exec_outputs(&first_frame_request, "call-1");
-    assert_eq!(first_outputs.len(), 1);
-    let first_items = output_items(&first_outputs[0]);
+    let first_items = output_items(
+        first_outputs
+            .first()
+            .expect("first response should contain the yielded exec output"),
+    );
     assert_eq!(first_items.len(), 2);
     super::assert_regex_match(
         concat!(
@@ -312,11 +315,30 @@ void tool_call_d().then(() => text("D res"), () => {});
     assert_eq!(text_item(&first_items, /*index*/ 1), "hello world");
     let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
 
-    let notification_request = notification_mock.single_request();
-    let notification_outputs = exec_outputs(&notification_request, "call-1");
+    let notification_requests = notification_mock.requests();
+    // The notification may join the yielded output in the first request or be drained into a
+    // separate request, depending on pending-input drain timing.
+    let notification_outputs = match notification_requests.as_slice() {
+        [] => {
+            assert_eq!(first_outputs.len(), 2);
+            first_outputs
+        }
+        [notification_request] => {
+            assert_eq!(first_outputs.len(), 1);
+            let notification_outputs = exec_outputs(notification_request, "call-1");
+            assert_eq!(notification_outputs.first(), first_outputs.first());
+            notification_outputs
+        }
+        requests => panic!(
+            "expected at most one separate notification response request, got {}",
+            requests.len()
+        ),
+    };
     assert_eq!(notification_outputs.len(), 2);
     assert_eq!(notification_outputs[1]["name"], "exec");
     assert_eq!(notification_outputs[1]["output"], "boo");
+
+    server.reset().await;
 
     responses::mount_sse_once(
         &server,
