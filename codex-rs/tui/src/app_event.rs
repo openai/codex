@@ -28,12 +28,15 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_chatgpt::referrals::ReferralOffer;
+use codex_chatgpt::referrals::ReferralRewardStatus;
 use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use uuid::Uuid;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -319,6 +322,27 @@ pub(crate) enum AppEvent {
 
     /// Open the default token-activity view selected from the `/usage` menu.
     OpenTokenActivity,
+
+    /// Check whether the signed-in account has a rewarded referral offer.
+    RefreshReferralOffer(Uuid),
+
+    /// Result of the client-side referral eligibility check.
+    ReferralOfferLoaded(Uuid, Option<Box<ReferralOffer>>),
+
+    /// Open the referral email input.
+    OpenReferralEmailPrompt,
+
+    /// Show the final referral confirmation for one email address.
+    OpenReferralConfirmation(String),
+
+    /// Send one referral invite using the offer that was shown to the user.
+    SendReferralInvite {
+        email: String,
+        offer: Box<ReferralOffer>,
+    },
+
+    /// Result of sending one referral invite.
+    ReferralInviteSent(Uuid, ReferralInviteResult),
 
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
@@ -1071,6 +1095,14 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
     },
+}
+
+#[derive(Debug)]
+pub(crate) enum ReferralInviteResult {
+    Sent(ReferralRewardStatus),
+    Rejected,
+    Unavailable,
+    Unknown,
 }
 
 /// Named profile selection to apply after any required UI guardrails complete.

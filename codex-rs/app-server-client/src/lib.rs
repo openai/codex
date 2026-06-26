@@ -45,6 +45,7 @@ use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_chatgpt::referrals::ReferralClient;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
@@ -436,6 +437,9 @@ enum ClientCommand {
         error: JSONRPCErrorError,
         response_tx: oneshot::Sender<IoResult<()>>,
     },
+    ReferralClient {
+        response_tx: oneshot::Sender<Arc<ReferralClient>>,
+    },
     Shutdown {
         response_tx: oneshot::Sender<IoResult<()>>,
     },
@@ -484,6 +488,7 @@ impl InProcessAppServerClient {
         let channel_capacity = args.channel_capacity.max(1);
         let mut handle =
             codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
+        let referral_client = handle.referral_client();
         let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
@@ -528,6 +533,9 @@ impl InProcessAppServerClient {
                             }) => {
                                 let send_result = request_sender.fail_server_request(request_id, error);
                                 let _ = response_tx.send(send_result);
+                            }
+                            Some(ClientCommand::ReferralClient { response_tx }) => {
+                                let _ = response_tx.send(Arc::clone(&referral_client));
                             }
                             Some(ClientCommand::Shutdown { response_tx }) => {
                                 let shutdown_result = handle.shutdown().await;
@@ -757,6 +765,7 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            ..
         } = self;
         let mut worker_handle = worker_handle;
         // Drop the caller-facing receiver before asking the worker to shut
@@ -829,6 +838,25 @@ impl InProcessAppServerRequestHandle {
         serde_json::from_value(result)
             .map_err(|source| TypedRequestError::Deserialize { method, source })
     }
+
+    pub async fn referral_client(&self) -> IoResult<Arc<ReferralClient>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(ClientCommand::ReferralClient { response_tx })
+            .await
+            .map_err(|_| {
+                IoError::new(
+                    ErrorKind::BrokenPipe,
+                    "in-process app-server worker channel is closed",
+                )
+            })?;
+        response_rx.await.map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process referral client channel is closed",
+            )
+        })
+    }
 }
 
 impl AppServerRequestHandle {
@@ -846,6 +874,13 @@ impl AppServerRequestHandle {
         match self {
             Self::InProcess(handle) => handle.request_typed(request).await,
             Self::Remote(handle) => handle.request_typed(request).await,
+        }
+    }
+
+    pub async fn referral_client(&self) -> IoResult<Option<Arc<ReferralClient>>> {
+        match self {
+            Self::InProcess(handle) => handle.referral_client().await.map(Some),
+            Self::Remote(_) => Ok(None),
         }
     }
 }

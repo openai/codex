@@ -197,6 +197,65 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
+        AppEvent::RefreshReferralOffer(request_id) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "RefreshReferralOffer",
+                "request_id": request_id,
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::ReferralOfferLoaded(request_id, offer) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "ReferralOfferLoaded",
+                "request_id": request_id,
+                "has_offer": offer.is_some(),
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::OpenReferralEmailPrompt => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "OpenReferralEmailPrompt",
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::OpenReferralConfirmation(_) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "OpenReferralConfirmation",
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::SendReferralInvite { .. } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "SendReferralInvite",
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::ReferralInviteSent(request_id, result) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "ReferralInviteSent",
+                "request_id": request_id,
+                "result": format!("{result:?}").split('(').next().unwrap_or("Unknown"),
+            });
+            LOGGER.write_json_line(value);
+        }
         // Noise or control flow – record variant only
         other => {
             let value = json!({

@@ -33,6 +33,7 @@ pub(crate) struct CustomPromptView {
     title: String,
     placeholder: String,
     context_label: Option<String>,
+    view_id: Option<&'static str>,
     on_submit: PromptSubmitted,
 
     // UI state
@@ -60,12 +61,18 @@ impl CustomPromptView {
             title,
             placeholder,
             context_label,
+            view_id: None,
             on_submit,
             textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             paste_burst: PasteBurst::default(),
             completion: None,
         }
+    }
+
+    pub(crate) fn with_view_id(mut self, view_id: &'static str) -> Self {
+        self.view_id = Some(view_id);
+        self
     }
 
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
@@ -141,6 +148,10 @@ impl BottomPaneView for CustomPromptView {
 
     fn completion(&self) -> Option<ViewCompletion> {
         self.completion
+    }
+
+    fn view_id(&self) -> Option<&'static str> {
+        self.view_id
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {

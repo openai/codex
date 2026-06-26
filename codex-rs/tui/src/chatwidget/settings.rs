@@ -222,6 +222,7 @@ impl ChatWidget {
         // be identical across two accounts, so always invalidate account-scoped requests and data.
         self.clear_pending_token_activity_refreshes();
         self.clear_pending_rate_limit_reset_requests();
+        self.clear_referral_state();
         self.codex_rate_limit_reached_type = None;
         self.rate_limit_warnings = RateLimitWarningState::default();
         self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;

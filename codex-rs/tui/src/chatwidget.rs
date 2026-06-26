@@ -388,6 +388,7 @@ pub(crate) use self::rate_limits::fallback_limit_label;
 use self::rate_limits::is_app_server_cyber_policy_error;
 pub(crate) use self::rate_limits::limit_label_for_window;
 mod reasoning_shortcuts;
+mod referrals;
 mod rendering;
 mod replay;
 mod review;
@@ -562,6 +563,7 @@ pub(crate) struct ChatWidget {
     pending_rate_limit_reset_hint: Option<PlainHistoryCell>,
     available_rate_limit_reset_credits: Option<i64>,
     next_rate_limit_reset_request_id: u64,
+    referral_state: referrals::ReferralState,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,

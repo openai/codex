@@ -7,6 +7,7 @@
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::ReferralInviteResult;
 use crate::app_info::app_info_from_api;
 use crate::config_update::format_config_error;
 use codex_app_server_protocol::AppsListParams;
@@ -115,6 +116,58 @@ impl App {
             .map_err(|_| "account/usage/read timed out in TUI".to_string())
             .and_then(|result| result.map_err(|err| err.to_string()));
             app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
+        });
+    }
+
+    pub(super) fn refresh_referral_offer(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: uuid::Uuid,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let offer = match request_handle.referral_client().await.ok().flatten() {
+                Some(client) => client.load_offer().await.ok().flatten(),
+                None => None,
+            };
+            app_event_tx.send(AppEvent::ReferralOfferLoaded(
+                request_id,
+                offer.map(Box::new),
+            ));
+        });
+    }
+
+    pub(super) fn send_referral_invite(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: uuid::Uuid,
+        offer: codex_chatgpt::referrals::ReferralOffer,
+        email: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = match request_handle.referral_client().await.ok().flatten() {
+                Some(client) => match client.send_invite(&offer, &email).await {
+                    Ok(status) => ReferralInviteResult::Sent(status),
+                    Err(err)
+                        if codex_chatgpt::referrals::is_definite_referral_invite_rejection(
+                            &err,
+                        ) =>
+                    {
+                        ReferralInviteResult::Rejected
+                    }
+                    Err(err)
+                        if codex_chatgpt::referrals::is_referral_invite_preflight_failure(&err) =>
+                    {
+                        ReferralInviteResult::Unavailable
+                    }
+                    Err(_) => ReferralInviteResult::Unknown,
+                },
+                None => ReferralInviteResult::Unavailable,
+            };
+            app_event_tx.send(AppEvent::ReferralInviteSent(request_id, result));
         });
     }
 
