@@ -2517,6 +2517,14 @@ dependencies = [
 [[package]]
 name = "codex-code-mode-host"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-code-mode",
+ "codex-code-mode-protocol",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "codex-code-mode-protocol"
