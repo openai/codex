@@ -133,6 +133,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: Uuid::now_v7().to_string(),
             metadata: ThreadPersistenceMetadata {
                 cwd: None,

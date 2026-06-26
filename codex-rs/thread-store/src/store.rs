@@ -1,4 +1,5 @@
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadHistoryMode;
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
@@ -32,6 +33,14 @@ pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResul
 pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the history mode to use when history does not carry a persisted mode.
+    ///
+    /// The default is legacy so existing stores stay compatible. Stores whose durable contract is
+    /// already paginated should override this instead of relying on core to infer storage behavior.
+    fn default_history_mode(&self) -> ThreadHistoryMode {
+        ThreadHistoryMode::Legacy
+    }
 
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;

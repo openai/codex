@@ -16,6 +16,8 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
+use crate::error::reject_paginated_history_mode;
+use crate::types::canonical_history_mode_from_rollout_items;
 
 const ROLLOUT_SIZE_BYTES_METRIC: &str = "codex.rollout.size_bytes";
 
@@ -34,6 +36,30 @@ pub(super) async fn resume_thread(
     params: ResumeThreadParams,
 ) -> ThreadStoreResult<()> {
     store.ensure_live_recorder_absent(params.thread_id).await?;
+    let history_mode = if let Some(history) = params.history.as_deref() {
+        canonical_history_mode_from_rollout_items(history)
+    } else if let Some(rollout_path) = params.rollout_path.as_ref() {
+        super::read_thread::read_thread_by_rollout_path(
+            store,
+            rollout_path.clone(),
+            params.include_archived,
+            /*include_history*/ false,
+        )
+        .await?
+        .history_mode
+    } else {
+        super::read_thread::read_thread(
+            store,
+            ReadThreadParams {
+                thread_id: params.thread_id,
+                include_archived: params.include_archived,
+                include_history: false,
+            },
+        )
+        .await?
+        .history_mode
+    };
+    reject_paginated_history_mode(history_mode)?;
     let rollout_path = match (params.rollout_path, params.history) {
         (Some(rollout_path), _history) => rollout_path,
         (None, history) => {
@@ -46,7 +72,6 @@ pub(super) async fn resume_thread(
                 },
             )
             .await?;
-
             thread
                 .rollout_path
                 .ok_or_else(|| ThreadStoreError::Internal {

@@ -76,6 +76,7 @@ impl ThreadMetadataSync {
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             git_info: git_info.map(git_info_patch_from_observation),
             memory_mode: Some(params.metadata.memory_mode),
+            history_mode: Some(params.history_mode),
             ..Default::default()
         };
         Self {
@@ -237,6 +238,7 @@ impl ThreadMetadataSync {
                     {
                         update.memory_mode = Some(memory_mode);
                     }
+                    update.history_mode = Some(meta_line.meta.history_mode);
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
                     if !self.cwd_seen {
@@ -375,6 +377,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.first_user_message.is_some()
         || update.git_info.is_some()
         || update.memory_mode.is_some()
+        || update.history_mode.is_some()
 }
 
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {

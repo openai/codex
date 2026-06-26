@@ -15,6 +15,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
@@ -95,6 +96,8 @@ pub struct CreateThreadParams {
     pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
     /// Multi-agent runtime selected when the thread was created.
     pub multi_agent_version: Option<MultiAgentVersion>,
+    /// Persisted thread history contract selected when the thread was created.
+    pub history_mode: ThreadHistoryMode,
     /// Initial context-window identity captured when the thread was created.
     pub initial_window_id: String,
     /// Metadata captured for the newly created thread.
@@ -114,6 +117,20 @@ pub struct ResumeThreadParams {
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
     pub metadata: ThreadPersistenceMetadata,
+}
+
+pub(crate) fn canonical_history_mode_from_rollout_items(
+    items: &[RolloutItem],
+) -> ThreadHistoryMode {
+    // Forked rollouts keep copied source SessionMeta items after the new thread's
+    // canonical SessionMeta, so the thread contract comes from the first one.
+    items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.history_mode),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Parameters for appending rollout items to a live thread.
@@ -434,6 +451,8 @@ pub struct StoredThread {
     pub cli_version: String,
     /// Runtime source for the thread.
     pub source: SessionSource,
+    /// Persisted thread history contract selected when this thread was created.
+    pub history_mode: ThreadHistoryMode,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Optional random nickname for thread-spawn sub-agents.
@@ -581,6 +600,8 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
+    /// Persisted thread history contract.
+    pub history_mode: Option<ThreadHistoryMode>,
 }
 
 impl ThreadMetadataPatch {
@@ -661,6 +682,9 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
+        if next.history_mode.is_some() {
+            self.history_mode = next.history_mode;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -687,6 +711,7 @@ impl ThreadMetadataPatch {
             && self.first_user_message.is_none()
             && self.git_info.is_none()
             && self.memory_mode.is_none()
+            && self.history_mode.is_none()
     }
 }
 
@@ -790,6 +815,17 @@ mod tests {
     }
 
     #[test]
+    fn canonical_history_mode_uses_first_session_meta() {
+        assert_eq!(
+            canonical_history_mode_from_rollout_items(&[
+                session_meta(ThreadHistoryMode::Legacy),
+                session_meta(ThreadHistoryMode::Paginated),
+            ]),
+            ThreadHistoryMode::Legacy
+        );
+    }
+
+    #[test]
     fn thread_metadata_patch_merge_uses_presence_semantics() {
         let mut current = ThreadMetadataPatch {
             name: Some(Some("old name".to_string())),
@@ -825,5 +861,15 @@ mod tests {
                 origin_url: Some(None),
             })
         );
+    }
+
+    fn session_meta(history_mode: ThreadHistoryMode) -> RolloutItem {
+        RolloutItem::SessionMeta(codex_protocol::protocol::SessionMetaLine {
+            meta: codex_protocol::protocol::SessionMeta {
+                history_mode,
+                ..Default::default()
+            },
+            git: None,
+        })
     }
 }

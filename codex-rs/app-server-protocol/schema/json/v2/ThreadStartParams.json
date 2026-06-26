@@ -241,6 +241,13 @@
       ],
       "type": "object"
     },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
+      ],
+      "type": "string"
+    },
     "ThreadSource": {
       "type": "string"
     },
