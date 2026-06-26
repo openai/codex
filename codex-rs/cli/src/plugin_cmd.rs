@@ -285,6 +285,20 @@ pub async fn run_plugin_list(
                         }
                         parts.join(", ")
                     }
+                    codex_core_plugins::marketplace::MarketplacePluginSource::Npm {
+                        package,
+                        version,
+                        registry,
+                    } => {
+                        let mut parts = vec![package.clone()];
+                        if let Some(version) = version {
+                            parts.push(format!("version `{version}`"));
+                        }
+                        if let Some(registry) = registry {
+                            parts.push(format!("registry `{registry}`"));
+                        }
+                        parts.join(", ")
+                    }
                 };
                 plugin_width = plugin_width.max(plugin.id.len());
                 status_width = status_width.max(state.len());
@@ -412,6 +426,13 @@ enum JsonPluginSource {
         #[serde(skip_serializing_if = "Option::is_none")]
         sha: Option<String>,
     },
+    Npm {
+        package: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        registry: Option<String>,
+    },
 }
 
 impl JsonPluginSource {
@@ -437,6 +458,15 @@ impl JsonPluginSource {
                 ref_name,
                 sha,
             } => Self::Git { url, ref_name, sha },
+            MarketplacePluginSource::Npm {
+                package,
+                version,
+                registry,
+            } => Self::Npm {
+                package,
+                version,
+                registry,
+            },
         }
     }
 }

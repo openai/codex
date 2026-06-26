@@ -9,6 +9,7 @@ pub mod marketplace_add;
 mod marketplace_policy;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
+mod npm_source;
 mod plugin_bundle_archive;
 mod provider;
 pub mod remote;

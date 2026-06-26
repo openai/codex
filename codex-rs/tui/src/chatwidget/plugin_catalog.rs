@@ -1474,6 +1474,12 @@ fn plugin_source_summary(plugin: &PluginDetail) -> String {
             Some(ref_name) => format!("Git · {url}@{ref_name}"),
             None => format!("Git · {url}"),
         },
+        PluginSource::Npm {
+            package, version, ..
+        } => match version {
+            Some(version) => format!("npm · {package}@{version}"),
+            None => format!("npm · {package}"),
+        },
         PluginSource::Remote => {
             let marketplace_label =
                 MarketplaceProduct::from_marketplace_name(&plugin.marketplace_name)

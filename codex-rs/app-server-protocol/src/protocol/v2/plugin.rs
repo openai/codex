@@ -744,6 +744,15 @@ pub enum PluginSource {
         ref_name: Option<String>,
         sha: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Npm {
+        package: String,
+        /// Optional npm version or version range.
+        version: Option<String>,
+        /// Optional HTTPS registry URL. Authentication stays in the user's npm config.
+        registry: Option<String>,
+    },
     /// The plugin is available in the remote catalog. Download metadata is
     /// kept server-side and is not exposed through the app-server API.
     Remote,
