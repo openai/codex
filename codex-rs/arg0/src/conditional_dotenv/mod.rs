@@ -160,6 +160,9 @@ fn parse_conditional_dotenv(path: &Path) -> Result<Option<ConditionalDotenv>, St
     let entries = dotenvy::from_read_iter(contents.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| "file contains an invalid dotenv assignment".to_string())?;
+    if entries.iter().any(|(_, value)| value.contains('\0')) {
+        return Err("file contains a dotenv value with a NUL byte".to_string());
+    }
 
     Ok(Some(ConditionalDotenv {
         condition,
