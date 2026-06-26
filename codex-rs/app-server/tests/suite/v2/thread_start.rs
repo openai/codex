@@ -655,6 +655,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             thread_source: Some(ThreadSource::User),
+            service_name: Some("codex_work_desktop".to_string()),
             ..Default::default()
         })
         .await?;
@@ -672,6 +673,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         event,
         &thread.id,
         &thread.session_id,
+        "codex_work_desktop",
         "mock-model",
         "new",
         "user",

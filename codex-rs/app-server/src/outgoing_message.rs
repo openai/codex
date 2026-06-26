@@ -504,7 +504,20 @@ impl OutgoingMessageSender {
     where
         T: Into<ClientResponsePayload>,
     {
-        self.send_response_as(request_id, response.into()).await;
+        self.send_response_as_inner(request_id, response.into(), /*thread_originator*/ None)
+            .await;
+    }
+
+    pub(crate) async fn send_response_with_thread_originator<T>(
+        &self,
+        request_id: ConnectionRequestId,
+        response: T,
+        thread_originator: String,
+    ) where
+        T: Into<ClientResponsePayload>,
+    {
+        self.send_response_as_inner(request_id, response.into(), Some(thread_originator))
+            .await;
     }
 
     pub(crate) async fn send_response_as(
@@ -512,17 +525,40 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         response: ClientResponsePayload,
     ) {
+        self.send_response_as_inner(request_id, response, /*thread_originator*/ None)
+            .await;
+    }
+
+    async fn send_response_as_inner(
+        &self,
+        request_id: ConnectionRequestId,
+        response: ClientResponsePayload,
+        thread_originator: Option<String>,
+    ) {
         let connection_id = request_id.connection_id;
         let request_id_for_analytics = request_id.request_id.clone();
         let serialized_response = response
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
                 if let Some(response) = response {
-                    self.analytics_events_client.track_response(
-                        connection_id.0,
-                        request_id_for_analytics,
-                        response,
-                    );
+                    match thread_originator {
+                        Some(thread_originator) => {
+                            self.analytics_events_client
+                                .track_response_with_thread_originator(
+                                    connection_id.0,
+                                    request_id_for_analytics,
+                                    response,
+                                    thread_originator,
+                                );
+                        }
+                        None => {
+                            self.analytics_events_client.track_response(
+                                connection_id.0,
+                                request_id_for_analytics,
+                                response,
+                            );
+                        }
+                    }
                 }
                 (id, result)
             });

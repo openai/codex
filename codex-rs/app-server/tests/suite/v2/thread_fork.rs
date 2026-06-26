@@ -488,6 +488,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         event,
         &thread.id,
         &thread.session_id,
+        "codex",
         "mock-model",
         "forked",
         "user",

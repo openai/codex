@@ -436,6 +436,31 @@ impl AnalyticsEventsClient {
         request_id: RequestId,
         response: ClientResponsePayload,
     ) {
+        self.track_response_inner(
+            connection_id,
+            request_id,
+            response,
+            /*thread_originator*/ None,
+        );
+    }
+
+    pub fn track_response_with_thread_originator(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: ClientResponsePayload,
+        thread_originator: String,
+    ) {
+        self.track_response_inner(connection_id, request_id, response, Some(thread_originator));
+    }
+
+    fn track_response_inner(
+        &self,
+        connection_id: u64,
+        request_id: RequestId,
+        response: ClientResponsePayload,
+        thread_originator: Option<String>,
+    ) {
         if !matches!(
             response,
             ClientResponsePayload::ThreadStart(_)
@@ -450,6 +475,7 @@ impl AnalyticsEventsClient {
             connection_id,
             request_id,
             response: Box::new(response),
+            thread_originator,
         });
     }
 
