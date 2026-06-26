@@ -201,7 +201,10 @@ fn evaluate_tcp_connect(
                     let value = overlay_entries
                         .iter()
                         .rev()
-                        .find_map(|(key, value)| (key == from).then_some(value))
+                        .find_map(|(key, value)| {
+                            (key == from || (cfg!(windows) && key.eq_ignore_ascii_case(from)))
+                                .then_some(value)
+                        })
                         .ok_or_else(|| {
                             format!(
                                 "tcp_connect source variable `{from}` is not defined in the overlay"
