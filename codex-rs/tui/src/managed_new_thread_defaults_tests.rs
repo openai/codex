@@ -42,6 +42,47 @@ async fn applies_managed_defaults_to_a_new_thread_config() {
 }
 
 #[tokio::test]
+async fn explicit_model_skips_managed_model_and_reasoning_effort() {
+    let mut actual = test_config().await;
+    actual.model = Some("explicit-model".to_string());
+    actual.model_reasoning_effort = None;
+    actual.service_tier = Some("flex".to_string());
+    let mut expected = actual.clone();
+    expected.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let harness_overrides = ConfigOverrides {
+        model: Some("explicit-model".to_string()),
+        ..ConfigOverrides::default()
+    };
+
+    apply_managed_new_thread_defaults(&mut actual, Some(&defaults()), &[], &harness_overrides);
+
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn explicit_reasoning_effort_skips_managed_model_and_reasoning_effort() {
+    let mut actual = test_config().await;
+    actual.model = Some("configured-model".to_string());
+    actual.model_reasoning_effort = Some(ReasoningEffort::Low);
+    actual.service_tier = Some("flex".to_string());
+    let mut expected = actual.clone();
+    expected.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    let cli_kv_overrides = vec![(
+        "model_reasoning_effort".to_string(),
+        TomlValue::String("low".to_string()),
+    )];
+
+    apply_managed_new_thread_defaults(
+        &mut actual,
+        Some(&defaults()),
+        &cli_kv_overrides,
+        &ConfigOverrides::default(),
+    );
+
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
 async fn explicit_launch_overrides_take_precedence() {
     let mut actual = test_config().await;
     actual.model = Some("explicit-model".to_string());
