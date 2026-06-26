@@ -43,7 +43,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::TestCodexBuilder;
+use core_test_support::test_codex::test_codex as base_test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -67,6 +68,27 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+const CODE_MODE_HOST_PATH_ENV: &str = "CODEX_CODE_MODE_HOST_PATH";
+
+/// Builds a code-mode test using the in-process runtime by default.
+///
+/// Set `CODEX_CODE_MODE_HOST_PATH` to a built `codex-code-mode-host` binary to
+/// run this suite against the process host instead.
+fn test_codex() -> TestCodexBuilder {
+    let use_process_host = std::env::var_os(CODE_MODE_HOST_PATH_ENV).is_some();
+    base_test_codex().with_config(move |config| {
+        if use_process_host {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("code mode host should be enabled");
+        }
+    })
+}
+
+#[path = "code_mode_canonical_script.rs"]
+mod canonical_script;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
@@ -222,6 +244,9 @@ async fn run_code_mode_turn_with_model_and_config(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_process_host_returns_a_tool_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if std::env::var_os(CODE_MODE_HOST_PATH_ENV).is_some() {
+        return Ok(());
+    }
 
     let server = responses::start_mock_server().await;
     let (_test, follow_up_mock) =
