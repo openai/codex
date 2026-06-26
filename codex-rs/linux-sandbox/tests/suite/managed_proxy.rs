@@ -429,7 +429,7 @@ async fn ingress_routes_parent_connection_into_sandbox_local_server() {
             "        self.wfile.write(body)\n",
             "    def log_message(self, format, *args):\n",
             "        pass\n",
-            "server = http.server.ThreadingHTTPServer(('127.0.0.1', {ingress_port}), Handler)\n",
+            "server = http.server.HTTPServer(('127.0.0.1', {ingress_port}), Handler)\n",
             "server.handle_request()\n",
         ),
         ingress_port = ingress_port,
