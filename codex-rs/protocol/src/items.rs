@@ -909,7 +909,7 @@ impl CollabAgentToolCallItem {
         Self {
             id: event.call_id,
             tool: CollabAgentTool::SendInput,
-            status: collab_tool_call_status(&event.status, true),
+            status: collab_tool_call_status(&event.status, /*has_receiver*/ true),
             sender_thread_id: event.sender_thread_id,
             receiver_thread_ids: vec![event.receiver_thread_id],
             receiver_agents: vec![receiver_agent],
@@ -992,7 +992,7 @@ impl CollabAgentToolCallItem {
         Self {
             id: event.call_id,
             tool: CollabAgentTool::CloseAgent,
-            status: collab_tool_call_status(&event.status, true),
+            status: collab_tool_call_status(&event.status, /*has_receiver*/ true),
             sender_thread_id: event.sender_thread_id,
             receiver_thread_ids: vec![event.receiver_thread_id],
             receiver_agents: vec![receiver_agent],
@@ -1034,7 +1034,7 @@ impl CollabAgentToolCallItem {
         Self {
             id: event.call_id,
             tool: CollabAgentTool::ResumeAgent,
-            status: collab_tool_call_status(&event.status, true),
+            status: collab_tool_call_status(&event.status, /*has_receiver*/ true),
             sender_thread_id: event.sender_thread_id,
             receiver_thread_ids: vec![event.receiver_thread_id],
             receiver_agents: vec![receiver_agent],
