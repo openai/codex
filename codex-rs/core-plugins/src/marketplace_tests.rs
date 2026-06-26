@@ -297,6 +297,15 @@ fn find_marketplace_plugin_skips_unsafe_npm_sources() {
       }
     },
     {
+      "name": "local-version",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": ".",
+        "registry": "https://npm.example.com"
+      }
+    },
+    {
       "name": "plaintext-registry",
       "source": {
         "source": "npm",
@@ -341,7 +350,7 @@ fn find_marketplace_plugin_skips_unsafe_npm_sources() {
 }
 
 #[test]
-fn find_marketplace_plugin_supports_npm_semver_ranges() {
+fn find_marketplace_plugin_supports_npm_registry_version_selectors() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).unwrap();
@@ -350,6 +359,14 @@ fn find_marketplace_plugin_supports_npm_semver_ranges() {
         r#"{
   "name": "codex-curated",
   "plugins": [
+    {
+      "name": "dist-tag",
+      "source": {
+        "source": "npm",
+        "package": "@acme/codex-plugin",
+        "version": "latest"
+      }
+    },
     {
       "name": "comparator-range",
       "source": {
@@ -386,6 +403,11 @@ fn find_marketplace_plugin_supports_npm_semver_ranges() {
             .map(|plugin| plugin.source)
             .collect::<Vec<_>>(),
         vec![
+            MarketplacePluginSource::Npm {
+                package: "@acme/codex-plugin".to_string(),
+                version: Some("latest".to_string()),
+                registry: None,
+            },
             MarketplacePluginSource::Npm {
                 package: "@acme/codex-plugin".to_string(),
                 version: Some(">=1.2.7 <1.3.0".to_string()),

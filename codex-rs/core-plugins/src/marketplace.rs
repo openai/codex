@@ -7,7 +7,6 @@ use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use node_semver::Range;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -831,15 +830,17 @@ fn normalize_optional_npm_version(
     else {
         return Ok(None);
     };
-    if Range::parse(&version).is_err() {
+    if !is_registry_npm_version_selector(&version) {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
-            message: format!(
-                "npm plugin source version must be a semver version or range: {version}"
-            ),
+            message: format!("npm plugin source version must use the registry: {version}"),
         });
     }
     Ok(Some(version))
+}
+
+fn is_registry_npm_version_selector(version: &str) -> bool {
+    version != "." && version != ".." && !version.chars().any(|ch| matches!(ch, '/' | '\\' | ':'))
 }
 
 fn normalize_optional_npm_registry(
