@@ -1533,7 +1533,7 @@ impl ServerHandler for AppListMcpServer {
     }
 }
 
-async fn start_apps_server_with_delays(
+pub(super) async fn start_apps_server_with_delays(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
     directory_delay: Duration,
@@ -1693,7 +1693,7 @@ async fn list_directory_connectors(
     }
 }
 
-fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
+pub(super) fn connector_tool(connector_id: &str, connector_name: &str) -> Result<Tool> {
     let schema: JsonObject = serde_json::from_value(json!({
         "type": "object",
         "additionalProperties": false

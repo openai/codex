@@ -316,7 +316,19 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: WalkOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
-        Box::pin(walk(self, path, options, sandbox))
+        self.walk_via_directory_reads(path, options, sandbox)
+    }
+
+    /// Performs a bounded walk using the primitive filesystem operations.
+    ///
+    /// Implementations with an optimized walk transport can use this as a compatibility fallback.
+    fn walk_via_directory_reads<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: WalkOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, WalkOutcome> {
+        Box::pin(walk_via_directory_reads(self, path, options, sandbox))
     }
 
     fn remove<'a>(
@@ -335,7 +347,7 @@ pub trait ExecutorFileSystem: Send + Sync {
     ) -> ExecutorFileSystemFuture<'a, ()>;
 }
 
-async fn walk<F: ExecutorFileSystem + ?Sized>(
+async fn walk_via_directory_reads<F: ExecutorFileSystem + ?Sized>(
     file_system: &F,
     root: &PathUri,
     options: WalkOptions,
