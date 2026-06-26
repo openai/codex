@@ -13,6 +13,10 @@ pub(crate) fn apply_managed_new_thread_defaults(
     let Some(defaults) = defaults else {
         return;
     };
+    // Managed values are defaults rather than enforcement. Preserve explicit launch choices from
+    // dedicated flags such as `-m` (`harness_overrides`) and generic `-c key=value` settings
+    // (`cli_kv_overrides`), then fill only the fields that were not selected for this invocation.
+    // For example, plain `codex` uses the managed model, while `codex -m gpt-5.4` keeps `gpt-5.4`.
     let has_cli_override = |key: &str| cli_kv_overrides.iter().any(|(path, _value)| path == key);
 
     if harness_overrides.model.is_none()
