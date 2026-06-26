@@ -195,16 +195,15 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
     .expect("custom_tool_call should produce a tool call");
 
     assert_eq!(
-        call.tool_name,
-        ToolName::namespaced("mcp__python", tool_name)
-    );
-    assert_eq!(call.call_id, "call-namespace");
-    match call.payload {
-        ToolPayload::Custom { input } => {
-            assert_eq!(input, "print('hello')");
+        call,
+        ToolCall {
+            tool_name: ToolName::namespaced("mcp__python", tool_name),
+            call_id: "call-namespace".to_string(),
+            payload: ToolPayload::Custom {
+                input: "print('hello')".to_string(),
+            },
         }
-        other => panic!("expected custom payload, got {other:?}"),
-    }
+    );
 
     Ok(())
 }

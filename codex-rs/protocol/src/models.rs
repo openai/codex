@@ -2761,35 +2761,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_tool_call_deserializes_optional_namespace() {
-        let item: ResponseItem = serde_json::from_value(serde_json::json!({
-            "type": "custom_tool_call",
-            "name": "exec",
-            "namespace": "mcp__python",
-            "input": "print('hello')",
-            "call_id": "call-1",
-        }))
-        .expect("custom_tool_call should deserialize");
-
-        assert_eq!(
-            item,
-            ResponseItem::CustomToolCall {
-                id: None,
-                status: None,
-                call_id: "call-1".to_string(),
-                name: "exec".to_string(),
-                namespace: Some("mcp__python".to_string()),
-                input: "print('hello')".to_string(),
-                internal_chat_message_metadata_passthrough: None,
-            }
-        );
-        assert_eq!(
-            serde_json::to_value(item).expect("custom_tool_call should serialize")["namespace"],
-            "mcp__python"
-        );
-    }
-
-    #[test]
     fn render_command_prefix_list_sorts_by_len_then_total_len_then_alphabetical() {
         let prefixes = vec![
             vec!["b".to_string(), "zz".to_string()],

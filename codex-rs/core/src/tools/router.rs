@@ -25,7 +25,7 @@ use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
     pub tool_name: ToolName,
     pub call_id: String,
