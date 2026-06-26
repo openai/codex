@@ -363,10 +363,9 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
         tokens,
     ) {
         Ok(()) => Ok(()),
-        // A store lock failure means another process may be updating the selected aggregate
-        // authority, or that coordination itself is unavailable. It is not evidence that the
-        // keyring backend is unavailable, so treating it as a File-fallback signal could leave a
-        // newer fallback token hidden behind a stale Secrets entry.
+        // As on load, a store lock failure is a coordination failure rather than evidence that
+        // the keyring backend is unavailable. Falling back could leave a newer File token hidden
+        // behind a stale Secrets entry.
         Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
         Err(error) => {
             let message = error.to_string();
