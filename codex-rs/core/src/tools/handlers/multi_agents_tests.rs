@@ -179,7 +179,6 @@ struct ListAgentsResult {
 struct ListedAgentResult {
     agent_name: String,
     agent_status: serde_json::Value,
-    last_task_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1512,7 +1511,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_spawn_preview() {
+async fn multi_agent_v2_list_agents_returns_completed_status() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1586,19 +1585,12 @@ async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_s
         .map(|agent| agent.agent_name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(agent_names, vec!["/root", "/root/worker"]);
-    let root_agent = result
-        .agents
-        .iter()
-        .find(|agent| agent.agent_name == "/root")
-        .expect("root agent should be listed");
-    assert_eq!(root_agent.last_task_message.as_deref(), Some("Main thread"));
     let worker = result
         .agents
         .iter()
         .find(|agent| agent.agent_name == "/root/worker")
         .expect("worker agent should be listed");
     assert_eq!(worker.agent_status, json!({"completed": "done"}));
-    assert_eq!(worker.last_task_message, None);
     assert_eq!(success, Some(true));
 }
 
@@ -1686,7 +1678,6 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
 
     assert_eq!(result.agents.len(), 1);
     assert_eq!(result.agents[0].agent_name, worker_path.as_str());
-    assert_eq!(result.agents[0].last_task_message.as_deref(), Some("build"));
 }
 
 #[tokio::test]
@@ -1747,10 +1738,6 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 
     assert_eq!(result.agents.len(), 1);
     assert_eq!(result.agents[0].agent_name, "/root");
-    assert_eq!(
-        result.agents[0].last_task_message.as_deref(),
-        Some("Main thread")
-    );
 }
 
 #[tokio::test]
@@ -1822,10 +1809,6 @@ async fn multi_agent_v2_list_agents_keeps_interrupted_resident_agents() {
 
     assert_eq!(result.agents.len(), 2);
     assert_eq!(result.agents[0].agent_name, "/root");
-    assert_eq!(
-        result.agents[0].last_task_message.as_deref(),
-        Some("Main thread")
-    );
     assert_eq!(result.agents[1].agent_name, agent_path.as_str());
 }
 
