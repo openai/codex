@@ -13,6 +13,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
+    thread_store: Arc<dyn ThreadStore>,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -23,6 +24,7 @@ impl ThreadGoalRequestProcessor {
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
+        thread_store: Arc<dyn ThreadStore>,
     ) -> Self {
         Self {
             thread_manager,
@@ -31,6 +33,7 @@ impl ThreadGoalRequestProcessor {
             thread_state_manager,
             state_db,
             goal_service,
+            thread_store,
         }
     }
 
@@ -91,6 +94,18 @@ impl ThreadGoalRequestProcessor {
         } else {
             None
         };
+        if self.thread_store.supports_external_thread_goal_state()
+            && let Some(state_db) = thread_goal_state_db.as_ref()
+            && let Err(err) = self
+                .hydrate_external_thread_goal(thread.session_configured().thread_id, state_db)
+                .await
+        {
+            warn!(
+                "failed to restore external thread goal before running resume snapshot for {}: {}",
+                thread.session_configured().thread_id,
+                err.message
+            );
+        }
         (emit_thread_goal_update, thread_goal_state_db)
     }
 
@@ -134,6 +149,8 @@ impl ThreadGoalRequestProcessor {
             )
             .await
             .map_err(goal_service_error)?;
+        self.persist_external_thread_goal_if_supported(thread_id, Some(outcome.goal.clone()))
+            .await?;
         let goal = ThreadGoal::from(outcome.goal.clone());
 
         let persist_result = match self.thread_manager.get_thread(thread_id).await {
@@ -172,6 +189,10 @@ impl ThreadGoalRequestProcessor {
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
         let state_db = self.state_db_for_materialized_thread(thread_id).await?;
+        if self.thread_store.supports_external_thread_goal_state() {
+            self.hydrate_external_thread_goal(thread_id, &state_db)
+                .await?;
+        }
         let goal = self
             .goal_service
             .get_thread_goal(&state_db, thread_id)
@@ -205,6 +226,10 @@ impl ThreadGoalRequestProcessor {
             .clear_thread_goal(&state_db, thread_id)
             .await
             .map_err(goal_service_error)?;
+        if cleared {
+            self.persist_external_thread_goal_if_supported(thread_id, None)
+                .await?;
+        }
 
         self.outgoing
             .send_response(request_id, ThreadGoalClearResponse { cleared })
@@ -220,8 +245,9 @@ impl ThreadGoalRequestProcessor {
         &self,
         thread_id: ThreadId,
     ) -> Result<StateDbHandle, JSONRPCErrorError> {
+        let external_goal_state = self.thread_store.supports_external_thread_goal_state();
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            if thread.rollout_path().is_none() {
+            if thread.rollout_path().is_none() && !external_goal_state {
                 return Err(invalid_request(format!(
                     "ephemeral thread does not support goals: {thread_id}"
                 )));
@@ -229,6 +255,15 @@ impl ThreadGoalRequestProcessor {
             if let Some(state_db) = thread.state_db() {
                 return Ok(state_db);
             }
+        } else if external_goal_state {
+            self.thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+                .map_err(external_thread_goal_store_error)?;
         } else {
             codex_rollout::find_thread_path_by_id_str(
                 &self.config.codex_home,
@@ -252,6 +287,9 @@ impl ThreadGoalRequestProcessor {
         thread_id: ThreadId,
         state_db: &StateDbHandle,
     ) -> Result<(), JSONRPCErrorError> {
+        if self.thread_store.supports_external_thread_goal_state() {
+            return self.hydrate_external_thread_goal(thread_id, state_db).await;
+        }
         let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
         let rollout_path = match running_thread.as_ref() {
             Some(thread) => thread.rollout_path().ok_or_else(|| {
@@ -283,6 +321,74 @@ impl ThreadGoalRequestProcessor {
         Ok(())
     }
 
+    async fn hydrate_external_thread_goal(
+        &self,
+        thread_id: ThreadId,
+        state_db: &StateDbHandle,
+    ) -> Result<(), JSONRPCErrorError> {
+        let external_goal = self
+            .thread_store
+            .load_external_thread_goal(thread_id)
+            .await
+            .map_err(external_thread_goal_store_error)?;
+        let local_goal = state_db
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to read local thread goal: {err}")))?;
+
+        match external_goal {
+            Some(external_goal) => {
+                if external_goal.thread_id != thread_id {
+                    return Err(internal_error(format!(
+                        "external thread goal snapshot has mismatched thread id: expected {thread_id}, got {}",
+                        external_goal.thread_id
+                    )));
+                }
+                if local_goal.as_ref().is_some_and(|local_goal| {
+                    protocol_thread_goal_from_state(local_goal) == external_goal
+                }) {
+                    return Ok(());
+                }
+                state_db
+                    .thread_goals()
+                    .restore_thread_goal(&external_goal)
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to restore external thread goal: {err}"))
+                    })?;
+            }
+            None => {
+                if local_goal.is_some() {
+                    state_db
+                        .thread_goals()
+                        .delete_thread_goal(thread_id)
+                        .await
+                        .map_err(|err| {
+                            internal_error(format!(
+                                "failed to apply external thread goal clear: {err}"
+                            ))
+                        })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn persist_external_thread_goal_if_supported(
+        &self,
+        thread_id: ThreadId,
+        goal: Option<codex_protocol::protocol::ThreadGoal>,
+    ) -> Result<(), JSONRPCErrorError> {
+        if !self.thread_store.supports_external_thread_goal_state() {
+            return Ok(());
+        }
+        self.thread_store
+            .persist_external_thread_goal(thread_id, goal)
+            .await
+            .map_err(external_thread_goal_store_error)
+    }
+
     async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {
         let state_db = match self.state_db_for_materialized_thread(thread_id).await {
             Ok(state_db) => state_db,
@@ -294,6 +400,17 @@ impl ThreadGoalRequestProcessor {
                 return;
             }
         };
+        if self.thread_store.supports_external_thread_goal_state()
+            && let Err(err) = self
+                .hydrate_external_thread_goal(thread_id, &state_db)
+                .await
+        {
+            warn!(
+                "failed to restore external thread goal before emitting resume snapshot for {thread_id}: {}",
+                err.message
+            );
+            return;
+        }
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let thread_state = thread_state.lock().await;
@@ -363,6 +480,55 @@ impl ThreadGoalRequestProcessor {
                 },
             ))
             .await;
+    }
+}
+
+fn external_thread_goal_store_error(err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => {
+            invalid_request(format!("thread not found: {thread_id}"))
+        }
+        ThreadStoreError::InvalidRequest { message } => invalid_request(message),
+        ThreadStoreError::Unsupported { operation } => internal_error(format!(
+            "external thread goal store does not support {operation}"
+        )),
+        ThreadStoreError::Conflict { message } | ThreadStoreError::Internal { message } => {
+            internal_error(format!("external thread goal store failed: {message}"))
+        }
+    }
+}
+
+fn protocol_thread_goal_from_state(
+    goal: &codex_state::ThreadGoal,
+) -> codex_protocol::protocol::ThreadGoal {
+    codex_protocol::protocol::ThreadGoal {
+        thread_id: goal.thread_id,
+        objective: goal.objective.clone(),
+        status: match goal.status {
+            codex_state::ThreadGoalStatus::Active => {
+                codex_protocol::protocol::ThreadGoalStatus::Active
+            }
+            codex_state::ThreadGoalStatus::Paused => {
+                codex_protocol::protocol::ThreadGoalStatus::Paused
+            }
+            codex_state::ThreadGoalStatus::Blocked => {
+                codex_protocol::protocol::ThreadGoalStatus::Blocked
+            }
+            codex_state::ThreadGoalStatus::UsageLimited => {
+                codex_protocol::protocol::ThreadGoalStatus::UsageLimited
+            }
+            codex_state::ThreadGoalStatus::BudgetLimited => {
+                codex_protocol::protocol::ThreadGoalStatus::BudgetLimited
+            }
+            codex_state::ThreadGoalStatus::Complete => {
+                codex_protocol::protocol::ThreadGoalStatus::Complete
+            }
+        },
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used,
+        time_used_seconds: goal.time_used_seconds,
+        created_at: goal.created_at.timestamp(),
+        updated_at: goal.updated_at.timestamp(),
     }
 }
 

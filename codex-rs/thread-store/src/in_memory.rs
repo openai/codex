@@ -14,7 +14,9 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_rollout::StateDbHandle;
 use codex_rollout::persisted_rollout_items;
 
 use crate::AppendThreadItemsParams;
@@ -227,9 +229,9 @@ pub struct InMemoryThreadStoreCalls {
 /// Test and debug configs can select this store by id, letting tests exercise
 /// config-driven non-local persistence without requiring the real remote gRPC
 /// service.
-#[derive(Default)]
 pub struct InMemoryThreadStore {
     state: tokio::sync::Mutex<InMemoryThreadStoreState>,
+    external_goal_state_db: Option<StateDbHandle>,
 }
 
 #[derive(Default)]
@@ -240,9 +242,30 @@ struct InMemoryThreadStoreState {
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
     names: HashMap<ThreadId, Option<String>>,
     rollout_paths: HashMap<PathBuf, ThreadId>,
+    external_thread_goals: HashMap<ThreadId, Option<ThreadGoal>>,
+}
+
+impl Default for InMemoryThreadStore {
+    fn default() -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(InMemoryThreadStoreState::default()),
+            external_goal_state_db: None,
+        }
+    }
 }
 
 impl InMemoryThreadStore {
+    /// Creates an in-memory store that behaves like an external durable goal-state backend.
+    ///
+    /// This is primarily useful for consumers that need to exercise a non-local thread store
+    /// while retaining the standard GoalService SQLite runtime.
+    pub fn with_external_thread_goal_state(state_db: StateDbHandle) -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(InMemoryThreadStoreState::default()),
+            external_goal_state_db: Some(state_db),
+        }
+    }
+
     /// Returns the store associated with `id`, creating it if needed.
     pub fn for_id(id: impl Into<String>) -> Arc<Self> {
         let id = id.into();
@@ -430,6 +453,56 @@ impl InMemoryThreadStore {
 impl ThreadStore for InMemoryThreadStore {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn state_db_handle(&self) -> Option<StateDbHandle> {
+        self.external_goal_state_db.clone()
+    }
+
+    fn supports_external_thread_goal_state(&self) -> bool {
+        self.external_goal_state_db.is_some()
+    }
+
+    fn load_external_thread_goal(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<ThreadGoal>> {
+        Box::pin(async move {
+            if !self.supports_external_thread_goal_state() {
+                return Err(ThreadStoreError::Unsupported {
+                    operation: "thread_goal/load_external",
+                });
+            }
+            let state = self.state.lock().await;
+            if !state.created_threads.contains_key(&thread_id) {
+                return Err(ThreadStoreError::ThreadNotFound { thread_id });
+            }
+            Ok(state
+                .external_thread_goals
+                .get(&thread_id)
+                .cloned()
+                .flatten())
+        })
+    }
+
+    fn persist_external_thread_goal(
+        &self,
+        thread_id: ThreadId,
+        goal: Option<ThreadGoal>,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            if !self.supports_external_thread_goal_state() {
+                return Err(ThreadStoreError::Unsupported {
+                    operation: "thread_goal/persist_external",
+                });
+            }
+            let mut state = self.state.lock().await;
+            if !state.created_threads.contains_key(&thread_id) {
+                return Err(ThreadStoreError::ThreadNotFound { thread_id });
+            }
+            state.external_thread_goals.insert(thread_id, goal);
+            Ok(())
+        })
     }
 
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
