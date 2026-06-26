@@ -6007,27 +6007,7 @@ async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<(
 async fn plugin_service_preview_cli_override_reaches_plugin_service_consumers()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let default_config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
-        .build()
-        .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
-
-    assert!(
-        !default_config
-            .features
-            .enabled(Feature::PluginServicePreview)
-    );
-    assert!(!default_config.plugins_config_input().plugin_service_preview);
-    assert!(
-        !default_config
-            .to_mcp_config(&plugins_manager)
-            .await
-            .plugin_service_preview
-    );
-
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))

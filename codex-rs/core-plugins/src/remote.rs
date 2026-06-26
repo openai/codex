@@ -1935,13 +1935,7 @@ pub(super) async fn send_plugin_service_request(
     config: &RemotePluginServiceConfig,
     request: RequestBuilder,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    send_plugin_service_request_with_preview(request, config.plugin_service_preview).await
-}
-
-async fn send_plugin_service_request_with_preview(
-    request: RequestBuilder,
-    preview_enabled: bool,
-) -> Result<reqwest::Response, reqwest::Error> {
+    let preview_enabled = config.plugin_service_preview;
     let (client, request) = request.build_split();
     let mut request = request?;
     let cloudflare_cookie = (preview_enabled && !request.headers().contains_key(COOKIE))

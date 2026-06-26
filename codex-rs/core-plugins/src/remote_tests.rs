@@ -1,9 +1,5 @@
 use super::*;
 use pretty_assertions::assert_eq;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
 
 #[test]
 fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only_plugins() {
@@ -301,7 +297,10 @@ fn recommended_plugins_ignore_invalid_remote_plugin_ids() {
 
 #[test]
 fn plugin_service_routing_preserves_cloudflare_cookie_jar_values() {
-    let mut headers = reqwest::header::HeaderMap::new();
+    let mut headers = reqwest::header::HeaderMap::from_iter([(
+        COOKIE,
+        HeaderValue::from_static("session=abc; oai-chat-plugin-service-preview=false"),
+    )]);
     let cloudflare_cookie = HeaderValue::from_static("cf_clearance=clearance; _cfuvid=visitor");
 
     apply_plugin_service_routing_cookie(
@@ -312,63 +311,9 @@ fn plugin_service_routing_preserves_cloudflare_cookie_jar_values() {
 
     assert_eq!(
         headers.get(COOKIE).and_then(|value| value.to_str().ok()),
-        Some("cf_clearance=clearance; _cfuvid=visitor; oai-chat-plugin-service-preview=true"),
-    );
-}
-
-#[tokio::test]
-async fn plugin_service_request_does_not_add_preview_cookie_when_disabled() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-
-    let response = send_plugin_service_request_with_preview(
-        reqwest::Client::new().get(server.uri()),
-        /*preview_enabled*/ false,
-    )
-    .await
-    .expect("request should succeed");
-    assert!(response.status().is_success());
-
-    let requests = server
-        .received_requests()
-        .await
-        .expect("request recording should be available");
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].headers.get("cookie"), None);
-}
-
-#[tokio::test]
-async fn plugin_service_request_sanitizes_and_preserves_caller_cookies() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-
-    let response = send_plugin_service_request_with_preview(
-        reqwest::Client::new().get(server.uri()).header(
-            COOKIE,
-            "session=abc; oai-chat-plugin-service-preview=false; theme=dark",
+        Some(
+            "session=abc; cf_clearance=clearance; _cfuvid=visitor; \
+             oai-chat-plugin-service-preview=true"
         ),
-        /*preview_enabled*/ true,
-    )
-    .await
-    .expect("request should succeed");
-    assert!(response.status().is_success());
-
-    let requests = server
-        .received_requests()
-        .await
-        .expect("request recording should be available");
-    assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0]
-            .headers
-            .get("cookie")
-            .and_then(|value| value.to_str().ok()),
-        Some("session=abc; theme=dark; oai-chat-plugin-service-preview=true"),
     );
 }

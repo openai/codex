@@ -304,17 +304,15 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
 
 #[test]
 fn built_in_plugin_service_mcp_config_only_adds_preview_cookie_when_enabled() {
-    let disabled = mcp_server_config_for_url(
-        "https://chatgpt.com/backend-api/ps/mcp".to_string(),
+    let disabled = hosted_plugin_runtime_mcp_server_config(
+        "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
-        McpServerAuth::ChatGpt,
-        /*preview_enabled*/ false,
+        /*plugin_service_preview*/ false,
     );
-    let enabled = mcp_server_config_for_url(
-        "https://chatgpt.com/backend-api/ps/mcp".to_string(),
+    let enabled = hosted_plugin_runtime_mcp_server_config(
+        "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
-        McpServerAuth::ChatGpt,
-        /*preview_enabled*/ true,
+        /*plugin_service_preview*/ true,
     );
 
     fn headers(config: &McpServerConfig) -> Option<&HashMap<String, String>> {
@@ -331,31 +329,6 @@ fn built_in_plugin_service_mcp_config_only_adds_preview_cookie_when_enabled() {
             "oai-chat-plugin-service-preview=true".to_string(),
         )])),
     );
-
-    let unrelated_server = McpServerConfig {
-        auth: Default::default(),
-        transport: McpServerTransportConfig::StreamableHttp {
-            url: "https://third-party.example/mcp".to_string(),
-            bearer_token_env_var: None,
-            http_headers: None,
-            env_http_headers: None,
-        },
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
-    };
-    assert_eq!(headers(&unrelated_server), None);
 }
 
 #[tokio::test]
@@ -363,6 +336,7 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let mut config = test_mcp_config(codex_home.path().to_path_buf());
     config.apps_enabled = true;
+    config.plugin_service_preview = true;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let mut catalog = ResolvedMcpCatalog::builder();
@@ -449,8 +423,11 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
         .expect("codex apps should use configured transport");
 
     match &sample.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => {
+        McpServerTransportConfig::StreamableHttp {
+            url, http_headers, ..
+        } => {
             assert_eq!(url, "https://user.example/mcp");
+            assert_eq!(http_headers, &None);
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }
@@ -461,8 +438,17 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
         other => panic!("expected streamable http transport, got {other:?}"),
     }
     match &codex_apps.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => {
+        McpServerTransportConfig::StreamableHttp {
+            url, http_headers, ..
+        } => {
             assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+            assert_eq!(
+                http_headers,
+                &Some(HashMap::from([(
+                    "Cookie".to_string(),
+                    "oai-chat-plugin-service-preview=true".to_string(),
+                )]))
+            );
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }

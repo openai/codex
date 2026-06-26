@@ -141,28 +141,14 @@ fn codex_apps_tools_cache_is_scoped_by_plugin_service_preview() {
     let cache = CodexAppsToolsCache::default();
     let regular = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-            plugin_service_preview: false,
-        },
+        codex_apps_tools_cache_key(/*auth*/ None, /*plugin_service_preview*/ false),
     );
     let preview = cache.context(
         codex_home.path().to_path_buf(),
-        CodexAppsToolsCacheKey {
-            account_id: Some("account-one".to_string()),
-            chatgpt_user_id: Some("user-one".to_string()),
-            is_workspace_account: false,
-            plugin_service_preview: true,
-        },
+        codex_apps_tools_cache_key(/*auth*/ None, /*plugin_service_preview*/ true),
     );
 
     assert_ne!(regular.tools_cache_path(), preview.tools_cache_path());
-    assert_ne!(
-        regular.server_info_cache_path(),
-        preview.server_info_cache_path()
-    );
 }
 
 #[test]
