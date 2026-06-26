@@ -2431,6 +2431,7 @@ async fn remote_control_http_mode_preserves_stale_enrollment_when_reenrollment_f
         retry_refresh_request.request_line,
         "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
     );
+    let refresh_failed_at = OffsetDateTime::now_utc();
     respond_with_status(
         retry_refresh_request.stream,
         "500 Internal Server Error",
@@ -2438,9 +2439,26 @@ async fn remote_control_http_mode_preserves_stale_enrollment_when_reenrollment_f
     )
     .await;
 
+    let current_enrollment = remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .clone()
+        .expect("stale enrollment should remain available");
+    let next_refresh_at = current_enrollment
+        .next_refresh_at
+        .expect("required refresh failure should set a retry deadline");
+    assert!(
+        (refresh_failed_at + time::Duration::seconds(24)
+            ..=OffsetDateTime::now_utc() + time::Duration::seconds(36))
+            .contains(&next_refresh_at)
+    );
     assert_eq!(
-        *remote_handle.current_enrollment.lock().await,
-        Some(stale_enrollment.clone())
+        current_enrollment,
+        RemoteControlEnrollment {
+            next_refresh_at: Some(next_refresh_at),
+            ..stale_enrollment.clone()
+        }
     );
     assert_eq!(
         state_db

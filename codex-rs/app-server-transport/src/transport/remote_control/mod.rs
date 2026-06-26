@@ -828,7 +828,11 @@ async fn refresh_pairing_enrollment(
 ) -> io::Result<()> {
     if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
         if err.kind() != io::ErrorKind::PermissionDenied {
-            return Err(err);
+            return if replace_current_enrollment(current_enrollment, enrollment) {
+                Err(err)
+            } else {
+                Err(pairing_unavailable_error())
+            };
         }
         if !replace_current_enrollment(current_enrollment, enrollment) {
             return Err(pairing_unavailable_error());

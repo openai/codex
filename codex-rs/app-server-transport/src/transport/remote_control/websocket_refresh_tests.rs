@@ -216,7 +216,7 @@ async fn assert_refresh_failure_blocks_websocket(
     let remote_control_url = remote_control_url_for_listener(&listener);
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
-    let (connect_done_tx, connect_done_rx) = oneshot::channel();
+    let (connects_done_tx, connects_done_rx) = oneshot::channel();
     let server_task = tokio::spawn(async move {
         let (stream, request_line) = accept_http_request(&listener).await;
         assert_eq!(
@@ -224,9 +224,14 @@ async fn assert_refresh_failure_blocks_websocket(
             "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
         );
         tokio::time::sleep(response_delay).await;
-        respond_with_status_and_headers(stream, "502 Bad Gateway", &[], "upstream unavailable")
-            .await;
-        assert_no_connection_until_connect_finishes(&listener, connect_done_rx).await;
+        respond_with_status_and_headers(
+            stream,
+            "502 Bad Gateway",
+            &[("retry-after", "120")],
+            "upstream unavailable",
+        )
+        .await;
+        assert_no_connection_until_connect_finishes(&listener, connects_done_rx).await;
     });
     let codex_home = TempDir::new().expect("temp dir should create");
     let state_db = remote_control_state_runtime(&codex_home).await;
@@ -235,7 +240,8 @@ async fn assert_refresh_failure_blocks_websocket(
     enrollment.expires_at = Some(time::OffsetDateTime::now_utc() + expires_in);
     let current_enrollment = test_current_enrollment(Some(enrollment));
 
-    let err = connect_test_websocket(
+    let refresh_started_at = time::OffsetDateTime::now_utc();
+    let refresh_err = connect_test_websocket(
         &remote_control_target,
         state_db.as_ref(),
         &auth_manager,
@@ -243,27 +249,41 @@ async fn assert_refresh_failure_blocks_websocket(
     )
     .await
     .expect_err("required refresh failure should block websocket connect");
-    connect_done_tx
+    let refresh_completed_at = time::OffsetDateTime::now_utc();
+    let deferred_err = connect_test_websocket(
+        &remote_control_target,
+        state_db.as_ref(),
+        &auth_manager,
+        &current_enrollment,
+    )
+    .await
+    .expect_err("required refresh deadline should block websocket reconnect");
+    connects_done_tx
         .send(())
-        .expect("server should wait for connect completion");
+        .expect("server should wait for connect attempts to finish");
 
     server_task.await.expect("server task should succeed");
-    assert!(err.to_string().contains("HTTP 502 Bad Gateway"));
-    assert_eq!(
-        current_enrollment
-            .snapshot()
-            .and_then(|enrollment| enrollment.next_refresh_at),
-        None
+    assert!(refresh_err.to_string().contains("HTTP 502 Bad Gateway"));
+    assert_eq!(deferred_err.kind(), io::ErrorKind::WouldBlock);
+    assert!(deferred_err.to_string().contains("refresh deferred until"));
+    let next_refresh_at = current_enrollment
+        .snapshot()
+        .and_then(|enrollment| enrollment.next_refresh_at)
+        .expect("required refresh failure should set a retry deadline");
+    assert!(
+        (refresh_started_at + time::Duration::seconds(120)
+            ..=refresh_completed_at + time::Duration::seconds(120))
+            .contains(&next_refresh_at)
     );
 }
 
 #[tokio::test]
-async fn expired_token_refresh_failure_does_not_connect_websocket() {
+async fn expired_token_refresh_failure_throttles_reconnect_without_websocket() {
     assert_refresh_failure_blocks_websocket(-time::Duration::seconds(1), Duration::ZERO).await;
 }
 
 #[tokio::test]
-async fn token_expiring_during_refresh_failure_does_not_connect_websocket() {
+async fn token_expiring_during_refresh_failure_throttles_reconnect_without_websocket() {
     assert_refresh_failure_blocks_websocket(
         time::Duration::seconds(1),
         Duration::from_millis(1_200),

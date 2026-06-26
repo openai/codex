@@ -122,9 +122,19 @@ pub(super) async fn refresh_remote_control_server(
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
-    let refresh_requirement = enrollment.server_token_refresh_requirement();
+    let now = OffsetDateTime::now_utc();
+    let refresh_requirement = enrollment.server_token_refresh_requirement_at(now);
     if refresh_requirement == RemoteControlServerTokenRefreshRequirement::NotNeeded {
         return Ok(());
+    }
+    if refresh_requirement == RemoteControlServerTokenRefreshRequirement::Required
+        && let Some(next_refresh_at) = enrollment.next_refresh_at
+        && next_refresh_at > now
+    {
+        return Err(io::Error::new(
+            ErrorKind::WouldBlock,
+            format!("remote control server token refresh deferred until {next_refresh_at}"),
+        ));
     }
     let refresh_url = enrollment.remote_control_target.refresh_url.clone();
     let request = RefreshRemoteServerRequest {
@@ -147,9 +157,7 @@ pub(super) async fn refresh_remote_control_server(
             enrollment.clear_server_token();
             return Err(err);
         }
-        Err(err)
-            if refresh_requirement == RemoteControlServerTokenRefreshRequirement::Proactive =>
-        {
+        Err(err) => {
             let Some(refresh_error) = remote_control_server_request_error(&err) else {
                 return Err(err);
             };
@@ -157,13 +165,22 @@ pub(super) async fn refresh_remote_control_server(
                 return Err(err);
             }
             let now = OffsetDateTime::now_utc();
-            if enrollment.server_token_refresh_requirement_at(now)
-                == RemoteControlServerTokenRefreshRequirement::Required
-            {
-                return Err(err);
-            }
+            let refresh_is_required = enrollment.server_token_refresh_requirement_at(now)
+                == RemoteControlServerTokenRefreshRequirement::Required;
             let (refresh_delay, next_refresh_at) = refresh_deferral(refresh_error.retry_at, now);
             enrollment.next_refresh_at = Some(next_refresh_at);
+            if refresh_is_required {
+                warn!(
+                    refresh_url,
+                    server_id = %enrollment.server_id,
+                    environment_id = %enrollment.environment_id,
+                    error = %err,
+                    ?refresh_delay,
+                    %next_refresh_at,
+                    "required remote control server token refresh failed; deferring next attempt"
+                );
+                return Err(err);
+            }
             warn!(
                 refresh_url,
                 server_id = %enrollment.server_id,
@@ -175,7 +192,6 @@ pub(super) async fn refresh_remote_control_server(
             );
             return Ok(());
         }
-        Err(err) => return Err(err),
     };
     if refreshed.server_id != enrollment.server_id
         || refreshed.environment_id != enrollment.environment_id

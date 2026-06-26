@@ -305,6 +305,72 @@ async fn proactive_refresh_rate_limit_uses_valid_token_for_pairing() {
 }
 
 #[tokio::test]
+async fn required_refresh_deadline_blocks_pairing_without_request() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        respond_with_status_and_headers(
+            refresh_request.stream,
+            "502 Bad Gateway",
+            &[("retry-after", "120")],
+            "upstream unavailable",
+        )
+        .await;
+        listener
+    });
+    let remote_handle = remote_control_handle_with_current_enrollment(
+        &remote_control_url,
+        remote_control_auth_manager(),
+    );
+    remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(OffsetDateTime::now_utc() - time::Duration::seconds(1));
+
+    let refresh_err = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("required refresh failure should block pairing");
+    let listener = server_task.await.expect("server task should finish");
+    let next_refresh_at = remote_handle
+        .current_enrollment
+        .snapshot()
+        .and_then(|enrollment| enrollment.next_refresh_at)
+        .expect("required pairing refresh should preserve the retry deadline");
+    let deferred_err = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("required refresh deadline should block pairing");
+
+    assert!(refresh_err.to_string().contains("HTTP 502 Bad Gateway"));
+    assert_eq!(deferred_err.kind(), io::ErrorKind::WouldBlock);
+    assert!(
+        deferred_err
+            .to_string()
+            .contains(&next_refresh_at.to_string())
+    );
+    timeout(Duration::from_millis(100), listener.accept())
+        .await
+        .expect_err("pairing should not issue a request before the refresh deadline");
+}
+
+#[tokio::test]
 async fn remote_control_pairing_status_returns_pending() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
