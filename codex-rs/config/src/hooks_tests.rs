@@ -13,6 +13,7 @@ use super::MatcherGroup;
 fn hooks_file_deserializes_existing_json_shape() {
     let parsed: HooksFile = serde_json::from_str(
         r#"{
+  "description": "Optional stop-time review gate for Codex Companion.",
   "hooks": {
     "PreToolUse": [
       {
@@ -35,6 +36,7 @@ fn hooks_file_deserializes_existing_json_shape() {
     assert_eq!(
         parsed,
         HooksFile {
+            description: Some("Optional stop-time review gate for Codex Companion.".to_string()),
             hooks: HookEventsToml {
                 pre_tool_use: vec![MatcherGroup {
                     matcher: Some("^Bash$".to_string()),
