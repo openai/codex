@@ -12,6 +12,7 @@ use crate::command_resolution::resolve_windows_launch;
 use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
+use crate::env::inherit_path_env;
 use crate::env::normalize_null_device_env;
 use crate::identity::SandboxCreds;
 use crate::identity::require_logon_sandbox_creds;
