@@ -22,6 +22,7 @@ use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
+use std::path::Path;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -177,7 +178,7 @@ impl ChatWidget {
             if let Some(skill) = self
                 .skills_all
                 .iter()
-                .find(|skill| skill.path.as_path() == path)
+                .find(|skill| skill.path.as_path() == Path::new(path.as_str()))
             {
                 *name = format!("{name} ({} skill)", skill.name);
             }

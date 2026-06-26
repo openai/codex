@@ -105,7 +105,7 @@ fn detect_skill_doc_read(
 ) -> Option<SkillMetadata> {
     for command in parse_command_impl(tokens) {
         if let ParsedCommand::Read { path, .. } = command {
-            let candidate_path = canonicalize_if_exists(&workdir.join(path.as_path()));
+            let candidate_path = canonicalize_if_exists(&workdir.join(Path::new(path.as_str())));
             if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
                 return Some(candidate.clone());
             }

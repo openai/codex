@@ -40,7 +40,7 @@ pub fn memories_usage_kinds_from_command(command: &str) -> Vec<MemoriesUsageKind
     parse_shell_script(command)
         .into_iter()
         .filter_map(|command| match command {
-            ParsedCommand::Read { path, .. } => get_memory_kind(path.display().to_string()),
+            ParsedCommand::Read { path, .. } => get_memory_kind(path.into_string()),
             ParsedCommand::Search { path, .. } => path.and_then(get_memory_kind),
             ParsedCommand::ListFiles { .. } | ParsedCommand::Unknown { .. } => None,
         })

@@ -129,33 +129,41 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
 }
 
 fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Vec<CommandAction> {
-    // TODO(anp): Carry PathUri into CommandAction so foreign Read actions retain resolved paths.
-    // Until then, omit those actions rather than project a foreign cwd onto the host.
-    let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {
-        cwd.to_abs_path().ok()
-    } else {
-        None
-    };
-
     parsed_cmd
         .iter()
         .cloned()
         .filter_map(|parsed| match parsed {
-            ParsedCommand::Read { cmd, name, path } => match native_cwd.as_ref() {
-                Some(native_cwd) => Some(CommandAction::Read {
-                    command: cmd,
-                    name,
-                    path: native_cwd.join(path),
-                }),
-                None => {
-                    warn!(
-                        command = cmd,
-                        %cwd,
-                        "omitting read command action whose path cannot be resolved against a foreign cwd"
-                    );
-                    None
+            ParsedCommand::Read { cmd, name, path } => {
+                let path_text = path.as_str();
+                let is_home_relative = path_text == "~"
+                    || path_text.starts_with("~/")
+                    || (cwd.infer_path_convention() == Some(PathConvention::Windows)
+                        && path_text.starts_with(r"~\"));
+                let resolved_path: anyhow::Result<PathUri> = if is_home_relative {
+                    cwd.to_abs_path()
+                        .map(|cwd| cwd.join(path_text).into())
+                        .map_err(anyhow::Error::from)
+                } else {
+                    cwd.join(path_text).map_err(anyhow::Error::from)
+                };
+                match resolved_path {
+                    Ok(path) => Some(CommandAction::Read {
+                        command: cmd,
+                        name,
+                        path: path.into(),
+                    }),
+                    Err(error) => {
+                        warn!(
+                            command = cmd,
+                            path = %path_text,
+                            %cwd,
+                            %error,
+                            "omitting read command action whose path cannot be resolved against its cwd"
+                        );
+                        None
+                    }
                 }
-            },
+            }
             ParsedCommand::ListFiles { cmd, path } => {
                 Some(CommandAction::ListFiles { command: cmd, path })
             }
