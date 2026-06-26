@@ -208,6 +208,7 @@ impl McpConnectionManager {
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
+                startup_submit_id.clone(),
                 server,
                 store_mode,
                 keyring_backend_kind,
@@ -256,6 +257,10 @@ impl McpConnectionManager {
                     },
                 )
                 .await;
+
+                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+                    async_managed_client.reconnect_failed_startup().await;
+                }
 
                 (server_name, outcome)
             });
@@ -479,6 +484,7 @@ impl McpConnectionManager {
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
+            managed_client.reconnect_failed_startup().await;
             let has_cached_tools = managed_client.has_cached_tools();
             let startup_complete = managed_client
                 .startup_complete
