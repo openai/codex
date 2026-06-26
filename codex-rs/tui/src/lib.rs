@@ -137,6 +137,7 @@ mod line_truncation;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
+mod managed_new_thread_defaults;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
