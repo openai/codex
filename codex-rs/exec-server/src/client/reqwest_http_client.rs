@@ -9,6 +9,7 @@ use std::error::Error as StdError;
 use std::time::Duration;
 
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -66,7 +67,7 @@ impl ReqwestHttpClient {
             HttpRedirectPolicy::Follow => builder,
             HttpRedirectPolicy::Stop => builder.redirect(reqwest::redirect::Policy::none()),
         };
-        build_reqwest_client_with_custom_ca(builder)
+        build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(builder))
             .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
     }
 }
