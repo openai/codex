@@ -673,7 +673,7 @@ fn spawn_agent_tool_description(
         {tool_description}
 This spawn_agent tool provides you access to sub-agents that inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model or there is a clear task-specific reason. You should follow the rules and guidelines below to use this tool.
 
-Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work.
+Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.
 {agent_role_usage_hint}
 
 ### Designing delegated subtasks

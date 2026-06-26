@@ -665,6 +665,51 @@ async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
 }
 
 #[tokio::test]
+async fn plugin_detail_popup_snapshot_shows_npm_source() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        /*installed*/ false,
+        /*enabled*/ true,
+        PluginInstallPolicy::Available,
+    );
+    summary.source = PluginSource::Npm {
+        package: "@acme/figma-plugin".to_string(),
+        version: Some("^1.2.0".to_string()),
+        registry: Some("https://npm.example.com".to_string()),
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (codex_app_server_protocol::HookEventName::PreToolUse, 1),
+            (codex_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["Figma", "Slack"],
+        &["figma-mcp", "docs-mcp"],
+    );
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_npm_source",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
 async fn plugin_detail_popup_distinguishes_admin_installed_from_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
