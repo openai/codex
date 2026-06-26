@@ -197,13 +197,35 @@ impl GoalToolExecutor {
                 request.token_budget,
             )
             .await
-            .map_err(|err| FunctionCallError::RespondToModel(format!("failed to create goal: {err}")))?
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first"
-                        .to_string(),
-                )
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to create goal: {err}"))
             })?;
+        let Some(goal) = goal else {
+            let existing_goal = self
+                .state_db
+                .thread_goals()
+                .get_thread_goal(self.thread_id)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to read existing goal: {err}"
+                    ))
+                })?;
+            if let Some(existing_goal) = existing_goal
+                && existing_goal.status == codex_state::ThreadGoalStatus::Active
+                && existing_goal.objective == request.objective
+                && existing_goal.token_budget == request.token_budget
+            {
+                return goal_response(
+                    Some(protocol_goal_from_state(existing_goal)),
+                    CompletionBudgetReport::Omit,
+                );
+            }
+            return Err(FunctionCallError::RespondToModel(
+                "cannot create a new goal because this thread has an unfinished goal; complete the existing goal first"
+                    .to_string(),
+            ));
+        };
         fill_empty_thread_preview_if_possible(self.state_db.as_ref(), self.thread_id, &goal).await;
         let turn_id = self
             .accounting_state

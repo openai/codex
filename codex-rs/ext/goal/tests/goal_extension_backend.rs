@@ -185,6 +185,74 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
 }
 
 #[tokio::test]
+async fn create_goal_accepts_matching_active_goal_set_externally() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let outcome = harness
+        .goal_service
+        .set_thread_goal(
+            runtime.as_ref(),
+            GoalSetRequest {
+                thread_id,
+                objective: GoalObjectiveUpdate::Set("ship goal extension backend"),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: GoalTokenBudgetUpdate::Set(Some(123)),
+            },
+        )
+        .await?;
+    outcome.apply_runtime_effects(&harness.goal_service).await;
+    let original_goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("externally set goal should exist"))?;
+    harness.sink.clear();
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    let invocation = tool_call(
+        "create_goal",
+        "call-create-matching-goal",
+        json!({
+            "objective": "ship goal extension backend",
+            "token_budget": 123,
+        }),
+    );
+    let output = create_tool.handle(invocation.clone()).await?;
+    let result = output.code_mode_result(&invocation.payload);
+    let current_goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("matching create should preserve the active goal"))?;
+
+    assert_eq!(original_goal, current_goal);
+    assert_eq!(
+        result,
+        json!({
+            "goal": {
+                "threadId": thread_id,
+                "objective": "ship goal extension backend",
+                "status": "active",
+                "tokenBudget": 123,
+                "tokensUsed": 0,
+                "timeUsedSeconds": 0,
+                "createdAt": result["goal"]["createdAt"],
+                "updatedAt": result["goal"]["updatedAt"],
+            },
+            "remainingTokens": 123,
+            "completionBudgetReport": serde_json::Value::Null,
+        })
+    );
+    assert_eq!(Vec::<CapturedGoalEvent>::new(), harness.sink.goal_events());
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_goal_resets_baseline_before_turn_stop_accounting() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
