@@ -186,7 +186,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 })
                 .collect();
             Some(TurnItem::Reasoning(ReasoningItem {
-                id: id.clone().unwrap_or_default(),
+                id: id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 summary_text,
                 raw_content,
             }))
@@ -197,7 +199,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 None => (WebSearchAction::Other, String::new()),
             };
             Some(TurnItem::WebSearch(WebSearchItem {
-                id: id.clone().unwrap_or_default(),
+                id: id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 query,
                 action,
             }))

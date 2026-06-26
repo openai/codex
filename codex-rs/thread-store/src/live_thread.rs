@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutPersistenceTelemetry;
 use codex_rollout::measure_and_filter_rollout_items;
@@ -32,6 +33,7 @@ use crate::thread_metadata_sync::ThreadMetadataSync;
 #[derive(Clone)]
 pub struct LiveThread {
     thread_id: ThreadId,
+    history_mode: ThreadHistoryMode,
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
     persistence_telemetry: RolloutPersistenceTelemetry,
@@ -92,10 +94,12 @@ impl LiveThread {
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
+        let history_mode = params.history_mode;
         let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,
+            history_mode,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
@@ -107,6 +111,7 @@ impl LiveThread {
         params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
+        let history_mode = params.history_mode;
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
         let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
@@ -132,6 +137,7 @@ impl LiveThread {
         }
         Ok(Self {
             thread_id,
+            history_mode,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
@@ -149,17 +155,20 @@ impl LiveThread {
             return Ok(());
         }
         let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
-            let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
+            let (canonical_items, measurement) =
+                measure_and_filter_rollout_items(items, self.history_mode);
             (canonical_items, Some(measurement))
         } else {
-            (persisted_rollout_items(items), None)
+            (persisted_rollout_items(items, self.history_mode), None)
         };
-        self.thread_store
-            .append_items(AppendThreadItemsParams {
-                thread_id: self.thread_id,
-                items: items.to_vec(),
-            })
-            .await?;
+        if !canonical_items.is_empty() {
+            self.thread_store
+                .append_items(AppendThreadItemsParams {
+                    thread_id: self.thread_id,
+                    items: canonical_items.clone(),
+                })
+                .await?;
+        }
         if let Some(measurement) = measurement.as_ref() {
             self.persistence_telemetry.record_batch(items, measurement);
         }

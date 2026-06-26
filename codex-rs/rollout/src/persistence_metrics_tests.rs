@@ -6,6 +6,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -65,7 +66,7 @@ fn update_for_batch(
     state: &mut TurnMeasurementState,
     items: &[RolloutItem],
 ) -> super::TurnMeasurementUpdate {
-    let (_, measurement) = measure_and_filter_rollout_items(items);
+    let (_, measurement) = measure_and_filter_rollout_items(items, ThreadHistoryMode::Legacy);
     update_turn_measurements(state, items, &measurement)
 }
 
@@ -100,7 +101,8 @@ fn mixed_batch_reports_exact_policy_counts_and_bytes() {
     let dropped = RolloutItem::ResponseItem(ResponseItem::Other);
     let items = vec![kept.clone(), dropped.clone()];
 
-    let (persisted, measurement) = measure_and_filter_rollout_items(&items);
+    let (persisted, measurement) =
+        measure_and_filter_rollout_items(&items, ThreadHistoryMode::Legacy);
     let kept_bytes = serde_json::to_vec(&kept)
         .expect("serialize kept item")
         .len() as u64;
@@ -128,7 +130,8 @@ fn mixed_batch_reports_exact_policy_counts_and_bytes() {
 #[test]
 fn retained_items_are_byte_identical() {
     let item = retained_message("a moderately sized payload");
-    let (persisted, measurement) = measure_and_filter_rollout_items(std::slice::from_ref(&item));
+    let (persisted, measurement) =
+        measure_and_filter_rollout_items(std::slice::from_ref(&item), ThreadHistoryMode::Legacy);
 
     assert_eq!(
         serde_json::to_vec(&persisted[0]).expect("serialize persisted item"),
@@ -155,8 +158,10 @@ fn turn_measurements_span_batches_and_include_items_before_start() {
         retained_message("second response"),
         turn_aborted("turn-2"),
     ];
-    let (_, first_expected) = measure_and_filter_rollout_items(&first_turn);
-    let (_, second_expected) = measure_and_filter_rollout_items(&second_turn);
+    let (_, first_expected) =
+        measure_and_filter_rollout_items(&first_turn, ThreadHistoryMode::Legacy);
+    let (_, second_expected) =
+        measure_and_filter_rollout_items(&second_turn, ThreadHistoryMode::Legacy);
     let batches = [
         first_turn[..1].to_vec(),
         first_turn[1..3].to_vec(),
@@ -217,7 +222,8 @@ fn invalid_turn_boundaries_reset_partial_measurements() {
         retained_message("retained turn"),
         turn_complete("turn-2"),
     ];
-    let (_, expected) = measure_and_filter_rollout_items(&replacement[2..]);
+    let (_, expected) =
+        measure_and_filter_rollout_items(&replacement[2..], ThreadHistoryMode::Legacy);
     let update = update_for_batch(&mut state, &replacement);
 
     assert_eq!(
@@ -247,7 +253,7 @@ fn filtered_item_completion_includes_its_nested_item_type() {
         completed_at_ms: 0,
     }));
 
-    let (_, measurement) = measure_and_filter_rollout_items(&[item]);
+    let (_, measurement) = measure_and_filter_rollout_items(&[item], ThreadHistoryMode::Legacy);
 
     assert_eq!(
         measurement.items[0].rollout_item_type,
@@ -256,5 +262,31 @@ fn filtered_item_completion_includes_its_nested_item_type() {
     assert_eq!(
         measurement.items[0].decision,
         super::PersistenceDecision::Dropped
+    );
+}
+
+#[test]
+fn paginated_item_completion_is_persisted() {
+    let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        thread_id: ThreadId::default(),
+        turn_id: "turn".to_string(),
+        item: TurnItem::UserMessage(UserMessageItem {
+            id: "item".to_string(),
+            client_id: None,
+            content: Vec::new(),
+        }),
+        completed_at_ms: 0,
+    }));
+
+    let (persisted, measurement) =
+        measure_and_filter_rollout_items(std::slice::from_ref(&item), ThreadHistoryMode::Paginated);
+
+    assert_eq!(
+        serde_json::to_value(persisted).expect("serialize persisted items"),
+        serde_json::to_value([item]).expect("serialize expected items")
+    );
+    assert_eq!(
+        measurement.items[0].decision,
+        super::PersistenceDecision::Kept
     );
 }

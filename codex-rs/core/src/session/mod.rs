@@ -6,7 +6,6 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -111,6 +110,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::EnteredReviewModeEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -118,7 +118,6 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
-use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -1193,10 +1192,7 @@ impl Session {
     }
 
     fn next_internal_sub_id(&self) -> String {
-        let id = self
-            .next_internal_sub_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        format!("auto-compact-{id}")
+        format!("auto-compact-{}", Uuid::now_v7())
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
@@ -1354,7 +1350,7 @@ impl Session {
             }
             InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                if turn_context.config.features.enabled(Feature::ItemIds) {
+                if turn_context.item_ids_enabled() {
                     for rollout_item in &mut rollout_items {
                         if let RolloutItem::ResponseItem(response_item) = rollout_item {
                             Self::assign_missing_response_item_id(response_item);
@@ -1917,7 +1913,7 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Persist the event into rollout storage (the store filters as needed).
+        // Persist the event into rollout storage. LiveThread applies the thread's persistence policy.
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         self.services
@@ -2725,7 +2721,7 @@ impl Session {
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        if turn_context.config.features.enabled(Feature::ItemIds) {
+        if turn_context.item_ids_enabled() {
             Self::assign_missing_response_item_ids(items)
         } else {
             items
@@ -2781,7 +2777,15 @@ impl Session {
         items: &[ResponseItem],
     ) {
         let items = self.prepare_conversation_items_for_history(turn_context, items);
-        let items = items.as_ref();
+        self.record_prepared_conversation_items(turn_context, items.as_ref())
+            .await;
+    }
+
+    async fn record_prepared_conversation_items(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+    ) {
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
@@ -2983,7 +2987,7 @@ impl Session {
         world_state_baseline: Option<Arc<WorldState>>,
         compacted_item: CompactedItem,
     ) {
-        let items = if turn_context.config.features.enabled(Feature::ItemIds) {
+        let items = if turn_context.item_ids_enabled() {
             Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned()
         } else {
             items
@@ -3777,8 +3781,12 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
-        // Add to conversation history and persist response item to rollout.
-        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+        let response_items = self.prepare_conversation_items_for_history(
+            turn_context,
+            std::slice::from_ref(&response_item),
+        );
+        let response_item = response_items[0].clone();
+        self.record_prepared_conversation_items(turn_context, response_items.as_ref())
             .await;
 
         // Derive a turn item and emit lifecycle events if applicable.

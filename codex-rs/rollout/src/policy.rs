@@ -1,14 +1,15 @@
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ThreadHistoryMode;
 
 /// Whether a rollout `item` should be persisted in rollout files.
-pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
+pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistoryMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
-        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
+        RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, history_mode),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
@@ -18,10 +19,13 @@ pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
 }
 
 /// Return the canonical rollout items that should be persisted for a live append.
-pub fn persisted_rollout_items(items: &[RolloutItem]) -> Vec<RolloutItem> {
+pub fn persisted_rollout_items(
+    items: &[RolloutItem],
+    history_mode: ThreadHistoryMode,
+) -> Vec<RolloutItem> {
     let mut persisted = Vec::new();
     for item in items {
-        if is_persisted_rollout_item(item) {
+        if is_persisted_rollout_item(item, history_mode) {
             persisted.push(item.clone());
         }
     }
@@ -78,7 +82,14 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
 
 /// Whether an `EventMsg` should be persisted in rollout files.
 #[inline]
-pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
+pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) -> bool {
+    match history_mode {
+        ThreadHistoryMode::Legacy => should_persist_legacy_event_msg(ev),
+        ThreadHistoryMode::Paginated => should_persist_paginated_event_msg(ev),
+    }
+}
+
+fn should_persist_legacy_event_msg(ev: &EventMsg) -> bool {
     match ev {
         EventMsg::UserMessage(_)
         | EventMsg::AgentMessage(_)
@@ -166,5 +177,30 @@ pub fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => false,
+    }
+}
+
+fn should_persist_paginated_event_msg(ev: &EventMsg) -> bool {
+    match ev {
+        EventMsg::ItemCompleted(_) => true,
+        EventMsg::TokenCount(_)
+        | EventMsg::ThreadGoalUpdated(_)
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
+        | EventMsg::ThreadRolledBack(_)
+        | EventMsg::TurnAborted(_)
+        | EventMsg::TurnStarted(_)
+        | EventMsg::TurnComplete(_) => true,
+        EventMsg::UserMessage(_)
+        | EventMsg::AgentMessage(_)
+        | EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::PatchApplyEnd(_)
+        | EventMsg::ContextCompacted(_)
+        | EventMsg::McpToolCallEnd(_)
+        | EventMsg::WebSearchEnd(_)
+        | EventMsg::ImageGenerationEnd(_)
+        | EventMsg::SubAgentActivity(_) => false,
+        _ => should_persist_legacy_event_msg(ev),
     }
 }

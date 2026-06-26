@@ -937,6 +937,7 @@ mod tests {
         store
             .resume_thread(ResumeThreadParams {
                 thread_id,
+                history_mode: ThreadHistoryMode::Legacy,
                 rollout_path: Some(path.clone()),
                 history: None,
                 include_archived: true,
@@ -1785,6 +1786,7 @@ mod tests {
         store
             .resume_thread(ResumeThreadParams {
                 thread_id,
+                history_mode: ThreadHistoryMode::Legacy,
                 rollout_path: Some(archived_path.clone()),
                 history: None,
                 include_archived: true,

@@ -1,4 +1,6 @@
 use crate::model::ThreadMetadata;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -39,6 +41,11 @@ pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(
             EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadGoalUpdated(_),
         ) => true,
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(event))
+            if matches!(event.item, TurnItem::UserMessage(_)) =>
+        {
+            true
+        }
         RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
@@ -96,16 +103,11 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::UserMessage(user) => {
-            let preview = user_message_preview(user);
-            if metadata.first_user_message.is_none() {
-                metadata.first_user_message = preview.clone();
-            }
-            set_preview_if_empty(metadata, preview);
-            if metadata.title.is_empty() {
-                let title = strip_user_message_prefix(user.message.as_str());
-                if !title.is_empty() {
-                    metadata.title = title.to_string();
-                }
+            apply_user_message(metadata, user);
+        }
+        EventMsg::ItemCompleted(event) => {
+            if let TurnItem::UserMessage(user) = &event.item {
+                apply_user_message_item(metadata, user);
             }
         }
         EventMsg::ThreadGoalUpdated(event) => {
@@ -119,6 +121,27 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(_metadata: &mut ThreadMetadata, _item: &ResponseItem) {}
+
+fn apply_user_message_item(metadata: &mut ThreadMetadata, user: &UserMessageItem) {
+    let EventMsg::UserMessage(user) = user.as_legacy_event() else {
+        unreachable!("user message items always convert to user message events");
+    };
+    apply_user_message(metadata, &user);
+}
+
+fn apply_user_message(metadata: &mut ThreadMetadata, user: &UserMessageEvent) {
+    let preview = user_message_preview(user);
+    if metadata.first_user_message.is_none() {
+        metadata.first_user_message = preview.clone();
+    }
+    set_preview_if_empty(metadata, preview);
+    if metadata.title.is_empty() {
+        let title = strip_user_message_prefix(user.message.as_str());
+        if !title.is_empty() {
+            metadata.title = title.to_string();
+        }
+    }
+}
 
 fn set_preview_if_empty(metadata: &mut ThreadMetadata, preview: Option<String>) {
     if metadata.preview.is_none() {
@@ -164,12 +187,15 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionMeta;
@@ -182,6 +208,7 @@ mod tests {
     use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_protocol::user_input::UserInput;
 
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -217,6 +244,29 @@ mod tests {
             local_images: vec![],
             text_elements: vec![],
             ..Default::default()
+        }));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("actual user request")
+        );
+        assert_eq!(metadata.preview.as_deref(), Some("actual user request"));
+        assert_eq!(metadata.title, "actual user request");
+    }
+
+    #[test]
+    fn completed_user_message_items_set_title_and_first_user_message() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::default(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
+                text: format!("{USER_MESSAGE_BEGIN} actual user request"),
+                text_elements: Vec::new(),
+            }])),
+            completed_at_ms: 0,
         }));
 
         apply_rollout_item(&mut metadata, &item, "test-provider");

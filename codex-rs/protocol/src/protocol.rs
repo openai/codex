@@ -1425,7 +1425,7 @@ pub enum EventMsg {
     ShutdownComplete,
 
     /// Entered review mode.
-    EnteredReviewMode(ReviewRequest),
+    EnteredReviewMode(EnteredReviewModeEvent),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
@@ -1850,7 +1850,27 @@ pub struct ReasoningRawContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct EnteredReviewModeEvent {
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
     pub review_output: Option<ReviewOutputEvent>,
 }
 
@@ -5451,6 +5471,47 @@ mod tests {
 
         let event = serde_json::from_value::<ItemCompletedEvent>(value).unwrap();
         assert_eq!(event.completed_at_ms, 0);
+    }
+
+    #[test]
+    fn review_mode_events_deserialize_legacy_payloads_and_serialize_persisted_ids() {
+        let entered = serde_json::from_value::<EnteredReviewModeEvent>(json!({
+            "target": {
+                "type": "custom",
+                "instructions": "review this"
+            },
+            "user_facing_hint": "hint"
+        }))
+        .unwrap();
+        assert_eq!(entered.turn_id, None);
+        assert_eq!(entered.item_id, None);
+
+        let exited = serde_json::from_value::<ExitedReviewModeEvent>(json!({
+            "review_output": null
+        }))
+        .unwrap();
+        assert_eq!(exited.turn_id, None);
+        assert_eq!(exited.item_id, None);
+
+        let entered = EnteredReviewModeEvent {
+            turn_id: Some("turn-1".into()),
+            item_id: Some("item-1".into()),
+            ..entered
+        };
+        let exited = ExitedReviewModeEvent {
+            turn_id: Some("turn-1".into()),
+            item_id: Some("item-2".into()),
+            ..exited
+        };
+
+        assert_eq!(
+            serde_json::to_value(entered).unwrap()["item_id"],
+            json!("item-1")
+        );
+        assert_eq!(
+            serde_json::to_value(exited).unwrap()["item_id"],
+            json!("item-2")
+        );
     }
 
     #[test]

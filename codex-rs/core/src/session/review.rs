@@ -117,6 +117,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        history_mode: parent_turn_context.history_mode,
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
         environments: parent_turn_context.environments.clone(),
@@ -165,10 +166,12 @@ pub(super) async fn spawn_review_thread(
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
-    let review_request = ReviewRequest {
+    let review_event = EnteredReviewModeEvent {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
+        turn_id: Some(tc.sub_id.clone()),
+        item_id: Some(uuid::Uuid::new_v4().to_string()),
     };
-    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
+    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_event))
         .await;
 }

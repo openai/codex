@@ -256,7 +256,11 @@ pub(crate) async fn exit_review_mode(
     session
         .send_event(
             ctx.as_ref(),
-            EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                turn_id: Some(ctx.sub_id.clone()),
+                item_id: Some(uuid::Uuid::new_v4().to_string()),
+                review_output,
+            }),
         )
         .await;
     session

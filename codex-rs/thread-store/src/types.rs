@@ -105,6 +105,8 @@ pub struct CreateThreadParams {
 pub struct ResumeThreadParams {
     /// Existing thread id whose future items should be appended.
     pub thread_id: ThreadId,
+    /// Persisted thread history contract selected when the thread was created.
+    pub history_mode: ThreadHistoryMode,
     /// Known local rollout path when the caller resumed from a specific file.
     pub rollout_path: Option<PathBuf>,
     /// Known replay history for the resumed thread, if already loaded by the caller.
@@ -134,10 +136,7 @@ pub(crate) fn canonical_history_mode_from_rollout_items(
 pub struct AppendThreadItemsParams {
     /// Thread id to append to.
     pub thread_id: ThreadId,
-    /// Raw rollout items to append in order.
-    ///
-    /// Store implementations are responsible for applying the shared rollout persistence policy
-    /// before writing durable replay history or any implementation-owned projections.
+    /// Canonical durable rollout items after `LiveThread` applies the shared persistence policy.
     pub items: Vec<RolloutItem>,
 }
 
