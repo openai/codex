@@ -6,6 +6,7 @@ const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 pub(crate) struct McpRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
+    thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
 }
@@ -14,12 +15,14 @@ impl McpRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
+        thread_state_manager: ThreadStateManager,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
     ) -> Self {
         Self {
             auth_manager,
             thread_manager,
+            thread_state_manager,
             outgoing,
             config_manager,
         }
@@ -393,17 +396,32 @@ impl McpRequestProcessor {
             thread_id,
             server,
             uri,
+            origin_call_id,
         } = params;
 
-        if let Some(thread_id) = thread_id {
-            let (_, thread) = self.load_thread(&thread_id).await?;
+        if let Some(thread_id_string) = thread_id {
+            let (thread_id, thread) = self.load_thread(&thread_id_string).await?;
+            let thread_state_manager = self.thread_state_manager.clone();
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
-                let result = thread.read_mcp_resource(&server, &uri).await;
+                let result = mcp_resource_read::read_thread_mcp_resource(
+                    &thread_state_manager,
+                    thread_id,
+                    &thread_id_string,
+                    &thread,
+                    &server,
+                    &uri,
+                    origin_call_id.as_deref(),
+                )
+                .await;
                 Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
             });
             return Ok(());
+        }
+
+        if origin_call_id.is_some() {
+            return Err(invalid_request("originCallId requires threadId"));
         }
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
@@ -475,7 +493,7 @@ impl McpRequestProcessor {
     }
 }
 
-fn with_mcp_tool_call_thread_id_meta(
+pub(super) fn with_mcp_tool_call_thread_id_meta(
     meta: Option<serde_json::Value>,
     thread_id: &str,
 ) -> Option<serde_json::Value> {
