@@ -946,6 +946,19 @@ fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let exact_read_files = overrides
+        .read_roots
+        .as_deref()
+        .into_iter()
+        .flatten()
+        .filter(|path| {
+            std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.file_type().is_dir())
+        })
+        .flat_map(|path| {
+            let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
+            std::iter::once(path.clone()).chain((canonical != *path).then_some(canonical))
+        })
+        .collect::<Vec<_>>();
     let write_roots = effective_write_roots_for_setup(
         request.permissions,
         request.command_cwd,
@@ -980,6 +993,11 @@ fn build_payload_roots(
     read_roots = filter_ssh_config_dependency_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
+    for file in exact_read_files {
+        if !write_root_set.contains(&file) && !read_roots.contains(&file) {
+            read_roots.push(file);
+        }
+    }
     (read_roots, write_roots)
 }
 
@@ -1697,7 +1715,9 @@ mod tests {
         let readable_root = tmp.path().join("docs");
         fs::create_dir_all(&workspace_root).expect("create workspace root");
         fs::create_dir_all(&command_cwd).expect("create workspace");
-        fs::create_dir_all(&readable_root).expect("create readable root");
+        fs::create_dir_all(readable_root.join("nested")).expect("create readable root");
+        fs::write(readable_root.join("tool.exe"), b"fixture").expect("write readable file");
+        let lexical_readable = readable_root.join("nested").join("..").join("tool.exe");
         let permission_profile = PermissionProfile::read_only();
         let workspace_roots = workspace_roots_for(workspace_root.as_path());
         let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
@@ -1711,7 +1731,7 @@ mod tests {
                 proxy_enforced: false,
             },
             &super::SetupRootOverrides {
-                read_roots: Some(vec![readable_root.clone()]),
+                read_roots: Some(vec![lexical_readable.clone()]),
                 read_roots_include_platform_defaults: true,
                 write_roots: None,
                 deny_read_paths: None,
@@ -1722,12 +1742,13 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
         let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
         let expected_readable =
-            dunce::canonicalize(&readable_root).expect("canonical readable root");
+            dunce::canonicalize(&lexical_readable).expect("canonical readable file");
 
         assert_eq!(write_roots, Vec::<PathBuf>::new());
         assert!(read_roots.contains(&expected_helper));
         assert!(!read_roots.contains(&expected_cwd));
         assert!(read_roots.contains(&expected_readable));
+        assert!(read_roots.contains(&lexical_readable));
         assert!(
             canonical_windows_platform_default_roots()
                 .into_iter()

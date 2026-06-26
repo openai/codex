@@ -995,10 +995,7 @@ impl UnifiedExecProcessManager {
                     permission_profile: &request.permission_profile,
                     workspace_roots: request.windows_sandbox_workspace_roots.as_slice(),
                     codex_home: codex_home.as_ref(),
-                    launch: codex_windows_sandbox::WindowsProcessLaunch {
-                        application_path: None,
-                        command: request.command.clone(),
-                    },
+                    command: request.command.clone(),
                     cwd: native_cwd.as_path(),
                     env_map: request.env.clone(),
                     windows_sandbox_level: request.windows_sandbox_level,
@@ -1050,10 +1047,26 @@ impl UnifiedExecProcessManager {
                 path: request.cwd.clone(),
             })?;
 
-        let (program, args) = request
+        let (_program, args) = request
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
+        #[cfg(target_os = "windows")]
+        let resolved_program = codex_windows_sandbox::resolve_windows_executable(
+            &request.command,
+            native_cwd.as_path(),
+            &request.env,
+        )
+        .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        #[cfg(target_os = "windows")]
+        let program = resolved_program.to_str().ok_or_else(|| {
+            UnifiedExecError::create_process(format!(
+                "resolved Windows executable is not Unicode: {}",
+                resolved_program.display()
+            ))
+        })?;
+        #[cfg(not(target_os = "windows"))]
+        let program = _program.as_str();
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,

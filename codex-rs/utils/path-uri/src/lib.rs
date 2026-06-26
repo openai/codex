@@ -66,11 +66,26 @@ impl PathUri {
     /// encoding of the original path (Unix bytes or Windows UTF-16LE). This
     /// includes paths containing nulls and, on Windows, unsupported prefix
     /// kinds such as device and generic verbatim namespaces, non-Unicode path
-    /// or UNC components, and UNC server names that are not valid URL hosts.
+    /// or UNC components, UNC server names that are not valid URL hosts, and
+    /// `\\localhost` UNC paths whose server component must remain explicit.
     /// The encoded null reserves a URI namespace that cannot collide with a
     /// real path on Unix or Windows.
     pub fn from_abs_path(path: &AbsolutePathBuf) -> Self {
-        if let Ok(url) = Url::from_file_path(path.as_path())
+        #[cfg(windows)]
+        let preserve_localhost_unc = matches!(
+            path.as_path().components().next(),
+            Some(std::path::Component::Prefix(prefix))
+                if matches!(
+                    prefix.kind(),
+                    std::path::Prefix::UNC(server, _)
+                        if server.to_string_lossy().eq_ignore_ascii_case("localhost")
+                )
+        );
+        #[cfg(not(windows))]
+        let preserve_localhost_unc = false;
+
+        if !preserve_localhost_unc
+            && let Ok(url) = Url::from_file_path(path.as_path())
             && let Ok(uri) = Self::try_from(url)
         {
             return uri;

@@ -10,7 +10,6 @@ use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
-use crate::process::WindowsProcessLaunch;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::runner_client::RunnerTransport;
 use crate::runner_client::retry_runner_spawn_once;
@@ -64,7 +63,7 @@ fn spawn_runner_transport_with_retry<T>(
 ) -> Result<T> {
     retry_runner_spawn_once(
         sandbox_creds,
-        &request.spawn_request.launch.command,
+        &request.spawn_request.launch,
         |sandbox_creds| {
             spawn(
                 &request.codex_home,
@@ -113,7 +112,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
-    launch: WindowsProcessLaunch,
+    command: Vec<String>,
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     proxy_enforced: bool,
@@ -146,7 +145,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         codex_home,
         cwd,
         &mut env_map,
-        &launch.command,
+        command,
         read_roots_override,
         read_roots_include_platform_defaults,
         write_roots_override,
@@ -157,6 +156,8 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     )?;
 
     let sandbox_creds = elevated.sandbox_creds;
+    let launch = elevated.launch;
+    let resolved_read_roots = elevated.read_roots_override;
     let request = RunnerTransportRequest {
         permissions,
         codex_home: codex_home.to_path_buf(),
@@ -177,7 +178,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             stdin_open,
             use_private_desktop,
         },
-        read_roots_override: read_roots_override.map(<[PathBuf]>::to_vec),
+        read_roots_override: Some(resolved_read_roots),
         read_roots_include_platform_defaults,
         write_roots_override: write_roots_override.map(<[PathBuf]>::to_vec),
         deny_read_paths_override,
