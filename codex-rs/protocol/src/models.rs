@@ -1052,6 +1052,9 @@ pub enum ResponseItem {
 
         call_id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        namespace: Option<String>,
         input: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -2754,6 +2757,35 @@ mod tests {
                 call_id: "call-1".to_string(),
                 internal_chat_message_metadata_passthrough: None,
             }
+        );
+    }
+
+    #[test]
+    fn custom_tool_call_deserializes_optional_namespace() {
+        let item: ResponseItem = serde_json::from_value(serde_json::json!({
+            "type": "custom_tool_call",
+            "name": "exec",
+            "namespace": "mcp__python",
+            "input": "print('hello')",
+            "call_id": "call-1",
+        }))
+        .expect("custom_tool_call should deserialize");
+
+        assert_eq!(
+            item,
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "call-1".to_string(),
+                name: "exec".to_string(),
+                namespace: Some("mcp__python".to_string()),
+                input: "print('hello')".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(item).expect("custom_tool_call should serialize")["namespace"],
+            "mcp__python"
         );
     }
 

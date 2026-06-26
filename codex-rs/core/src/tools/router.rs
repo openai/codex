@@ -147,11 +147,12 @@ impl ToolRouter {
             ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
+                namespace,
                 input,
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: ToolName::plain(name),
+                tool_name: ToolName::new(namespace, name),
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
