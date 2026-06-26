@@ -6,6 +6,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
@@ -389,23 +390,6 @@ async fn metadata_for_missing_sqlite_row(
     rollout_path_archived: bool,
     patch: &ThreadMetadataPatch,
 ) -> ThreadStoreResult<codex_state::ThreadMetadata> {
-    let session_meta =
-        read_session_meta_line(rollout_path)
-            .await
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!(
-                    "failed to read canonical session metadata for {thread_id}: {err}"
-                ),
-            })?;
-    if session_meta.meta.id != thread_id {
-        return Err(ThreadStoreError::Internal {
-            message: format!(
-                "failed to rebuild thread metadata: rollout session metadata id mismatch: expected {thread_id}, found {}",
-                session_meta.meta.id
-            ),
-        });
-    }
-
     let created_at = patch
         .created_at
         .or(patch.updated_at)
@@ -417,9 +401,7 @@ async fn metadata_for_missing_sqlite_row(
         patch.source.clone().unwrap_or(SessionSource::Unknown),
     );
     builder.model_provider = patch.model_provider.clone();
-    // history_mode is immutable thread metadata, so recover it from the canonical SessionMeta
-    // instead of the mutable metadata patch that happened to notice this missing SQLite row.
-    builder.history_mode = session_meta.meta.history_mode;
+    builder.history_mode = canonical_history_mode(store, thread_id, rollout_path).await?;
     builder.thread_source = patch.thread_source.clone().flatten();
     builder.agent_nickname = patch.agent_nickname.clone().flatten();
     builder.agent_role = patch.agent_role.clone().flatten();
@@ -431,6 +413,46 @@ async fn metadata_for_missing_sqlite_row(
         metadata.archived_at = Some(metadata.updated_at);
     }
     Ok(metadata)
+}
+
+async fn canonical_history_mode(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+) -> ThreadStoreResult<ThreadHistoryMode> {
+    let session_meta = match read_session_meta_line(rollout_path).await {
+        Ok(session_meta) => session_meta,
+        Err(err) => {
+            if codex_rollout::existing_rollout_path(rollout_path)
+                .await
+                .is_none()
+                && let Some(history_mode) = store
+                    .live_recorders
+                    .lock()
+                    .await
+                    .get(&thread_id)
+                    .map(|entry| entry.history_mode)
+            {
+                // The live writer retains the canonical mode selected before its deferred
+                // SessionMeta reaches JSONL.
+                return Ok(history_mode);
+            }
+            return Err(ThreadStoreError::Internal {
+                message: format!(
+                    "failed to read canonical session metadata for {thread_id}: {err}"
+                ),
+            });
+        }
+    };
+    if session_meta.meta.id != thread_id {
+        return Err(ThreadStoreError::Internal {
+            message: format!(
+                "failed to rebuild thread metadata: rollout session metadata id mismatch: expected {thread_id}, found {}",
+                session_meta.meta.id
+            ),
+        });
+    }
+    Ok(session_meta.meta.history_mode)
 }
 
 fn needs_rollout_compatibility_update(patch: &ThreadMetadataPatch) -> bool {
