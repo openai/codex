@@ -1,4 +1,6 @@
 use crate::function_tool::FunctionCallError;
+use crate::tool_search_debug::ToolSearchDebugResult;
+use crate::tool_search_debug::ToolSearchDebugResultEntry;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
@@ -152,7 +154,15 @@ impl ToolSearchHandler {
     }
 }
 
-impl CoreToolRuntime for ToolSearchHandler {}
+impl CoreToolRuntime for ToolSearchHandler {
+    fn search_tool_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Option<ToolSearchDebugResult>, FunctionCallError> {
+        self.search_with_debug(query, limit).map(Some)
+    }
+}
 
 impl ToolSearchHandler {
     fn search(
@@ -177,6 +187,50 @@ impl ToolSearchHandler {
         Ok(coalesce_loadable_tool_specs(
             results.into_iter().map(|entry| entry.output.clone()),
         ))
+    }
+
+    fn search_with_debug(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<ToolSearchDebugResult, FunctionCallError> {
+        let results = self.search_engine.search(query, None);
+        let matching_tool_count = results.len();
+        let effective_limit = limit.min(matching_tool_count);
+        let result_entries = results
+            .iter()
+            .take(effective_limit)
+            .enumerate()
+            .filter_map(|(rank, result)| {
+                let search_info = self.search_infos.get(result.document.id)?;
+                Some(ToolSearchDebugResultEntry {
+                    rank: rank + 1,
+                    index: result.document.id,
+                    score: result.score.is_finite().then_some(result.score),
+                    source_name: search_info
+                        .source_info
+                        .as_ref()
+                        .map(|source| source.name.clone()),
+                    source_description: search_info
+                        .source_info
+                        .as_ref()
+                        .and_then(|source| source.description.clone()),
+                    searchable_text: search_info.entry.search_text.clone(),
+                    tools: vec![search_info.entry.output.clone()],
+                })
+            })
+            .collect::<Vec<_>>();
+        let tools = self.search(query, limit)?;
+
+        Ok(ToolSearchDebugResult {
+            indexed_tool_count: self.search_infos.len(),
+            matching_tool_count,
+            requested_limit: limit,
+            effective_limit,
+            top_k_truncated: matching_tool_count > limit,
+            tools,
+            results: result_entries,
+        })
     }
 }
 
@@ -325,7 +379,121 @@ mod tests {
         );
     }
 
+    #[test]
+    fn debug_search_returns_current_tool_search_output_and_truncation_metadata() {
+        let search_infos = (0..10)
+            .map(|index| {
+                McpHandler::new(tool_info(
+                    "calendar",
+                    &format!("list_events_{index}"),
+                    "Calendar events",
+                ))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info")
+            })
+            .collect::<Vec<_>>();
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let debug = handler
+            .search_with_debug("Calendar events", 8)
+            .expect("debug search should succeed");
+        let current_tools = handler
+            .search("Calendar events", 8)
+            .expect("tool_search should succeed");
+
+        assert_eq!(debug.tools, current_tools);
+        assert_eq!(debug.indexed_tool_count, 10);
+        assert_eq!(debug.matching_tool_count, 10);
+        assert_eq!(debug.requested_limit, 8);
+        assert_eq!(debug.effective_limit, 8);
+        assert!(debug.top_k_truncated);
+        assert_eq!(debug.results.len(), 8);
+        assert!(debug.results.iter().all(|result| result.score.is_some()));
+        assert_eq!(debug.tools.len(), 1);
+        assert_eq!(canonical_names(&debug.tools).len(), 8);
+    }
+
+    #[test]
+    fn debug_search_recovers_exact_named_tool() {
+        let search_infos = vec![
+            McpHandler::new(tool_info("calendar", "list_events", "Calendar events"))
+                .expect("MCP tool should convert")
+                .search_info()
+                .expect("MCP handler should return search info"),
+            McpHandler::new(tool_info(
+                "openai_topics",
+                "list_topics",
+                "List OpenAI topics",
+            ))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
+        ];
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let debug = handler
+            .search_with_debug("openai_topics.list_topics", 8)
+            .expect("debug search should succeed");
+
+        assert_eq!(
+            canonical_names(&debug.results[0].tools),
+            vec!["mcp__openai_topics.list_topics"]
+        );
+        assert_eq!(debug.results[0].rank, 1);
+    }
+
+    #[test]
+    fn debug_search_exposes_searchable_text_without_tool_arguments_or_results() {
+        let search_infos = vec![
+            McpHandler::new(tool_info_with_schema(
+                "secrets",
+                "lookup",
+                "Lookup metadata",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "api_token": { "type": "string" }
+                    },
+                    "additionalProperties": false,
+                }),
+            ))
+            .expect("MCP tool should convert")
+            .search_info()
+            .expect("MCP handler should return search info"),
+        ];
+        let handler = ToolSearchHandler::new(search_infos);
+
+        let debug = handler
+            .search_with_debug("api_token", 8)
+            .expect("debug search should succeed");
+        let serialized = format!("{debug:?}");
+
+        assert!(debug.results[0].searchable_text.contains("api_token"));
+        assert!(!serialized.contains("arguments:"));
+        assert!(!serialized.contains("tool_input"));
+        assert!(!serialized.contains("tool_response"));
+    }
+
     fn tool_info(server_name: &str, tool_name: &str, description_prefix: &str) -> ToolInfo {
+        tool_info_with_schema(
+            server_name,
+            tool_name,
+            description_prefix,
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        )
+    }
+
+    fn tool_info_with_schema(
+        server_name: &str,
+        tool_name: &str,
+        description_prefix: &str,
+        input_schema: serde_json::Value,
+    ) -> ToolInfo {
         ToolInfo {
             server_name: server_name.to_string(),
             supports_parallel_tool_calls: false,
@@ -336,15 +504,28 @@ mod tests {
             tool: Tool::new(
                 tool_name.to_string(),
                 format!("{description_prefix} desktop tool"),
-                Arc::new(rmcp::model::object(serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false,
-                }))),
+                Arc::new(rmcp::model::object(input_schema)),
             ),
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),
         }
+    }
+
+    fn canonical_names(tools: &[LoadableToolSpec]) -> Vec<String> {
+        tools
+            .iter()
+            .flat_map(|tool| match tool {
+                LoadableToolSpec::Function(tool) => vec![tool.name.clone()],
+                LoadableToolSpec::Namespace(namespace) => namespace
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        let ResponsesApiNamespaceTool::Function(tool) = tool;
+                        format!("{}.{}", namespace.name, tool.name)
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 }

@@ -969,6 +969,13 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
+    #[experimental("toolSearch/search")]
+    ToolSearchSearch => "toolSearch/search" {
+        params: v2::ToolSearchSearchParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ToolSearchSearchResponse,
+    },
+
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         serialization: optional_thread_id(params.thread_id),

@@ -1,6 +1,7 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::tool_search_debug::ToolSearchDebugResult;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -14,6 +15,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
@@ -107,6 +109,15 @@ impl ToolRouter {
         self.registry
             .waits_for_runtime_cancellation(&call.tool_name)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn search_tool_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Option<ToolSearchDebugResult>, FunctionCallError> {
+        self.registry
+            .search_tool_search(&ToolName::plain(TOOL_SEARCH_TOOL_NAME), query, limit)
     }
 
     #[instrument(level = "trace", skip_all, err)]

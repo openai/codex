@@ -658,6 +658,14 @@ impl CodexThread {
             .await
     }
 
+    pub async fn search_tool_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> CodexResult<crate::ToolSearchDebugResult> {
+        self.codex.session.search_tool_search(query, limit).await
+    }
+
     pub fn enabled(&self, feature: Feature) -> bool {
         self.codex.enabled(feature)
     }
