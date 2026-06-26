@@ -1069,8 +1069,14 @@ impl UnifiedExecProcessManager {
             return UnifiedExecProcess::from_exec_server_started(started).await;
         }
 
+        #[cfg(unix)]
         let mut env = request.env.clone();
+        #[cfg(not(unix))]
+        let env = request.env.clone();
+        #[cfg(unix)]
         let mut inherited_fds = spawn_lifecycle.inherited_fds();
+        #[cfg(not(unix))]
+        let inherited_fds = spawn_lifecycle.inherited_fds();
         #[cfg(unix)]
         let ingress = IngressListener::prepare(request.ingress).map_err(ingress_error)?;
         #[cfg(unix)]
