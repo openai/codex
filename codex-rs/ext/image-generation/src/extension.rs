@@ -34,11 +34,11 @@ struct ImageGenerationExtensionConfig {
 }
 
 impl ImageGenerationExtensionConfig {
-    /// Resolves whether standalone image generation should be available for a thread.
+    /// Resolves the image provider and save root for a thread.
     fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
         Self {
-            // Core selects this executor per turn using the feature flag or model metadata.
-            available: config.model_provider.is_openai(),
+            available: config.model_provider.is_openai()
+                || config.model_provider.uses_openai_actor_authorization(),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
         }
@@ -46,7 +46,7 @@ impl ImageGenerationExtensionConfig {
 }
 
 impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
-    /// Seeds image-generation availability when a thread begins.
+    /// Seeds image-generation configuration when a thread begins.
     fn on_thread_start<'a>(
         &'a self,
         input: ThreadStartInput<'a, Config>,
@@ -63,7 +63,7 @@ impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
 }
 
 impl ConfigContributor<Config> for ImageGenerationExtension {
-    /// Refreshes image-generation availability after thread configuration changes.
+    /// Refreshes image-generation configuration after thread configuration changes.
     fn on_config_changed(
         &self,
         _session_store: &ExtensionData,
@@ -88,7 +88,7 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available || !self.auth_manager.current_auth_uses_codex_backend() {
+        if !config.available {
             return Vec::new();
         }
 
