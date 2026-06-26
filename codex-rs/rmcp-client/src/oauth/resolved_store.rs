@@ -12,6 +12,7 @@ use super::load_oauth_tokens_from_file;
 use super::load_oauth_tokens_from_keyring;
 use super::resolution_state::StoreResolutionReason;
 use super::resolution_state::record_store_resolution;
+use super::store_lock::OAuthStoreLockFailure;
 
 /// Concrete credential store resolved for one MCP OAuth client lifecycle.
 ///
@@ -68,6 +69,12 @@ pub(crate) fn resolve_oauth_tokens<K: KeyringStore + Clone + 'static>(
                     }),
                     StoreResolutionReason::AutoLoadFromFileAfterMissingKeyring,
                 ),
+                // Auto may fall back when the keyring backend is unavailable, but a Secrets
+                // aggregate-lock failure means authority may be changing. Consulting File in
+                // that state could replay credentials hidden behind a newer Secrets entry.
+                Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => {
+                    return Err(error);
+                }
                 Err(error) => {
                     warn!("failed to read OAuth tokens from keyring: {error}");
                     (
