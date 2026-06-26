@@ -63,7 +63,8 @@ impl ThreadMetadataSync {
         } else {
             None
         };
-        let update = ThreadMetadataPatch {
+        let guardian_review = codex_state::is_guardian_review_source(&params.source);
+        let mut update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
             created_at: Some(created_at),
             updated_at: Some(created_at),
@@ -78,12 +79,18 @@ impl ThreadMetadataSync {
             memory_mode: Some(params.metadata.memory_mode),
             ..Default::default()
         };
+        if guardian_review {
+            update.title = Some(codex_state::GUARDIAN_THREAD_TITLE.to_string());
+            update.preview = Some(codex_state::GUARDIAN_THREAD_PREVIEW.to_string());
+        }
         Self {
             thread_id: params.thread_id,
             cwd_seen: !cwd.as_os_str().is_empty(),
-            preview_seen: false,
-            first_user_message_seen: false,
-            title_seen: false,
+            // Guardian prompts are synthetic, so later UserMessage items must not
+            // rederive these fields.
+            preview_seen: guardian_review,
+            first_user_message_seen: guardian_review,
+            title_seen: guardian_review,
             pending_update: Some(update),
             pending_update_generation: 1,
             last_touch_persisted_at: None,
@@ -211,6 +218,14 @@ impl ThreadMetadataSync {
         for item in items {
             match item {
                 RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == self.thread_id => {
+                    // The first matching SessionMeta precedes this thread's user messages, so
+                    // mark synthetic fields settled before observing the prompt.
+                    if codex_state::is_guardian_review_source(&meta_line.meta.source) {
+                        self.preview_seen = true;
+                        self.first_user_message_seen = true;
+                        self.title_seen = true;
+                        update.preview = Some(codex_state::GUARDIAN_THREAD_PREVIEW.to_string());
+                    }
                     update.created_at = parse_session_timestamp(meta_line.meta.timestamp.as_str());
                     update.source = Some(meta_line.meta.source.clone());
                     update.thread_source = Some(meta_line.meta.thread_source.clone());
@@ -249,7 +264,11 @@ impl ThreadMetadataSync {
                     update.permission_profile = Some(turn_ctx.permission_profile());
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
-                    if let Some(preview) = user_message_preview(user) {
+                    // Only preview and first_user_message use the allocated preview;
+                    // title derivation below borrows the message.
+                    if (!self.first_user_message_seen || !self.preview_seen)
+                        && let Some(preview) = user_message_preview(user)
+                    {
                         if !self.first_user_message_seen {
                             self.first_user_message_seen = true;
                             update.first_user_message = Some(preview.clone());
@@ -391,15 +410,82 @@ mod tests {
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::ThreadSource;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::CreateThreadParams;
     use crate::ThreadPersistenceMetadata;
+
+    #[tokio::test]
+    async fn guardian_create_uses_defaults_without_projecting_prompt() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_create(&CreateThreadParams {
+            session_id: thread_id.into(),
+            thread_id,
+            extra_config: None,
+            forked_from_id: None,
+            parent_thread_id: Some(ThreadId::new()),
+            source: guardian_source(),
+            thread_source: Some(ThreadSource::Subagent),
+            base_instructions: Default::default(),
+            dynamic_tools: Vec::new(),
+            multi_agent_version: None,
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
+            metadata: ThreadPersistenceMetadata {
+                cwd: None,
+                model_provider: "test-provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await;
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
+                "large synthetic guardian prompt",
+            )))])
+            .expect("guardian metadata update");
+
+        assert_eq!(
+            update.patch.title.as_deref(),
+            Some(codex_state::GUARDIAN_THREAD_TITLE)
+        );
+        assert_eq!(
+            update.patch.preview.as_deref(),
+            Some(codex_state::GUARDIAN_THREAD_PREVIEW)
+        );
+        assert_eq!(update.patch.first_user_message, None);
+    }
+
+    #[test]
+    fn guardian_resume_does_not_emit_default_title() {
+        let thread_id = ThreadId::new();
+        let mut guardian_meta = session_meta(thread_id);
+        guardian_meta.meta.source = guardian_source();
+        let sync = ThreadMetadataSync::for_resume(&resume_params(
+            thread_id,
+            vec![
+                RolloutItem::SessionMeta(guardian_meta),
+                RolloutItem::EventMsg(EventMsg::UserMessage(user_message(
+                    "large synthetic guardian prompt",
+                ))),
+            ],
+        ));
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+        assert_eq!(update.patch.title, None);
+        assert_eq!(
+            update.patch.preview.as_deref(),
+            Some(codex_state::GUARDIAN_THREAD_PREVIEW)
+        );
+        assert_eq!(update.patch.first_user_message, None);
+    }
 
     #[test]
     fn resume_history_keeps_derived_metadata_pending_until_applied() {
@@ -595,6 +681,10 @@ mod tests {
             },
             git: None,
         }
+    }
+
+    fn guardian_source() -> SessionSource {
+        SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string()))
     }
 
     fn goal_update(thread_id: ThreadId, objective: &str) -> ThreadGoalUpdatedEvent {

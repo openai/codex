@@ -37,6 +37,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
@@ -978,6 +979,36 @@ async fn test_list_threads_uses_goal_objective_as_preview() {
     let item = &page.items[0];
     assert_eq!(item.thread_id, Some(thread_id_from_uuid(uuid)));
     assert_eq!(item.preview.as_deref(), Some("optimize the benchmark"));
+    assert_eq!(item.first_user_message, None);
+}
+
+#[tokio::test]
+async fn test_guardian_rollout_uses_compact_preview() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(102);
+    let ts = "2025-05-03T10-30-00";
+    write_session_file(
+        home,
+        ts,
+        uuid,
+        /*num_records*/ 1,
+        Some(SessionSource::SubAgent(SubAgentSource::Other(
+            "guardian".to_string(),
+        ))),
+    )
+    .unwrap();
+
+    let path = home.join(format!("sessions/2025/05/03/rollout-{ts}-{uuid}.jsonl"));
+    let item = crate::read_thread_item_from_rollout(path)
+        .await
+        .expect("guardian rollout should produce a thread item");
+
+    assert_eq!(
+        item.preview.as_deref(),
+        Some(codex_state::GUARDIAN_THREAD_PREVIEW)
+    );
     assert_eq!(item.first_user_message, None);
 }
 

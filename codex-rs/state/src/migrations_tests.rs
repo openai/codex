@@ -27,6 +27,136 @@ fn migrator_through(version: i64) -> Migrator {
 }
 
 #[tokio::test]
+async fn guardian_metadata_cleanup_compacts_prompt_projection() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory database should open");
+    migrator_through(/*version*/ 39)
+        .run(&pool)
+        .await
+        .expect("pre-cleanup migrations should apply");
+
+    sqlx::query(
+        r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    created_at_ms,
+    updated_at_ms,
+    source,
+    model_provider,
+    cwd,
+    title,
+    preview,
+    sandbox_policy,
+    approval_mode,
+    first_user_message
+) VALUES
+    (
+        '00000000-0000-0000-0000-000000000001',
+        '/tmp/guardian.jsonl',
+        1700000000,
+        1700000100,
+        1700000000123,
+        1700000100456,
+        '{"subagent":{"other":"guardian"}}',
+        'openai',
+        '/tmp',
+        'large guardian prompt',
+        'large guardian prompt',
+        'read-only',
+        'on-request',
+        'large guardian prompt'
+    ),
+    (
+        '00000000-0000-0000-0000-000000000002',
+        '/tmp/worker.jsonl',
+        1700000000,
+        1700000100,
+        1700000000123,
+        1700000100456,
+        '{"subagent":{"other":"worker"}}',
+        'openai',
+        '/tmp',
+        'worker title',
+        'worker preview',
+        'read-only',
+        'on-request',
+        'worker first message'
+    ),
+    (
+        '00000000-0000-0000-0000-000000000003',
+        '/tmp/named-guardian.jsonl',
+        1700000000,
+        1700000100,
+        1700000000123,
+        1700000100456,
+        '{"subagent":{"other":"guardian"}}',
+        'openai',
+        '/tmp',
+        'Named Guardian review',
+        'large guardian prompt',
+        'read-only',
+        'on-request',
+        'large guardian prompt'
+    )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy metadata rows should insert");
+
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("guardian metadata cleanup should apply");
+
+    let rows =
+        sqlx::query("SELECT id, title, preview, first_user_message FROM threads ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("cleaned metadata rows should load");
+    let actual = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                row.get::<String, _>("title"),
+                row.get::<String, _>("preview"),
+                row.get::<String, _>("first_user_message"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                "Guardian review".to_string(),
+                "Approval review".to_string(),
+                String::new(),
+            ),
+            (
+                "00000000-0000-0000-0000-000000000002".to_string(),
+                "worker title".to_string(),
+                "worker preview".to_string(),
+                "worker first message".to_string(),
+            ),
+            (
+                "00000000-0000-0000-0000-000000000003".to_string(),
+                "Named Guardian review".to_string(),
+                "Approval review".to_string(),
+                String::new(),
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn recency_migration_backfills_and_seeds_old_binary_inserts() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
