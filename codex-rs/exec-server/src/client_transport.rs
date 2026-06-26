@@ -274,7 +274,10 @@ impl ExecServerClient {
             connect_async_with_config(
                 request,
                 Some(noise_relay_websocket_config()),
-                /*disable_nagle*/ true,
+                // Relay traffic consists of small, latency-sensitive frames, so
+                // send them immediately instead of waiting for Nagle coalescing.
+                /*disable_nagle*/
+                true,
             ),
         )
         .await
