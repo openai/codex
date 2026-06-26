@@ -179,6 +179,11 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore + Clone 
     match load_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url) {
         Ok(Some(tokens)) => Ok(Some(tokens)),
         Ok(None) => load_oauth_tokens_from_file(server_name, url),
+        // A store lock failure means the configured aggregate authority could be changing, or
+        // that coordination itself is unavailable. It is not evidence that the keyring backend
+        // is unavailable, so consulting File here could replay credentials hidden behind a
+        // newer Secrets entry. This is the load-side counterpart of the save guard below.
+        Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
         Err(error) => {
             warn!("failed to read OAuth tokens from keyring: {error}");
             load_oauth_tokens_from_file(server_name, url)
@@ -365,10 +370,9 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
 ) -> Result<()> {
     match save_oauth_tokens_with_keyring(keyring_store, keyring_backend_kind, server_name, tokens) {
         Ok(()) => Ok(()),
-        // A store lock failure means another process may be updating the selected aggregate
-        // authority, or that coordination itself is unavailable. It is not evidence that the
-        // keyring backend is unavailable, so treating it as a File-fallback signal could leave a
-        // newer fallback token hidden behind a stale Secrets entry.
+        // As on load, a store lock failure is a coordination failure rather than evidence that
+        // the keyring backend is unavailable. Falling back could leave a newer File token hidden
+        // behind a stale Secrets entry.
         Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
         Err(error) => {
             let message = error.to_string();

@@ -20,6 +20,7 @@ use crate::oauth::OAuthStoreLockFailure;
 use crate::oauth::fallback_file_path;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::load_oauth_tokens_from_keyring;
+use crate::oauth::load_oauth_tokens_from_keyring_with_fallback_to_file;
 use crate::oauth::save_oauth_tokens_to_file;
 use crate::oauth::save_oauth_tokens_to_file_unlocked;
 use crate::oauth::save_oauth_tokens_to_secrets_keyring_unlocked;
@@ -30,12 +31,14 @@ use codex_config::types::AuthKeyringBackendKind;
 const STORE_LOCK_CONTENTION_EVENT_TARGET: &str = "codex_rmcp_client::oauth::store_lock::contention";
 
 #[test]
-fn auto_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
+fn auto_save_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
     let env = TempCodexHome::new();
-    // Make only the lock directory invalid. The fallback file remains writable, so this test
-    // would succeed and leave File credentials behind if Auto mistook coordination failure for
-    // keyring unavailability.
-    std::fs::write(env.path().join("mcp-oauth-locks"), "not a directory")?;
+    let lock_dir = env.path().join("mcp-oauth-locks");
+    std::fs::create_dir_all(&lock_dir)?;
+    // Break only the Secrets lock path. The distinct File lock remains usable, so Auto would
+    // successfully write fallback credentials if it mistook coordination failure for backend
+    // unavailability.
+    std::fs::create_dir(lock_dir.join("secrets-store.lock"))?;
     let keyring_store = MockKeyringStore::default();
     let tokens = sample_tokens();
 
@@ -49,6 +52,34 @@ fn auto_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
 
     assert!(error.downcast_ref::<OAuthStoreLockFailure>().is_some());
     assert!(!fallback_file_path()?.exists());
+    save_oauth_tokens_to_file(&tokens)?;
+    let loaded = load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?
+        .expect("fallback File should remain independently writable");
+    assert_tokens_match_without_expiry(&loaded, &tokens);
+    Ok(())
+}
+
+#[test]
+fn auto_load_secrets_lock_failure_does_not_fall_back_to_file() -> Result<()> {
+    let env = TempCodexHome::new();
+    let keyring_store = MockKeyringStore::default();
+    let tokens = sample_tokens();
+    save_oauth_tokens_to_file(&tokens)?;
+
+    let lock_dir = env.path().join("mcp-oauth-locks");
+    std::fs::create_dir(lock_dir.join("secrets-store.lock"))?;
+    let error = load_oauth_tokens_from_keyring_with_fallback_to_file(
+        &keyring_store,
+        AuthKeyringBackendKind::Secrets,
+        &tokens.server_name,
+        &tokens.url,
+    )
+    .expect_err("aggregate-store lock failure must abort Auto resolution");
+
+    assert!(error.downcast_ref::<OAuthStoreLockFailure>().is_some());
+    let loaded = load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?
+        .expect("fallback File should remain independently readable");
+    assert_tokens_match_without_expiry(&loaded, &tokens);
     Ok(())
 }
 
