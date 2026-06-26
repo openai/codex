@@ -85,7 +85,7 @@ const SKILLS_READ_CALL_ID: &str = "skills-read";
 const SKILLS_READ_AGAIN_CALL_ID: &str = "skills-read-again";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_forwards_meta() -> Result<()> {
+async fn mcp_resource_read_without_origin_uses_resources_read() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
@@ -106,17 +106,13 @@ async fn mcp_resource_read_forwards_meta() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
 
-    let expected_meta = resource_read_request_meta();
     let read_request_id = mcp
-        .send_mcp_resource_read_request_with_meta(
-            McpResourceReadParams {
-                thread_id: Some(thread.id),
-                server: "codex_apps".to_string(),
-                uri: TEST_RESOURCE_URI.to_string(),
-                meta: None,
-            },
-            serde_json::to_value(&expected_meta)?,
-        )
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: Some(thread.id),
+            server: "codex_apps".to_string(),
+            uri: TEST_RESOURCE_URI.to_string(),
+            origin_call_id: None,
+        })
         .await?;
     let read_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -127,7 +123,7 @@ async fn mcp_resource_read_forwards_meta() -> Result<()> {
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
     );
-    assert_eq!(apps_server_calls.resource_read_metas(), vec![expected_meta]);
+    assert_eq!(apps_server_calls.resource_read_metas(), vec![Meta::new()]);
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -533,7 +529,7 @@ enabled = false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_resource_read_forwards_meta_without_thread() -> Result<()> {
+async fn mcp_resource_read_without_thread_uses_resources_read() -> Result<()> {
     let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
 
@@ -562,17 +558,13 @@ apps = true
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let expected_meta = resource_read_request_meta();
     let read_request_id = mcp
-        .send_mcp_resource_read_request_with_meta(
-            McpResourceReadParams {
-                thread_id: None,
-                server: "codex_apps".to_string(),
-                uri: TEST_RESOURCE_URI.to_string(),
-                meta: None,
-            },
-            serde_json::to_value(&expected_meta)?,
-        )
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: "codex_apps".to_string(),
+            uri: TEST_RESOURCE_URI.to_string(),
+            origin_call_id: None,
+        })
         .await?;
     let read_response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -584,7 +576,7 @@ apps = true
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
     );
-    assert_eq!(apps_server_calls.resource_read_metas(), vec![expected_meta]);
+    assert_eq!(apps_server_calls.resource_read_metas(), vec![Meta::new()]);
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -637,7 +629,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 thread_id: Some("00000000-0000-4000-8000-000000000000".to_string()),
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
-                meta: None,
+                origin_call_id: None,
             },
         })
         .await;
@@ -928,12 +920,5 @@ fn skill_resource_meta(plugin_name: &str, skill_name: &str) -> Meta {
     Meta(serde_json::Map::from_iter([
         ("plugin_name".to_string(), json!(plugin_name)),
         ("skill_name".to_string(), json!(skill_name)),
-    ]))
-}
-
-fn resource_read_request_meta() -> Meta {
-    Meta(serde_json::Map::from_iter([
-        ("traceId".to_string(), json!("trace-123")),
-        ("context".to_string(), json!({ "source": "app-server" })),
     ]))
 }

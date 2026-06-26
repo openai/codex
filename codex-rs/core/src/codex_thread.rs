@@ -44,7 +44,6 @@ use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
-use rmcp::model::Meta;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -608,16 +607,25 @@ impl CodexThread {
         &self,
         server: &str,
         uri: &str,
-        meta: Option<BTreeMap<String, serde_json::Value>>,
     ) -> anyhow::Result<serde_json::Value> {
-        let params = if let Some(meta) = meta {
-            ReadResourceRequestParams::new(uri).with_meta(Meta(meta.into_iter().collect()))
-        } else {
-            ReadResourceRequestParams::new(uri)
-        };
-        let result = self.codex.session.read_resource(server, params).await?;
+        let result = self
+            .codex
+            .session
+            .read_resource(server, ReadResourceRequestParams::new(uri))
+            .await?;
 
         Ok(serde_json::to_value(result)?)
+    }
+
+    pub async fn mcp_server_info(
+        &self,
+        server: &str,
+    ) -> Option<codex_protocol::mcp::McpServerInfo> {
+        self.codex.session.mcp_server_info(server).await
+    }
+
+    pub async fn mcp_tool_info(&self, server: &str, tool: &str) -> Option<codex_mcp::ToolInfo> {
+        self.codex.session.mcp_tool_info(server, tool).await
     }
 
     pub async fn call_mcp_tool(

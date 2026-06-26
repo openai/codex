@@ -79,9 +79,9 @@ pub struct McpResourceReadParams {
     pub thread_id: Option<String>,
     pub server: String,
     pub uri: String,
-    #[serde(rename = "_meta")]
-    #[ts(optional = nullable, rename = "_meta")]
-    pub meta: Option<BTreeMap<String, JsonValue>>,
+    /// The MCP tool call whose app context identifies the resource provider. Requires `threadId`.
+    #[ts(optional = nullable)]
+    pub origin_call_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

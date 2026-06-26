@@ -11,7 +11,6 @@ pub use auth::should_retry_without_scopes;
 
 pub(crate) mod auth;
 
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
@@ -37,7 +36,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpAuthStatus;
 use rmcp::model::ElicitationCapability;
-use rmcp::model::Meta;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use serde_json::Value;
@@ -303,7 +301,6 @@ pub async fn read_mcp_resource(
     runtime_context: McpRuntimeContext,
     server: &str,
     uri: &str,
-    meta: Option<BTreeMap<String, Value>>,
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
     mcp_servers.retain(|name, _| name == server);
@@ -339,12 +336,9 @@ pub async fn read_mcp_resource(
     )
     .await;
 
-    let params = if let Some(meta) = meta {
-        ReadResourceRequestParams::new(uri).with_meta(Meta(meta.into_iter().collect()))
-    } else {
-        ReadResourceRequestParams::new(uri)
-    };
-    let result = manager.read_resource(server, params).await;
+    let result = manager
+        .read_resource(server, ReadResourceRequestParams::new(uri))
+        .await;
     cancel_token.cancel();
     result
 }
