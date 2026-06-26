@@ -238,7 +238,10 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
+        #[cfg(unix)]
         let mut env = child_env(&params);
+        #[cfg(not(unix))]
+        let env = child_env(&params);
         #[cfg(unix)]
         let ingress = match IngressListener::prepare(params.ingress) {
             Ok(ingress) => ingress,
