@@ -39,7 +39,10 @@ fn host_program_is_next_to_the_main_executable_even_when_missing() {
     };
 
     assert_eq!(
-        resolve_host_program(None, Ok(PathBuf::from("/opt/codex/bin/codex")),),
+        resolve_host_program(
+            /*override_path*/ None,
+            Ok(PathBuf::from("/opt/codex/bin/codex")),
+        ),
         PathBuf::from("/opt/codex/bin").join(executable_name)
     );
 }
@@ -54,7 +57,7 @@ fn host_program_falls_back_to_its_name_when_main_executable_is_unknown() {
 
     assert_eq!(
         resolve_host_program(
-            None,
+            /*override_path*/ None,
             Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "missing executable"
