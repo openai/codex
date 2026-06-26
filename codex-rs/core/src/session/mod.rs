@@ -44,6 +44,7 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
+use crate::tool_search_debug::ToolSearchDebugResult;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -1983,6 +1984,29 @@ impl Session {
             .and_then(|turn| turn.task.as_ref())
             .filter(|task| task.turn_context.sub_id == sub_id)
             .map(|task| Arc::clone(&task.turn_context))
+    }
+
+    pub async fn search_tool_search(
+        self: &Arc<Self>,
+        query: &str,
+        limit: usize,
+    ) -> CodexResult<ToolSearchDebugResult> {
+        let active = self.active_turn_context_and_cancellation_token().await;
+        let (turn_context, cancellation_token) = match active {
+            Some(active) => active,
+            None => (self.new_default_turn().await, CancellationToken::new()),
+        };
+        let step_context = self.capture_step_context(turn_context).await;
+        let router =
+            crate::session::turn::built_tools(self, step_context.as_ref(), &cancellation_token)
+                .await?;
+
+        router
+            .search_tool_search(query, limit)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest("tool_search is not available for this thread".to_string())
+            })
     }
 
     async fn active_turn_context_and_cancellation_token(
