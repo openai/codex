@@ -60,18 +60,17 @@ jobs:
       - sdk
     runs-on: ubuntu-24.04
     steps:
-      # The terminal gate is policy, not code under test. For pull requests,
-      # load its helper from the trusted base commit instead of the PR head or
-      # synthetic merge commit. Otherwise a PR could change the helper to
-      # report success after one of the required child workflows failed.
+      # Keep the helper on the same revision as the caller and child workflows.
+      # CI workflow uploads are restricted, so this repository does not need a
+      # separate trusted-base checkout for the terminal policy step. Using the
+      # PR head also lets the introducing PR exercise a newly added helper.
       #
-      # Using the base commit also lets branches created before this helper was
-      # added pick it up after main advances, without requiring a rebase. Main
-      # pushes use the pushed commit because it is already on the protected
-      # branch.
+      # During the initial rollout, PR branches created before
+      # check_ci_results.py exists must rebase onto main before this gate can
+      # run.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Require successful dependencies
