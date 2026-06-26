@@ -3387,7 +3387,7 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
-            turn_id,
+            last_turn_id,
             path,
             model,
             model_provider,
@@ -3428,9 +3428,9 @@ impl ThreadRequestProcessor {
                     "thread {source_thread_id} did not include persisted history"
                 ))
             })?;
-        let history_items = if let Some(turn_id) = turn_id.as_deref() {
+        let history_items = if let Some(last_turn_id) = last_turn_id.as_deref() {
             Arc::new(
-                truncate_rollout_after_turn_id(&history_items, turn_id)
+                truncate_rollout_after_turn_id(&history_items, last_turn_id)
                     .map_err(|err| core_thread_write_error("truncate thread for fork", err))?,
             )
         } else {

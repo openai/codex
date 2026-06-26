@@ -252,7 +252,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_at_turn_id_keeps_only_terminal_prefix() -> Result<()> {
+async fn thread_fork_at_last_turn_id_keeps_only_terminal_prefix() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -306,7 +306,7 @@ async fn thread_fork_at_turn_id_keeps_only_terminal_prefix() -> Result<()> {
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: source_thread_id.clone(),
-            turn_id: Some(turn_ids[1].clone()),
+            last_turn_id: Some(turn_ids[1].clone()),
             ..Default::default()
         })
         .await?;

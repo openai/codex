@@ -161,15 +161,15 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 /// because they do not provide a stable raw rollout boundary for a fork.
 pub fn truncate_rollout_after_turn_id(
     items: &[RolloutItem],
-    turn_id: &str,
+    last_turn_id: &str,
 ) -> CodexResult<Vec<RolloutItem>> {
     let turns = build_turns_from_rollout_items(items);
     let turn = turns
         .iter()
-        .find(|turn| turn.id == turn_id)
+        .find(|turn| turn.id == last_turn_id)
         .ok_or_else(|| {
             CodexErr::InvalidRequest(format!(
-                "turnId '{turn_id}' was not found in the source thread"
+                "lastTurnId '{last_turn_id}' was not found in the source thread"
             ))
         })?;
 
@@ -179,18 +179,18 @@ pub fn truncate_rollout_after_turn_id(
             matches!(
                 item,
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event))
-                    if event.turn_id == turn_id
+                    if event.turn_id == last_turn_id
             )
         })
         .ok_or_else(|| {
             CodexErr::InvalidRequest(format!(
-                "turnId '{turn_id}' is not a persisted canonical turn in the source thread"
+                "lastTurnId '{last_turn_id}' is not a persisted canonical turn in the source thread"
             ))
         })?;
 
     if matches!(turn.status, TurnStatus::InProgress) {
         return Err(CodexErr::InvalidRequest(format!(
-            "turnId '{turn_id}' identifies an in-progress turn"
+            "lastTurnId '{last_turn_id}' identifies an in-progress turn"
         )));
     }
 

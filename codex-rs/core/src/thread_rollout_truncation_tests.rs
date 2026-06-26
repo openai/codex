@@ -129,7 +129,7 @@ fn truncate_rollout_after_turn_id_rejects_rolled_back_turn() {
     assert!(matches!(
         err,
         CodexErr::InvalidRequest(message)
-            if message == "turnId 'turn-2' was not found in the source thread"
+            if message == "lastTurnId 'turn-2' was not found in the source thread"
     ));
 }
 
@@ -149,7 +149,7 @@ fn truncate_rollout_after_turn_id_rejects_synthetic_legacy_turn_id() {
         err,
         CodexErr::InvalidRequest(message)
             if message
-                == "turnId 'rollout-0' is not a persisted canonical turn in the source thread"
+                == "lastTurnId 'rollout-0' is not a persisted canonical turn in the source thread"
     ));
 }
 
@@ -163,7 +163,7 @@ fn truncate_rollout_after_turn_id_rejects_in_progress_turn() {
     assert!(matches!(
         err,
         CodexErr::InvalidRequest(message)
-            if message == "turnId 'turn-1' identifies an in-progress turn"
+            if message == "lastTurnId 'turn-1' identifies an in-progress turn"
     ));
 }
 
