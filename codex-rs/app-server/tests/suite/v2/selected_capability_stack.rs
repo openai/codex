@@ -57,6 +57,7 @@ const SKILL_NAME: &str = "executor-demo:deploy";
 const SKILL_DESCRIPTION: &str = "Deploy through the selected executor.";
 const SKILL_BODY_MARKER: &str = "SELECTED_EXECUTOR_SKILL_BODY";
 const LOCAL_SKILL_BODY_MARKER: &str = "COLLIDING_LOCAL_SKILL_BODY";
+const NO_SELECTED_SKILLS_MESSAGE: &str = "No selected-environment skills are currently available.";
 const MCP_SERVER_NAME: &str = "executor_probe";
 const MCP_CALL_ID: &str = "selected-executor-mcp-call";
 const CONNECTOR_ID: &str = "calendar";
@@ -211,10 +212,8 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     assert_eq!(5, requests.len());
     assert_selected_plugin_tools_absent(&requests[4]);
     assert!(
-        requests[4]
-            .message_input_texts("developer")
-            .into_iter()
-            .any(|text| text.contains("No selected-environment skills are currently available."))
+        latest_selected_skill_update(&requests[4])
+            .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
 
     exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
@@ -573,13 +572,20 @@ fn assert_selected_skill_is_injected(request: &ResponsesRequest, expected_count:
 }
 
 fn assert_selected_skill_catalog_available(request: &ResponsesRequest) {
-    let catalog_fragments = request
+    let catalog_fragment = latest_selected_skill_update(request)
+        .expect("selected skill catalog update should be model-visible");
+    assert!(catalog_fragment.contains(SKILL_DESCRIPTION));
+    assert!(catalog_fragment.contains("environment resource:"));
+}
+
+fn latest_selected_skill_update(request: &ResponsesRequest) -> Option<String> {
+    request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.contains(SKILL_DESCRIPTION))
-        .collect::<Vec<_>>();
-    assert_eq!(1, catalog_fragments.len());
-    assert!(catalog_fragments[0].contains("environment resource:"));
+        .filter(|text| {
+            text.contains(SKILL_DESCRIPTION) || text.contains(NO_SELECTED_SKILLS_MESSAGE)
+        })
+        .next_back()
 }
 
 fn assert_selected_plugin_tools(request: &ResponsesRequest) {
