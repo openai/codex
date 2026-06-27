@@ -25,6 +25,7 @@ pub use extensions::prune_old_extension_resources;
 pub use prompts::build_consolidation_prompt;
 pub use prompts::build_stage_one_input_message;
 pub use start::start_memories_startup_task;
+pub use start::start_memories_startup_task_with_store;
 pub use storage::rebuild_raw_memories_file_from_memories;
 pub use storage::rollout_summary_file_stem;
 pub use storage::sync_rollout_summaries_from_memories;
