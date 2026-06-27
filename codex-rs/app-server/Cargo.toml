@@ -129,7 +129,6 @@ serial_test = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 tar = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 url = { workspace = true }

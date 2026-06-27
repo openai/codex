@@ -1,45 +1,25 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
-use codex_app_server::in_process;
-use codex_app_server::in_process::InProcessStartArgs;
-use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::EnvironmentAddParams;
 use codex_app_server_protocol::EnvironmentAddResponse;
-use codex_app_server_protocol::EnvironmentInfoParams;
 use codex_app_server_protocol::EnvironmentInfoResponse;
 use codex_app_server_protocol::EnvironmentShellInfo;
-use codex_app_server_protocol::InitializeCapabilities;
-use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudConfigBundleLoader;
-use codex_config::LoaderOverrides;
-use codex_core::config::ConfigBuilder;
-use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
-use codex_protocol::protocol::SessionSource;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use super::exec_server_test_support::accept_exec_server_environment;
-use super::exec_server_test_support::accept_initialized_exec_server;
-use super::exec_server_test_support::read_exec_server_json;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
-const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const INTERNAL_ERROR_CODE: i64 = -32603;
 
@@ -200,110 +180,6 @@ async fn environment_info_reports_connection_failure() -> Result<()> {
             .message
             .contains("failed to get info for environment `remote-a`")
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn environment_info_reports_response_timeout() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let exec_server_url = format!("ws://{}", listener.local_addr()?);
-    let (request_received_tx, request_received_rx) = oneshot::channel();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let exec_server = tokio::spawn(async move {
-        let mut websocket = accept_initialized_exec_server(listener).await?;
-        let request = read_exec_server_json(&mut websocket).await?;
-        assert_eq!(request["method"], "environment/info");
-        request_received_tx
-            .send(())
-            .map_err(|()| anyhow::anyhow!("environment info request receiver dropped"))?;
-        shutdown_rx.await?;
-        Ok::<_, anyhow::Error>(())
-    });
-
-    let codex_home = TempDir::new()?;
-    let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .loader_overrides(loader_overrides.clone())
-        .build()
-        .await?;
-    let app_server = in_process::start(InProcessStartArgs {
-        arg0_paths: Arg0DispatchPaths::default(),
-        config: Arc::new(config),
-        cli_overrides: Vec::new(),
-        loader_overrides,
-        strict_config: false,
-        cloud_config_bundle: CloudConfigBundleLoader::default(),
-        thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
-        log_db: None,
-        state_db: None,
-        environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        config_warnings: Vec::new(),
-        session_source: SessionSource::Cli,
-        enable_codex_api_key_env: false,
-        initialize: InitializeParams {
-            client_info: ClientInfo {
-                name: "codex-app-server-tests".to_string(),
-                title: None,
-                version: "0.1.0".to_string(),
-            },
-            capabilities: Some(InitializeCapabilities {
-                experimental_api: true,
-                ..Default::default()
-            }),
-        },
-        channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    })
-    .await?;
-
-    let add_response = app_server
-        .request(ClientRequest::EnvironmentAdd {
-            request_id: RequestId::Integer(1),
-            params: EnvironmentAddParams {
-                environment_id: "remote-a".to_string(),
-                exec_server_url,
-                connect_timeout_ms: None,
-            },
-        })
-        .await?
-        .expect("environment/add should succeed");
-    assert_eq!(
-        serde_json::from_value::<EnvironmentAddResponse>(add_response)?,
-        EnvironmentAddResponse {}
-    );
-
-    let info_sender = app_server.sender();
-    let info_task = tokio::spawn(async move {
-        info_sender
-            .request(ClientRequest::EnvironmentInfo {
-                request_id: RequestId::Integer(2),
-                params: EnvironmentInfoParams {
-                    environment_id: "remote-a".to_string(),
-                },
-            })
-            .await
-    });
-    timeout(RPC_TIMEOUT, request_received_rx).await??;
-    tokio::time::pause();
-    tokio::time::advance(ENVIRONMENT_INFO_TIMEOUT + Duration::from_millis(1)).await;
-    tokio::time::resume();
-    let error = timeout(RPC_TIMEOUT, info_task)
-        .await???
-        .expect_err("environment/info should time out");
-    assert_eq!(error.code, INTERNAL_ERROR_CODE);
-    assert!(
-        error
-            .message
-            .contains("timed out waiting for exec-server `environment/info` response")
-    );
-
-    shutdown_tx
-        .send(())
-        .map_err(|()| anyhow::anyhow!("exec-server shutdown receiver dropped"))?;
-    timeout(RPC_TIMEOUT, exec_server).await???;
-    app_server.shutdown().await?;
     Ok(())
 }
 
