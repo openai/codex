@@ -110,28 +110,41 @@ pub(crate) fn new_cyber_policy_error_event() -> SafetyAccessBlockCell {
 
 impl HistoryCell for SafetyAccessBlockCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![vec!["ⓘ ".cyan(), SAFETY_ACCESS_BLOCK_TITLE.bold()].into()];
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = vec![HyperlinkLine::new(
+            vec!["ⓘ ".cyan(), SAFETY_ACCESS_BLOCK_TITLE.bold()].into(),
+        )];
         let body = Line::from(vec!["  ".into(), self.body.dim()]);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
         let wrapped = adaptive_wrap_line(
             &body,
             RtOptions::new(wrap_width).subsequent_indent("  ".into()),
         );
-        push_owned_lines(&wrapped, &mut lines);
-        lines.push(
-            vec![
-                "  Trusted Access: ".dim(),
-                self.trusted_access_url.cyan().underlined(),
-            ]
-            .into(),
-        );
-        lines.push(
-            vec![
-                "  Learn more: ".dim(),
-                SAFETY_ACCESS_BLOCK_LEARN_MORE_URL.cyan().underlined(),
-            ]
-            .into(),
-        );
+        let mut wrapped_body = Vec::new();
+        push_owned_lines(&wrapped, &mut wrapped_body);
+        lines.extend(plain_hyperlink_lines(wrapped_body));
+
+        for (label, url) in [
+            ("Trusted Access", self.trusted_access_url),
+            ("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL),
+        ] {
+            let source = crate::terminal_hyperlinks::annotate_web_urls_in_line(
+                vec![format!("  {label}: ").dim(), url.cyan().underlined()].into(),
+            );
+            let wrapped = crate::wrapping::word_wrap_line(
+                &source.line,
+                RtOptions::new(wrap_width).subsequent_indent("  ".into()),
+            );
+            let mut wrapped_links = Vec::new();
+            push_owned_lines(&wrapped, &mut wrapped_links);
+            lines.extend(crate::terminal_hyperlinks::remap_wrapped_line(
+                &source,
+                wrapped_links,
+            ));
+        }
         lines
     }
 
@@ -143,10 +156,6 @@ impl HistoryCell for SafetyAccessBlockCell {
             Line::from(format!("Trusted Access: {trusted_access_url}")),
             Line::from(format!("Learn more: {SAFETY_ACCESS_BLOCK_LEARN_MORE_URL}")),
         ]
-    }
-
-    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {

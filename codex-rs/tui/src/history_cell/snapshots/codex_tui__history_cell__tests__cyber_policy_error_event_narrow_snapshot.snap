@@ -1,6 +1,5 @@
 ---
-source: tui/src/history_cell.rs
-assertion_line: 3312
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 ⓘ This content can't be shown
@@ -9,5 +8,9 @@ expression: rendered
   you’re a security professional,
   you may be able to apply for
   Trusted Access.
-  Trusted Access: https://openai.com/form/enterprise-trusted-access-for-cyber/
-  Learn more: https://help.openai.com/en/articles/20001326
+  Trusted Access: https://
+  openai.com/form/enterprise-
+  trusted-access-for-cyber/
+  Learn more: https://
+  help.openai.com/en/
+  articles/20001326
