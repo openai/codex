@@ -30,7 +30,6 @@ use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket;
 use crate::noise_relay::noise_relay_websocket_config;
-use crate::noise_relay::rendezvous_tcp_nodelay;
 use crate::relay::harness_connection_from_websocket;
 use crate::trace_context::current_trace_context_headers;
 
@@ -270,13 +269,12 @@ impl ExecServerClient {
         request
             .headers_mut()
             .extend(current_trace_context_headers());
-        let tcp_nodelay = rendezvous_tcp_nodelay(request.uri());
         let (stream, _) = timeout(
             connect_timeout,
             connect_async_with_config(
                 request,
                 Some(noise_relay_websocket_config()),
-                /*disable_nagle*/ tcp_nodelay,
+                /*disable_nagle*/ true,
             ),
         )
         .await

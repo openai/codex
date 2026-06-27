@@ -23,19 +23,6 @@ pub(crate) fn noise_relay_websocket_config() -> WebSocketConfig {
         .max_message_size(Some(MAX_NOISE_RELAY_WEBSOCKET_MESSAGE_SIZE))
 }
 
-pub(crate) fn rendezvous_tcp_nodelay(uri: &http::Uri) -> bool {
-    let Some(path) = uri.path().strip_prefix("/cloud-agent-nodelay/") else {
-        return false;
-    };
-    let Some((route_id, environment_id)) = path.split_once("/ws/environment/") else {
-        return false;
-    };
-    !route_id.is_empty()
-        && !route_id.contains('/')
-        && !environment_id.is_empty()
-        && !environment_id.contains('/')
-}
-
 fn take_next_sequence(next_seq: &mut u32) -> Result<u32, ExecServerError> {
     // Never wrap: relay sequence is the explicit ordering key for an implicit
     // Noise nonce. Reusing zero after u32::MAX would be ambiguous and unsafe.
@@ -45,7 +32,3 @@ fn take_next_sequence(next_seq: &mut u32) -> Result<u32, ExecServerError> {
     })?;
     Ok(seq)
 }
-
-#[cfg(test)]
-#[path = "rendezvous_url_tests.rs"]
-mod rendezvous_url_tests;
