@@ -342,6 +342,16 @@ impl RpcClient {
         drain_pending(&self.pending).await;
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.request",
+        level = "info",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            method,
+        )
+    )]
     pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
     where
         P: Serialize,
@@ -803,6 +813,15 @@ mod tests {
             .expect("RPC response");
         assert_eq!(response, serde_json::json!({}));
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+        let expected_traceparent = expected_trace
+            .traceparent
+            .as_deref()
+            .expect("parent traceparent");
+        let traceparent = trace.traceparent.as_deref().expect("request traceparent");
+        let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
+        let parts = traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(parts[1], expected_parts[1]);
+        assert_ne!(parts[2], expected_parts[2]);
+        assert_eq!(trace.tracestate, expected_trace.tracestate);
     }
 }

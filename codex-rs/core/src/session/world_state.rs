@@ -7,6 +7,7 @@ use crate::context::world_state::WorldState;
 use codex_extension_api::WorldStateContributionInput;
 
 impl Session {
+    #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]
     pub(crate) async fn build_world_state_for_step(
         &self,
         step_context: &StepContext,
