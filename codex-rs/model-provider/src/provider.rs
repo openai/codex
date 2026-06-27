@@ -277,6 +277,9 @@ impl ModelProvider for ConfiguredModelProvider {
                     if auth_manager.refresh_failure_for_auth(&auth).is_some() {
                         return None;
                     }
+                    if matches!(&auth, CodexAuth::ExternalProvided(_)) && !auth.is_chatgpt_auth() {
+                        return None;
+                    }
                     Some(auth)
                 })
                 .map(|auth| match &auth {
@@ -337,6 +340,8 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_login::ExternalProvidedAuth;
+    use codex_login::ExternalProvidedAuthCapabilities;
     use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
@@ -585,6 +590,30 @@ mod tests {
                     email: None,
                     plan_type: PlanType::Unknown,
                 }),
+                requires_openai_auth: true,
+            })
+        );
+    }
+
+    #[test]
+    fn openai_provider_does_not_report_backend_only_external_auth_as_chatgpt() {
+        let auth = ExternalProvidedAuth::new([], "user-123").with_capabilities(
+            ExternalProvidedAuthCapabilities {
+                uses_codex_backend: true,
+                ..Default::default()
+            },
+        );
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::ExternalProvided(auth),
+            )),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Ok(ProviderAccountState {
+                account: None,
                 requires_openai_auth: true,
             })
         );
