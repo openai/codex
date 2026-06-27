@@ -57,9 +57,6 @@ pub enum AuthMode {
 
 impl AuthMode {
     /// Returns whether this mode represents an authenticated human ChatGPT account.
-    ///
-    /// Externally provided auth configures this capability per auth instance,
-    /// so the mode alone cannot assert it.
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
@@ -70,9 +67,6 @@ impl AuthMode {
     }
 
     /// Returns whether this mode is backed by Codex services rather than a direct model API.
-    ///
-    /// Externally provided auth configures this capability per auth instance, so
-    /// the mode alone cannot assert it.
     pub fn uses_codex_backend(self) -> bool {
         match self {
             Self::Chatgpt
