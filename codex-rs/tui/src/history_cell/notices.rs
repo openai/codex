@@ -97,7 +97,7 @@ const SAFETY_ACCESS_BLOCK_LEARN_MORE_URL: &str = "https://help.openai.com/en/art
 pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
     SafetyAccessBlockCell {
         body: "We take extra caution with requests involving biological research and applications that could pose safety risks. If you’re a researcher at an approved organization, you may be able to apply for Trusted Access.",
-        trusted_access_url: "https://openai.com/form/life-sciences-access/",
+        trusted_access_url: "https://openai.com/form/trusted-access-for-life-sciences",
     }
 }
 
