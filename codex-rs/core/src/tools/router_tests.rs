@@ -180,6 +180,35 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
+    let tool_name = "exec".to_string();
+
+    let call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "call-namespace".to_string(),
+        name: tool_name.clone(),
+        namespace: Some("mcp__python".to_string()),
+        input: "print('hello')".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("custom_tool_call should produce a tool call");
+
+    assert_eq!(
+        call,
+        ToolCall {
+            tool_name: ToolName::namespaced("mcp__python", tool_name),
+            call_id: "call-namespace".to_string(),
+            payload: ToolPayload::Custom {
+                input: "print('hello')".to_string(),
+            },
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);

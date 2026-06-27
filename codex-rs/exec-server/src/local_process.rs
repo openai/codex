@@ -876,13 +876,16 @@ async fn watch_exit(
                 process.sandbox_denied = is_likely_sandbox_denied(process.sandbox, &exec_output);
             }
             let _ = process.wake_tx.send(seq);
-            process
-                .events
-                .publish(ExecProcessEvent::Exited { seq, exit_code });
+            process.events.publish(ExecProcessEvent::Exited {
+                seq,
+                exit_code,
+                sandbox_denied: Some(process.sandbox_denied),
+            });
             Some(ExecExitedNotification {
                 process_id: process_id.clone(),
                 seq,
                 exit_code,
+                sandbox_denied: Some(process.sandbox_denied),
             })
         } else {
             None
