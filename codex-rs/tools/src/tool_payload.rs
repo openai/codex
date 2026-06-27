@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use codex_protocol::models::SearchToolCallParams;
 
 /// Canonical payload shapes accepted by model-visible tool runtimes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolPayload {
     Function { arguments: String },
     ToolSearch { arguments: SearchToolCallParams },
