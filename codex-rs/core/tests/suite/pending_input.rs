@@ -1,5 +1,9 @@
 use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use codex_core::CodexThread;
 use codex_core::config::CurrentTimeReminderConfig;
@@ -39,6 +43,50 @@ use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
+use tracing::Subscriber;
+use tracing::span::Id;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::registry::LookupSpan;
+
+/// Pauses task finalization after `RegularTask::run` has made its last pending-input decision.
+///
+/// The test thread uses this span boundary to submit a steer through `CodexThread`, exercising the
+/// production gap between the regular task returning and `Session::on_task_finished` atomically
+/// deciding whether to continue or finish the turn.
+struct RegularTaskRunCloseBarrier {
+    armed: Arc<AtomicBool>,
+    target_thread: std::thread::ThreadId,
+    run_closed: mpsc::SyncSender<()>,
+    steer_finished: std::sync::Mutex<mpsc::Receiver<()>>,
+}
+
+impl<S> Layer<S> for RegularTaskRunCloseBarrier
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+        let is_regular_task_run = ctx
+            .metadata(&id)
+            .is_some_and(|metadata| metadata.name() == "session_task.run");
+        if std::thread::current().id() != self.target_thread
+            || !is_regular_task_run
+            || !self.armed.swap(false, Ordering::SeqCst)
+        {
+            return;
+        }
+
+        self.run_closed
+            .send(())
+            .expect("late-steer worker should wait for regular task completion");
+        self.steer_finished
+            .lock()
+            .expect("late-steer barrier mutex should not be poisoned")
+            .recv_timeout(Duration::from_secs(15))
+            .expect("late-steer worker should finish before task finalization resumes");
+    }
+}
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -285,6 +333,114 @@ async fn wait_for_sleep_item_completed(codex: &CodexThread, call_id: &str, durat
             duration_ms,
         }
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn steer_accepted_after_regular_task_returns_continues_same_turn() {
+    const INITIAL_PROMPT: &str = "first prompt";
+    const STEER_PROMPT: &str = "late steer";
+    const CLIENT_ID: &str = "late-steer-client-id";
+    const FINAL_MESSAGE: &str = "processed late steer";
+
+    let armed = Arc::new(AtomicBool::new(false));
+    let (run_closed_tx, run_closed_rx) = mpsc::sync_channel(0);
+    let (steer_finished_tx, steer_finished_rx) = mpsc::sync_channel(0);
+    let subscriber = tracing_subscriber::registry().with(RegularTaskRunCloseBarrier {
+        armed: Arc::clone(&armed),
+        target_thread: std::thread::current().id(),
+        run_closed: run_closed_tx,
+        steer_finished: std::sync::Mutex::new(steer_finished_rx),
+    });
+    // A global subscriber keeps callsite interest stable while other integration tests run in
+    // parallel. The layer only acts on this current-thread runtime and disarms after one span.
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("pending-input integration test should install the global tracing subscriber");
+
+    let final_chunks = vec![
+        chunk(ev_response_created("resp-2")),
+        chunk(ev_message_item_done("msg-2", FINAL_MESSAGE)),
+        chunk(ev_completed("resp-2")),
+    ];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![response_completed_chunks("resp-1"), final_chunks]).await;
+    let codex = build_codex(&server).await;
+
+    let runtime_handle = tokio::runtime::Handle::current();
+    let codex_for_steer = Arc::clone(&codex);
+    let steer_thread = std::thread::spawn(move || {
+        run_closed_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("regular task should reach its post-run finalization gap");
+        runtime_handle.block_on(async {
+            codex_for_steer
+                .steer_input(
+                    vec![UserInput::Text {
+                        text: STEER_PROMPT.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    /*additional_context*/ Default::default(),
+                    /*expected_turn_id*/ None,
+                    /*client_user_message_id*/
+                    Some(CLIENT_ID.to_string()),
+                    /*responsesapi_client_metadata*/ None,
+                )
+                .await
+                .expect("steer should be accepted before task finalization");
+        });
+        steer_finished_tx
+            .send(())
+            .expect("task finalization should wait for the steer");
+    });
+
+    armed.store(true, Ordering::SeqCst);
+    submit_user_input(&codex, INITIAL_PROMPT).await;
+
+    let mut turn_started_count = 0;
+    let mut late_user_message_client_ids = Vec::new();
+    let mut received_final_message = false;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let event = codex
+                .next_event()
+                .await
+                .expect("event stream should remain open");
+            match event.msg {
+                EventMsg::TurnStarted(_) => turn_started_count += 1,
+                EventMsg::UserMessage(message) if message.message == STEER_PROMPT => {
+                    late_user_message_client_ids.push(message.client_id);
+                }
+                EventMsg::AgentMessage(message) if message.message == FINAL_MESSAGE => {
+                    received_final_message = true;
+                }
+                EventMsg::TurnComplete(_) => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("continued regular task should complete");
+    steer_thread
+        .join()
+        .expect("late-steer worker should not panic");
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let continued_body: Value = from_slice(&requests[1]).expect("parse continued request");
+    assert_eq!(
+        message_input_texts(&continued_body, "user")
+            .into_iter()
+            .filter(|text| text == STEER_PROMPT)
+            .count(),
+        1
+    );
+    assert_eq!(turn_started_count, 1);
+    assert_eq!(
+        late_user_message_client_ids,
+        vec![Some(CLIENT_ID.to_string())]
+    );
+    assert!(received_final_message);
+
+    server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
