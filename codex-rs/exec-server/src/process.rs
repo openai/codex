@@ -30,8 +30,14 @@ pub struct StartedExecProcess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecProcessEvent {
     Output(ProcessOutputChunk),
-    Exited { seq: u64, exit_code: i32 },
-    Closed { seq: u64 },
+    Exited {
+        seq: u64,
+        exit_code: i32,
+        sandbox_denied: Option<bool>,
+    },
+    Closed {
+        seq: u64,
+    },
     Failed(String),
 }
 
@@ -125,21 +131,28 @@ impl ExecProcessEventLog {
         let live_rx = self.inner.live_tx.subscribe();
         let replay = history.events.iter().cloned().collect();
 
-        ExecProcessEventReceiver { replay, live_rx }
+        ExecProcessEventReceiver {
+            replay,
+            live_rx,
+            _keepalive: None,
+        }
     }
 }
 
 pub struct ExecProcessEventReceiver {
     replay: VecDeque<ExecProcessEvent>,
     live_rx: broadcast::Receiver<ExecProcessEvent>,
+    _keepalive: Option<broadcast::Sender<ExecProcessEvent>>,
 }
 
 impl ExecProcessEventReceiver {
+    /// Returns a receiver that remains open without yielding events.
     pub fn empty() -> Self {
-        let (_live_tx, live_rx) = broadcast::channel(1);
+        let (live_tx, live_rx) = broadcast::channel(1);
         Self {
             replay: VecDeque::new(),
             live_rx,
+            _keepalive: Some(live_tx),
         }
     }
 
@@ -202,8 +215,20 @@ mod tests {
 
     use super::ExecProcessEvent;
     use super::ExecProcessEventLog;
+    use super::ExecProcessEventReceiver;
     use crate::protocol::ExecOutputStream;
     use crate::protocol::ProcessOutputChunk;
+
+    #[tokio::test]
+    async fn empty_event_receiver_stays_open() {
+        let mut events = ExecProcessEventReceiver::empty();
+
+        assert!(
+            timeout(Duration::from_millis(10), events.recv())
+                .await
+                .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn event_history_replay_is_bounded_by_retained_bytes() {
@@ -217,6 +242,7 @@ mod tests {
         log.publish(ExecProcessEvent::Exited {
             seq: 2,
             exit_code: 0,
+            sandbox_denied: Some(false),
         });
         log.publish(ExecProcessEvent::Closed { seq: 3 });
 
@@ -238,6 +264,7 @@ mod tests {
                 ExecProcessEvent::Exited {
                     seq: 2,
                     exit_code: 0,
+                    sandbox_denied: Some(false),
                 },
                 ExecProcessEvent::Closed { seq: 3 },
             ]

@@ -128,7 +128,10 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     }
 }
 
-fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> Vec<CommandAction> {
+pub(crate) fn command_actions_for_path_uri(
+    parsed_cmd: &[ParsedCommand],
+    cwd: &PathUri,
+) -> Vec<CommandAction> {
     // TODO(anp): Carry PathUri into CommandAction so foreign Read actions retain resolved paths.
     // Until then, omit those actions rather than project a foreign cwd onto the host.
     let native_cwd = if cwd.infer_path_convention() == Some(PathConvention::native()) {

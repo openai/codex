@@ -1151,8 +1151,8 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("This chat was flagged for possible cybersecurity risk"));
-    assert!(rendered.contains("Trusted Access for Cyber"));
+    assert!(rendered.contains("This content can't be shown"));
+    assert!(rendered.contains("extra caution with cybersecurity requests"));
     assert!(!rendered.contains("server fallback message"));
     assert!(!chat.bottom_pane.is_task_running());
 }
@@ -1171,6 +1171,7 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
         assert_eq!(cells.len(), 1);
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
+        assert!(rendered.contains("biological research"));
         assert!(!rendered.contains("Invalid prompt:"));
     }
 }

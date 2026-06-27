@@ -4,11 +4,19 @@ use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
+use codex_protocol::items::CollabAgentToolCallItem;
+use codex_protocol::items::CollabAgentToolCallStatus as CoreCollabAgentToolCallStatus;
+use codex_protocol::items::CommandExecutionItem;
+use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
+use codex_protocol::items::DynamicToolCallItem;
+use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
 use codex_protocol::items::FileChangeItem;
 use codex_protocol::items::ImageViewItem;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::ReasoningItem;
+use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
@@ -30,8 +38,10 @@ use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialP
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::ConversationTextRole;
+use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2629,6 +2639,134 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             id: "reasoning-1".to_string(),
             summary: vec!["line one".to_string(), "line two".to_string()],
             content: vec![],
+        }
+    );
+
+    let command_item = TurnItem::CommandExecution(CommandExecutionItem {
+        id: "exec-1".to_string(),
+        process_id: Some("pid-1".to_string()),
+        command: vec!["echo".to_string(), "done".to_string()],
+        cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),
+        parsed_cmd: vec![codex_protocol::parse_command::ParsedCommand::Unknown {
+            cmd: "echo done".to_string(),
+        }],
+        source: CoreExecCommandSource::Agent,
+        interaction_input: None,
+        status: CoreCommandExecutionStatus::Completed,
+        stdout: Some("done\n".to_string()),
+        stderr: Some(String::new()),
+        aggregated_output: Some("done\n".to_string()),
+        exit_code: Some(0),
+        duration: Some(Duration::from_millis(5)),
+        formatted_output: Some("done\n".to_string()),
+    });
+
+    assert_eq!(
+        ThreadItem::from(command_item),
+        ThreadItem::CommandExecution {
+            id: "exec-1".to_string(),
+            command: "echo done".to_string(),
+            cwd: LegacyAppPathString::from_abs_path(&test_path_buf("/tmp").abs()),
+            process_id: Some("pid-1".to_string()),
+            source: CommandExecutionSource::Agent,
+            status: CommandExecutionStatus::Completed,
+            command_actions: vec![CommandAction::Unknown {
+                command: "echo done".to_string(),
+            }],
+            aggregated_output: Some("done\n".to_string()),
+            exit_code: Some(0),
+            duration_ms: Some(5),
+        }
+    );
+
+    let dynamic_tool_call_item = TurnItem::DynamicToolCall(DynamicToolCallItem {
+        id: "dynamic-1".to_string(),
+        namespace: Some("apps".to_string()),
+        tool: "lookup".to_string(),
+        arguments: json!({"id": "123"}),
+        status: CoreDynamicToolCallStatus::Completed,
+        content_items: Some(vec![
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputText {
+                text: "ok".to_string(),
+            },
+        ]),
+        success: Some(true),
+        error: None,
+        duration: Some(Duration::from_millis(5)),
+    });
+
+    assert_eq!(
+        ThreadItem::from(dynamic_tool_call_item),
+        ThreadItem::DynamicToolCall {
+            id: "dynamic-1".to_string(),
+            namespace: Some("apps".to_string()),
+            tool: "lookup".to_string(),
+            arguments: json!({"id": "123"}),
+            status: DynamicToolCallStatus::Completed,
+            content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                text: "ok".to_string(),
+            }]),
+            success: Some(true),
+            duration_ms: Some(5),
+        }
+    );
+
+    let sender_thread_id = codex_protocol::ThreadId::default();
+    let receiver_thread_id = codex_protocol::ThreadId::default();
+    let collab_item = TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
+        id: "collab-1".to_string(),
+        tool: CoreCollabAgentTool::SendInput,
+        status: CoreCollabAgentToolCallStatus::Completed,
+        sender_thread_id,
+        receiver_thread_ids: vec![receiver_thread_id],
+        receiver_agents: Vec::new(),
+        prompt: Some("continue".to_string()),
+        model: None,
+        reasoning_effort: None,
+        agents_states: [(receiver_thread_id, CoreAgentStatus::Completed(None))]
+            .into_iter()
+            .collect(),
+    });
+
+    assert_eq!(
+        ThreadItem::from(collab_item),
+        ThreadItem::CollabAgentToolCall {
+            id: "collab-1".to_string(),
+            tool: CollabAgentTool::SendInput,
+            status: CollabAgentToolCallStatus::Completed,
+            sender_thread_id: sender_thread_id.to_string(),
+            receiver_thread_ids: vec![receiver_thread_id.to_string()],
+            prompt: Some("continue".to_string()),
+            model: None,
+            reasoning_effort: None,
+            agents_states: [(
+                receiver_thread_id.to_string(),
+                CollabAgentState {
+                    status: CollabAgentStatus::Completed,
+                    message: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    );
+
+    let sub_agent_activity_item = TurnItem::SubAgentActivity(SubAgentActivityItem {
+        id: "activity-1".to_string(),
+        kind: CoreSubAgentActivityKind::Interrupted,
+        agent_thread_id: receiver_thread_id,
+        agent_path: codex_protocol::AgentPath::root()
+            .join("worker")
+            .expect("worker path"),
+    });
+
+    assert_eq!(
+        ThreadItem::from(sub_agent_activity_item),
+        ThreadItem::SubAgentActivity {
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Interrupted,
+            agent_thread_id: receiver_thread_id.to_string(),
+            agent_path: "/root/worker".to_string(),
         }
     );
 
