@@ -22,8 +22,8 @@ use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::load_oauth_tokens_from_keyring;
 use crate::oauth::load_oauth_tokens_from_keyring_with_fallback_to_file;
 use crate::oauth::save_oauth_tokens_to_file;
-use crate::oauth::save_oauth_tokens_to_file_unlocked;
-use crate::oauth::save_oauth_tokens_to_secrets_keyring_unlocked;
+use crate::oauth::save_oauth_tokens_to_file_with_lock_held;
+use crate::oauth::save_oauth_tokens_to_secrets_keyring_with_lock_held;
 use crate::oauth::save_oauth_tokens_with_keyring;
 use crate::oauth::save_oauth_tokens_with_keyring_with_fallback_to_file;
 use codex_config::types::AuthKeyringBackendKind;
@@ -181,7 +181,7 @@ fn file_store_lock_preserves_updates_for_different_servers() -> Result<()> {
     });
 
     contended_rx.recv_timeout(Duration::from_secs(/*secs*/ 1))?;
-    save_oauth_tokens_to_file_unlocked(&first)?;
+    save_oauth_tokens_to_file_with_lock_held(&first)?;
     drop(held_lock);
     result_rx.recv_timeout(Duration::from_secs(/*secs*/ 10))??;
     writer.join().expect("file store writer should finish");
@@ -251,7 +251,7 @@ fn secrets_store_lock_preserves_updates_for_different_servers() -> Result<()> {
 
     contended_rx.recv_timeout(Duration::from_secs(/*secs*/ 1))?;
     let first_serialized = serde_json::to_string(&first)?;
-    save_oauth_tokens_to_secrets_keyring_unlocked(
+    save_oauth_tokens_to_secrets_keyring_with_lock_held(
         &keyring_store,
         &first.server_name,
         &first,
