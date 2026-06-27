@@ -86,86 +86,61 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
 }
 
 #[derive(Debug)]
-pub(crate) struct SafetyAccessBlockCell;
+pub(crate) struct SafetyAccessBlockCell {
+    body: &'static str,
+    trusted_access_url: &'static str,
+}
 
 const SAFETY_ACCESS_BLOCK_TITLE: &str = "This content can't be shown";
-const SAFETY_ACCESS_BLOCK_BODY: &str = "We've limited access to this content for safety reasons. This type of information may be used to benefit or to harm people.";
+const SAFETY_ACCESS_BLOCK_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
 
 pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
-    SafetyAccessBlockCell
+    SafetyAccessBlockCell {
+        body: "We take extra caution with requests involving biological research and applications that could pose safety risks. If you’re a researcher at an approved organization, you may be able to apply for Trusted Access.",
+        trusted_access_url: "https://openai.com/form/life-sciences-access/",
+    }
+}
+
+pub(crate) fn new_cyber_policy_error_event() -> SafetyAccessBlockCell {
+    SafetyAccessBlockCell {
+        body: "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
+        trusted_access_url: "https://openai.com/form/enterprise-trusted-access-for-cyber/",
+    }
 }
 
 impl HistoryCell for SafetyAccessBlockCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = vec![vec!["ⓘ ".cyan(), SAFETY_ACCESS_BLOCK_TITLE.bold()].into()];
-        let body = Line::from(vec!["  ".into(), SAFETY_ACCESS_BLOCK_BODY.dim()]);
+        let body = Line::from(vec!["  ".into(), self.body.dim()]);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
         let wrapped = adaptive_wrap_line(
             &body,
             RtOptions::new(wrap_width).subsequent_indent("  ".into()),
         );
         push_owned_lines(&wrapped, &mut lines);
+        lines.push(
+            vec![
+                "  Trusted Access: ".dim(),
+                self.trusted_access_url.cyan().underlined(),
+            ]
+            .into(),
+        );
+        lines.push(
+            vec![
+                "  Learn more: ".dim(),
+                SAFETY_ACCESS_BLOCK_LEARN_MORE_URL.cyan().underlined(),
+            ]
+            .into(),
+        );
         lines
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![
             Line::from(SAFETY_ACCESS_BLOCK_TITLE),
-            Line::from(SAFETY_ACCESS_BLOCK_BODY),
-        ]
-    }
-}
-
-const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
-
-#[derive(Debug)]
-pub(crate) struct CyberPolicyNoticeCell;
-
-pub(crate) fn new_cyber_policy_error_event() -> CyberPolicyNoticeCell {
-    CyberPolicyNoticeCell
-}
-
-impl HistoryCell for CyberPolicyNoticeCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(
-            vec![
-                "ⓘ ".cyan(),
-                "This chat was flagged for possible cybersecurity risk".bold(),
-            ]
-            .into(),
-        );
-
-        let wrap_width = width.saturating_sub(2).max(1) as usize;
-        let body = Line::from(vec![
-            "  If this seems wrong, try rephrasing your request. To get authorized for security work, join the "
-                .dim(),
-            "Trusted Access for Cyber".cyan().underlined(),
-            " program.".dim(),
-        ]);
-        let wrapped = adaptive_wrap_line(
-            &body,
-            RtOptions::new(wrap_width).subsequent_indent("  ".into()),
-        );
-        push_owned_lines(&wrapped, &mut lines);
-        lines.push(
-            vec![
-                "  ".into(),
-                TRUSTED_ACCESS_FOR_CYBER_URL.cyan().underlined(),
-            ]
-            .into(),
-        );
-
-        lines
-    }
-
-    fn raw_lines(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from("This chat was flagged for possible cybersecurity risk"),
-            Line::from(
-                "If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program.",
-            ),
-            Line::from(TRUSTED_ACCESS_FOR_CYBER_URL),
+            Line::from(self.body),
+            Line::from(format!("Trusted Access: {}", self.trusted_access_url)),
+            Line::from(format!("Learn more: {SAFETY_ACCESS_BLOCK_LEARN_MORE_URL}")),
         ]
     }
 
