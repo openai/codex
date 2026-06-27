@@ -136,10 +136,11 @@ impl HistoryCell for SafetyAccessBlockCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        let trusted_access_url = self.trusted_access_url;
         vec![
             Line::from(SAFETY_ACCESS_BLOCK_TITLE),
             Line::from(self.body),
-            Line::from(format!("Trusted Access: {}", self.trusted_access_url)),
+            Line::from(format!("Trusted Access: {trusted_access_url}")),
             Line::from(format!("Learn more: {SAFETY_ACCESS_BLOCK_LEARN_MORE_URL}")),
         ]
     }
