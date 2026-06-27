@@ -227,7 +227,7 @@ impl ThreadGoalRequestProcessor {
             .await
             .map_err(goal_service_error)?;
         if cleared {
-            self.persist_external_thread_goal_if_supported(thread_id, None)
+            self.persist_external_thread_goal_if_supported(thread_id, /*goal*/ None)
                 .await?;
         }
 
