@@ -618,7 +618,7 @@ pub(crate) use self::thread_summary::thread_settings_from_core_snapshot;
 pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
-        if is_persisted_rollout_item(item) {
+        if is_persisted_rollout_item(item, codex_protocol::protocol::ThreadHistoryMode::Legacy) {
             builder.handle_rollout_item(item);
         }
     }

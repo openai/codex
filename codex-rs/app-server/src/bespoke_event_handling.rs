@@ -939,16 +939,20 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ViewImageToolCall(_) => {}
         EventMsg::EnteredReviewMode(review_request) => {
+            let turn_id = review_request
+                .turn_id
+                .unwrap_or_else(|| event_turn_id.clone());
+            let item_id = review_request.item_id.unwrap_or_else(|| turn_id.clone());
             let review = review_request
                 .user_facing_hint
                 .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));
             let item = ThreadItem::EnteredReviewMode {
-                id: event_turn_id.clone(),
+                id: item_id,
                 review,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
+                turn_id: turn_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
                 item: item.clone(),
             };
@@ -957,7 +961,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
+                turn_id,
                 completed_at_ms: now_unix_timestamp_ms(),
                 item,
             };
@@ -1048,17 +1052,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExitedReviewMode(review_event) => {
+            let turn_id = review_event
+                .turn_id
+                .unwrap_or_else(|| event_turn_id.clone());
+            let item_id = review_event.item_id.unwrap_or_else(|| turn_id.clone());
             let review = match review_event.review_output {
                 Some(output) => render_review_output_text(&output),
                 None => REVIEW_FALLBACK_MESSAGE.to_string(),
             };
             let item = ThreadItem::ExitedReviewMode {
-                id: event_turn_id.clone(),
+                id: item_id,
                 review,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
+                turn_id: turn_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
                 item: item.clone(),
             };
@@ -1067,7 +1075,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
+                turn_id,
                 completed_at_ms: now_unix_timestamp_ms(),
                 item,
             };

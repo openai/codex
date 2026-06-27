@@ -9,12 +9,20 @@ use chrono::Utc;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
+#[cfg(test)]
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RolloutItem;
+#[cfg(test)]
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::UserMessageEvent;
+#[cfg(test)]
+use codex_protocol::user_input::UserInput;
 
 use crate::CreateThreadParams;
 use crate::GitInfoPatch;
@@ -29,9 +37,9 @@ const THREAD_UPDATED_AT_TOUCH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Live-thread helper that derives metadata updates from canonical rollout items.
 ///
-/// Stores receive raw history plus explicit metadata patches. This helper keeps append-derived
-/// metadata observation in the live layer without owning persistence-policy filtering or making
-/// `append_items` infer metadata inside a `ThreadStore` implementation.
+/// Stores receive canonical durable rollout items plus explicit metadata patches. This helper
+/// keeps append-derived metadata observation in the live layer without owning persistence-policy
+/// filtering or making `append_items` infer metadata inside a `ThreadStore` implementation.
 pub(crate) struct ThreadMetadataSync {
     thread_id: ThreadId,
     cwd_seen: bool,
@@ -249,22 +257,11 @@ impl ThreadMetadataSync {
                     update.permission_profile = Some(turn_ctx.permission_profile());
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
-                    if let Some(preview) = user_message_preview(user) {
-                        if !self.first_user_message_seen {
-                            self.first_user_message_seen = true;
-                            update.first_user_message = Some(preview.clone());
-                        }
-                        if !self.preview_seen {
-                            self.preview_seen = true;
-                            update.preview = Some(preview);
-                        }
-                    }
-                    if !self.title_seen {
-                        let title = strip_user_message_prefix(user.message.as_str());
-                        if !title.is_empty() {
-                            self.title_seen = true;
-                            update.title = Some(title.to_string());
-                        }
+                    self.observe_user_message(user, &mut update);
+                }
+                RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+                    if let TurnItem::UserMessage(user) = &event.item {
+                        self.observe_user_message_item(user, &mut update);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TokenCount(token_count)) => {
@@ -344,6 +341,39 @@ fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
         return Some(IMAGE_ONLY_USER_MESSAGE_PLACEHOLDER.to_string());
     }
     None
+}
+
+impl ThreadMetadataSync {
+    fn observe_user_message_item(
+        &mut self,
+        user: &UserMessageItem,
+        update: &mut ThreadMetadataPatch,
+    ) {
+        let EventMsg::UserMessage(user) = user.as_legacy_event() else {
+            unreachable!("user message items always convert to user message events");
+        };
+        self.observe_user_message(&user, update);
+    }
+
+    fn observe_user_message(&mut self, user: &UserMessageEvent, update: &mut ThreadMetadataPatch) {
+        if let Some(preview) = user_message_preview(user) {
+            if !self.first_user_message_seen {
+                self.first_user_message_seen = true;
+                update.first_user_message = Some(preview.clone());
+            }
+            if !self.preview_seen {
+                self.preview_seen = true;
+                update.preview = Some(preview);
+            }
+        }
+        if !self.title_seen {
+            let title = strip_user_message_prefix(user.message.as_str());
+            if !title.is_empty() {
+                self.title_seen = true;
+                update.title = Some(title.to_string());
+            }
+        }
+    }
 }
 
 fn thread_updated_at_touch() -> ThreadMetadataPatch {
@@ -485,6 +515,32 @@ mod tests {
     }
 
     #[test]
+    fn completed_user_message_items_emit_metadata_fields() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::ItemCompleted(
+                ItemCompletedEvent {
+                    thread_id,
+                    turn_id: "turn-1".to_string(),
+                    item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
+                        text: "first user text".to_string(),
+                        text_elements: Vec::new(),
+                    }])),
+                    completed_at_ms: 0,
+                },
+            ))])
+            .expect("completed user message metadata update");
+
+        assert_eq!(update.patch.preview.as_deref(), Some("first user text"));
+        assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(
+            update.patch.first_user_message.as_deref(),
+            Some("first user text")
+        );
+    }
+
+    #[test]
     fn metadata_irrelevant_items_coalesce_updated_at_touches() {
         let thread_id = ThreadId::new();
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
@@ -562,6 +618,7 @@ mod tests {
     fn resume_params(thread_id: ThreadId, history: Vec<RolloutItem>) -> ResumeThreadParams {
         ResumeThreadParams {
             thread_id,
+            history_mode: ThreadHistoryMode::Legacy,
             rollout_path: None,
             history: Some(Arc::new(history)),
             include_archived: false,

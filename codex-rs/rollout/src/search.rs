@@ -4,6 +4,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -267,6 +268,25 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
                 Some(agent.message.trim().to_string())
             }
         }
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match &event.item {
+            TurnItem::UserMessage(user) => {
+                let message = user.message();
+                let text = strip_user_message_prefix(message.as_str());
+                (!text.is_empty()).then(|| text.to_string())
+            }
+            TurnItem::AgentMessage(agent) => {
+                let text = agent
+                    .content
+                    .iter()
+                    .map(|content| match content {
+                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (!text.trim().is_empty()).then(|| text.trim().to_string())
+            }
+            _ => None,
+        },
         RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) => {
             let text = content
                 .iter()

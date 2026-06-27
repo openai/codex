@@ -22,6 +22,7 @@ use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1187,9 +1188,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     if summary.preview.is_none() {
                         summary.preview = Some(preview.clone());
                     }
-                    if let EventMsg::UserMessage(_) = ev
-                        && summary.first_user_message.is_none()
-                    {
+                    if is_user_message_event(&ev) && summary.first_user_message.is_none() {
                         summary.first_user_message = Some(preview);
                     }
                 }
@@ -1259,27 +1258,49 @@ fn strip_user_message_prefix(text: &str) -> &str {
 
 fn event_msg_preview(event: &EventMsg) -> Option<String> {
     match event {
-        EventMsg::UserMessage(user) => {
-            let message = strip_user_message_prefix(user.message.as_str());
-            if !message.is_empty() {
-                return Some(message.to_string());
+        EventMsg::UserMessage(user) => user_message_preview(user),
+        EventMsg::ItemCompleted(event) => match &event.item {
+            TurnItem::UserMessage(user) => {
+                let EventMsg::UserMessage(user) = user.as_legacy_event() else {
+                    unreachable!("user message items always convert to user message events");
+                };
+                user_message_preview(&user)
             }
-            if user
-                .images
-                .as_ref()
-                .is_some_and(|images| !images.is_empty())
-                || !user.local_images.is_empty()
-            {
-                return Some("[Image]".to_string());
-            }
-            None
-        }
+            _ => None,
+        },
         EventMsg::ThreadGoalUpdated(event) => {
             let objective = event.goal.objective.trim();
             (!objective.is_empty()).then(|| objective.to_string())
         }
         _ => None,
     }
+}
+
+fn is_user_message_event(event: &EventMsg) -> bool {
+    matches!(
+        event,
+        EventMsg::UserMessage(_)
+            | EventMsg::ItemCompleted(codex_protocol::protocol::ItemCompletedEvent {
+                item: TurnItem::UserMessage(_),
+                ..
+            })
+    )
+}
+
+fn user_message_preview(user: &codex_protocol::protocol::UserMessageEvent) -> Option<String> {
+    let message = strip_user_message_prefix(user.message.as_str());
+    if !message.is_empty() {
+        return Some(message.to_string());
+    }
+    if user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || !user.local_images.is_empty()
+    {
+        return Some("[Image]".to_string());
+    }
+    None
 }
 
 /// Read the SessionMetaLine from the head of a rollout file for reuse by

@@ -16,7 +16,6 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_rollout::persisted_rollout_items;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -211,6 +210,7 @@ mod tests {
         store
             .resume_thread(ResumeThreadParams {
                 thread_id,
+                history_mode: ThreadHistoryMode::Legacy,
                 rollout_path: Some(rollout_path.clone()),
                 history: None,
                 include_archived: false,
@@ -290,6 +290,7 @@ mod tests {
             store
                 .resume_thread(ResumeThreadParams {
                     thread_id,
+                    history_mode: ThreadHistoryMode::Paginated,
                     rollout_path: None,
                     history: None,
                     include_archived: false,
@@ -482,8 +483,7 @@ impl InMemoryThreadStore {
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
-        let canonical_items = persisted_rollout_items(params.items.as_slice());
-        if canonical_items.is_empty() {
+        if params.items.is_empty() {
             return Ok(());
         }
         let mut state = self.state.lock().await;
@@ -492,7 +492,7 @@ impl InMemoryThreadStore {
             .histories
             .entry(params.thread_id)
             .or_default()
-            .extend(canonical_items);
+            .extend(params.items);
         Ok(())
     }
 
