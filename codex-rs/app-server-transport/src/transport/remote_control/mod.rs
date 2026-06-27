@@ -5,6 +5,7 @@ mod desired_state;
 mod enroll;
 mod protocol;
 mod segment;
+mod server_api;
 mod websocket;
 
 use self::auth::load_remote_control_auth;
@@ -12,10 +13,10 @@ use self::auth::recover_remote_control_auth;
 use self::desired_state::RemoteControlDesiredState;
 use self::desired_state::acquire_persistence_lock;
 use self::enroll::RemoteControlEnrollment;
-use self::enroll::enroll_remote_control_server;
 use self::enroll::load_persisted_remote_control_enrollment;
-use self::enroll::refresh_remote_control_server;
 use self::enroll::update_persisted_remote_control_enrollment;
+use self::server_api::enroll_remote_control_server;
+use self::server_api::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
 use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
@@ -825,27 +826,39 @@ async fn refresh_pairing_enrollment(
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
-    if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
-        if err.kind() != io::ErrorKind::PermissionDenied {
-            return Err(err);
-        }
+    let mut refresh_result = refresh_remote_control_server(auth, installation_id, enrollment).await;
+    if refresh_result
+        .as_ref()
+        .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
+    {
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        if !recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
-            return Err(err);
+        if recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
+            match load_remote_control_auth(auth_manager).await {
+                Ok(recovered_auth) if recovered_auth.account_id == enrollment.account_id => {
+                    *auth = recovered_auth;
+                    refresh_result =
+                        refresh_remote_control_server(auth, installation_id, enrollment).await;
+                }
+                Ok(_) | Err(_) => {
+                    enrollment.clear_server_token();
+                    refresh_result = Err(pairing_unavailable_error());
+                }
+            }
+        } else {
+            enrollment.clear_server_token();
         }
-        *auth = load_remote_control_auth(auth_manager)
-            .await
-            .map_err(|_| pairing_unavailable_error())?;
-        if auth.account_id != enrollment.account_id {
-            return Err(pairing_unavailable_error());
-        }
-        refresh_remote_control_server(auth, installation_id, enrollment).await?
     }
-    if replace_current_enrollment(current_enrollment, enrollment) {
-        Ok(())
-    } else {
+    if refresh_result
+        .as_ref()
+        .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
+    {
+        enrollment.clear_server_token();
+    }
+    if !replace_current_enrollment(current_enrollment, enrollment) {
         Err(pairing_unavailable_error())
+    } else {
+        refresh_result
     }
 }
 
