@@ -47,7 +47,7 @@ impl EnvironmentRequestProcessor {
                     name: info.shell.name,
                     path: info.shell.path,
                 },
-                cwd: info.cwd.map(Into::into),
+                cwd: info.cwd,
             }
             .into(),
         ))

@@ -1,4 +1,4 @@
-use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -33,7 +33,8 @@ pub struct EnvironmentInfoParams {
 #[ts(export_to = "v2/")]
 pub struct EnvironmentInfoResponse {
     pub shell: EnvironmentShellInfo,
-    pub cwd: Option<LegacyAppPathString>,
+    /// Default working directory reported by the environment, as a canonical file URI.
+    pub cwd: Option<PathUri>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

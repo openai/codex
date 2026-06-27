@@ -8,7 +8,6 @@ use codex_app_server_protocol::EnvironmentInfoResponse;
 use codex_app_server_protocol::EnvironmentShellInfo;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -68,9 +67,7 @@ async fn environment_info_returns_remote_environment_info() -> Result<()> {
                 name: "zsh".to_string(),
                 path: "/bin/zsh".to_string(),
             },
-            cwd: Some(LegacyAppPathString::from(PathUri::parse(
-                "file:///workspace",
-            )?)),
+            cwd: Some(PathUri::parse("file:///workspace")?),
         }
     );
     timeout(RPC_TIMEOUT, exec_server).await???;
