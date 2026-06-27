@@ -268,7 +268,11 @@ async fn operation_timeout_bounds_unauthorized_refresh_wait() -> anyhow::Result<
                     .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
             }
         })
-        .expect(4)
+        // The later operation can either observe the completed background refresh immediately
+        // (three requests with the old token) or race it once before adopting the refreshed
+        // credentials (four). The exact provider-refresh and refreshed-token expectations below
+        // still require both paths to converge after one rotation.
+        .expect(3..=4)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
