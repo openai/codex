@@ -236,9 +236,9 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     for request in &requests[1..4] {
         assert_selected_skill_is_injected(request, /*expected_count*/ 1);
         assert_selected_plugin_tools(request);
-        assert_plugin_guidance_count(request, 1);
+        assert_plugin_guidance_count(request, /*expected_count*/ 1);
     }
-    assert_plugin_guidance_count(&requests[4], 1);
+    assert_plugin_guidance_count(&requests[4], /*expected_count*/ 1);
     assert_selected_skill_is_injected(&requests[5], /*expected_count*/ 2);
     assert_selected_plugin_tools(&requests[5]);
     let output = requests[2].function_call_output(MCP_CALL_ID);
@@ -401,9 +401,9 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn() ->
     assert_eq!(3, requests.len());
     assert_selected_skill_catalog_available(&requests[1]);
     assert_selected_plugin_tools(&requests[1]);
-    assert_plugin_guidance_count(&requests[1], 1);
+    assert_plugin_guidance_count(&requests[1], /*expected_count*/ 1);
     assert_selected_plugin_tools(&requests[2]);
-    assert_plugin_guidance_count(&requests[2], 1);
+    assert_plugin_guidance_count(&requests[2], /*expected_count*/ 1);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
         .as_str()
@@ -542,7 +542,7 @@ fn assert_selected_capabilities_absent(request: &ResponsesRequest) {
             .all(|text| !text.contains(SKILL_DESCRIPTION))
     );
     assert_selected_plugin_tools_absent(request);
-    assert_plugin_guidance_count(request, 0);
+    assert_plugin_guidance_count(request, /*expected_count*/ 0);
 }
 
 fn assert_selected_plugin_tools_absent(request: &ResponsesRequest) {
