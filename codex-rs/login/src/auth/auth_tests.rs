@@ -50,6 +50,25 @@ fn externally_provided_auth_delegates_account_metadata() {
     assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
 }
 
+#[test]
+fn externally_provided_auth_respects_forced_workspace() {
+    let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
+    manager.set_forced_chatgpt_workspace_id(Some(vec![WORKSPACE_ID_ALLOWED.to_string()]));
+
+    manager.set_external_provided_auth(
+        ExternalProvidedAuth::new([], "user-123").with_account_id(WORKSPACE_ID_DISALLOWED),
+    );
+    assert!(matches!(manager.auth_cached(), Some(CodexAuth::ApiKey(_))));
+
+    manager.set_external_provided_auth(
+        ExternalProvidedAuth::new([], "user-123").with_account_id(WORKSPACE_ID_ALLOWED),
+    );
+    assert!(matches!(
+        manager.auth_cached(),
+        Some(CodexAuth::ExternalProvided(_))
+    ));
+}
+
 #[tokio::test]
 async fn refresh_without_id_token() {
     let codex_home = tempdir().unwrap();

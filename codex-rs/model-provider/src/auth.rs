@@ -132,6 +132,9 @@ impl AuthProvider for ExternalProvidedAuthProvider {
         {
             let _ = headers.insert("ChatGPT-Account-ID", account_id);
         }
+        if self.auth.is_fedramp_account() {
+            let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
+        }
     }
 }
 
@@ -444,7 +447,8 @@ mod tests {
                 )],
                 "user-123",
             )
-            .with_account_id("account-123"),
+            .with_account_id("account-123")
+            .with_fedramp_account(/*is_fedramp_account*/ true),
         );
 
         let headers = auth_provider_from_auth(&auth).to_auth_headers();
@@ -460,6 +464,12 @@ mod tests {
                 .get("ChatGPT-Account-ID")
                 .and_then(|value| value.to_str().ok()),
             Some("account-123")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenAI-Fedramp")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
         );
     }
 

@@ -2298,6 +2298,18 @@ impl AuthManager {
 
     /// Replaces the current auth snapshot with externally provided auth.
     pub fn set_external_provided_auth(&self, auth: ExternalProvidedAuth) {
+        if let Some(expected_workspace_ids) = self.forced_chatgpt_workspace_id()
+            && !auth
+                .account_id()
+                .is_some_and(|actual| expected_workspace_ids.iter().any(|id| id == actual))
+        {
+            tracing::warn!(
+                account_id = auth.account_id(),
+                ?expected_workspace_ids,
+                "ignoring externally provided auth outside forced ChatGPT workspace"
+            );
+            return;
+        }
         let _ = self.set_cached_auth(Some(CodexAuth::ExternalProvided(auth)));
     }
 
