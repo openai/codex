@@ -1161,6 +1161,7 @@ async fn handle_server_notification(
                 let published_closed = session.publish_ordered_event(ExecProcessEvent::Exited {
                     seq: params.seq,
                     exit_code: params.exit_code,
+                    sandbox_denied: params.sandbox_denied,
                 });
                 if published_closed {
                     inner.remove_session_if(&params.process_id, &session);
@@ -1737,6 +1738,7 @@ mod tests {
                         process_id: process_id.clone(),
                         seq: 3,
                         exit_code: 0,
+                        sandbox_denied: Some(true),
                     })
                     .expect("exit notification should serialize"),
                 ),
@@ -1786,6 +1788,7 @@ mod tests {
                 ExecProcessEvent::Exited {
                     seq: 3,
                     exit_code: 0,
+                    sandbox_denied: Some(true),
                 },
                 ExecProcessEvent::Closed { seq: 4 },
             ]
@@ -2391,6 +2394,7 @@ mod tests {
                         process_id: quiet_process_id,
                         seq: 1,
                         exit_code: 17,
+                        sandbox_denied: Some(false),
                     })
                     .expect("exit notification should serialize"),
                 ),
