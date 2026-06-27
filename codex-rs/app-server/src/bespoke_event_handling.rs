@@ -838,12 +838,14 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::SubAgentActivity(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::ExecCommandEnd(_) => {
-            // Deprecated item lifecycle events are still fanned out for legacy clients.
+            // Deprecated item lifecycle events are still fanned out for raw-event and rollout
+            // compatibility consumers.
             // App-server v2 receives canonical TurnItem lifecycle instead, and dispatches
             // dynamic tool requests from canonical DynamicToolCall starts.
         }
         EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_) => {
-            // Deprecated MCP tool-call events are still fanned out for legacy clients.
+            // Deprecated MCP tool-call events are still fanned out for raw-event and rollout
+            // compatibility consumers.
             // App-server v2 receives the canonical TurnItem::McpToolCall lifecycle instead.
         }
         msg @ (EventMsg::AgentMessageContentDelta(_)
@@ -859,7 +861,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.send_server_notification(notification).await;
         }
         EventMsg::ContextCompacted(..) => {
-            // Core still fans out this deprecated event for legacy clients;
+            // Core still fans out this deprecated event for raw-event and rollout compatibility
+            // consumers;
             // v2 clients receive the canonical ContextCompaction item instead.
         }
         EventMsg::DeprecationNotice(event) => {
@@ -1089,7 +1092,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::PatchApplyBegin(_) | EventMsg::PatchApplyEnd(_) => {
-            // Core still fans out these deprecated events for legacy clients;
+            // Core still fans out these deprecated events for raw-event and rollout compatibility
+            // consumers;
             // v2 clients receive the canonical FileChange item instead.
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
