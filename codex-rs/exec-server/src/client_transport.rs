@@ -10,7 +10,6 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
-use tracing::info;
 use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -21,8 +20,6 @@ use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::NoiseRendezvousConnectArgs;
-use crate::client_api::NoiseRendezvousConnectAttempt;
-use crate::client_api::NoiseRendezvousConnectAttemptArgs;
 use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::NoiseRendezvousConnectProvider;
 use crate::client_api::RemoteExecServerConnectArgs;
@@ -74,17 +71,15 @@ impl ExecServerReconnectStrategy {
                 connect_timeout,
                 initialize_timeout,
             } => {
-                let attempt = provider.connect_attempt(identity.public_key()).await?;
-                ExecServerClient::open_noise_rendezvous_connection(
-                    NoiseRendezvousConnectAttemptArgs {
-                        attempt,
-                        harness_identity: identity.clone(),
-                        client_name: client_name.clone(),
-                        connect_timeout: *connect_timeout,
-                        initialize_timeout: *initialize_timeout,
-                        resume_session_id: Some(session_id.to_string()),
-                    },
-                )
+                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
+                    bundle,
+                    harness_identity: identity.clone(),
+                    client_name: client_name.clone(),
+                    connect_timeout: *connect_timeout,
+                    initialize_timeout: *initialize_timeout,
+                    resume_session_id: Some(session_id.to_string()),
+                })
                 .await
             }
         }
@@ -147,9 +142,9 @@ impl ExecServerClient {
         provider: &Arc<dyn NoiseRendezvousConnectProvider>,
         identity: &NoiseChannelIdentity,
     ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
-        let open_connection = |attempt: NoiseRendezvousConnectAttempt| {
-            Self::open_noise_rendezvous_connection(NoiseRendezvousConnectAttemptArgs {
-                attempt,
+        let open_connection = |bundle: NoiseRendezvousConnectBundle| {
+            Self::open_noise_rendezvous_connection(NoiseRendezvousConnectArgs {
+                bundle,
                 harness_identity: identity.clone(),
                 client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                 connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
@@ -157,8 +152,8 @@ impl ExecServerClient {
                 resume_session_id: None,
             })
         };
-        let attempt = provider.connect_attempt(identity.public_key()).await?;
-        match open_connection(attempt).await {
+        let bundle = provider.connect_bundle(identity.public_key()).await?;
+        match open_connection(bundle).await {
             Err(error)
                 if matches!(
                     &error,
@@ -170,8 +165,8 @@ impl ExecServerClient {
                         )
                 ) =>
             {
-                let attempt = provider.connect_attempt(identity.public_key()).await?;
-                open_connection(attempt).await
+                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                open_connection(bundle).await
             }
             result => result,
         }
@@ -234,45 +229,24 @@ impl ExecServerClient {
     pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
-        let (connection, options) = Self::open_noise_rendezvous_connection(args.into()).await?;
-        Self::connect(connection, options).await
-    }
-
-    /// Connect using a caller-supplied transport policy for this physical
-    /// rendezvous attempt.
-    #[tracing::instrument(
-        name = "codex.exec_server.remote.harness.connect",
-        skip_all,
-        fields(
-            otel.kind = "client",
-            otel.name = "codex.exec_server.remote.harness.connect",
-        )
-    )]
-    pub async fn connect_noise_rendezvous_attempt(
-        args: NoiseRendezvousConnectAttemptArgs,
-    ) -> Result<Self, ExecServerError> {
         let (connection, options) = Self::open_noise_rendezvous_connection(args).await?;
         Self::connect(connection, options).await
     }
 
     pub(crate) async fn open_noise_rendezvous_connection(
-        args: NoiseRendezvousConnectAttemptArgs,
+        args: NoiseRendezvousConnectArgs,
     ) -> Result<(JsonRpcConnection, ExecServerClientConnectOptions), ExecServerError> {
         ensure_rustls_crypto_provider();
         // Keep the registry-issued URL, key, and authorization together for this
         // connection attempt.
-        let NoiseRendezvousConnectAttemptArgs {
-            attempt,
+        let NoiseRendezvousConnectArgs {
+            bundle,
             harness_identity,
             client_name,
             connect_timeout,
             initialize_timeout,
             resume_session_id,
         } = args;
-        let NoiseRendezvousConnectAttempt {
-            bundle,
-            transport_policy,
-        } = attempt;
         let NoiseRendezvousConnectBundle {
             websocket_url,
             environment_id,
@@ -280,7 +254,6 @@ impl ExecServerClient {
             executor_public_key,
             harness_key_authorization,
         } = bundle;
-        let effective_outbound_tcp_nodelay = transport_policy.effective_outbound_tcp_nodelay();
         let diagnostic_url = websocket_url
             .split(['?', '#'])
             .next()
@@ -301,8 +274,10 @@ impl ExecServerClient {
             connect_async_with_config(
                 request,
                 Some(noise_relay_websocket_config()),
+                // Relay traffic consists of small, latency-sensitive frames, so
+                // send them immediately instead of waiting for Nagle coalescing.
                 /*disable_nagle*/
-                effective_outbound_tcp_nodelay,
+                true,
             ),
         )
         .await
@@ -314,19 +289,6 @@ impl ExecServerClient {
             url: diagnostic_url.clone(),
             source,
         })?;
-        info!(
-            noise_event = "transport_policy_effective_exposure",
-            role = "harness",
-            side = "outbound",
-            environment_id = %environment_id,
-            executor_registration_id = %executor_registration_id,
-            transport_policy_version = transport_policy.version,
-            transport_policy_assignment_epoch = transport_policy.telemetry_assignment_epoch(),
-            transport_policy_cell = transport_policy.effective_cell().as_str(),
-            transport_policy_state = transport_policy.effective_state().as_str(),
-            outbound_tcp_nodelay = effective_outbound_tcp_nodelay,
-            "Noise rendezvous transport policy applied"
-        );
 
         let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
         let connection = noise_harness_connection_from_websocket(
@@ -338,11 +300,6 @@ impl ExecServerClient {
                 identity: harness_identity,
                 responder_public_key: executor_public_key,
                 harness_key_authorization,
-                transport_policy_cell: transport_policy.effective_cell(),
-                transport_policy_state: transport_policy.effective_state(),
-                transport_policy_assignment_epoch: transport_policy
-                    .telemetry_assignment_epoch()
-                    .to_string(),
             },
         );
         Ok((

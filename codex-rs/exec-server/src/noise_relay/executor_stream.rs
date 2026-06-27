@@ -168,9 +168,6 @@ pub(crate) fn spawn_noise_virtual_stream(
         disconnected_rx,
         task_handles: vec![writer_task],
         transport: JsonRpcTransport::Plain,
-        transport_policy_cell: crate::environment_registry::TransportPolicyCell::Unassigned,
-        transport_policy_state: crate::environment_registry::TransportPolicyState::Unassigned,
-        transport_policy_assignment_epoch: "unassigned".to_string(),
     };
     tokio::spawn(async move {
         processor

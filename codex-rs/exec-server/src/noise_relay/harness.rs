@@ -24,8 +24,6 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
-use crate::environment_registry::TransportPolicyCell;
-use crate::environment_registry::TransportPolicyState;
 use crate::noise_channel::InitiatorHandshake;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
@@ -54,9 +52,6 @@ pub(crate) struct NoiseHarnessConnectionArgs {
     pub(crate) identity: NoiseChannelIdentity,
     pub(crate) responder_public_key: NoiseChannelPublicKey,
     pub(crate) harness_key_authorization: String,
-    pub(crate) transport_policy_cell: TransportPolicyCell,
-    pub(crate) transport_policy_state: TransportPolicyState,
-    pub(crate) transport_policy_assignment_epoch: String,
 }
 
 // Reset frames are cleartext relay control and are not authenticated by Noise.
@@ -86,9 +81,6 @@ where
         identity,
         responder_public_key,
         harness_key_authorization,
-        transport_policy_cell,
-        transport_policy_state,
-        transport_policy_assignment_epoch,
     } = args;
     let stream_id = Uuid::new_v4().to_string();
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -403,9 +395,6 @@ where
         disconnected_rx,
         task_handles: vec![websocket_task],
         transport: JsonRpcTransport::Plain,
-        transport_policy_cell,
-        transport_policy_state,
-        transport_policy_assignment_epoch,
     }
 }
 

@@ -23,9 +23,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use tracing::warn;
 
-use crate::environment_registry::TransportPolicyCell;
-use crate::environment_registry::TransportPolicyState;
-
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -229,9 +226,6 @@ pub(crate) struct JsonRpcConnection {
     pub(crate) disconnected_rx: watch::Receiver<bool>,
     pub(crate) task_handles: Vec<tokio::task::JoinHandle<()>>,
     pub(crate) transport: JsonRpcTransport,
-    pub(crate) transport_policy_cell: TransportPolicyCell,
-    pub(crate) transport_policy_state: TransportPolicyState,
-    pub(crate) transport_policy_assignment_epoch: String,
 }
 
 impl JsonRpcConnection {
@@ -323,9 +317,6 @@ impl JsonRpcConnection {
             disconnected_rx,
             task_handles: vec![reader_task, writer_task],
             transport: JsonRpcTransport::Plain,
-            transport_policy_cell: TransportPolicyCell::Unassigned,
-            transport_policy_state: TransportPolicyState::Unassigned,
-            transport_policy_assignment_epoch: "unassigned".to_string(),
         }
     }
 
@@ -463,9 +454,6 @@ impl JsonRpcConnection {
             disconnected_rx,
             task_handles: vec![websocket_task],
             transport: JsonRpcTransport::Plain,
-            transport_policy_cell: TransportPolicyCell::Unassigned,
-            transport_policy_state: TransportPolicyState::Unassigned,
-            transport_policy_assignment_epoch: "unassigned".to_string(),
         }
     }
 

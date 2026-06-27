@@ -80,9 +80,6 @@ async fn run_connection(
         mut disconnected_rx,
         task_handles: connection_tasks,
         transport: _transport,
-        transport_policy_cell: _transport_policy_cell,
-        transport_policy_state: _transport_policy_state,
-        transport_policy_assignment_epoch: _transport_policy_assignment_epoch,
     } = connection;
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
