@@ -250,6 +250,96 @@ async fn websocket_retry_after_throttles_pairing_refresh() {
     drop(first_server_websocket);
 }
 
+#[tokio::test]
+async fn pairing_http_date_retry_after_throttles_websocket_refresh() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let retry_after =
+        httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(120));
+    let expected_next_refresh_at = time::OffsetDateTime::from(
+        httpdate::parse_http_date(&retry_after).expect("Retry-After date should parse"),
+    );
+    let server_task = tokio::spawn(async move {
+        let (refresh_stream, request_line) = accept_http_request(&listener).await;
+        assert_eq!(
+            request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        respond_with_status_and_headers(
+            refresh_stream,
+            "502 Bad Gateway",
+            &[("retry-after", &retry_after)],
+            "upstream unavailable",
+        )
+        .await;
+        let (pairing_stream, request_line) = accept_http_request(&listener).await;
+        assert_eq!(
+            request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        respond_with_status_and_headers(
+            pairing_stream,
+            "200 OK",
+            &[],
+            r#"{"pairing_code":"pairing-code","manual_pairing_code":"ABCD-EFGH","server_id":"srv_e_test","environment_id":"env_test","expires_at":"3026-05-22T12:34:56Z"}"#,
+        )
+        .await;
+        accept_test_websocket(&listener).await
+    });
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let auth_manager = remote_control_auth_manager();
+    let mut remote_handle =
+        remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager.clone());
+    remote_handle.state_db = Some(state_db.clone());
+    remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(time::OffsetDateTime::now_utc() + time::Duration::minutes(4));
+    let current_enrollment = remote_handle.current_enrollment.clone();
+
+    let pairing_response = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect("pairing should continue after proactive refresh failure");
+    assert_eq!(
+        current_enrollment
+            .snapshot()
+            .and_then(|enrollment| enrollment.next_refresh_at),
+        Some(expected_next_refresh_at)
+    );
+    connect_test_websocket(
+        &remote_control_target,
+        state_db.as_ref(),
+        &auth_manager,
+        &current_enrollment,
+    )
+    .await
+    .expect("pairing Retry-After should throttle websocket refresh");
+    let server_websocket = server_task.await.expect("server task should succeed");
+
+    assert_eq!(
+        pairing_response,
+        RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "env_test".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+    drop(server_websocket);
+}
+
 async fn assert_refresh_failure_blocks_websocket(
     expires_in: time::Duration,
     response_delay: Duration,
