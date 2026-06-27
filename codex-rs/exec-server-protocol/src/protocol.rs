@@ -527,6 +527,8 @@ pub struct ExecExitedNotification {
     pub process_id: ProcessId,
     pub seq: u64,
     pub exit_code: i32,
+    #[serde(default)]
+    pub sandbox_denied: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -564,6 +566,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecExitedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
     use super::HttpRequestParams;
@@ -707,5 +710,17 @@ mod tests {
             ),
             ("req-explicit-timeout", Some(1234))
         );
+    }
+
+    #[test]
+    fn exited_notification_accepts_legacy_payload_without_sandbox_denied() {
+        let notification: ExecExitedNotification = serde_json::from_value(serde_json::json!({
+            "processId": "proc-1",
+            "seq": 3,
+            "exitCode": 1,
+        }))
+        .expect("legacy exited notification should deserialize");
+
+        assert_eq!(notification.sandbox_denied, None);
     }
 }

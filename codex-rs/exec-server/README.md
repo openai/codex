@@ -321,9 +321,14 @@ Params:
 {
   "processId": "proc-1",
   "seq": 2,
-  "exitCode": 0
+  "exitCode": 0,
+  "sandboxDenied": false
 }
 ```
+
+`sandboxDenied` lets streaming clients preserve executor-side sandbox denial
+detection without issuing a final `process/read` request. Clients recover it
+with `process/read` when an older server omits the field.
 
 ### `process/closed`
 
@@ -334,7 +339,8 @@ Params:
 
 ```json
 {
-  "processId": "proc-1"
+  "processId": "proc-1",
+  "seq": 3
 }
 ```
 
@@ -431,6 +437,6 @@ Terminate it:
 ```json
 {"id":4,"method":"process/terminate","params":{"processId":"proc-1"}}
 {"id":4,"result":{"running":true}}
-{"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0}}
-{"method":"process/closed","params":{"processId":"proc-1"}}
+{"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0,"sandboxDenied":false}}
+{"method":"process/closed","params":{"processId":"proc-1","seq":4}}
 ```

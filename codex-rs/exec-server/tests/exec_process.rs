@@ -164,6 +164,7 @@ async fn collect_process_output_from_events(
             ExecProcessEvent::Exited {
                 seq: _,
                 exit_code: code,
+                ..
             } => {
                 exit_code = Some(code);
             }
@@ -190,7 +191,7 @@ async fn collect_process_event_snapshots(
                 stream: chunk.stream,
                 text: String::from_utf8_lossy(&chunk.chunk.into_inner()).into_owned(),
             },
-            ExecProcessEvent::Exited { seq, exit_code } => {
+            ExecProcessEvent::Exited { seq, exit_code, .. } => {
                 ProcessEventSnapshot::Exited { seq, exit_code }
             }
             ExecProcessEvent::Closed { seq } => ProcessEventSnapshot::Closed { seq },
@@ -792,7 +793,7 @@ async fn remote_exec_process_recovers_after_transport_disconnect() -> Result<()>
                 last_seq = chunk.seq;
                 output.extend_from_slice(&chunk.chunk.into_inner());
             }
-            ExecProcessEvent::Exited { seq, exit_code } => {
+            ExecProcessEvent::Exited { seq, exit_code, .. } => {
                 assert_eq!(seq, last_seq + 1);
                 assert_eq!(exit_code, 7);
                 last_seq = seq;
