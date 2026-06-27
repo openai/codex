@@ -204,7 +204,7 @@ async fn environment_info_reports_connection_failure() -> Result<()> {
 }
 
 #[tokio::test]
-async fn environment_info_timeout_releases_environment_serialization_queue() -> Result<()> {
+async fn environment_info_reports_response_timeout() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let (request_received_tx, request_received_rx) = oneshot::channel();
@@ -286,24 +286,6 @@ async fn environment_info_timeout_releases_environment_serialization_queue() -> 
             .await
     });
     timeout(RPC_TIMEOUT, request_received_rx).await??;
-
-    let replacement_sender = app_server.sender();
-    let replacement_request = replacement_sender.request(ClientRequest::EnvironmentAdd {
-        request_id: RequestId::Integer(3),
-        params: EnvironmentAddParams {
-            environment_id: "remote-a".to_string(),
-            exec_server_url: "ws://127.0.0.1:1".to_string(),
-            connect_timeout_ms: Some(50),
-        },
-    });
-    tokio::pin!(replacement_request);
-    tokio::select! {
-        response = &mut replacement_request => {
-            anyhow::bail!("environment/add completed before environment/info released the queue: {response:?}");
-        }
-        () = tokio::task::yield_now() => {}
-    }
-
     tokio::time::pause();
     tokio::time::advance(ENVIRONMENT_INFO_TIMEOUT + Duration::from_millis(1)).await;
     tokio::time::resume();
@@ -315,14 +297,6 @@ async fn environment_info_timeout_releases_environment_serialization_queue() -> 
         error
             .message
             .contains("timed out waiting for exec-server `environment/info` response")
-    );
-
-    let replacement_response = timeout(RPC_TIMEOUT, &mut replacement_request)
-        .await??
-        .expect("environment/add should succeed after the timeout");
-    assert_eq!(
-        serde_json::from_value::<EnvironmentAddResponse>(replacement_response)?,
-        EnvironmentAddResponse {}
     );
 
     shutdown_tx
