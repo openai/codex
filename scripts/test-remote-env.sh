@@ -25,7 +25,7 @@ setup_remote_env() {
   local remote_exec_server_stdout_path
 
   container_name="${CODEX_TEST_REMOTE_ENV_CONTAINER_NAME:-codex-remote-test-env-local-$(date +%s)-${RANDOM}}"
-  codex_binary_path="${REPO_ROOT}/codex-rs/target/debug/codex"
+  codex_binary_path="${CODEX_TEST_REMOTE_ENV_CODEX_BINARY_PATH:-${REPO_ROOT}/codex-rs/target/debug/codex}"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "docker is required (Colima or Docker Desktop)" >&2
@@ -42,10 +42,12 @@ setup_remote_env() {
     return 1
   fi
 
-  (
-    cd "${REPO_ROOT}/codex-rs"
-    cargo build -p codex-cli --bin codex
-  )
+  if [[ -z "${CODEX_TEST_REMOTE_ENV_CODEX_BINARY_PATH:-}" ]]; then
+    (
+      cd "${REPO_ROOT}/codex-rs"
+      cargo build -p codex-cli --bin codex
+    )
+  fi
 
   if [[ ! -f "${codex_binary_path}" ]]; then
     echo "codex binary not found at ${codex_binary_path}" >&2
