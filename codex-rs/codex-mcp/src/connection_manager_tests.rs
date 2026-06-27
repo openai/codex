@@ -77,25 +77,13 @@ fn external_provided_auth_scopes_codex_apps_cache() {
     );
 
     assert_eq!(
-        crate::codex_apps::codex_apps_tools_cache_key(Some(&auth)),
+        crate::codex_apps_tools_cache_key(Some(&auth)),
         CodexAppsToolsCacheKey {
             account_id: Some("account-123".to_string()),
             chatgpt_user_id: Some("user-123".to_string()),
             is_workspace_account: false,
         }
     );
-}
-
-fn create_test_tool_with_connector(
-    server_name: &str,
-    tool_name: &str,
-    connector_id: &str,
-    connector_name: Option<&str>,
-) -> ToolInfo {
-    let mut tool = create_test_tool(server_name, tool_name);
-    tool.connector_id = Some(connector_id.to_string());
-    tool.connector_name = connector_name.map(ToOwned::to_owned);
-    tool
 }
 
 fn create_codex_apps_tools_cache_context(

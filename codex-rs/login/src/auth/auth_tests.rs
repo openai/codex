@@ -37,7 +37,7 @@ fn externally_provided_auth_delegates_account_metadata() {
         ExternalProvidedAuth::new([], "user-123")
             .with_account_email("user@example.com")
             .with_account_plan_type(AccountPlanType::Pro)
-            .with_fedramp_account(true),
+            .with_fedramp_account(/*is_fedramp_account*/ true),
     );
 
     assert!(auth.is_fedramp_account());

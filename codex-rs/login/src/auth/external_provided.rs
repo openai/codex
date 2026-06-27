@@ -114,7 +114,7 @@ impl ExternalProvidedAuth {
 
     /// Returns the account plan classification supplied by the caller.
     pub fn account_plan_type(&self) -> Option<AccountPlanType> {
-        self.account_plan_type.clone()
+        self.account_plan_type
     }
 
     /// Returns whether the supplied account is a FedRAMP account.

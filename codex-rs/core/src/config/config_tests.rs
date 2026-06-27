@@ -218,7 +218,8 @@ async fn external_provided_auth_is_installed_from_runtime_config() -> std::io::R
             },
         ));
 
-    let auth_manager = AuthManager::shared_from_config(&config, false).await;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await.expect("external auth");
 
     assert!(auth.uses_codex_backend());
