@@ -494,6 +494,13 @@ impl From<ThreadTurnsListResponse> for TurnsPage {
 pub struct ThreadForkParams {
     pub thread_id: String,
 
+    /// Optional last turn id to fork through, inclusive.
+    ///
+    /// When specified, turns after `last_turn_id` are omitted from the fork.
+    /// The referenced turn cannot be in progress.
+    #[ts(optional = nullable)]
+    pub last_turn_id: Option<String>,
+
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
     #[experimental("thread/fork.path")]

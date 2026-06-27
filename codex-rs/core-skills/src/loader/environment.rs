@@ -45,6 +45,15 @@ struct DiscoveredEnvironmentSkill {
     metadata: SkillMetadataDiscovery,
 }
 
+struct ParsedEnvironmentSkill {
+    path_to_skills_md: PathUri,
+    base_name: String,
+    description: String,
+    short_description: Option<String>,
+    dependencies: Option<SkillDependencies>,
+    policy: Option<SkillPolicy>,
+}
+
 enum SkillMetadataDiscovery {
     Present(PathUri),
     Absent,
@@ -81,11 +90,12 @@ impl EnvironmentSkillMetadata {
             None => true,
         }
     }
+}
 
-    async fn parse(
+impl ParsedEnvironmentSkill {
+    async fn load(
         file_system: &dyn ExecutorFileSystem,
         skill: &DiscoveredEnvironmentSkill,
-        plugin_namespace: Option<&str>,
     ) -> Result<Self, String> {
         let (contents, discovered_metadata) = match &skill.metadata {
             SkillMetadataDiscovery::Present(metadata_path) => {
@@ -106,11 +116,6 @@ impl EnvironmentSkillMetadata {
             short_description,
         } = parse_skill_frontmatter_metadata_inner(&contents, || default_skill_name(&skill.path))
             .map_err(|err| err.to_string())?;
-        let name = plugin_namespace
-            .map(|namespace| format!("{namespace}:{base_name}"))
-            .unwrap_or(base_name);
-        validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
-            .map_err(|err| err.to_string())?;
         let (dependencies, policy) = match &skill.metadata {
             SkillMetadataDiscovery::Present(_) | SkillMetadataDiscovery::Absent => {
                 discovered_metadata
@@ -122,7 +127,7 @@ impl EnvironmentSkillMetadata {
 
         Ok(Self {
             path_to_skills_md: skill.path.clone(),
-            name,
+            base_name,
             description,
             short_description,
             dependencies,
@@ -245,38 +250,55 @@ pub async fn load_environment_skills_from_root(
     }
 
     let namespace_roots = discovery.namespace_roots;
-    let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
-        (
-            namespace_root.clone(),
-            plugin_namespace_for_skill_uri(file_system, namespace_root).await,
-        )
-    }))
-    .await;
-    let plugin_lookups = join_all(
-        discovery
-            .plugin_roots
-            .iter()
-            .filter(|plugin_root| skill_ancestors.contains(*plugin_root))
-            .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
-            .map(|plugin_root| async {
-                (
-                    plugin_root.clone(),
-                    plugin_namespace_for_root_uri(file_system, plugin_root).await,
-                )
-            }),
-    )
-    .await;
-    let plugin_namespaces = namespace_lookups
-        .into_iter()
-        .chain(plugin_lookups)
-        .filter_map(|(plugin_root, namespace)| namespace.map(|namespace| (plugin_root, namespace)))
-        .collect::<HashMap<_, _>>();
+    let plugin_namespaces = async {
+        let namespace_lookups = join_all(namespace_roots.iter().map(|namespace_root| async {
+            (
+                namespace_root.clone(),
+                plugin_namespace_for_skill_uri(file_system, namespace_root).await,
+            )
+        }));
+        let plugin_lookups = join_all(
+            discovery
+                .plugin_roots
+                .iter()
+                .filter(|plugin_root| skill_ancestors.contains(*plugin_root))
+                .filter(|plugin_root| !namespace_roots.contains(*plugin_root))
+                .map(|plugin_root| async {
+                    (
+                        plugin_root.clone(),
+                        plugin_namespace_for_root_uri(file_system, plugin_root).await,
+                    )
+                }),
+        );
+        let (namespace_lookups, plugin_lookups) = tokio::join!(namespace_lookups, plugin_lookups);
+        namespace_lookups
+            .into_iter()
+            .chain(plugin_lookups)
+            .filter_map(|(plugin_root, namespace)| {
+                namespace.map(|namespace| (plugin_root, namespace))
+            })
+            .collect::<HashMap<_, _>>()
+    };
 
     // Remote executors can multiplex these independent per-skill reads, so polling a bounded
     // number together allows the I/O for each skill and its metadata to happen concurrently.
     let skill_results = futures::stream::iter(discovery.skills)
         .map(|skill| {
-            let mut ancestor = skill.path.parent();
+            let path = skill.path.clone();
+            async move {
+                (
+                    path,
+                    ParsedEnvironmentSkill::load(file_system, &skill).await,
+                )
+            }
+        })
+        .buffered(MAX_CONCURRENT_SKILL_LOADS)
+        .collect::<Vec<_>>();
+    let (plugin_namespaces, skill_results) = tokio::join!(plugin_namespaces, skill_results);
+
+    for (path, result) in skill_results {
+        let result = result.and_then(|skill| {
+            let mut ancestor = skill.path_to_skills_md.parent();
             let plugin_namespace = loop {
                 let Some(current) = ancestor else {
                     break None;
@@ -286,18 +308,21 @@ pub async fn load_environment_skills_from_root(
                 }
                 ancestor = current.parent();
             };
-            let path = skill.path.clone();
-            async move {
-                let result =
-                    EnvironmentSkillMetadata::parse(file_system, &skill, plugin_namespace).await;
-                (path, result)
-            }
-        })
-        .buffered(MAX_CONCURRENT_SKILL_LOADS)
-        .collect::<Vec<_>>()
-        .await;
+            let name = plugin_namespace
+                .map(|namespace| format!("{namespace}:{}", skill.base_name))
+                .unwrap_or(skill.base_name);
+            validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")
+                .map_err(|err| err.to_string())?;
 
-    for (path, result) in skill_results {
+            Ok(EnvironmentSkillMetadata {
+                path_to_skills_md: skill.path_to_skills_md,
+                name,
+                description: skill.description,
+                short_description: skill.short_description,
+                dependencies: skill.dependencies,
+                policy: skill.policy,
+            })
+        });
         match result {
             Ok(skill) if skill.matches_product_restriction(restriction_product) => {
                 outcome.skills.push(skill);

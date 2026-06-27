@@ -1,10 +1,7 @@
 name: cargo-deny
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_call:
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
