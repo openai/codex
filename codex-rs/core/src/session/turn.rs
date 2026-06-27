@@ -540,6 +540,10 @@ async fn build_skills_and_plugins(
         .plugins_manager
         .plugins_for_config(&turn_context.config.plugins_config_input())
         .await;
+    let loaded_plugins = crate::plugins::apply_connector_skills_feature(
+        turn_context.config.as_ref(),
+        loaded_plugins,
+    );
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =

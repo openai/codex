@@ -146,6 +146,18 @@ impl<M: Clone> PluginLoadOutcome<M> {
         skill_roots
     }
 
+    /// Returns a runtime view that preserves connector apps, MCP servers, and hooks while hiding
+    /// skills supplied by plugins with app declarations.
+    pub fn without_app_backed_skills(mut self) -> Self {
+        for plugin in &mut self.plugins {
+            if !plugin.apps.is_empty() {
+                plugin.skill_roots.clear();
+                plugin.has_enabled_skills = false;
+            }
+        }
+        Self::from_plugins(self.plugins)
+    }
+
     pub fn effective_mcp_servers(&self) -> HashMap<String, M> {
         let mut mcp_servers = HashMap::new();
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
@@ -259,6 +271,62 @@ mod tests {
                 plugin_namespace: "zeta".to_string(),
                 plugin_root: test_path("zeta@test"),
             }]
+        );
+    }
+
+    #[test]
+    fn without_app_backed_skills_preserves_other_plugin_capabilities() {
+        let connector_skill_root = test_path("connector-skills");
+        let standalone_skill_root = test_path("standalone-skills");
+        let mut connector = loaded_plugin("connector@test", vec![connector_skill_root]);
+        connector.apps = vec![AppDeclaration {
+            name: "calendar".to_string(),
+            connector_id: AppConnectorId("connector-calendar".to_string()),
+            category: None,
+        }];
+        connector.mcp_servers.insert("calendar".to_string(), ());
+        let standalone = loaded_plugin("standalone@test", vec![standalone_skill_root.clone()]);
+
+        let outcome = PluginLoadOutcome::from_plugins(vec![connector, standalone])
+            .without_app_backed_skills();
+
+        assert_eq!(
+            outcome.effective_plugin_skill_roots(),
+            vec![PluginSkillRoot {
+                path: standalone_skill_root,
+                plugin_id: "standalone@test".to_string(),
+                plugin_namespace: "standalone".to_string(),
+                plugin_root: test_path("standalone@test"),
+            }]
+        );
+        assert_eq!(
+            outcome.effective_apps(),
+            vec![AppConnectorId("connector-calendar".to_string())]
+        );
+        assert_eq!(
+            outcome.effective_mcp_servers(),
+            HashMap::from([("calendar".to_string(), ())])
+        );
+        assert_eq!(
+            outcome.capability_summaries(),
+            &[
+                PluginCapabilitySummary {
+                    config_name: "connector@test".to_string(),
+                    display_name: "connector@test".to_string(),
+                    description: None,
+                    has_skills: false,
+                    mcp_server_names: vec!["calendar".to_string()],
+                    app_connector_ids: vec![AppConnectorId("connector-calendar".to_string())],
+                },
+                PluginCapabilitySummary {
+                    config_name: "standalone@test".to_string(),
+                    display_name: "standalone@test".to_string(),
+                    description: None,
+                    has_skills: true,
+                    mcp_server_names: Vec::new(),
+                    app_connector_ids: Vec::new(),
+                },
+            ]
         );
     }
 }

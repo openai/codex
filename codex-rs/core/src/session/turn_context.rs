@@ -717,6 +717,8 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&plugins_input)
             .await;
+        let plugin_outcome =
+            crate::plugins::apply_connector_skills_feature(&per_turn_config, plugin_outcome);
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let plugin_skill_snapshots = self
             .services

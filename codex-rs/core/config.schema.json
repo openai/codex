@@ -469,6 +469,9 @@
             "computer_use": {
               "type": "boolean"
             },
+            "connector_skills": {
+              "type": "boolean"
+            },
             "connectors": {
               "type": "boolean"
             },
@@ -4833,6 +4836,9 @@
           "type": "boolean"
         },
         "computer_use": {
+          "type": "boolean"
+        },
+        "connector_skills": {
           "type": "boolean"
         },
         "connectors": {

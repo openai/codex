@@ -275,6 +275,70 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabled_connector_skills_preserve_connector_apps() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name(&server, "Google Calendar").await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_plugin_skill_plugin(codex_home.as_ref());
+    write_plugin_app_plugin(codex_home.as_ref());
+    let chatgpt_base_url = apps_server.chatgpt_base_url;
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::ConnectorSkills)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
+    let test_codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation");
+    let codex = Arc::clone(&test_codex.codex);
+    wait_for_mcp_server(&codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    let developer_text = request.message_input_texts("developer").join("\n\n");
+    assert!(!developer_text.contains("sample:sample-search"));
+    assert!(!developer_text.contains("Skills from this plugin"));
+    assert!(developer_text.contains("Apps from this plugin"));
+    assert!(
+        request
+            .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+            .is_some()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_plugin_mentions_use_apps_for_chatgpt_dual_surface_plugins() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
