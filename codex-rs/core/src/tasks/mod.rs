@@ -588,6 +588,8 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
+        self.record_missing_call_outputs(turn_context.as_ref())
+            .await;
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
@@ -855,6 +857,9 @@ impl Session {
         ));
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
+            .await;
+
+        self.record_missing_call_outputs(task.turn_context.as_ref())
             .await;
 
         if reason == TurnAbortReason::Interrupted

@@ -188,6 +188,7 @@ use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
+use crate::context_manager::missing_call_outputs;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
@@ -1361,6 +1362,13 @@ impl Session {
                         }
                     }
                 }
+
+                // Copy the source rollout before reconstruction appends any repairs for legacy
+                // unmatched calls, preserving their causal order in the forked rollout.
+                if !rollout_items.is_empty() {
+                    self.persist_rollout_items(&rollout_items).await;
+                }
+
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -1369,11 +1377,6 @@ impl Session {
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
-                }
-
-                // If persisting, persist all rollout items as-is (the store filters).
-                if !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -1412,11 +1415,18 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        // Keep the recorded rollout unchanged. Prepare its reconstructed history before
-        // installing it, so legacy images are processed once for this resume or fork and
-        // will be processed again if the rollout is reconstructed in a future session.
-        // This meets image resizing requirements without modifying persisted rollouts.
+        // Prepare reconstructed items before installing them. Legacy images are processed once
+        // for this reconstruction. Legacy unmatched calls are terminal, so close them in the
+        // canonical history and persist those repairs to keep their identities stable on future
+        // prompt builds and resumes.
         prepare_response_items(&mut history);
+        let mut repaired_outputs = missing_call_outputs(&history);
+        prepare_response_items(&mut repaired_outputs);
+        if turn_context.config.features.enabled(Feature::ItemIds) {
+            repaired_outputs =
+                Self::assign_missing_response_item_ids(Cow::Owned(repaired_outputs)).into_owned();
+        }
+        history.extend(repaired_outputs.iter().cloned());
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
@@ -1434,6 +1444,9 @@ impl Session {
                 },
             );
             state.set_previous_turn_settings(previous_turn_settings.clone());
+        }
+        if !repaired_outputs.is_empty() {
+            self.persist_rollout_response_items(&repaired_outputs).await;
         }
         let prefix_tokens = if matches!(
             turn_context.config.model_auto_compact_token_limit_scope,
@@ -3470,6 +3483,50 @@ impl Session {
     pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
+    }
+
+    /// Returns canonical history projected for a model request.
+    ///
+    /// Missing outputs should normally be closed when a task terminates or a rollout is
+    /// reconstructed. Repairing here is a final ownership boundary for callers that build a
+    /// standalone request from session history.
+    pub(crate) async fn prompt_input_from_history(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        self.record_missing_call_outputs(turn_context).await;
+        self.clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities)
+    }
+
+    pub(crate) async fn record_missing_call_outputs(&self, turn_context: &TurnContext) {
+        let repaired_outputs = {
+            let mut state = self.state.lock().await;
+            let repaired_outputs = missing_call_outputs(state.history.raw_items());
+            if repaired_outputs.is_empty() {
+                return;
+            }
+            let repaired_outputs = self
+                .prepare_conversation_items_for_history(turn_context, &repaired_outputs)
+                .into_owned();
+            state
+                .current_time_reminder
+                .note_recorded_items(&repaired_outputs);
+            state.record_items(
+                repaired_outputs.iter(),
+                turn_context.model_info.truncation_policy.into(),
+            );
+            repaired_outputs
+        };
+
+        warn!(
+            repaired_output_count = repaired_outputs.len(),
+            "recording terminal outputs for unmatched calls"
+        );
+        self.persist_rollout_response_items(&repaired_outputs).await;
+        self.send_raw_response_items(turn_context, &repaired_outputs)
+            .await;
     }
 
     pub(crate) async fn current_window_id(&self) -> String {
