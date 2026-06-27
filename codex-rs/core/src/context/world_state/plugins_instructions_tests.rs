@@ -16,8 +16,8 @@ fn render(
 
 #[test]
 fn renders_only_when_plugins_become_available() {
-    let unavailable = PluginsInstructionsState::new(false);
-    let available = PluginsInstructionsState::new(true);
+    let unavailable = PluginsInstructionsState::new(/*available*/ false);
+    let available = PluginsInstructionsState::new(/*available*/ true);
     let false_snapshot = false;
     let true_snapshot = true;
 
@@ -43,16 +43,20 @@ fn renders_only_when_plugins_become_available() {
 #[test]
 fn legacy_guidance_is_not_injected_again() {
     let mut world_state = super::super::WorldState::default();
-    world_state.add_section(PluginsInstructionsState::new(true));
+    world_state.add_section(PluginsInstructionsState::new(/*available*/ true));
     let legacy: ResponseItem = ContextualUserFragment::into(AvailablePluginsInstructions);
 
-    assert!(world_state.render_history_diff(None, &[legacy]).is_empty());
+    assert!(
+        world_state
+            .render_history_diff(/*previous*/ None, &[legacy])
+            .is_empty()
+    );
 }
 
 #[test]
 fn persisted_guidance_is_restored_only_when_missing_from_history() {
     let mut world_state = super::super::WorldState::default();
-    world_state.add_section(PluginsInstructionsState::new(true));
+    world_state.add_section(PluginsInstructionsState::new(/*available*/ true));
     let snapshot = world_state.snapshot();
     let retained: ResponseItem = ContextualUserFragment::into(AvailablePluginsInstructions);
 
