@@ -110,7 +110,7 @@ mod recovery;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
-const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(5);
+const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
 

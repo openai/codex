@@ -22,6 +22,7 @@ use super::exec_server_test_support::accept_initialized_exec_server;
 use super::exec_server_test_support::read_exec_server_json;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+const STALLED_RPC_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn environment_info_returns_remote_environment_info() -> Result<()> {
@@ -141,7 +142,7 @@ async fn environment_info_timeout_releases_environment_request_queue() -> Result
         .await?;
     timeout(RPC_TIMEOUT, request_received_rx).await??;
     let error = timeout(
-        RPC_TIMEOUT,
+        STALLED_RPC_TIMEOUT,
         app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
