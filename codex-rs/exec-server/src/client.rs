@@ -110,6 +110,7 @@ mod recovery;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
 
@@ -510,7 +511,12 @@ impl ExecServerClient {
     }
 
     pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        self.call(ENVIRONMENT_INFO_METHOD, &()).await
+        let rpc_client = self.inner.rpc_client().await?;
+        map_rpc_call_result(
+            rpc_client
+                .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
+                .await,
+        )
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
@@ -780,20 +786,19 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        match rpc_client.call(method, params).await {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                let error = ExecServerError::from(error);
-                if is_transport_closed_error(&error) {
-                    Err(ExecServerError::Disconnected(disconnected_message(
-                        /*reason*/ None,
-                    )))
-                } else {
-                    Err(error)
-                }
-            }
-        }
+        map_rpc_call_result(rpc_client.call(method, params).await)
     }
+}
+
+fn map_rpc_call_result<T>(result: Result<T, RpcCallError>) -> Result<T, ExecServerError> {
+    result.map_err(|error| {
+        let error = ExecServerError::from(error);
+        if is_transport_closed_error(&error) {
+            ExecServerError::Disconnected(disconnected_message(/*reason*/ None))
+        } else {
+            error
+        }
+    })
 }
 
 async fn cleanup_process_start(
@@ -822,6 +827,9 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
+            RpcCallError::TimedOut { method, timeout } => Self::Protocol(format!(
+                "timed out waiting for exec-server `{method}` response after {timeout:?}"
+            )),
         }
     }
 }

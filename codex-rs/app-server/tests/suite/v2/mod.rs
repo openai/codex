@@ -15,6 +15,8 @@ mod connection_handling_websocket_unix;
 mod current_time;
 mod dynamic_tools;
 mod environment_add;
+mod environment_info;
+mod exec_server_test_support;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
 mod executor_skills;
