@@ -95,6 +95,7 @@ windows-sys = { version = "0.52", features = [
 ] }
 
 [dev-dependencies]
+app_test_support = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
