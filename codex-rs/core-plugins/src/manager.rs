@@ -42,6 +42,7 @@ use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
 use crate::remote_legacy::RemotePluginFetchError;
 use crate::remote_legacy::RemotePluginMutationError;
@@ -56,7 +57,7 @@ use crate::tool_suggest_metadata::ToolSuggestMetadataCache;
 use codex_analytics::AnalyticsEventsClient;
 use codex_config::ConfigLayerStack;
 use codex_config::clear_user_plugin;
-use codex_config::set_user_plugin_enabled;
+use codex_config::reconcile_user_plugin_registrations;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -365,6 +366,7 @@ pub struct PluginsManager {
     restriction_product: Option<Product>,
     auth_mode: RwLock<Option<AuthMode>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+    plugin_mutation_lock: Semaphore,
 }
 
 #[derive(Clone)]
@@ -437,6 +439,7 @@ impl PluginsManager {
             restriction_product,
             auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
+            plugin_mutation_lock: Semaphore::new(/*permits*/ 1),
         }
     }
 
@@ -980,6 +983,7 @@ impl PluginsManager {
             self.codex_home.clone(),
             remote_plugin_service_config(config),
             auth,
+            enabled_local_plugin_names(&config.config_layer_stack),
             Some(on_local_cache_changed),
         );
     }
@@ -1258,7 +1262,10 @@ impl PluginsManager {
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let resolved = self.resolve_installable_plugin(config_layer_stack, &request)?;
         let plugin_id = resolved.plugin_id.clone();
-        match self.install_resolved_plugin(resolved).await {
+        match self
+            .install_resolved_plugin(resolved, Some(config_layer_stack))
+            .await
+        {
             Ok(outcome) => Ok(outcome),
             Err(err) => {
                 self.track_plugin_install_failed(
@@ -1331,7 +1338,10 @@ impl PluginsManager {
             return Err(err);
         }
         let plugin_id = resolved.plugin_id.clone();
-        match self.install_resolved_plugin(resolved).await {
+        match self
+            .install_resolved_plugin(resolved, Some(&config.config_layer_stack))
+            .await
+        {
             Ok(outcome) => Ok(outcome),
             Err(err) => {
                 self.track_plugin_install_failed(
@@ -1402,7 +1412,13 @@ impl PluginsManager {
     async fn install_resolved_plugin(
         &self,
         resolved: ResolvedMarketplacePlugin,
+        config_layer_stack: Option<&ConfigLayerStack>,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        let _mutation_guard = self
+            .plugin_mutation_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!("plugin mutation lock should stay open"));
         let auth_policy = resolved.policy.authentication;
         let plugin_version =
             if is_openai_curated_marketplace_name(&resolved.plugin_id.marketplace_name) {
@@ -1449,13 +1465,12 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        set_user_plugin_enabled(
-            &self.codex_home,
-            result.plugin_id.as_key(),
-            /*enabled*/ true,
+        self.reconcile_plugin_install_locked(
+            &result.plugin_id,
+            config_layer_stack,
+            /*enable_canonical*/ true,
         )
-        .await
-        .map_err(anyhow::Error::from)?;
+        .await?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
@@ -1474,6 +1489,78 @@ impl PluginsManager {
             installed_path: result.installed_path,
             auth_policy,
         })
+    }
+
+    pub async fn reconcile_remote_plugin_install(
+        &self,
+        config: &PluginsConfigInput,
+        plugin_id: &PluginId,
+    ) -> Result<(), PluginInstallError> {
+        let _mutation_guard = self
+            .plugin_mutation_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!("plugin mutation lock should stay open"));
+        self.reconcile_plugin_install_locked(
+            plugin_id,
+            Some(&config.config_layer_stack),
+            /*enable_canonical*/ false,
+        )
+        .await?;
+        self.clear_cache();
+        Ok(())
+    }
+
+    async fn reconcile_plugin_install_locked(
+        &self,
+        plugin_id: &PluginId,
+        config_layer_stack: Option<&ConfigLayerStack>,
+        enable_canonical: bool,
+    ) -> Result<(), PluginInstallError> {
+        let removed_plugin_keys = reconcile_user_plugin_registrations(
+            &self.codex_home,
+            config_layer_stack,
+            plugin_id.as_key(),
+            plugin_id.plugin_name.clone(),
+            enable_canonical,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+        let store = self.store.clone();
+        let canonical_plugin_id = plugin_id.clone();
+        let removed_plugin_ids = tokio::task::spawn_blocking(move || {
+            let mut removed = Vec::new();
+            for plugin_key in removed_plugin_keys {
+                let Ok(removed_plugin_id) = PluginId::parse(&plugin_key) else {
+                    tracing::warn!(
+                        plugin = %plugin_key,
+                        "skipping cache cleanup for invalid reconciled plugin key"
+                    );
+                    continue;
+                };
+                if removed_plugin_id == canonical_plugin_id
+                    || !store
+                        .plugin_base_root(&removed_plugin_id)
+                        .as_path()
+                        .is_dir()
+                {
+                    continue;
+                }
+                store.uninstall(&removed_plugin_id)?;
+                removed.push(removed_plugin_id);
+            }
+            Ok::<_, PluginStoreError>(removed)
+        })
+        .await
+        .map_err(PluginInstallError::join)??;
+        for removed_plugin_id in removed_plugin_ids {
+            tracing::info!(
+                canonical_plugin = %plugin_id.as_key(),
+                removed_plugin = %removed_plugin_id.as_key(),
+                "removed stale duplicate plugin installation"
+            );
+        }
+        Ok(())
     }
 
     pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
@@ -1503,6 +1590,11 @@ impl PluginsManager {
     }
 
     async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
+        let _mutation_guard = self
+            .plugin_mutation_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!("plugin mutation lock should stay open"));
         let plugin_telemetry = if self.store.active_plugin_root(&plugin_id).is_some() {
             Some(
                 self.telemetry_metadata_for_installed_plugin(&plugin_id)
@@ -2620,6 +2712,18 @@ pub(crate) fn configured_plugins_from_stack(
         return HashMap::new();
     };
     configured_plugins_from_user_config_value(&user_config)
+}
+
+fn enabled_local_plugin_names(config_layer_stack: &ConfigLayerStack) -> HashSet<String> {
+    configured_plugins_from_stack(config_layer_stack)
+        .into_iter()
+        .filter_map(|(plugin_key, config)| config.enabled.then_some(plugin_key))
+        .filter_map(|plugin_key| PluginId::parse(&plugin_key).ok())
+        .filter(|plugin_id| {
+            RemotePluginScope::from_marketplace_name(&plugin_id.marketplace_name).is_none()
+        })
+        .map(|plugin_id| plugin_id.plugin_name)
+        .collect()
 }
 
 fn configured_plugins_from_user_config_value(

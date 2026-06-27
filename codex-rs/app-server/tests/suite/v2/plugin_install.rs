@@ -30,6 +30,8 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -215,6 +217,16 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
     )
     .await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "{}\n[plugins.\"linear@debug\"]\nenabled = true\n",
+            std::fs::read_to_string(&config_path)?
+        ),
+    )?;
+    let stale_root = codex_home.path().join("plugins/cache/debug/linear");
+    std::fs::create_dir_all(stale_root.join("local"))?;
     mount_remote_plugin_detail_with_app_manifest(
         &server,
         REMOTE_PLUGIN_ID,
@@ -277,6 +289,8 @@ async fn plugin_install_writes_remote_plugin_to_cloud_and_cache() -> Result<()> 
         serde_json::from_str(&std::fs::read_to_string(installed_path.join(".app.json"))?)?;
     assert_eq!(installed_app_manifest, remote_app_manifest);
     assert!(installed_path.join("skills/plan-work/SKILL.md").is_file());
+    assert!(!stale_root.exists());
+    assert!(!std::fs::read_to_string(config_path)?.contains("linear@debug"));
     assert!(
         !codex_home
             .path()
@@ -1688,31 +1702,35 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
 }
 
 #[tokio::test]
-async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests() -> Result<()> {
+async fn plugin_install_reconciles_config_and_exposes_one_server_and_skill() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\nplugins = true\n",
+        "[features]\nplugins = true\n[plugins.\"structure-viewer@openai-internal-testing\"]\nenabled = true\n",
     )?;
+    let stale_root = codex_home
+        .path()
+        .join("plugins/cache/openai-internal-testing/structure-viewer");
+    std::fs::create_dir_all(stale_root.join("local"))?;
     let repo_root = TempDir::new()?;
     write_plugin_marketplace(
         repo_root.path(),
-        "debug",
-        "sample-plugin",
-        "./sample-plugin",
+        "openai-monorepo",
+        "structure-viewer",
+        "./structure-viewer",
         /*install_policy*/ None,
         /*auth_policy*/ None,
     )?;
-    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    write_plugin_source(repo_root.path(), "structure-viewer", &[])?;
+    let plugin_root = repo_root.path().join("structure-viewer");
+    std::fs::create_dir_all(plugin_root.join("skills/structure-viewer"))?;
     std::fs::write(
-        repo_root.path().join("sample-plugin/.mcp.json"),
-        r#"{
-  "mcpServers": {
-    "sample-mcp": {
-      "command": "echo"
-    }
-  }
-}"#,
+        plugin_root.join("skills/structure-viewer/SKILL.md"),
+        "---\nname: structure-viewer\ndescription: View structures\n---\n",
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        r#"{"mcpServers":{"structure":{"command":"echo"}}}"#,
     )?;
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
@@ -1722,9 +1740,9 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
-            marketplace_path: Some(marketplace_path),
+            marketplace_path: Some(marketplace_path.clone()),
             remote_marketplace_name: None,
-            plugin_name: "sample-plugin".to_string(),
+            plugin_name: "structure-viewer".to_string(),
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1735,14 +1753,22 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(!config.contains("[mcp_servers.sample-mcp]"));
+    assert!(!config.contains("[mcp_servers.structure]"));
     assert!(!config.contains("command = \"echo\""));
+    let config: toml::Value = toml::from_str(&config)?;
+    let plugins = config["plugins"].as_table().expect("plugins table");
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(
+        plugins.keys().next().map(String::as_str),
+        Some("structure-viewer@openai-monorepo")
+    );
+    assert!(!stale_root.exists());
 
     let request_id = mcp
         .send_raw_request(
             "mcpServer/oauth/login",
             Some(json!({
-                "name": "sample-mcp",
+                "name": "structure",
             })),
         )
         .await?;
@@ -1757,6 +1783,25 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
         err.error.message,
         "OAuth login is only supported for streamable HTTP servers."
     );
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "structure-viewer".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+    assert_eq!(response.plugin.skills.len(), 1);
+    assert_eq!(
+        response.plugin.skills[0].name,
+        "structure-viewer:structure-viewer"
+    );
+    assert_eq!(response.plugin.mcp_servers, vec!["structure"]);
     Ok(())
 }
 

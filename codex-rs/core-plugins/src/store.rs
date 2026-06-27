@@ -1,3 +1,6 @@
+use crate::install_provenance::fingerprint_plugin_tree;
+use crate::install_provenance::read_install_fingerprint;
+use crate::install_provenance::write_install_fingerprint;
 use crate::manifest::PluginManifest;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::parse_plugin_manifest;
@@ -19,6 +22,7 @@ use std::path::PathBuf;
 pub const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 pub const PLUGINS_DATA_DIR: &str = "plugins/data";
+const NO_MANIFEST_OVERRIDE: Option<&str> = None;
 const REMOTE_PLUGIN_INSTALL_METADATA_FILE: &str = ".codex-remote-plugin-install.json";
 const REMOTE_PLUGIN_INSTALL_METADATA_SCHEMA_VERSION: u8 = 1;
 
@@ -45,6 +49,15 @@ pub struct PluginStore {
 enum InstallManifest<'a> {
     OnDisk,
     Fallback(&'a str),
+}
+
+impl<'a> InstallManifest<'a> {
+    fn contents_override(self) -> Option<&'a str> {
+        match self {
+            Self::OnDisk => None,
+            Self::Fallback(contents) => Some(contents),
+        }
+    }
 }
 
 impl PluginStore {
@@ -114,6 +127,48 @@ impl PluginStore {
 
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
         self.active_plugin_version(plugin_id).is_some()
+    }
+
+    pub fn active_plugin_matches_source(
+        &self,
+        plugin_id: &PluginId,
+        source_path: &Path,
+    ) -> Result<bool, PluginStoreError> {
+        self.active_plugin_matches_install_manifest(plugin_id, source_path, InstallManifest::OnDisk)
+    }
+
+    pub(crate) fn active_plugin_matches_source_with_fallback_manifest(
+        &self,
+        plugin_id: &PluginId,
+        source_path: &Path,
+        manifest_contents: &str,
+    ) -> Result<bool, PluginStoreError> {
+        self.active_plugin_matches_install_manifest(
+            plugin_id,
+            source_path,
+            InstallManifest::Fallback(manifest_contents),
+        )
+    }
+
+    fn active_plugin_matches_install_manifest(
+        &self,
+        plugin_id: &PluginId,
+        source_path: &Path,
+        manifest: InstallManifest<'_>,
+    ) -> Result<bool, PluginStoreError> {
+        let Some(installed_root) = self.active_plugin_root(plugin_id) else {
+            return Ok(false);
+        };
+        let manifest = resolve_install_manifest(source_path, manifest);
+        let expected = fingerprint_plugin_tree(source_path, manifest.contents_override())?;
+        let Some(recorded) = read_install_fingerprint(self.plugin_base_root(plugin_id).as_path())?
+        else {
+            return Ok(false);
+        };
+        if recorded != expected {
+            return Ok(false);
+        }
+        Ok(fingerprint_plugin_tree(installed_root.as_path(), NO_MANIFEST_OVERRIDE)? == expected)
     }
 
     pub fn remote_plugin_id(
@@ -297,11 +352,26 @@ impl PluginStore {
         }
         validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;
         let installed_path = self.plugin_root(&plugin_id, &plugin_version);
+        let source_fingerprint =
+            fingerprint_plugin_tree(source_path.as_path(), manifest.contents_override())?;
         replace_plugin_root_atomically(
             source_path.as_path(),
             self.plugin_base_root(&plugin_id).as_path(),
             &plugin_version,
             manifest,
+            &source_fingerprint,
+        )?;
+        let installed_fingerprint =
+            fingerprint_plugin_tree(installed_path.as_path(), NO_MANIFEST_OVERRIDE)?;
+        if installed_fingerprint != source_fingerprint {
+            return Err(PluginStoreError::Invalid(format!(
+                "installed plugin bytes do not match source for `{}`",
+                plugin_id.as_key()
+            )));
+        }
+        write_install_fingerprint(
+            self.plugin_base_root(&plugin_id).as_path(),
+            &source_fingerprint,
         )?;
         self.remove_remote_plugin_install_metadata(&plugin_id)?;
 
@@ -351,7 +421,7 @@ pub enum PluginStoreError {
 }
 
 impl PluginStoreError {
-    fn io(context: &'static str, source: io::Error) -> Self {
+    pub(crate) fn io(context: &'static str, source: io::Error) -> Self {
         Self::Io { context, source }
     }
 }
@@ -500,6 +570,7 @@ fn replace_plugin_root_atomically(
     target_root: &Path,
     plugin_version: &str,
     manifest: InstallManifest<'_>,
+    source_fingerprint: &str,
 ) -> Result<(), PluginStoreError> {
     let Some(parent) = target_root.parent() else {
         return Err(PluginStoreError::Invalid(format!(
@@ -540,6 +611,12 @@ fn replace_plugin_root_atomically(
         })?;
         fs::write(&manifest_path, contents)
             .map_err(|err| PluginStoreError::io("failed to write fallback plugin manifest", err))?;
+    }
+    let staged_fingerprint = fingerprint_plugin_tree(&staged_version_root, NO_MANIFEST_OVERRIDE)?;
+    if staged_fingerprint != source_fingerprint {
+        return Err(PluginStoreError::Invalid(
+            "staged plugin bytes do not match source".to_string(),
+        ));
     }
 
     let target_version_root = target_root.join(plugin_version);

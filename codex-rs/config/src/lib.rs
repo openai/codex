@@ -133,6 +133,7 @@ pub use overrides::build_cli_overrides_layer;
 pub use plugin_edit::PluginConfigEdit;
 pub use plugin_edit::apply_user_plugin_config_edits;
 pub use plugin_edit::clear_user_plugin;
+pub use plugin_edit::reconcile_user_plugin_registrations;
 pub use plugin_edit::set_user_plugin_enabled;
 pub use project_root_markers::default_project_root_markers;
 pub use project_root_markers::project_root_markers_from_config;

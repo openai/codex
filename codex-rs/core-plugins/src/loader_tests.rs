@@ -227,6 +227,52 @@ fn curated_plugin_cache_version_preserves_non_git_sha_versions() {
     assert_eq!(curated_plugin_cache_version("0123456"), "0123456");
 }
 
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn duplicate_mcp_diagnostic_names_the_stable_winner_and_remediation() {
+    let codex_home = tempfile::tempdir().expect("codex home");
+    for marketplace in ["a", "b", "c"] {
+        let plugin_root = codex_home.path().join(format!(
+            "plugins/cache/{marketplace}/structure-viewer/local"
+        ));
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"structure-viewer"}"#,
+        );
+        write_file(
+            &plugin_root.join(".mcp.json"),
+            r#"{"mcpServers":{"structure":{"command":"echo"}}}"#,
+        );
+    }
+    let stack = ConfigLayerStack::new(
+        vec![user_layer(
+            user_config_path(&codex_home, "config.toml"),
+            "[plugins.\"structure-viewer@c\"]\nenabled = true\n[plugins.\"structure-viewer@a\"]\nenabled = true\n[plugins.\"structure-viewer@b\"]\nenabled = true\n",
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config stack");
+    let store = PluginStore::new(codex_home.path().to_path_buf());
+    let plugins = load_plugins_from_layer_stack(
+        &stack,
+        HashMap::new(),
+        &store,
+        /*plugin_skill_snapshots*/ None,
+        Some(Product::Codex),
+        /*remote_global_catalog_active*/ false,
+    )
+    .await;
+    assert_eq!(plugins.len(), 3);
+    for expected in [
+        "`structure-viewer@a` wins over `structure-viewer@b`",
+        "`structure-viewer@a` wins over `structure-viewer@c`",
+        "[plugins.\"structure-viewer@b\"].enabled = false",
+    ] {
+        assert!(logs_contain(expected));
+    }
+}
+
 fn plugin_id() -> PluginId {
     PluginId::parse("demo-plugin@test-marketplace").expect("plugin id")
 }

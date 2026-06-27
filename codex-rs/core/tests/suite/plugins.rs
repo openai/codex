@@ -95,6 +95,41 @@ fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
     .expect("write plugin mcp config");
 }
 
+fn write_installed_structure_plugin(
+    home: &TempDir,
+    marketplace: &str,
+    skill_name: &str,
+    server_name: &str,
+    command: &str,
+) {
+    let plugin_root = home
+        .path()
+        .join("plugins/cache")
+        .join(marketplace)
+        .join("structure-viewer/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .expect("create installed plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"structure-viewer","description":"View structures"}"#,
+    )
+    .expect("write installed plugin manifest");
+    let skill_root = plugin_root.join("skills").join(skill_name);
+    std::fs::create_dir_all(&skill_root).expect("create installed plugin skill dir");
+    std::fs::write(
+        skill_root.join("SKILL.md"),
+        format!("---\nname: {skill_name}\ndescription: {skill_name} structure skill\n---\n"),
+    )
+    .expect("write installed plugin skill");
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        format!(
+            r#"{{"mcpServers":{{"{server_name}":{{"command":"{command}","cwd":".","startup_timeout_sec":60.0}}}}}}"#
+        ),
+    )
+    .expect("write installed plugin MCP config");
+}
+
 fn write_plugin_app_plugin(home: &TempDir) {
     write_plugin_app_plugin_with_name(home, "sample");
 }
@@ -271,6 +306,71 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_context_uses_only_configured_same_name_plugin_install() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+    let codex_home = Arc::new(TempDir::new()?);
+    write_installed_structure_plugin(
+        codex_home.as_ref(),
+        "openai-monorepo",
+        "canonical",
+        "canonical",
+        &rmcp_test_server_bin,
+    );
+    write_installed_structure_plugin(
+        codex_home.as_ref(),
+        "openai-internal-testing",
+        "stale",
+        "stale",
+        &rmcp_test_server_bin,
+    );
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n[plugins.\"structure-viewer@openai-monorepo\"]\nenabled = true\n",
+    )?;
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false);
+    let codex = builder.build(&server).await?.codex;
+    wait_for_mcp_server(&codex, "canonical").await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Text {
+                text: "inspect the structure".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = response_mock.single_request();
+    let developer_text = request.message_input_texts("developer").join("\n");
+    assert!(developer_text.contains("structure-viewer:canonical: canonical structure skill"));
+    assert!(!developer_text.contains("stale structure skill"));
+    assert!(request.tool_by_name("mcp__canonical", "echo").is_some());
+    assert!(request.tool_by_name("mcp__stale", "echo").is_none());
     Ok(())
 }
 

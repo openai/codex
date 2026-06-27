@@ -193,6 +193,62 @@ fn install_with_version_uses_requested_cache_version() {
 }
 
 #[test]
+fn install_records_and_verifies_exact_source_bytes() {
+    let tmp = tempdir().unwrap();
+    write_plugin_with_version(tmp.path(), "sample-plugin", "sample-plugin", Some("1.2.3"));
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let source = AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap();
+    let result = store
+        .install(source.clone(), plugin_id.clone())
+        .expect("install plugin");
+    let matches_source = || {
+        store
+            .active_plugin_matches_source(&plugin_id, source.as_path())
+            .expect("verify installed bytes")
+    };
+    assert!(matches_source());
+    let provenance_path = store
+        .plugin_base_root(&plugin_id)
+        .join(crate::install_provenance::INSTALL_PROVENANCE_FILE);
+    assert!(provenance_path.is_file());
+    fs::write(result.installed_path.join("skills/SKILL.md"), "tampered")
+        .expect("tamper installed file");
+    assert!(!matches_source());
+    store.install(source.clone(), plugin_id.clone()).unwrap();
+    fs::write(&provenance_path, "corrupt").expect("corrupt install provenance");
+    assert!(!matches_source());
+    store.install(source.clone(), plugin_id.clone()).unwrap();
+    fs::write(source.join("skills/SKILL.md"), "updated source").expect("update source file");
+    assert!(!matches_source());
+}
+
+#[test]
+#[cfg(unix)]
+fn install_accepts_symlinked_plugin_source_root() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "real-plugin", "sample-plugin");
+    let linked_source = tmp.path().join("linked-plugin");
+    symlink(tmp.path().join("real-plugin"), &linked_source).unwrap();
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+    let store = PluginStore::new(tmp.path().to_path_buf());
+    let source = AbsolutePathBuf::try_from(linked_source).unwrap();
+
+    let result = store
+        .install(source.clone(), plugin_id.clone())
+        .expect("install plugin through symlinked source root");
+
+    assert!(result.installed_path.join("skills/SKILL.md").is_file());
+    assert!(
+        store
+            .active_plugin_matches_source(&plugin_id, source.as_path())
+            .expect("verify symlinked source bytes")
+    );
+}
+
+#[test]
 fn remote_plugin_install_metadata_follows_installed_cache_lifecycle() {
     let tmp = tempdir().unwrap();
     write_plugin(tmp.path(), "sample-plugin", "sample-plugin");

@@ -2375,6 +2375,108 @@ fn loaded_plugins_cache_invalidation_rejects_stale_load_completion() {
 }
 
 #[tokio::test]
+async fn reconcile_remote_plugin_install_invalidates_loaded_plugin_cache() {
+    let codex_home = TempDir::new().unwrap();
+    write_cached_plugin(codex_home.path(), "debug", "linear");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+
+[plugins."linear@debug"]
+enabled = true
+"#,
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let before = manager.plugins_for_config(&config).await;
+    assert_eq!(before.plugins().len(), 1);
+    assert!(before.plugins()[0].is_active());
+
+    manager
+        .reconcile_remote_plugin_install(
+            &config,
+            &PluginId::new(
+                "linear".to_string(),
+                REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/cache/debug/linear")
+            .exists()
+    );
+    let after = manager.plugins_for_config(&config).await;
+    assert!(after.plugins().iter().all(|plugin| !plugin.is_active()));
+}
+
+#[tokio::test]
+async fn reconcile_plugin_install_preserves_inactive_profile_cache() {
+    let codex_home = TempDir::new().unwrap();
+    let base_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let inactive_profile_path = codex_home.path().join("inactive.config.toml");
+    let base_config = "[plugins.\"linear@active\"]\nenabled = true\n";
+    let inactive_profile_config = "[plugins.\"linear@inactive\"]\nenabled = true\n";
+    write_file(&base_path, base_config);
+    write_file(&inactive_profile_path, inactive_profile_config);
+    write_cached_plugin(codex_home.path(), "active", "linear");
+    write_cached_plugin(codex_home.path(), "inactive", "linear");
+    let stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: AbsolutePathBuf::try_from(base_path.clone()).unwrap(),
+                profile: None,
+            },
+            toml::from_str(base_config).unwrap(),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let canonical = PluginId::new("linear".to_string(), "canonical".to_string()).unwrap();
+
+    manager
+        .reconcile_plugin_install_locked(&canonical, Some(&stack), /*enable_canonical*/ true)
+        .await
+        .unwrap();
+
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/cache/active/linear")
+            .exists()
+    );
+    assert!(
+        codex_home
+            .path()
+            .join("plugins/cache/inactive/linear/local")
+            .is_dir()
+    );
+    assert_eq!(
+        fs::read_to_string(&inactive_profile_path).unwrap(),
+        inactive_profile_config
+    );
+    let base: toml::Value = toml::from_str(&fs::read_to_string(base_path).unwrap()).unwrap();
+    assert_eq!(
+        base["plugins"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["linear@canonical"]
+    );
+}
+
+#[tokio::test]
 async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -5158,7 +5260,7 @@ plugins = true
 }
 
 #[test]
-fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
+fn refresh_curated_plugin_cache_reinstalls_unverified_current_version() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
@@ -5174,8 +5276,17 @@ fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_curren
     );
 
     assert!(
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should reinstall current but unverified plugin bytes")
+    );
+    let plugin_id = PluginId::new(
+        "slack".to_string(),
+        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+    assert!(
         !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
-            .expect("cache refresh should be a no-op when configured plugins are current")
+            .expect("verified current plugin bytes should be a no-op")
     );
 }
 
@@ -5379,7 +5490,7 @@ enabled = true
 }
 
 #[test]
-fn refresh_non_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
+fn refresh_non_curated_plugin_cache_reinstalls_changed_current_version() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).unwrap();
@@ -5400,12 +5511,6 @@ fn refresh_non_curated_plugin_cache_returns_false_when_configured_plugins_are_cu
   ]
 }"#,
     );
-    write_plugin_with_version(
-        &tmp.path().join("plugins/cache/debug"),
-        "sample-plugin/1.2.3",
-        "sample-plugin",
-        Some("1.2.3"),
-    );
     write_file(
         &tmp.path().join(CONFIG_TOML_FILE),
         r#"[features]
@@ -5416,13 +5521,11 @@ enabled = true
 "#,
     );
 
-    assert!(
-        !refresh_non_curated_plugin_cache(
-            tmp.path(),
-            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-        )
-        .expect("cache refresh should be a no-op when configured plugins are current")
-    );
+    let roots = [AbsolutePathBuf::try_from(repo_root.clone()).unwrap()];
+    assert!(refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
+    fs::write(repo_root.join("sample-plugin/skills/SKILL.md"), "updated").unwrap();
+    assert!(refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
+    assert!(!refresh_non_curated_plugin_cache(tmp.path(), &roots).unwrap());
 }
 
 #[test]
