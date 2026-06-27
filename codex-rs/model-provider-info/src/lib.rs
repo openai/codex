@@ -244,7 +244,7 @@ impl ModelProviderInfo {
             Some(
                 AuthMode::Chatgpt
                     | AuthMode::ChatgptAuthTokens
-                    | AuthMode::CallerProvided
+                    | AuthMode::ExternalProvided
                     | AuthMode::AgentIdentity
                     | AuthMode::PersonalAccessToken
             )

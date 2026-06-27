@@ -1079,7 +1079,7 @@
         {
           "description": "[UNSTABLE] Backend auth supplied programmatically by the caller.\n\nRequest headers are kept in memory and are not persisted or refreshed by Codex.",
           "enum": [
-            "callerProvided"
+            "externalProvided"
           ],
           "type": "string"
         },

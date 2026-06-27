@@ -31,6 +31,25 @@ const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
+#[test]
+fn externally_provided_auth_delegates_account_metadata() {
+    let auth = CodexAuth::ExternalProvided(
+        ExternalProvidedAuth::new([], "user-123")
+            .with_account_email("user@example.com")
+            .with_account_plan_type(AccountPlanType::Pro)
+            .with_fedramp_account(true),
+    );
+
+    assert!(auth.is_fedramp_account());
+    assert_eq!(auth.api_key(), None);
+    assert!(auth.get_token().is_err());
+    assert_eq!(
+        auth.get_account_email().as_deref(),
+        Some("user@example.com")
+    );
+    assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
+}
+
 #[tokio::test]
 async fn refresh_without_id_token() {
     let codex_home = tempdir().unwrap();

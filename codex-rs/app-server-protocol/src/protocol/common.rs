@@ -34,10 +34,10 @@ pub enum AuthMode {
     /// [UNSTABLE] Backend auth supplied programmatically by the caller.
     ///
     /// Request headers are kept in memory and are not persisted or refreshed by Codex.
-    #[serde(rename = "callerProvided")]
-    #[ts(rename = "callerProvided")]
-    #[strum(serialize = "callerProvided")]
-    CallerProvided,
+    #[serde(rename = "externalProvided")]
+    #[ts(rename = "externalProvided")]
+    #[strum(serialize = "externalProvided")]
+    ExternalProvided,
     /// Programmatic Codex auth backed by a registered Agent Identity.
     #[serde(rename = "agentIdentity")]
     #[ts(rename = "agentIdentity")]
@@ -57,10 +57,13 @@ pub enum AuthMode {
 
 impl AuthMode {
     /// Returns whether this mode represents an authenticated human ChatGPT account.
+    ///
+    /// Externally provided auth configures this capability per auth instance,
+    /// so the mode alone cannot assert it.
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::CallerProvided | Self::AgentIdentity | Self::BedrockApiKey => {
+            Self::ApiKey | Self::ExternalProvided | Self::AgentIdentity | Self::BedrockApiKey => {
                 false
             }
         }
@@ -68,7 +71,7 @@ impl AuthMode {
 
     /// Returns whether this mode is backed by Codex services rather than a direct model API.
     ///
-    /// Caller-provided auth configures this capability per auth instance, so
+    /// Externally provided auth configures this capability per auth instance, so
     /// the mode alone cannot assert it.
     pub fn uses_codex_backend(self) -> bool {
         match self {
@@ -76,7 +79,7 @@ impl AuthMode {
             | Self::ChatgptAuthTokens
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::CallerProvided | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::ExternalProvided | Self::BedrockApiKey => false,
         }
     }
 }

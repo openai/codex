@@ -23,6 +23,8 @@ use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::ExternalProvidedAuth;
+use codex_login::ExternalProvidedAuthCapabilities;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider::SharedModelProvider;
@@ -33,7 +35,6 @@ use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
-use codex_protocol::auth::AuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -738,8 +739,15 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
 
 #[test]
 fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
+    let auth =
+        CodexAuth::ExternalProvided(ExternalProvidedAuth::new([], "user-123").with_capabilities(
+            ExternalProvidedAuthCapabilities {
+                uses_codex_backend: true,
+                ..Default::default()
+            },
+        ));
     let auth_context = AuthRequestTelemetryContext::new(
-        Some(AuthMode::Chatgpt),
+        Some(&auth),
         &BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
         /*agent_identity_telemetry*/ None,
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
@@ -758,8 +766,9 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
 
 #[test]
 fn auth_request_telemetry_context_tracks_agent_identity_ids() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let auth_context = AuthRequestTelemetryContext::new(
-        Some(AuthMode::Chatgpt),
+        Some(&auth),
         &BearerAuthProvider::for_test(/*token*/ None, /*account_id*/ None),
         Some(AgentIdentityTelemetry {
             agent_id: "agent-runtime-context".to_string(),

@@ -286,7 +286,7 @@ impl ModelProvider for ConfiguredModelProvider {
                     }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::CallerProvided(_)
+                    | CodexAuth::ExternalProvided(_)
                     | CodexAuth::AgentIdentity(_)
                     | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
