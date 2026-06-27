@@ -13,8 +13,8 @@ fn render(state: AppsInstructionsState, previous: PreviousSectionState<'_, bool>
 
 #[test]
 fn renders_only_when_apps_become_available() {
-    let unavailable = AppsInstructionsState::new(false);
-    let available = AppsInstructionsState::new(true);
+    let unavailable = AppsInstructionsState::new(/*available*/ false);
+    let available = AppsInstructionsState::new(/*available*/ true);
     let false_snapshot = false;
     let true_snapshot = true;
 
@@ -40,16 +40,20 @@ fn renders_only_when_apps_become_available() {
 #[test]
 fn legacy_guidance_is_not_injected_again() {
     let mut world_state = super::super::WorldState::default();
-    world_state.add_section(AppsInstructionsState::new(true));
+    world_state.add_section(AppsInstructionsState::new(/*available*/ true));
     let legacy: ResponseItem = ContextualUserFragment::into(AppsInstructions);
 
-    assert!(world_state.render_history_diff(None, &[legacy]).is_empty());
+    assert!(
+        world_state
+            .render_history_diff(/*previous*/ None, &[legacy])
+            .is_empty()
+    );
 }
 
 #[test]
 fn persisted_guidance_is_restored_only_when_missing_from_history() {
     let mut world_state = super::super::WorldState::default();
-    world_state.add_section(AppsInstructionsState::new(true));
+    world_state.add_section(AppsInstructionsState::new(/*available*/ true));
     let snapshot = world_state.snapshot();
     let retained: ResponseItem = ContextualUserFragment::into(AppsInstructions);
 
