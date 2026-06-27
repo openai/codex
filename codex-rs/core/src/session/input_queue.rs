@@ -253,6 +253,10 @@ impl InputQueue {
 }
 
 impl TurnInputQueue {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn has_user_input(&self) -> bool {
         self.items
             .iter()
