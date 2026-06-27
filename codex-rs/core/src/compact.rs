@@ -229,6 +229,8 @@ async fn run_compact_task_inner_impl(
         .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
+    sess.record_missing_call_outputs(turn_context.as_ref())
+        .await;
     let mut history = sess.clone_history().await;
     history.record_items(
         &[initial_input_for_turn.into()],

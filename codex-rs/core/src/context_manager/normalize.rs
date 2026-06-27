@@ -12,6 +12,55 @@ const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
+    let missing_outputs_to_insert = missing_call_outputs_with_positions(items);
+
+    for (idx, _) in &missing_outputs_to_insert {
+        match &items[*idx] {
+            ResponseItem::FunctionCall { call_id, .. } => {
+                info!("Function call output is missing for call id: {call_id}");
+            }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                info!("Tool search output is missing for call id: {call_id}");
+            }
+            ResponseItem::CustomToolCall { call_id, .. } => {
+                error_or_panic(format!(
+                    "Custom tool call output is missing for call id: {call_id}"
+                ));
+            }
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                error_or_panic(format!(
+                    "Local shell call output is missing for call id: {call_id}"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Insert synthetic outputs in reverse index order to avoid re-indexing.
+    for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
+        items.insert(idx + 1, output_item);
+    }
+}
+
+/// Returns terminal outputs for calls that have no matching output in `items`.
+///
+/// Callers that own canonical conversation history should record these items before exposing the
+/// history to another model request. `ensure_call_outputs_present` remains as a defensive repair
+/// for detached prompt snapshots.
+pub(crate) fn missing_call_outputs(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    missing_call_outputs_with_positions(items)
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect()
+}
+
+fn missing_call_outputs_with_positions(items: &[ResponseItem]) -> Vec<(usize, ResponseItem)> {
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
@@ -40,25 +89,27 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
 
     for (idx, item) in items.iter().enumerate() {
         match item {
-            ResponseItem::FunctionCall { call_id, .. }
-                if !function_output_ids.contains(call_id.as_str()) =>
-            {
-                info!("Function call output is missing for call id: {call_id}");
+            ResponseItem::FunctionCall {
+                call_id,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } if !function_output_ids.contains(call_id.as_str()) => {
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItem::FunctionCallOutput {
                         id: None,
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
                     },
                 ));
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
+                internal_chat_message_metadata_passthrough,
                 ..
             } if !tool_search_output_ids.contains(call_id.as_str()) => {
-                info!("Tool search output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItem::ToolSearchOutput {
@@ -67,16 +118,16 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         status: "completed".to_string(),
                         execution: "client".to_string(),
                         tools: Vec::new(),
-                        internal_chat_message_metadata_passthrough: None,
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
                     },
                 ));
             }
-            ResponseItem::CustomToolCall { call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
-            {
-                error_or_panic(format!(
-                    "Custom tool call output is missing for call id: {call_id}"
-                ));
+            ResponseItem::CustomToolCall {
+                call_id,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } if !custom_tool_output_ids.contains(call_id.as_str()) => {
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItem::CustomToolCallOutput {
@@ -84,25 +135,25 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         call_id: call_id.clone(),
                         name: None,
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
                     },
                 ));
             }
             // LocalShellCall is represented in upstream streams by a FunctionCallOutput
             ResponseItem::LocalShellCall {
                 call_id: Some(call_id),
+                internal_chat_message_metadata_passthrough,
                 ..
             } if !function_output_ids.contains(call_id.as_str()) => {
-                error_or_panic(format!(
-                    "Local shell call output is missing for call id: {call_id}"
-                ));
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItem::FunctionCallOutput {
                         id: None,
                         call_id: call_id.clone(),
                         output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        internal_chat_message_metadata_passthrough: None,
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
                     },
                 ));
             }
@@ -115,10 +166,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
         custom_tool_output_ids,
     ));
 
-    // Insert synthetic outputs in reverse index order to avoid re-indexing.
-    for (idx, output_item) in missing_outputs_to_insert.into_iter().rev() {
-        items.insert(idx + 1, output_item);
-    }
+    missing_outputs_to_insert
 }
 
 pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {

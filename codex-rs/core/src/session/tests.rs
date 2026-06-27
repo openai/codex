@@ -9304,6 +9304,43 @@ struct NeverEndingTask {
     listen_to_cancellation_token: bool,
 }
 
+struct UnmatchedFunctionCallTask;
+
+impl SessionTask for UnmatchedFunctionCallTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.unmatched_function_call"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        cancellation_token: CancellationToken,
+    ) -> SessionTaskResult {
+        session
+            .clone_session()
+            .record_conversation_items(
+                ctx.as_ref(),
+                &[ResponseItem::FunctionCall {
+                    id: None,
+                    name: "do_it".to_string(),
+                    namespace: None,
+                    arguments: "{}".to_string(),
+                    call_id: "unmatched-call".to_string(),
+                    internal_chat_message_metadata_passthrough: None,
+                }],
+            )
+            .await;
+        cancellation_token.cancelled().await;
+        Ok(None)
+    }
+}
+
 impl SessionTask for NeverEndingTask {
     fn kind(&self) -> TaskKind {
         self.kind
@@ -9609,6 +9646,61 @@ async fn abort_gracefully_emits_marker_before_turn_aborted() {
     }
     // No extra events should be emitted after an abort.
     assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn abort_records_terminal_output_for_unmatched_call() {
+    let (sess, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let _ = config.features.enable(Feature::ItemIds);
+        },
+    )
+    .await;
+    sess.spawn_task(Arc::clone(&tc), Vec::new(), UnmatchedFunctionCallTask)
+        .await;
+
+    timeout(StdDuration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if matches!(
+                event.msg,
+                EventMsg::RawResponseItem(ref raw)
+                    if matches!(
+                        raw.item,
+                        ResponseItem::FunctionCall { ref call_id, .. }
+                            if call_id == "unmatched-call"
+                    )
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for unmatched function call");
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let history = sess.clone_history().await;
+    let outputs = history
+        .raw_items()
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::FunctionCallOutput {
+                id,
+                call_id,
+                output,
+                ..
+            } if call_id == "unmatched-call" => Some((id.as_deref(), output)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 1);
+    assert!(outputs[0].0.is_some_and(|id| id.starts_with("fco_")));
+    assert_eq!(
+        outputs[0].1,
+        &FunctionCallOutputPayload::from_text("aborted".to_string())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
