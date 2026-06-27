@@ -128,6 +128,13 @@ async fn run_connection(
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
                     let request_started_at = Instant::now();
+                    let request_log_context = telemetry.request_log_context(
+                        &request.id,
+                        request
+                            .trace
+                            .as_ref()
+                            .and_then(|trace| trace.traceparent.as_deref()),
+                    );
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
                         let request_span = request_span(method, &request);
                         let message = tokio::select! {
@@ -135,6 +142,7 @@ async fn run_connection(
                             _ = disconnected_rx.changed() => {
                                 request_span.record("result", "disconnected");
                                 telemetry.request_completed(
+                                    request_log_context.as_ref(),
                                     method,
                                     "disconnected",
                                     request_started_at.elapsed(),
@@ -149,6 +157,7 @@ async fn run_connection(
                         {
                             request_span.record("result", "disconnected");
                             telemetry.request_completed(
+                                request_log_context.as_ref(),
                                 method,
                                 "disconnected",
                                 request_started_at.elapsed(),
@@ -156,7 +165,12 @@ async fn run_connection(
                             break;
                         }
                         request_span.record("result", result);
-                        telemetry.request_completed(method, result, request_started_at.elapsed());
+                        telemetry.request_completed(
+                            request_log_context.as_ref(),
+                            method,
+                            result,
+                            request_started_at.elapsed(),
+                        );
                         drop(request_span);
                     } else {
                         let method = "unknown";
@@ -174,6 +188,7 @@ async fn run_connection(
                         {
                             request_span.record("result", "disconnected");
                             telemetry.request_completed(
+                                request_log_context.as_ref(),
                                 method,
                                 "disconnected",
                                 request_started_at.elapsed(),
@@ -181,7 +196,12 @@ async fn run_connection(
                             break;
                         }
                         request_span.record("result", "error");
-                        telemetry.request_completed(method, "error", request_started_at.elapsed());
+                        telemetry.request_completed(
+                            request_log_context.as_ref(),
+                            method,
+                            "error",
+                            request_started_at.elapsed(),
+                        );
                     }
                 }
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
