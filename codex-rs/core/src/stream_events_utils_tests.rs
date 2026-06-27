@@ -116,6 +116,7 @@ fn external_context_pollution_items_exclude_local_tool_calls() {
             status: None,
             call_id: "custom-1".to_string(),
             name: "apply_patch".to_string(),
+            namespace: None,
             input: "*** Begin Patch\n*** End Patch\n".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
