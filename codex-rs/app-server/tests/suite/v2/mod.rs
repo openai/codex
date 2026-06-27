@@ -55,6 +55,7 @@ mod request_permissions;
 mod request_user_input;
 mod request_validation;
 mod review;
+mod safety_buffering;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
