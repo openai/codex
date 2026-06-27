@@ -376,6 +376,7 @@ fn save_oauth_tokens_to_direct_keyring<K: KeyringStore>(
     }
 }
 
+/// Saves one credential while holding the Secrets aggregate-store lock across the mutation.
 fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
@@ -383,10 +384,16 @@ fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
     let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
-    save_oauth_tokens_to_secrets_keyring_unlocked(keyring_store, server_name, tokens, &serialized)
+    save_oauth_tokens_to_secrets_keyring_with_lock_held(
+        keyring_store,
+        server_name,
+        tokens,
+        &serialized,
+    )
 }
 
-fn save_oauth_tokens_to_secrets_keyring_unlocked<K: KeyringStore + Clone + 'static>(
+/// Writes one credential to Secrets. The caller must hold the Secrets aggregate-store lock.
+fn save_oauth_tokens_to_secrets_keyring_with_lock_held<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     tokens: &StoredOAuthTokens,
@@ -659,12 +666,15 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
     Ok(None)
 }
 
+/// Saves one credential while holding the File aggregate-store lock across the full
+/// read-modify-write operation.
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
     let _store_lock = OAuthStoreLock::acquire(OAuthStore::File)?;
-    save_oauth_tokens_to_file_unlocked(tokens)
+    save_oauth_tokens_to_file_with_lock_held(tokens)
 }
 
-fn save_oauth_tokens_to_file_unlocked(tokens: &StoredOAuthTokens) -> Result<()> {
+/// Updates the fallback File. The caller must hold the File aggregate-store lock.
+fn save_oauth_tokens_to_file_with_lock_held(tokens: &StoredOAuthTokens) -> Result<()> {
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
     let mut store = read_fallback_file_unlocked()?.unwrap_or_default();
 
