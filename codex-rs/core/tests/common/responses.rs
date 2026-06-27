@@ -895,6 +895,24 @@ pub fn ev_custom_tool_call(call_id: &str, name: &str, input: &str) -> Value {
     })
 }
 
+pub fn ev_custom_tool_call_with_namespace(
+    call_id: &str,
+    namespace: &str,
+    name: &str,
+    input: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "custom_tool_call",
+            "call_id": call_id,
+            "namespace": namespace,
+            "name": name,
+            "input": input
+        }
+    })
+}
+
 pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",
