@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth::ExternalProvidedAuthCapabilities;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
@@ -55,18 +56,31 @@ fn externally_provided_auth_respects_forced_workspace() {
     let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
     manager.set_forced_chatgpt_workspace_id(Some(vec![WORKSPACE_ID_ALLOWED.to_string()]));
 
-    manager.set_external_provided_auth(
-        ExternalProvidedAuth::new([], "user-123").with_account_id(WORKSPACE_ID_DISALLOWED),
-    );
+    let backend_auth = |account_id| {
+        ExternalProvidedAuth::new([], "user-123")
+            .with_account_id(account_id)
+            .with_capabilities(ExternalProvidedAuthCapabilities {
+                uses_codex_backend: true,
+                ..Default::default()
+            })
+    };
+
+    assert!(!manager.set_external_provided_auth(backend_auth(WORKSPACE_ID_DISALLOWED)));
     assert!(matches!(manager.auth_cached(), Some(CodexAuth::ApiKey(_))));
 
-    manager.set_external_provided_auth(
-        ExternalProvidedAuth::new([], "user-123").with_account_id(WORKSPACE_ID_ALLOWED),
-    );
+    assert!(manager.set_external_provided_auth(backend_auth(WORKSPACE_ID_ALLOWED)));
     assert!(matches!(
         manager.auth_cached(),
         Some(CodexAuth::ExternalProvided(_))
     ));
+}
+
+#[test]
+fn externally_provided_auth_requires_codex_backend_capability() {
+    let manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
+
+    assert!(!manager.set_external_provided_auth(ExternalProvidedAuth::new([], "user-123")));
+    assert!(matches!(manager.auth_cached(), Some(CodexAuth::ApiKey(_))));
 }
 
 #[tokio::test]

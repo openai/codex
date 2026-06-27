@@ -2297,7 +2297,11 @@ impl AuthManager {
     }
 
     /// Replaces the current auth snapshot with externally provided auth.
-    pub fn set_external_provided_auth(&self, auth: ExternalProvidedAuth) {
+    pub fn set_external_provided_auth(&self, auth: ExternalProvidedAuth) -> bool {
+        if !auth.uses_codex_backend() {
+            tracing::warn!("ignoring externally provided auth without Codex backend capability");
+            return false;
+        }
         if let Some(expected_workspace_ids) = self.forced_chatgpt_workspace_id()
             && !auth
                 .account_id()
@@ -2308,9 +2312,10 @@ impl AuthManager {
                 ?expected_workspace_ids,
                 "ignoring externally provided auth outside forced ChatGPT workspace"
             );
-            return;
+            return false;
         }
         let _ = self.set_cached_auth(Some(CodexAuth::ExternalProvided(auth)));
+        true
     }
 
     pub fn clear_external_auth(&self) {
