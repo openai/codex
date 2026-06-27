@@ -36,6 +36,7 @@ use crate::NoiseRendezvousConnectBundle;
 use crate::NoiseRendezvousConnectProvider;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
 use crate::noise_relay::noise_relay_websocket_config;
+use crate::noise_relay::rendezvous_tcp_nodelay;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
@@ -558,13 +559,11 @@ async fn connect_rendezvous(
         request
             .headers_mut()
             .extend(current_trace_context_headers());
+        let tcp_nodelay = rendezvous_tcp_nodelay(request.uri());
         connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
-            // Relay traffic consists of small, latency-sensitive frames, so send
-            // them immediately instead of waiting for Nagle coalescing.
-            /*disable_nagle*/
-            true,
+            /*disable_nagle*/ tcp_nodelay,
         )
         .await
         .map(|(websocket, _)| websocket)
