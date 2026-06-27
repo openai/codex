@@ -13,6 +13,27 @@ pub(crate) async fn accept_exec_server_environment(
     listener: TcpListener,
     environment_info: Value,
 ) -> Result<WebSocketStream<TcpStream>> {
+    let mut websocket = accept_initialized_exec_server(listener).await?;
+
+    let request = read_exec_server_json(&mut websocket).await?;
+    assert_eq!(request["method"], "environment/info");
+    websocket
+        .send(Message::Text(
+            json!({
+                "id": request["id"],
+                "result": environment_info,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+
+    Ok(websocket)
+}
+
+pub(crate) async fn accept_initialized_exec_server(
+    listener: TcpListener,
+) -> Result<WebSocketStream<TcpStream>> {
     let (stream, _) = listener.accept().await?;
     let mut websocket = accept_async(stream).await?;
 
@@ -30,19 +51,6 @@ pub(crate) async fn accept_exec_server_environment(
         .await?;
     let initialized = read_exec_server_json(&mut websocket).await?;
     assert_eq!(initialized["method"], "initialized");
-
-    let request = read_exec_server_json(&mut websocket).await?;
-    assert_eq!(request["method"], "environment/info");
-    websocket
-        .send(Message::Text(
-            json!({
-                "id": request["id"],
-                "result": environment_info,
-            })
-            .to_string()
-            .into(),
-        ))
-        .await?;
 
     Ok(websocket)
 }

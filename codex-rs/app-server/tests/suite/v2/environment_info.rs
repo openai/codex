@@ -14,9 +14,12 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use super::exec_server_test_support::accept_exec_server_environment;
+use super::exec_server_test_support::accept_initialized_exec_server;
+use super::exec_server_test_support::read_exec_server_json;
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -100,6 +103,69 @@ async fn environment_info_reports_connection_failure() -> Result<()> {
             .message
             .contains("failed to get info for environment `remote-a`")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn environment_info_timeout_releases_environment_request_queue() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let (request_received_tx, request_received_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let exec_server = tokio::spawn(async move {
+        let mut websocket = accept_initialized_exec_server(listener).await?;
+        let request = read_exec_server_json(&mut websocket).await?;
+        assert_eq!(request["method"], "environment/info");
+        request_received_tx
+            .send(())
+            .map_err(|()| anyhow::anyhow!("environment info request receiver dropped"))?;
+        shutdown_rx.await?;
+        Ok::<_, anyhow::Error>(())
+    });
+
+    let codex_home = TempDir::new()?;
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(RPC_TIMEOUT, app_server.initialize()).await??;
+    add_environment(
+        &mut app_server,
+        &exec_server_url,
+        /*connect_timeout_ms*/ None,
+    )
+    .await?;
+
+    let request_id = app_server
+        .send_raw_request(
+            "environment/info",
+            Some(json!({"environmentId": "remote-a"})),
+        )
+        .await?;
+    timeout(RPC_TIMEOUT, request_received_rx).await??;
+    let error = timeout(
+        RPC_TIMEOUT,
+        app_server.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert!(
+        error
+            .error
+            .message
+            .contains("timed out waiting for exec-server `environment/info` response")
+    );
+
+    let replacement_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let replacement_url = format!("ws://{}", replacement_listener.local_addr()?);
+    drop(replacement_listener);
+    timeout(
+        Duration::from_secs(1),
+        add_environment(&mut app_server, &replacement_url, Some(50)),
+    )
+    .await??;
+
+    shutdown_tx
+        .send(())
+        .map_err(|()| anyhow::anyhow!("exec-server shutdown receiver dropped"))?;
+    timeout(RPC_TIMEOUT, exec_server).await???;
     Ok(())
 }
 
