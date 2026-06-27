@@ -1630,6 +1630,49 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
 }
 
 #[test]
+fn for_prompt_assigns_stable_id_to_synthetic_output_without_reordering_history() {
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: Some("fc_existing".to_string()),
+            name: "do_it".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-x".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: Some("msg_later".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "later turn".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let first = create_history_with_items(items.clone()).for_prompt(&default_input_modalities());
+    let second = create_history_with_items(items).for_prompt(&default_input_modalities());
+
+    assert_eq!(
+        first, second,
+        "repeated prompt projections should assign the same ID to the synthetic output"
+    );
+    let [
+        ResponseItem::FunctionCall { .. },
+        ResponseItem::FunctionCallOutput { id: Some(id), .. },
+        ResponseItem::Message { .. },
+    ] = first.as_slice()
+    else {
+        panic!("expected the synthetic output between its call and the later message");
+    };
+    assert!(
+        id.starts_with("fco_"),
+        "the synthetic function call output should use the Responses API output ID prefix"
+    );
+}
+
+#[test]
 fn normalize_adds_missing_output_for_tool_search_call() {
     let items = vec![ResponseItem::ToolSearchCall {
         id: None,
