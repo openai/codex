@@ -10,6 +10,7 @@ use codex_core_plugins::PluginInstallOutcome;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::allowed_configured_marketplace_names;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::MarketplaceListError;
@@ -228,7 +229,7 @@ pub async fn run_plugin_list(
                 .is_none_or(|name| marketplace.name == *name)
         })
         .collect::<Vec<_>>();
-    let marketplace_sources = configured_marketplace_sources(&plugins_input);
+    let marketplace_sources = configured_marketplace_sources(&plugins_input, codex_home.as_path());
 
     if args.json {
         let output = JsonPluginListOutput::from_marketplaces(
@@ -480,6 +481,7 @@ pub(crate) struct JsonMarketplaceSource {
 
 pub(crate) fn configured_marketplace_sources(
     plugins_input: &PluginsConfigInput,
+    codex_home: &Path,
 ) -> HashMap<String, JsonMarketplaceSource> {
     let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
         return HashMap::new();
@@ -490,9 +492,12 @@ pub(crate) fn configured_marketplace_sources(
     else {
         return HashMap::new();
     };
+    let allowed_marketplace_names =
+        allowed_configured_marketplace_names(&plugins_input.config_layer_stack, codex_home);
 
     marketplaces
         .iter()
+        .filter(|(marketplace_name, _)| allowed_marketplace_names.contains(*marketplace_name))
         .filter_map(|(marketplace_name, marketplace)| {
             let source_type = marketplace
                 .get("source_type")
@@ -746,11 +751,16 @@ pub(crate) fn configured_marketplace_snapshot_issues(
     else {
         return Vec::new();
     };
+    let allowed_marketplace_names =
+        allowed_configured_marketplace_names(&plugins_input.config_layer_stack, codex_home);
 
     let default_install_root = marketplace_install_root(codex_home);
     let mut manifest_paths = Vec::new();
     let mut issues = Vec::new();
     for (configured_name, marketplace) in configured_marketplaces {
+        if !allowed_marketplace_names.contains(configured_name) {
+            continue;
+        }
         if marketplace_name.is_some_and(|name| configured_name != name) {
             continue;
         }
