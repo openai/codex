@@ -344,7 +344,6 @@ chatgpt_base_url = "{}/backend-api"
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -1050,7 +1049,6 @@ chatgpt_base_url = "{}/backend-api"
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -1204,7 +1202,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )

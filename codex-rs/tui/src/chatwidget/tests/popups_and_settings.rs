@@ -1200,9 +1200,10 @@ async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
 }
 
 #[tokio::test]
-async fn plugins_popup_remote_section_fallback_states_snapshot() {
+async fn plugins_popup_remote_section_fallback_states_when_remote_plugin_disabled_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ false);
 
     let select_tab_containing = |chat: &mut ChatWidget, visible_text: &str| -> String {
         for _ in 0..8 {
@@ -1266,7 +1267,6 @@ async fn plugins_popup_remote_section_fallback_states_snapshot() {
 
     let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
-    remote_chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ true);
     remote_chat.add_plugins_output();
     let remote_cwd = remote_chat.config.cwd.clone();
     remote_chat.on_plugins_loaded(
