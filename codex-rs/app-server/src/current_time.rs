@@ -22,7 +22,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
-const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CURRENT_TIME_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn app_server_time_provider(
