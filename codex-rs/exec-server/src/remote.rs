@@ -8,6 +8,7 @@ use futures::FutureExt;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
+use rand::Rng as _;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::time::sleep;
@@ -21,20 +22,24 @@ use tracing::warn;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
+use crate::ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION;
 use crate::EnvironmentRegistryConnectRequest;
 use crate::EnvironmentRegistryConnectResponse;
 use crate::EnvironmentRegistryHarnessKeyValidationRequest;
 use crate::EnvironmentRegistryHarnessKeyValidationResponse;
 use crate::EnvironmentRegistryRegistrationRequest;
 use crate::EnvironmentRegistryRegistrationResponse;
+use crate::EnvironmentRegistryTransportPolicy;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecServerTelemetry;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
+use crate::NoiseRendezvousConnectAttempt;
 use crate::NoiseRendezvousConnectBundle;
 use crate::NoiseRendezvousConnectProvider;
 use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
+use crate::environment_registry::TransportPolicyState;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
@@ -43,6 +48,9 @@ use crate::trace_context::current_trace_context_headers;
 
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 const NOISE_RELAY_SECURITY_PROFILE: &str = "noise_hybrid_ik_v1";
+const TRANSPORT_POLICY_VERSIONS_HEADER: &str = "codex-transport-policy-versions";
+const MAX_REMOTE_RECONNECT_BACKOFF: Duration = Duration::from_secs(30);
+const REGISTRATION_REFRESH_JITTER_RANGE: std::ops::Range<f64> = 0.9..1.1;
 
 #[derive(Clone)]
 struct EnvironmentRegistryClient {
@@ -105,6 +113,10 @@ impl EnvironmentRegistryClient {
         let response = self
             .register_environment_inner(environment_id, executor_public_key)
             .await;
+        if let Ok(response) = &response {
+            self.telemetry
+                .set_transport_policy(&response.transport_policy);
+        }
         let result = if response.is_ok() { "success" } else { "error" };
         tracing::Span::current().record("result", result);
         self.telemetry
@@ -125,6 +137,10 @@ impl EnvironmentRegistryClient {
             ))
             .headers(self.auth_provider.to_auth_headers())
             .headers(current_trace_context_headers())
+            .header(
+                TRANSPORT_POLICY_VERSIONS_HEADER,
+                ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION.to_string(),
+            )
             .json(&EnvironmentRegistryRegistrationRequest {
                 security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
                 executor_public_key: executor_public_key.clone(),
@@ -163,7 +179,7 @@ impl EnvironmentRegistryClient {
         &self,
         environment_id: &str,
         harness_public_key: NoiseChannelPublicKey,
-    ) -> Result<NoiseRendezvousConnectBundle, ExecServerError> {
+    ) -> Result<NoiseRendezvousConnectAttempt, ExecServerError> {
         let response = self
             .http
             .post(endpoint_url(
@@ -171,6 +187,10 @@ impl EnvironmentRegistryClient {
                 &format!("/cloud/environment/{environment_id}/connect"),
             ))
             .headers(self.auth_provider.to_auth_headers())
+            .header(
+                TRANSPORT_POLICY_VERSIONS_HEADER,
+                ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION.to_string(),
+            )
             .json(&EnvironmentRegistryConnectRequest { harness_public_key })
             .timeout(self.connect_timeout)
             .send()
@@ -196,12 +216,15 @@ impl EnvironmentRegistryClient {
                 "environment registry returned incomplete Noise connection data".to_string(),
             ));
         }
-        Ok(NoiseRendezvousConnectBundle {
-            websocket_url: response.url,
-            environment_id: response.environment_id,
-            executor_registration_id: response.executor_registration_id,
-            executor_public_key: response.executor_public_key,
-            harness_key_authorization: response.harness_key_authorization,
+        Ok(NoiseRendezvousConnectAttempt {
+            bundle: NoiseRendezvousConnectBundle {
+                websocket_url: response.url,
+                environment_id: response.environment_id,
+                executor_registration_id: response.executor_registration_id,
+                executor_public_key: response.executor_public_key,
+                harness_key_authorization: response.harness_key_authorization,
+            },
+            transport_policy: response.transport_policy,
         })
     }
 
@@ -341,6 +364,21 @@ impl NoiseRendezvousConnectProvider for EnvironmentRegistryNoiseConnectProvider 
         harness_public_key: NoiseChannelPublicKey,
     ) -> futures::future::BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
         async move {
+            Ok(self
+                .client
+                .connect_environment(&self.environment_id, harness_public_key)
+                .await?
+                .bundle)
+        }
+        .boxed()
+    }
+
+    fn connect_attempt(
+        &self,
+        harness_public_key: NoiseChannelPublicKey,
+    ) -> futures::future::BoxFuture<'_, Result<NoiseRendezvousConnectAttempt, ExecServerError>>
+    {
+        async move {
             self.client
                 .connect_environment(&self.environment_id, harness_public_key)
                 .await
@@ -459,9 +497,12 @@ impl RemoteEnvironmentConfig {
 /// Register an exec-server for remote use and serve requests over Noise.
 ///
 /// The executor identity is generated once per process and reused across
-/// reconnects. The registration and rendezvous URL are also reused until
-/// rendezvous rejects the URL, at which point the next attempt registers again.
-/// The websocket carries cleartext routing metadata and encrypted payloads.
+/// reconnects. A capable v1 assignment refreshes registration after a closed
+/// established connection so one planned drain can enroll inactive clients or
+/// roll back active clients. Legacy clients reuse registration. Failed refreshes
+/// retry with bounded, jittered backoff. Failed pre-establishment attempts reuse
+/// the current registration unless rendezvous rejects it. The websocket carries
+/// cleartext routing metadata and encrypted payloads.
 pub async fn run_remote_environment(
     config: RemoteEnvironmentConfig,
     runtime_paths: ExecServerRuntimePaths,
@@ -481,12 +522,57 @@ pub async fn run_remote_environment(
     let mut response = client
         .register_environment(&config.environment_id, &identity.public_key())
         .await?;
+    let mut registration_refresh_required = false;
 
     loop {
-        match connect_rendezvous(&response.url, &config.telemetry).await {
+        if registration_refresh_required {
+            match client
+                .register_environment(&config.environment_id, &identity.public_key())
+                .await
+            {
+                Ok(refreshed_response) => {
+                    response = refreshed_response;
+                    registration_refresh_required = false;
+                }
+                Err(error) => {
+                    warn!(
+                        noise_event = "registration_refresh",
+                        noise_outcome = "error",
+                        noise_reason = "registry_error",
+                        "Noise executor failed to refresh registration"
+                    );
+                    debug!(error = %error, "Noise executor registration refresh error");
+                    config
+                        .telemetry
+                        .remote_reconnect("registration_refresh_failed");
+                    sleep(jittered_registration_refresh_backoff(backoff)).await;
+                    backoff = (backoff * 2).min(MAX_REMOTE_RECONNECT_BACKOFF);
+                    continue;
+                }
+            }
+        }
+        match connect_rendezvous(&response.url, &response.transport_policy, &config.telemetry).await
+        {
             Ok(websocket) => {
                 backoff = Duration::from_secs(1);
                 let executor_registration_id = response.executor_registration_id.clone();
+                info!(
+                    noise_event = "transport_policy_effective_exposure",
+                    role = "environment",
+                    side = "outbound",
+                    environment_id = %response.environment_id,
+                    executor_registration_id = %executor_registration_id,
+                    transport_policy_version = response.transport_policy.version,
+                    transport_policy_assignment_epoch = response
+                        .transport_policy
+                        .telemetry_assignment_epoch(),
+                    transport_policy_cell = response.transport_policy.effective_cell().as_str(),
+                    transport_policy_state = response.transport_policy.effective_state().as_str(),
+                    outbound_tcp_nodelay = response
+                        .transport_policy
+                        .effective_outbound_tcp_nodelay(),
+                    "Noise rendezvous transport policy applied"
+                );
                 info!(
                     noise_event = "rendezvous_connection",
                     noise_outcome = "ok",
@@ -506,6 +592,10 @@ pub async fn run_remote_environment(
                 )
                 .await;
                 config.telemetry.remote_reconnect("disconnected");
+                registration_refresh_required = matches!(
+                    response.transport_policy.effective_state(),
+                    TransportPolicyState::Inactive | TransportPolicyState::Active
+                );
             }
             Err(error) => {
                 let registration_rejected = matches!(
@@ -522,18 +612,32 @@ pub async fn run_remote_environment(
                 debug!(error = %error, "Noise executor rendezvous connection error");
                 if registration_rejected {
                     config.telemetry.remote_reconnect("registration_rejected");
-                    response = client
-                        .register_environment(&config.environment_id, &identity.public_key())
-                        .await?;
+                    registration_refresh_required = true;
                 } else {
                     config.telemetry.remote_reconnect("connect_failed");
                 }
             }
         }
 
-        sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        let retry_delay = if registration_refresh_required {
+            jittered_registration_refresh_backoff(backoff)
+        } else {
+            backoff
+        };
+        sleep(retry_delay).await;
+        backoff = (backoff * 2).min(MAX_REMOTE_RECONNECT_BACKOFF);
     }
+}
+
+fn jittered_registration_refresh_backoff(base: Duration) -> Duration {
+    registration_refresh_backoff_with_jitter(
+        base,
+        rand::rng().random_range(REGISTRATION_REFRESH_JITTER_RANGE),
+    )
+}
+
+fn registration_refresh_backoff_with_jitter(base: Duration, jitter: f64) -> Duration {
+    base.mul_f64(jitter).min(MAX_REMOTE_RECONNECT_BACKOFF)
 }
 
 #[tracing::instrument(
@@ -547,6 +651,7 @@ pub async fn run_remote_environment(
 )]
 async fn connect_rendezvous(
     url: &str,
+    transport_policy: &EnvironmentRegistryTransportPolicy,
     telemetry: &ExecServerTelemetry,
 ) -> Result<
     WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
@@ -561,10 +666,8 @@ async fn connect_rendezvous(
         connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
-            // Relay traffic consists of small, latency-sensitive frames, so send
-            // them immediately instead of waiting for Nagle coalescing.
             /*disable_nagle*/
-            true,
+            transport_policy.effective_outbound_tcp_nodelay(),
         )
         .await
         .map(|(websocket, _)| websocket)
@@ -699,6 +802,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn registration_refresh_backoff_jitter_is_bounded_and_respects_cap() {
+        let base = Duration::from_secs(10);
+        assert_eq!(
+            registration_refresh_backoff_with_jitter(base, 0.9),
+            Duration::from_secs(9)
+        );
+        assert_eq!(
+            registration_refresh_backoff_with_jitter(base, 1.1),
+            Duration::from_secs(11)
+        );
+        assert_eq!(
+            registration_refresh_backoff_with_jitter(MAX_REMOTE_RECONNECT_BACKOFF, 1.1),
+            MAX_REMOTE_RECONNECT_BACKOFF
+        );
+    }
+
     fn static_registry_auth_provider() -> SharedAuthProvider {
         Arc::new(StaticRegistryAuthProvider)
     }
@@ -719,6 +839,7 @@ mod tests {
             .and(path("/cloud/environment/environment-requested/register"))
             .and(header("authorization", "Bearer registry-token"))
             .and(header("chatgpt-account-id", "workspace-123"))
+            .and(header(TRANSPORT_POLICY_VERSIONS_HEADER, "1"))
             .and(header_regex(
                 "traceparent",
                 "^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
@@ -751,6 +872,7 @@ mod tests {
                 url: "wss://rendezvous.test/cloud-agent/default/ws/environment/environment-requested?role=environment&sig=abc".to_string(),
                 security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
                 executor_registration_id: "registration-1".to_string(),
+                transport_policy: Default::default(),
             }
         );
     }
@@ -768,6 +890,7 @@ mod tests {
             .and(path("/cloud/environment/environment-requested/connect"))
             .and(header("authorization", "Bearer registry-token"))
             .and(header("chatgpt-account-id", "workspace-123"))
+            .and(header(TRANSPORT_POLICY_VERSIONS_HEADER, "1"))
             .and(body_partial_json(serde_json::json!({
                 "harness_public_key": harness_public_key.clone(),
             })))
@@ -778,6 +901,12 @@ mod tests {
                 "executor_registration_id": "registration-1",
                 "executor_public_key": executor_public_key.clone(),
                 "harness_key_authorization": "authorization-1",
+                "transport_policy": {
+                    "version": ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION,
+                    "assignment_epoch": "experiment-1",
+                    "outbound_tcp_nodelay": true,
+                    "rendezvous_accepted_tcp_nodelay": false,
+                },
             })))
             .mount(&server)
             .await;
@@ -789,11 +918,12 @@ mod tests {
         )
         .expect("noise configuration");
 
-        let bundle = config
+        let attempt = config
             .connect_provider()
-            .connect_bundle(harness_public_key)
+            .connect_attempt(harness_public_key)
             .await
-            .expect("Noise connect bundle");
+            .expect("Noise connect attempt");
+        let bundle = attempt.bundle;
 
         assert_eq!(
             bundle.websocket_url,
@@ -803,6 +933,15 @@ mod tests {
         assert_eq!(bundle.executor_registration_id, "registration-1");
         assert_eq!(bundle.executor_public_key, executor_public_key);
         assert_eq!(bundle.harness_key_authorization, "authorization-1");
+        assert_eq!(
+            attempt.transport_policy,
+            EnvironmentRegistryTransportPolicy {
+                version: ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION,
+                assignment_epoch: "experiment-1".to_string(),
+                outbound_tcp_nodelay: true,
+                rendezvous_accepted_tcp_nodelay: false,
+            }
+        );
     }
 
     #[tokio::test]

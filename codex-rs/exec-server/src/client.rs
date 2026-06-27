@@ -770,6 +770,21 @@ impl ExecServerClient {
         self.call_rpc(&rpc_client, method, params).await
     }
 
+    #[tracing::instrument(
+        name = "codex.exec_server.client.request",
+        skip_all,
+        fields(
+            otel.kind = "client",
+            otel.name = method,
+            method = method,
+            result = tracing::field::Empty,
+            transport_policy_cell = rpc_client.transport_policy_cell.as_str(),
+            transport_policy_state = rpc_client.transport_policy_state.as_str(),
+            transport_policy_assignment_epoch = rpc_client
+                .transport_policy_assignment_epoch
+                .as_str(),
+        )
+    )]
     async fn call_rpc<P, T>(
         &self,
         rpc_client: &Arc<RpcClient>,
@@ -780,7 +795,7 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        match rpc_client.call(method, params).await {
+        let result = match rpc_client.call(method, params).await {
             Ok(response) => Ok(response),
             Err(error) => {
                 let error = ExecServerError::from(error);
@@ -792,7 +807,14 @@ impl ExecServerClient {
                     Err(error)
                 }
             }
-        }
+        };
+        let result_name = match &result {
+            Ok(_) => "success",
+            Err(ExecServerError::Disconnected(_)) => "disconnected",
+            Err(_) => "error",
+        };
+        tracing::Span::current().record("result", result_name);
+        result
     }
 }
 
@@ -1203,6 +1225,7 @@ mod tests {
     use futures::SinkExt;
     use futures::StreamExt;
     use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -1243,6 +1266,8 @@ mod tests {
     use crate::client_api::StdioExecServerCommand;
     use crate::client_api::StdioExecServerConnectArgs;
     use crate::connection::JsonRpcConnection;
+    use crate::environment_registry::TransportPolicyCell;
+    use crate::environment_registry::TransportPolicyState;
     use crate::process::ExecProcessEvent;
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
@@ -1339,18 +1364,23 @@ mod tests {
             trace
         });
 
-        let client = ExecServerClient::connect(
-            JsonRpcConnection::from_stdio(
-                client_stdout,
-                client_stdin,
-                "trace-test-client".to_string(),
-            ),
-            ExecServerClientConnectOptions::default(),
-        )
-        .await
-        .expect("client should connect");
+        let mut connection = JsonRpcConnection::from_stdio(
+            client_stdout,
+            client_stdin,
+            "trace-test-client".to_string(),
+        );
+        connection.transport_policy_cell = TransportPolicyCell::C11;
+        connection.transport_policy_state = TransportPolicyState::Active;
+        connection.transport_policy_assignment_epoch = "experiment-1".to_string();
+        let client =
+            ExecServerClient::connect(connection, ExecServerClientConnectOptions::default())
+                .await
+                .expect("client should connect");
 
-        let tracer_provider = SdkTracerProvider::builder().build();
+        let span_exporter = InMemorySpanExporter::default();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(span_exporter.clone())
+            .build();
         let tracer = tracer_provider.tracer("exec-server-test");
         let subscriber = tracing_subscriber::registry().with(
             tracing_opentelemetry::layer()
@@ -1385,7 +1415,51 @@ mod tests {
 
         assert_eq!(session.process_id(), &process_id);
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+
+        tracer_provider.force_flush().expect("flush traces");
+        let spans = span_exporter.get_finished_spans().expect("span export");
+        let request_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == EXEC_METHOD)
+            .expect("process start client span");
+        let expected_traceparent = expected_trace.traceparent.expect("parent traceparent");
+        let expected_traceparent_parts = expected_traceparent.split('-').collect::<Vec<_>>();
+        assert_eq!(expected_traceparent_parts.len(), 4);
+        assert_eq!(
+            request_span.span_context.trace_id(),
+            opentelemetry::trace::TraceId::from_hex(expected_traceparent_parts[1])
+                .expect("parent trace id")
+        );
+        assert_eq!(
+            request_span.parent_span_id,
+            opentelemetry::trace::SpanId::from_hex(expected_traceparent_parts[2])
+                .expect("parent span id")
+        );
+        let request_traceparent = format!(
+            "00-{}-{}-01",
+            request_span.span_context.trace_id(),
+            request_span.span_context.span_id()
+        );
+        assert_eq!(
+            trace.traceparent.as_deref(),
+            Some(request_traceparent.as_str())
+        );
+        for (key, value) in [
+            ("method", EXEC_METHOD),
+            ("result", "success"),
+            ("transport_policy_cell", "c11"),
+            ("transport_policy_state", "active"),
+            ("transport_policy_assignment_epoch", "experiment-1"),
+        ] {
+            assert_eq!(
+                request_span
+                    .attributes
+                    .iter()
+                    .find(|attribute| attribute.key.as_str() == key)
+                    .map(|attribute| attribute.value.clone()),
+                Some(opentelemetry::Value::String(value.into()))
+            );
+        }
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

@@ -420,6 +420,9 @@ where
         disconnected_rx,
         task_handles: vec![websocket_task],
         transport: JsonRpcTransport::Plain,
+        transport_policy_cell: crate::environment_registry::TransportPolicyCell::Unassigned,
+        transport_policy_state: crate::environment_registry::TransportPolicyState::Unassigned,
+        transport_policy_assignment_epoch: "unassigned".to_string(),
     }
 }
 

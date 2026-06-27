@@ -1,10 +1,16 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
 use codex_otel::MetricsClient;
 use tracing::warn;
+
+use crate::EnvironmentRegistryTransportPolicy;
+use crate::environment_registry::TransportPolicyCell;
+use crate::environment_registry::TransportPolicyState;
 
 const CONNECTIONS_ACTIVE_METRIC: &str = "exec_server_connections_active";
 const CONNECTIONS_ACTIVE_DESCRIPTION: &str = "Number of active exec-server connections.";
@@ -35,6 +41,9 @@ const REMOTE_RENDEZVOUS_METRICS: OperationMetrics = OperationMetrics {
 };
 const REMOTE_RECONNECTS_TOTAL_METRIC: &str = "exec_server_remote_reconnects_total";
 const REMOTE_RECONNECTS_TOTAL_DESCRIPTION: &str = "Total number of remote exec-server reconnects.";
+const TRANSPORT_POLICY_CELL_TAG: &str = "transport_policy_cell";
+const TRANSPORT_POLICY_STATE_TAG: &str = "transport_policy_state";
+const TRANSPORT_POLICY_STATE_SHIFT: u8 = 3;
 
 #[derive(Clone, Copy)]
 struct OperationMetrics {
@@ -69,6 +78,7 @@ pub struct ExecServerTelemetry {
 struct ExecServerTelemetryInner {
     metrics: MetricsClient,
     active: Arc<Mutex<ActiveCounts>>,
+    transport_policy: AtomicU8,
 }
 
 #[derive(Default)]
@@ -105,8 +115,24 @@ impl ExecServerTelemetry {
         let active = Arc::new(Mutex::new(ActiveCounts::default()));
         register_active_gauges(&metrics, &active);
         Self {
-            inner: Some(Arc::new(ExecServerTelemetryInner { metrics, active })),
+            inner: Some(Arc::new(ExecServerTelemetryInner {
+                metrics,
+                active,
+                transport_policy: AtomicU8::new(encode_transport_policy(
+                    TransportPolicyCell::Unassigned,
+                    TransportPolicyState::Unassigned,
+                )),
+            })),
         }
+    }
+
+    pub(crate) fn set_transport_policy(&self, policy: &EnvironmentRegistryTransportPolicy) {
+        self.with_inner(|inner| {
+            inner.transport_policy.store(
+                encode_transport_policy(policy.effective_cell(), policy.effective_state()),
+                Ordering::Release,
+            );
+        });
     }
 
     pub(crate) fn connection_started(
@@ -115,10 +141,15 @@ impl ExecServerTelemetry {
     ) -> ConnectionMetricGuard {
         self.with_inner(|inner| {
             inner.adjust_connection_count(transport, /*delta*/ 1);
+            let (transport_policy_cell, transport_policy_state) = inner.transport_policy();
             inner.counter(
                 CONNECTIONS_TOTAL_METRIC,
                 CONNECTIONS_TOTAL_DESCRIPTION,
-                &[("transport", transport.metric_tag())],
+                &[
+                    ("transport", transport.metric_tag()),
+                    (TRANSPORT_POLICY_CELL_TAG, transport_policy_cell.as_str()),
+                    (TRANSPORT_POLICY_STATE_TAG, transport_policy_state.as_str()),
+                ],
             );
         });
         ConnectionMetricGuard {
@@ -134,7 +165,13 @@ impl ExecServerTelemetry {
         duration: Duration,
     ) {
         self.with_inner(|inner| {
-            let tags = [("method", method), ("result", result)];
+            let (transport_policy_cell, transport_policy_state) = inner.transport_policy();
+            let tags = [
+                ("method", method),
+                ("result", result),
+                (TRANSPORT_POLICY_CELL_TAG, transport_policy_cell.as_str()),
+                (TRANSPORT_POLICY_STATE_TAG, transport_policy_state.as_str()),
+            ];
             inner.counter(REQUESTS_TOTAL_METRIC, REQUESTS_TOTAL_DESCRIPTION, &tags);
             inner.duration(
                 REQUEST_DURATION_METRIC,
@@ -155,10 +192,15 @@ impl ExecServerTelemetry {
 
     pub(crate) fn remote_reconnect(&self, reason: &'static str) {
         self.with_inner(|inner| {
+            let (transport_policy_cell, transport_policy_state) = inner.transport_policy();
             inner.counter(
                 REMOTE_RECONNECTS_TOTAL_METRIC,
                 REMOTE_RECONNECTS_TOTAL_DESCRIPTION,
-                &[("reason", reason)],
+                &[
+                    ("reason", reason),
+                    (TRANSPORT_POLICY_CELL_TAG, transport_policy_cell.as_str()),
+                    (TRANSPORT_POLICY_STATE_TAG, transport_policy_state.as_str()),
+                ],
             );
         });
     }
@@ -210,7 +252,12 @@ impl ExecServerTelemetry {
         duration: Duration,
     ) {
         self.with_inner(|inner| {
-            let tags = [("result", result)];
+            let (transport_policy_cell, transport_policy_state) = inner.transport_policy();
+            let tags = [
+                ("result", result),
+                (TRANSPORT_POLICY_CELL_TAG, transport_policy_cell.as_str()),
+                (TRANSPORT_POLICY_STATE_TAG, transport_policy_state.as_str()),
+            ];
             inner.counter(metrics.total_name, metrics.total_description, &tags);
             inner.duration(
                 metrics.duration_name,
@@ -242,6 +289,14 @@ impl Drop for ProcessMetricGuard {
 }
 
 impl ExecServerTelemetryInner {
+    fn transport_policy(&self) -> (TransportPolicyCell, TransportPolicyState) {
+        let encoded = self.transport_policy.load(Ordering::Acquire);
+        (
+            TransportPolicyCell::from_u8(encoded & ((1 << TRANSPORT_POLICY_STATE_SHIFT) - 1)),
+            TransportPolicyState::from_u8(encoded >> TRANSPORT_POLICY_STATE_SHIFT),
+        )
+    }
+
     fn active_counts(&self) -> std::sync::MutexGuard<'_, ActiveCounts> {
         // These are independent integer counts, so a panic cannot leave a cross-field invariant
         // half-updated. Recovering a poisoned lock preserves the last completed count update.
@@ -284,6 +339,10 @@ impl ExecServerTelemetryInner {
             warn!(metric = name, "failed to emit exec-server duration");
         }
     }
+}
+
+const fn encode_transport_policy(cell: TransportPolicyCell, state: TransportPolicyState) -> u8 {
+    (state as u8) << TRANSPORT_POLICY_STATE_SHIFT | cell as u8
 }
 
 fn register_active_gauges(metrics: &MetricsClient, active: &Arc<Mutex<ActiveCounts>>) {
@@ -338,3 +397,7 @@ fn register_active_gauge(
         warn!(metric = name, "failed to register exec-server gauge");
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;

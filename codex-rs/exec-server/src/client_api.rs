@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
+use crate::EnvironmentRegistryTransportPolicy;
 use crate::ExecServerError;
 use crate::HttpRequestParams;
 use crate::HttpRequestResponse;
@@ -47,6 +48,12 @@ pub struct NoiseRendezvousConnectBundle {
     pub harness_key_authorization: String,
 }
 
+/// Registry-authorized bundle and transport policy for one physical connection.
+pub struct NoiseRendezvousConnectAttempt {
+    pub bundle: NoiseRendezvousConnectBundle,
+    pub transport_policy: EnvironmentRegistryTransportPolicy,
+}
+
 /// Connection arguments for an authenticated Noise rendezvous exec-server.
 ///
 /// `harness_identity` identifies the logical harness endpoint and may be reused
@@ -61,6 +68,33 @@ pub struct NoiseRendezvousConnectArgs {
     pub resume_session_id: Option<String>,
 }
 
+/// Policy-aware connection arguments for one authenticated Noise rendezvous
+/// attempt.
+pub struct NoiseRendezvousConnectAttemptArgs {
+    pub attempt: NoiseRendezvousConnectAttempt,
+    pub harness_identity: NoiseChannelIdentity,
+    pub client_name: String,
+    pub connect_timeout: Duration,
+    pub initialize_timeout: Duration,
+    pub resume_session_id: Option<String>,
+}
+
+impl From<NoiseRendezvousConnectArgs> for NoiseRendezvousConnectAttemptArgs {
+    fn from(args: NoiseRendezvousConnectArgs) -> Self {
+        Self {
+            attempt: NoiseRendezvousConnectAttempt {
+                bundle: args.bundle,
+                transport_policy: EnvironmentRegistryTransportPolicy::default(),
+            },
+            harness_identity: args.harness_identity,
+            client_name: args.client_name,
+            connect_timeout: args.connect_timeout,
+            initialize_timeout: args.initialize_timeout,
+            resume_session_id: args.resume_session_id,
+        }
+    }
+}
+
 /// Supplies fresh registry-authorized material for Noise rendezvous connections.
 pub trait NoiseRendezvousConnectProvider: Send + Sync {
     /// Fetch a bundle authorizing this harness key for one physical connection.
@@ -68,6 +102,23 @@ pub trait NoiseRendezvousConnectProvider: Send + Sync {
         &self,
         harness_public_key: NoiseChannelPublicKey,
     ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>>;
+
+    /// Fetch a policy-aware connection attempt.
+    ///
+    /// Existing providers remain source-compatible and use the legacy/off
+    /// transport policy until they explicitly override this method.
+    fn connect_attempt(
+        &self,
+        harness_public_key: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectAttempt, ExecServerError>> {
+        Box::pin(async move {
+            let bundle = self.connect_bundle(harness_public_key).await?;
+            Ok(NoiseRendezvousConnectAttempt {
+                bundle,
+                transport_policy: EnvironmentRegistryTransportPolicy::default(),
+            })
+        })
+    }
 }
 
 /// Stdio connection arguments for a command-backed exec-server.

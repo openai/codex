@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use futures::future::BoxFuture;
@@ -11,11 +12,17 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 
 use super::ExecServerClient;
+use crate::ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION;
+use crate::EnvironmentRegistryTransportPolicy;
 use crate::ExecServerError;
 use crate::NoiseChannelIdentity;
 use crate::NoiseChannelPublicKey;
+use crate::NoiseRendezvousConnectAttempt;
+use crate::NoiseRendezvousConnectAttemptArgs;
 use crate::NoiseRendezvousConnectBundle;
 use crate::NoiseRendezvousConnectProvider;
+use crate::environment_registry::TransportPolicyCell;
+use crate::environment_registry::TransportPolicyState;
 
 struct SequenceNoiseConnectProvider {
     bundles: Mutex<VecDeque<NoiseRendezvousConnectBundle>>,
@@ -99,14 +106,59 @@ async fn initial_noise_connection_refreshes_bundle_after_unauthorized_handshake(
     let provider: Arc<dyn NoiseRendezvousConnectProvider> = sequence.clone();
     let identity = NoiseChannelIdentity::generate()?;
 
-    let _connection =
+    let (connection, _) =
         ExecServerClient::open_initial_noise_rendezvous_connection(&provider, &identity).await?;
 
     assert_eq!(
         sequence.returned_urls(),
         vec![unauthorized_url, accepted_url]
     );
+    assert_eq!(connection.transport_policy_cell, TransportPolicyCell::C00);
+    assert_eq!(
+        connection.transport_policy_state,
+        TransportPolicyState::Legacy
+    );
+    assert_eq!(connection.transport_policy_assignment_epoch, "legacy");
     unauthorized_server.await??;
     accepted_server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_aware_noise_connection_carries_effective_cell() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await?;
+        let _websocket = accept_async(socket).await?;
+        anyhow::Ok(())
+    });
+    let connection =
+        ExecServerClient::open_noise_rendezvous_connection(NoiseRendezvousConnectAttemptArgs {
+            attempt: NoiseRendezvousConnectAttempt {
+                bundle: test_bundle(websocket_url)?,
+                transport_policy: EnvironmentRegistryTransportPolicy {
+                    version: ENVIRONMENT_REGISTRY_TRANSPORT_POLICY_VERSION,
+                    assignment_epoch: "test".to_string(),
+                    outbound_tcp_nodelay: true,
+                    rendezvous_accepted_tcp_nodelay: true,
+                },
+            },
+            harness_identity: NoiseChannelIdentity::generate()?,
+            client_name: "policy-aware-test".to_string(),
+            connect_timeout: Duration::from_secs(1),
+            initialize_timeout: Duration::from_secs(1),
+            resume_session_id: None,
+        })
+        .await?
+        .0;
+
+    assert_eq!(connection.transport_policy_cell, TransportPolicyCell::C11);
+    assert_eq!(
+        connection.transport_policy_state,
+        TransportPolicyState::Active
+    );
+    assert_eq!(connection.transport_policy_assignment_epoch, "test");
+    server.await??;
     Ok(())
 }

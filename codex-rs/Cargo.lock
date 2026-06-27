@@ -2932,6 +2932,7 @@ dependencies = [
  "opentelemetry_sdk",
  "pretty_assertions",
  "prost 0.14.3",
+ "rand 0.9.3",
  "rcgen",
  "reqwest 0.12.28",
  "rustls",

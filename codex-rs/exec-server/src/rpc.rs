@@ -25,6 +25,8 @@ use tokio::task::JoinHandle;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::environment_registry::TransportPolicyCell;
+use crate::environment_registry::TransportPolicyState;
 
 pub(crate) const SESSION_ALREADY_ATTACHED_ERROR_CODE: i64 = -32010;
 
@@ -234,6 +236,9 @@ pub(crate) struct RpcClient {
     next_request_id: AtomicI64,
     transport_tasks: Vec<JoinHandle<()>>,
     transport: JsonRpcTransport,
+    pub(crate) transport_policy_cell: TransportPolicyCell,
+    pub(crate) transport_policy_state: TransportPolicyState,
+    pub(crate) transport_policy_assignment_epoch: String,
     reader_task: JoinHandle<()>,
 }
 
@@ -245,6 +250,9 @@ impl RpcClient {
             disconnected_rx,
             task_handles: transport_tasks,
             transport,
+            transport_policy_cell,
+            transport_policy_state,
+            transport_policy_assignment_epoch,
         } = connection;
         let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
         let closed = Arc::new(AtomicBool::new(false));
@@ -296,6 +304,9 @@ impl RpcClient {
                 next_request_id: AtomicI64::new(1),
                 transport_tasks,
                 transport,
+                transport_policy_cell,
+                transport_policy_state,
+                transport_policy_assignment_epoch,
                 reader_task,
             },
             event_rx,
