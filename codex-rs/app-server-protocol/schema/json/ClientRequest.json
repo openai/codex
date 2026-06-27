@@ -3673,6 +3673,13 @@
             }
           ],
           "description": "Optional client-supplied analytics source classification for this forked thread."
+        },
+        "lastTurnId": {
+          "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3744,6 +3751,13 @@
         "usageLimited",
         "budgetLimited",
         "complete"
+      ],
+      "type": "string"
+    },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
       ],
       "type": "string"
     },

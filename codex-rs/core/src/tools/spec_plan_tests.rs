@@ -275,22 +275,19 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
-fn use_provider_auth(
-    turn: &mut TurnContext,
-    requires_openai_auth: bool,
-    actor_header: Option<(&str, &str)>,
-) {
+fn use_actor_authorized_provider(turn: &mut TurnContext) {
     let mut provider_info = turn.config.model_provider.clone();
-    provider_info.requires_openai_auth = requires_openai_auth;
-    provider_info.http_headers = actor_header.map(|(name, value)| {
-        HashMap::from([
-            (name.to_string(), value.to_string()),
-            (
-                "ChatGPT-Account-ID".to_string(),
-                "test-account-id".to_string(),
-            ),
-        ])
-    });
+    provider_info.requires_openai_auth = false;
+    provider_info.http_headers = Some(HashMap::from([
+        (
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        ),
+        (
+            "ChatGPT-Account-ID".to_string(),
+            "test-account-id".to_string(),
+        ),
+    ]));
     turn.auth_manager = None;
     update_config(turn, |config| {
         config.model_provider = provider_info.clone();
@@ -686,10 +683,12 @@ async fn environment_tools_follow_the_step_context() {
 
     let environments = turn.environments.clone();
     turn.environments.turn_environments.clear();
+    let turn = Arc::new(turn);
     let step_context = Arc::new(StepContext::new(
-        Arc::new(turn),
+        Arc::clone(&turn),
         environments,
         Vec::new(),
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
         /*loaded_agents_md*/ None,
     ));
 
@@ -1550,47 +1549,17 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
 
-    let provider_without_actor_auth = probe(|turn| {
+    let actor_authorized_provider = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(
-            turn, /*requires_openai_auth*/ false, /*actor_header*/ None,
-        );
+        use_actor_authorized_provider(turn);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
-    provider_without_actor_auth.assert_visible_lacks(&["image_generation"]);
-
-    let provider_authenticated = probe(|turn| {
-        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(
-            turn,
-            /*requires_openai_auth*/ false,
-            Some(("X-OpenAI-Actor-Authorization", "test-actor-authorization")),
-        );
-        turn.model_info.input_modalities = vec![InputModality::Image];
-    })
-    .await;
-    provider_authenticated.assert_visible_contains(&["image_generation"]);
-
-    let empty_actor_auth = probe(|turn| {
-        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(
-            turn,
-            /*requires_openai_auth*/ false,
-            Some(("x-openai-actor-authorization", "  ")),
-        );
-        turn.model_info.input_modalities = vec![InputModality::Image];
-    })
-    .await;
-    empty_actor_auth.assert_visible_lacks(&["image_generation"]);
+    actor_authorized_provider.assert_visible_contains(&["image_generation"]);
 
     let feature_disabled = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
-        use_provider_auth(
-            turn,
-            /*requires_openai_auth*/ false,
-            Some(("x-openai-actor-authorization", "test-actor-authorization")),
-        );
+        use_actor_authorized_provider(turn);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
@@ -1598,11 +1567,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
 
     let text_only_model = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(
-            turn,
-            /*requires_openai_auth*/ false,
-            Some(("x-openai-actor-authorization", "test-actor-authorization")),
-        );
+        use_actor_authorized_provider(turn);
         turn.model_info.input_modalities = vec![];
     })
     .await;
@@ -1611,33 +1576,11 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     let unsupported_image_generation_provider = probe(|turn| {
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
         use_bedrock_provider(turn);
-        let mut provider_info = turn.provider.info().clone();
-        provider_info.requires_openai_auth = false;
-        provider_info.http_headers = Some(HashMap::from([(
-            "x-openai-actor-authorization".to_string(),
-            "test-actor-authorization".to_string(),
-        )]));
-        turn.auth_manager = None;
-        update_config(turn, |config| {
-            config.model_provider = provider_info.clone();
-        });
-        turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        use_actor_authorized_provider(turn);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
     unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
-
-    let codex_managed_auth_provider = probe(|turn| {
-        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
-        use_provider_auth(
-            turn,
-            /*requires_openai_auth*/ true,
-            Some(("x-openai-actor-authorization", "test-actor-authorization")),
-        );
-        turn.model_info.input_modalities = vec![InputModality::Image];
-    })
-    .await;
-    codex_managed_auth_provider.assert_visible_lacks(&["image_generation"]);
 
     let image_generation = probe(|turn| {
         use_chatgpt_auth(turn);

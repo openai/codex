@@ -660,6 +660,7 @@ impl TestCodexBuilder {
                         config: config.clone(),
                         allow_provider_model_fallback: false,
                         initial_history: InitialHistory::New,
+                        history_mode: None,
                         session_source: None,
                         thread_source: None,
                         dynamic_tools: Vec::new(),

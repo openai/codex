@@ -1578,7 +1578,7 @@ impl PluginsManager {
                         let mut local_version = plugin.local_version;
                         let manifest_fallback = plugin.manifest_fallback.clone();
                         if installed
-                            && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
+                            && plugin.source.is_install_materialized()
                             && let Some(plugin_id) = plugin_id.as_ref()
                             && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
@@ -1741,7 +1741,7 @@ impl PluginsManager {
                 }
             })?;
         let plugin_key = plugin_id.as_key();
-        if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && !plugin.installed {
+        if plugin.source.is_install_materialized() && !plugin.installed {
             let description = remote_plugin_install_required_description(&plugin.source);
             return Ok(PluginDetail {
                 id: plugin_key,
@@ -1766,28 +1766,27 @@ impl PluginsManager {
             });
         }
 
-        let source_path =
-            if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && plugin.installed {
-                self.store.active_plugin_root(&plugin_id).ok_or_else(|| {
-                    MarketplaceError::InvalidPlugin(format!(
-                        "installed plugin cache entry is missing for {plugin_key}"
-                    ))
-                })?
-            } else {
-                let codex_home = self.codex_home.clone();
-                let source = plugin.source.clone();
-                let materialized = tokio::task::spawn_blocking(move || {
-                    materialize_marketplace_plugin_source(codex_home.as_path(), &source)
-                })
-                .await
-                .map_err(|err| {
-                    MarketplaceError::InvalidPlugin(format!(
-                        "failed to materialize plugin source: {err}"
-                    ))
-                })?
-                .map_err(MarketplaceError::InvalidPlugin)?;
-                materialized.path.clone()
-            };
+        let source_path = if plugin.source.is_install_materialized() && plugin.installed {
+            self.store.active_plugin_root(&plugin_id).ok_or_else(|| {
+                MarketplaceError::InvalidPlugin(format!(
+                    "installed plugin cache entry is missing for {plugin_key}"
+                ))
+            })?
+        } else {
+            let codex_home = self.codex_home.clone();
+            let source = plugin.source.clone();
+            let materialized = tokio::task::spawn_blocking(move || {
+                materialize_marketplace_plugin_source(codex_home.as_path(), &source)
+            })
+            .await
+            .map_err(|err| {
+                MarketplaceError::InvalidPlugin(format!(
+                    "failed to materialize plugin source: {err}"
+                ))
+            })?
+            .map_err(MarketplaceError::InvalidPlugin)?;
+            materialized.path.clone()
+        };
         if !source_path.as_path().is_dir() {
             return Err(MarketplaceError::InvalidPlugin(
                 "path does not exist or is not a directory".to_string(),
@@ -2474,10 +2473,29 @@ pub(crate) fn remote_plugin_install_required_description(
             parts.join(", ")
         }
         MarketplacePluginSource::Local { path } => path.as_path().display().to_string(),
+        MarketplacePluginSource::Npm {
+            package,
+            version,
+            registry,
+        } => {
+            let mut parts = vec![package.clone()];
+            if let Some(version) = version {
+                parts.push(format!("version `{version}`"));
+            }
+            if let Some(registry) = registry {
+                parts.push(format!("registry `{registry}`"));
+            }
+            parts.join(", ")
+        }
     };
 
+    let source_kind = if matches!(source, MarketplacePluginSource::Npm { .. }) {
+        "an npm plugin"
+    } else {
+        "a cross-repo plugin"
+    };
     format!(
-        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
+        "This is {source_kind}. Install it to view more detailed information. The source of the plugin is {source_description}."
     )
 }
 

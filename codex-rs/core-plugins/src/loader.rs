@@ -10,6 +10,7 @@ use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::npm_source::materialize_npm_plugin_source;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
@@ -1353,6 +1354,22 @@ pub fn materialize_marketplace_plugin_source(
                     format!("failed to resolve materialized plugin source path: {err}")
                 })?
             };
+            Ok(MaterializedMarketplacePluginSource {
+                path,
+                _tempdir: Some(tempdir),
+            })
+        }
+        MarketplacePluginSource::Npm {
+            package,
+            version,
+            registry,
+        } => {
+            let (path, tempdir) = materialize_npm_plugin_source(
+                codex_home,
+                package,
+                version.as_deref(),
+                registry.as_deref(),
+            )?;
             Ok(MaterializedMarketplacePluginSource {
                 path,
                 _tempdir: Some(tempdir),

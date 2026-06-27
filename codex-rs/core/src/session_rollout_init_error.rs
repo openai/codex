@@ -3,8 +3,16 @@ use std::path::Path;
 
 use crate::rollout::SESSIONS_SUBDIR;
 use codex_protocol::error::CodexErr;
+use codex_thread_store::ThreadStoreError;
 
 pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> CodexErr {
+    if let Some(ThreadStoreError::Unsupported { operation }) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ThreadStoreError>())
+    {
+        return CodexErr::UnsupportedOperation(format!("{operation} is not supported yet"));
+    }
+
     if let Some(mapped) = err
         .chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())

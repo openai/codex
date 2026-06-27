@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use codex_config::McpServerConfig;
+use codex_connectors::ConnectorSnapshot;
+use codex_connectors::PluginConnectorSource;
 use codex_core_plugins::PluginsManager;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
@@ -18,6 +21,7 @@ use codex_mcp::McpServerRegistration;
 use codex_mcp::codex_apps_mcp_server_config;
 use codex_mcp::configured_mcp_servers;
 use codex_mcp::effective_mcp_servers;
+use codex_plugin::AppConnectorId;
 
 const LEGACY_CODEX_APPS_REGISTRATION_ID: &str = "legacy_codex_apps";
 
@@ -69,28 +73,32 @@ impl McpManager {
     /// Returns the MCP config after applying compatibility built-ins and
     /// runtime-only extension overlays.
     pub async fn runtime_config(&self, config: &Config) -> McpConfig {
-        self.runtime_config_with_context(config, /*thread_init*/ None)
+        self.runtime_config_with_context(McpServerContributionContext::global(config))
             .await
     }
 
-    pub(crate) async fn runtime_config_for_thread(
+    pub(crate) async fn runtime_config_for_step(
         &self,
         config: &Config,
         thread_init: &ExtensionDataInit,
+        thread_store: &ExtensionData,
+        available_environment_ids: &[String],
     ) -> McpConfig {
-        self.runtime_config_with_context(config, Some(thread_init))
-            .await
+        self.runtime_config_with_context(McpServerContributionContext::for_step(
+            config,
+            thread_init,
+            thread_store,
+            available_environment_ids,
+        ))
+        .await
     }
 
     async fn runtime_config_with_context(
         &self,
-        config: &Config,
-        thread_init: Option<&ExtensionDataInit>,
+        context: McpServerContributionContext<'_, Config>,
     ) -> McpConfig {
-        let context = match thread_init {
-            Some(thread_init) => McpServerContributionContext::for_thread(config, thread_init),
-            None => McpServerContributionContext::global(config),
-        };
+        let config = context.config();
+        let mut selected_plugin_connector_sources = Vec::new();
         let mut selected_plugin_registrations = Vec::new();
         let mut overlays = Vec::new();
         // A contributor can emit multiple ordered actions, so order each action globally rather
@@ -119,6 +127,17 @@ impl McpManager {
                             McpPluginAttribution::new(plugin_id, plugin_display_name),
                             selection_order,
                             *config,
+                        ),
+                    ),
+                    McpServerContribution::SelectedPluginConnectors {
+                        plugin_id,
+                        plugin_display_name,
+                        connector_ids,
+                    } => selected_plugin_connector_sources.push(
+                        PluginConnectorSource::from_connector_ids(
+                            plugin_id,
+                            plugin_display_name,
+                            connector_ids.into_iter().map(AppConnectorId),
                         ),
                     ),
                     McpServerContribution::Remove { name } => {
@@ -186,6 +205,12 @@ impl McpManager {
             );
         }
         mcp_config.mcp_server_catalog = catalog;
+        mcp_config.connector_snapshot =
+            mcp_config
+                .connector_snapshot
+                .merged_with(&ConnectorSnapshot::from_plugin_sources(
+                    selected_plugin_connector_sources,
+                ));
         mcp_config
     }
 

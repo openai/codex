@@ -15,6 +15,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
+use crate::session::McpRuntimeSnapshot;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -30,7 +31,9 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
+use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeContext;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -44,8 +47,12 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    /// The latest manager; callers retain an owned handle while performing MCP I/O.
+    /// Mirror of the latest manager for extension resource clients that predate runtime snapshots.
     pub(crate) mcp_connection_manager: Arc<ArcSwap<McpConnectionManager>>,
+    /// The latest atomically published MCP config and manager pair.
+    pub(crate) mcp_runtime: ArcSwapOption<McpRuntimeSnapshot>,
+    /// Serializes environment-driven runtime rebuilds.
+    pub(crate) mcp_projection_lock: Mutex<()>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -99,12 +106,41 @@ impl SessionServices {
     /// resolve through the session's manager while validation waits.
     pub(crate) async fn install_mcp_connection_manager(
         &self,
+        config: Arc<McpConfig>,
+        runtime_context: McpRuntimeContext,
+        available_environment_ids: Vec<String>,
         manager: McpConnectionManager,
     ) -> Result<()> {
-        self.mcp_connection_manager.store(Arc::new(manager));
-        self.mcp_connection_manager
-            .load_full()
-            .validate_required_servers()
-            .await
+        let runtime =
+            self.publish_mcp_runtime(config, runtime_context, available_environment_ids, manager);
+        runtime.manager().validate_required_servers().await
+    }
+
+    pub(crate) fn publish_mcp_runtime(
+        &self,
+        config: Arc<McpConfig>,
+        runtime_context: McpRuntimeContext,
+        available_environment_ids: Vec<String>,
+        manager: McpConnectionManager,
+    ) -> Arc<McpRuntimeSnapshot> {
+        let manager = Arc::new(manager);
+        // Publish the manager for legacy resource clients first. Once the paired snapshot is
+        // visible, every model-scoped consumer observes this exact manager.
+        self.mcp_connection_manager.store(Arc::clone(&manager));
+        let runtime = Arc::new(McpRuntimeSnapshot::new(
+            config,
+            manager,
+            runtime_context,
+            available_environment_ids,
+        ));
+        self.mcp_runtime.store(Some(Arc::clone(&runtime)));
+        runtime
+    }
+
+    pub(crate) fn latest_mcp_runtime(&self) -> Arc<McpRuntimeSnapshot> {
+        let Some(runtime) = self.mcp_runtime.load_full() else {
+            unreachable!("MCP runtime must be installed before handling requests");
+        };
+        runtime
     }
 }

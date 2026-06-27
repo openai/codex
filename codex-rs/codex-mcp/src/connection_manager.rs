@@ -18,6 +18,7 @@ use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
 use crate::elicitation::ElicitationRequestManager;
+use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
@@ -141,6 +142,7 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        elicitation_router: ElicitationRequestRouter,
     ) -> Self {
         let mut required_servers = mcp_servers
             .iter()
@@ -155,6 +157,7 @@ impl McpConnectionManager {
             approval_policy.value(),
             initial_permission_profile,
             elicitation_reviewer,
+            elicitation_router,
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
@@ -205,6 +208,7 @@ impl McpConnectionManager {
                 };
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
+                startup_submit_id.clone(),
                 server,
                 store_mode,
                 keyring_backend_kind,
@@ -253,6 +257,10 @@ impl McpConnectionManager {
                     },
                 )
                 .await;
+
+                if matches!(&outcome, Err(StartupOutcomeError::Failed { .. })) {
+                    async_managed_client.reconnect_failed_startup().await;
+                }
 
                 (server_name, outcome)
             });
@@ -352,6 +360,7 @@ impl McpConnectionManager {
                 approval_policy.value(),
                 permission_profile.clone(),
                 /*reviewer*/ None,
+                ElicitationRequestRouter::default(),
             ),
             startup_cancellation_token: CancellationToken::new(),
         }
@@ -444,6 +453,10 @@ impl McpConnectionManager {
         self.elicitation_requests.set_auto_deny(auto_deny);
     }
 
+    pub fn elicitation_router(&self) -> ElicitationRequestRouter {
+        self.elicitation_requests.router()
+    }
+
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -471,6 +484,7 @@ impl McpConnectionManager {
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
         for (server_name, managed_client) in &self.clients {
+            managed_client.reconnect_failed_startup().await;
             let has_cached_tools = managed_client.has_cached_tools();
             let startup_complete = managed_client
                 .startup_complete

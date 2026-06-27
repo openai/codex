@@ -2287,6 +2287,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            history_mode: Default::default(),
             thread_source: None,
             agent_nickname: None,
             agent_role: None,

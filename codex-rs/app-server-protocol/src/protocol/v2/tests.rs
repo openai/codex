@@ -175,6 +175,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: "openai".to_string(),
             created_at: 1,
             updated_at: 1,
@@ -835,6 +836,30 @@ fn thread_path_params_deserialize_empty_path_as_none() {
     assert_eq!(
         resume_with_path.path,
         Some(PathBuf::from("/tmp/resume-thread.jsonl"))
+    );
+}
+
+#[test]
+fn thread_fork_last_turn_id_round_trips() {
+    let params: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "lastTurnId": "turn-2",
+    }))
+    .expect("thread/fork params deserialize");
+
+    assert_eq!(params.last_turn_id, Some("turn-2".to_string()));
+    let serialized = serde_json::to_value(params).expect("thread/fork params serialize");
+    assert_eq!(serialized["lastTurnId"], json!("turn-2"));
+
+    let omitted = serde_json::to_value(ThreadForkParams {
+        thread_id: "thread-1".to_string(),
+        ..Default::default()
+    })
+    .expect("thread/fork params without last turn id serialize");
+    assert_eq!(
+        omitted["lastTurnId"],
+        serde_json::Value::Null,
+        "optional lastTurnId should serialize as null when omitted"
     );
 }
 
@@ -1752,6 +1777,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             hooks: None,
             enforce_residency: None,
             network: None,
+            models: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));
@@ -2677,6 +2703,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         connector_id: Some("calendar".to_string()),
         mcp_app_resource_uri: Some("app://connector".to_string()),
         link_id: Some("link_calendar".to_string()),
+        app_name: Some("Calendar".to_string()),
+        template_id: Some("calendar_template".to_string()),
+        action_name: Some("create_event".to_string()),
         plugin_id: Some("sample@test".to_string()),
         status: CoreMcpToolCallStatus::InProgress,
         result: None,
@@ -2696,6 +2725,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 connector_id: "calendar".to_string(),
                 link_id: Some("link_calendar".to_string()),
                 resource_uri: Some("app://connector".to_string()),
+                app_name: Some("Calendar".to_string()),
+                template_id: Some("calendar_template".to_string()),
+                action_name: Some("create_event".to_string()),
             }),
             mcp_app_resource_uri: Some("app://connector".to_string()),
             plugin_id: Some("sample@test".to_string()),
@@ -2713,6 +2745,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         connector_id: None,
         mcp_app_resource_uri: None,
         link_id: None,
+        app_name: None,
+        template_id: None,
+        action_name: None,
         plugin_id: None,
         status: CoreMcpToolCallStatus::Completed,
         result: Some(CallToolResult {
@@ -2759,6 +2794,9 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             connector_id: "calendar".to_string(),
             link_id: Some("link_calendar".to_string()),
             resource_uri: Some("app://connector".to_string()),
+            app_name: Some("Calendar".to_string()),
+            template_id: Some("calendar_template".to_string()),
+            action_name: Some("create_event".to_string()),
         }),
         mcp_app_resource_uri: Some("app://connector".to_string()),
         plugin_id: None,
@@ -2780,12 +2818,38 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
                 "connectorId": "calendar",
                 "linkId": "link_calendar",
                 "resourceUri": "app://connector",
+                "appName": "Calendar",
+                "templateId": "calendar_template",
+                "actionName": "create_event",
             },
             "mcpAppResourceUri": "app://connector",
             "pluginId": null,
             "result": null,
             "error": null,
             "durationMs": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null() {
+    assert_eq!(
+        serde_json::to_value(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: None,
+            resource_uri: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+        })
+        .expect("MCP tool call app context should serialize"),
+        json!({
+            "connectorId": "calendar",
+            "linkId": null,
+            "resourceUri": null,
+            "appName": null,
+            "templateId": null,
+            "actionName": null,
         })
     );
 }
@@ -2863,7 +2927,7 @@ fn skills_extra_roots_set_params_rejects_relative_roots() {
 }
 
 #[test]
-fn plugin_source_serializes_local_git_and_remote_variants() {
+fn plugin_source_serializes_local_git_npm_and_remote_variants() {
     let local_path = if cfg!(windows) {
         r"C:\plugins\linear"
     } else {
@@ -2894,6 +2958,21 @@ fn plugin_source_serializes_local_git_and_remote_variants() {
             "path": "plugins/example",
             "refName": "main",
             "sha": "abc123",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginSource::Npm {
+            package: "@acme/plugin".to_string(),
+            version: Some("^1.2.0".to_string()),
+            registry: Some("https://npm.example.com".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "type": "npm",
+            "package": "@acme/plugin",
+            "version": "^1.2.0",
+            "registry": "https://npm.example.com",
         }),
     );
 
