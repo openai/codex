@@ -725,6 +725,7 @@ mod tests {
     async fn rpc_client_timeout_removes_pending_request() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (server_writer, client_stdout) = tokio::io::duplex(4096);
+        let (release_server_tx, release_server_rx) = tokio::sync::oneshot::channel();
         let connection =
             JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
         let (client, _events_rx) = RpcClient::new(connection);
@@ -734,7 +735,7 @@ mod tests {
             let request = read_jsonrpc_line(&mut lines).await;
             assert!(matches!(request, JSONRPCMessage::Request(_)));
             let _server_writer = server_writer;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = release_server_rx.await;
         });
 
         let call_timeout = Duration::from_millis(10);
@@ -748,6 +749,7 @@ mod tests {
         ));
         assert_eq!(client.pending_request_count().await, 0);
 
+        let _ = release_server_tx.send(());
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
