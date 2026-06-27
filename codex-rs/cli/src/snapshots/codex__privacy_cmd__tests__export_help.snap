@@ -1,0 +1,15 @@
+---
+source: cli/src/privacy_cmd_tests.rs
+expression: export.render_long_help().to_string()
+---
+Export your local Codex data
+
+Usage: export <PATH>
+
+Arguments:
+  <PATH>
+          Directory to copy the export into
+
+Options:
+  -h, --help
+          Print help

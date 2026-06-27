@@ -1,0 +1,13 @@
+---
+source: cli/src/privacy_cmd_tests.rs
+expression: command.render_long_help().to_string()
+---
+Usage: codex privacy <COMMAND>
+
+Commands:
+  export  Export your local Codex data
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
