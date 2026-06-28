@@ -3,6 +3,7 @@ use super::HookEventName;
 use super::HookHandlerType;
 use super::HookSource;
 use super::HookTrustStatus;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
@@ -15,7 +16,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
@@ -26,6 +29,11 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
+
+    /// Optional thread whose selected executor skills should be included.
+    #[experimental("skills/list.threadId")]
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -33,6 +41,22 @@ pub struct SkillsListParams {
 #[ts(export_to = "v2/")]
 pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
+    /// Skills contributed by selected capability roots for the requested thread.
+    pub thread_skills: Vec<ThreadSkillMetadata>,
+    /// Warnings encountered while discovering the requested thread's executor skills.
+    pub thread_skill_warnings: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSkillMetadata {
+    pub name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    /// Stable executor-owned locator used for display and deduplication.
+    pub resource: String,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -875,8 +899,11 @@ impl From<CoreSkillScope> for SkillScope {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Notification emitted when watched local skill files change.
+/// Notification emitted when the available skills catalog changes.
 ///
 /// Treat this as an invalidation signal and re-run `skills/list` with the
 /// client's current parameters when refreshed skill metadata is needed.
-pub struct SkillsChangedNotification {}
+pub struct SkillsChangedNotification {
+    /// The affected thread, or `None` for a process-wide local skill change.
+    pub thread_id: Option<String>,
+}

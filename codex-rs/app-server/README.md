@@ -217,7 +217,7 @@ Example with notification opt-out:
 - `plugin/installed` — list installed plugin rows plus any explicitly requested local install-suggestion plugin names, without fetching the broader remote catalog. Mention surfaces can use this narrower view when they need plugin mention payloads rather than plugin-page discovery data (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/hooks/apps/MCP server names. Remote plugin details expose the canonical `shareUrl` supplied by the remote catalog when available; it is `null` for local plugins or when the catalog omits it. This field is separate from `summary.shareContext`, which continues to describe user and workspace sharing state. Returned plugin skills include their current `enabled` state after local config filtering; bundled hooks are returned as lightweight declaration summaries keyed for correlation with `hooks/list`. Use `plugin/install`'s `appsNeedingAuth` to drive post-install authentication and `app/list`'s `isAccessible` to determine current connector accessibility (**under development; do not call from production clients yet**).
 - `plugin/skill/read` — read remote plugin skill markdown on demand by `remoteMarketplaceName`, `remotePluginId`, and `skillName`. This lets clients preview uninstalled remote plugin skills without downloading the plugin bundle.
-- `skills/changed` — notification emitted when watched local skill files change.
+- `skills/changed` — notification emitted when local or thread-selected skills change.
 - `app/list` — list available apps.
 - `remoteControl/enable` — experimental; enable remote control for the current app-server process and return the current remote-control status snapshot. By default, any missing enrollment is completed before the response and the preference is persisted for the current app-server client scope. Pass `ephemeral: true` to enable remote control only for the current process without changing the persisted preference.
 - `remoteControl/disable` — experimental; disable remote control for the current app-server process and return the current remote-control status snapshot. By default, the disabled preference is persisted for the current app-server client scope. Pass `ephemeral: true` to disable only for the current process without changing the persisted preference. This does not revoke already enrolled controller devices.
@@ -1637,15 +1637,16 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`). Pass the experimental `threadId` field to also receive the selected executor skills currently available to that thread in `threadSkills`; executor discovery problems are returned in `threadSkillWarnings`.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
-The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
+The server also emits `skills/changed` notifications when watched local skill files or a selected executor catalog changes. A thread-scoped notification includes `threadId`; re-run `skills/list` with that same ID to refresh the invocation UI. A notification with `threadId: null` invalidates process-wide local skill state.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
     "cwds": ["/Users/me/project", "/Users/me/other-project"],
-    "forceReload": true
+    "forceReload": true,
+    "threadId": "67e8c0d2-5f31-4f0d-9f70-4b529c6fdd01"
 } }
 { "id": 25, "result": {
     "data": [{
@@ -1666,14 +1667,22 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
             }
         ],
         "errors": []
-    }]
+    }],
+    "threadSkills": [{
+        "name": "deploy",
+        "description": "Deploy through the selected executor",
+        "shortDescription": null,
+        "resource": "skill://executor-plugin@1/workspace/plugin/skills/deploy/SKILL.md",
+        "enabled": true
+    }],
+    "threadSkillWarnings": []
 } }
 ```
 
 ```json
 {
   "method": "skills/changed",
-  "params": {}
+  "params": { "threadId": "67e8c0d2-5f31-4f0d-9f70-4b529c6fdd01" }
 }
 ```
 

@@ -3804,7 +3804,7 @@ async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event(
 
     assert_eq!(
         app.active_non_primary_shutdown_target(&ServerNotification::SkillsChanged(
-            codex_app_server_protocol::SkillsChangedNotification {},
+            codex_app_server_protocol::SkillsChangedNotification { thread_id: None },
         )),
         None
     );

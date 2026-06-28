@@ -235,12 +235,15 @@ impl Drop for ActiveProcessStart {
 
 type ConnectionResult = Result<ExecServerClient, Arc<ExecServerError>>;
 type ConnectionAttempt = OnceCell<ConnectionResult>;
+type StartupCompletion = Result<(), Arc<ExecServerError>>;
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
     transport_params: ExecServerTransportParams,
     // Saves the first startup result so callers share it and failures remain final.
     startup: Arc<ConnectionAttempt>,
+    // Broadcasts startup completion without allowing observers to initiate it.
+    startup_completion: watch::Sender<Option<StartupCompletion>>,
     // The latest successful client, replaced whenever reconnecting succeeds.
     current_client: Arc<StdMutex<Option<ExecServerClient>>>,
     reconnect: Arc<StdMutex<Option<Arc<ConnectionAttempt>>>>,
@@ -248,9 +251,11 @@ pub(crate) struct LazyRemoteExecServerClient {
 
 impl LazyRemoteExecServerClient {
     pub(crate) fn new(transport_params: ExecServerTransportParams) -> Self {
+        let (startup_completion, _startup_completion_rx) = watch::channel(None);
         Self {
             transport_params,
             startup: Arc::new(ConnectionAttempt::new()),
+            startup_completion,
             current_client: Arc::new(StdMutex::new(None)),
             reconnect: Arc::new(StdMutex::new(None)),
         }
@@ -280,6 +285,24 @@ impl LazyRemoteExecServerClient {
         self.initial_client().await.map(drop)
     }
 
+    pub(crate) fn observe_startup(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send + 'static {
+        let mut startup_completion = self.startup_completion.subscribe();
+        async move {
+            loop {
+                let result = startup_completion.borrow_and_update().clone();
+                if let Some(result) = result {
+                    return result.map_err(ExecServerError::ConnectionAttempt);
+                }
+                startup_completion
+                    .changed()
+                    .await
+                    .map_err(|_| ExecServerError::Closed)?;
+            }
+        }
+    }
+
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         if let Some(client) = self.connected_client() {
             return Ok(client);
@@ -302,9 +325,16 @@ impl LazyRemoteExecServerClient {
 
     async fn initial_client(&self) -> Result<ExecServerClient, ExecServerError> {
         // The first caller starts the work; every other caller waits for that same result.
+        let transport_params = self.transport_params.clone();
+        let startup_completion = self.startup_completion.clone();
         let result = self
             .startup
-            .get_or_init(|| connect_once(self.transport_params.clone()))
+            .get_or_init(|| async move {
+                let result = connect_once(transport_params).await;
+                let completion = result.as_ref().map(|_| ()).map_err(Arc::clone);
+                startup_completion.send_replace(Some(completion));
+                result
+            })
             .await;
         match result {
             Ok(client) => {

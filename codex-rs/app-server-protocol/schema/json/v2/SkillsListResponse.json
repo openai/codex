@@ -209,6 +209,36 @@
         "skills"
       ],
       "type": "object"
+    },
+    "ThreadSkillMetadata": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resource": {
+          "description": "Stable executor-owned locator used for display and deduplication.",
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "enabled",
+        "name",
+        "resource"
+      ],
+      "type": "object"
     }
   },
   "properties": {
@@ -217,10 +247,26 @@
         "$ref": "#/definitions/SkillsListEntry"
       },
       "type": "array"
+    },
+    "threadSkillWarnings": {
+      "description": "Warnings encountered while discovering the requested thread's executor skills.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "threadSkills": {
+      "description": "Skills contributed by selected capability roots for the requested thread.",
+      "items": {
+        "$ref": "#/definitions/ThreadSkillMetadata"
+      },
+      "type": "array"
     }
   },
   "required": [
-    "data"
+    "data",
+    "threadSkillWarnings",
+    "threadSkills"
   ],
   "title": "SkillsListResponse",
   "type": "object"

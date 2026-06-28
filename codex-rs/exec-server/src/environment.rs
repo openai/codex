@@ -266,6 +266,16 @@ impl EnvironmentManager {
         environment_ids
     }
 
+    /// Returns a snapshot of every currently registered environment.
+    pub fn registered_environments(&self) -> Vec<(String, Arc<Environment>)> {
+        self.environments
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(environment_id, environment)| (environment_id.clone(), Arc::clone(environment)))
+            .collect()
+    }
+
     /// Returns the local environment instance when one is configured.
     pub fn try_local_environment(&self) -> Option<Arc<Environment>> {
         self.local_environment.as_ref().map(Arc::clone)
@@ -605,6 +615,22 @@ impl Environment {
         match &self.remote_client {
             Some(client) => client.wait_until_ready().await,
             None => Ok(()),
+        }
+    }
+
+    /// Observes the initial startup result without initiating startup.
+    pub fn observe_startup(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send + 'static {
+        let startup = self
+            .remote_client
+            .as_ref()
+            .map(LazyRemoteExecServerClient::observe_startup);
+        async move {
+            match startup {
+                Some(startup) => startup.await,
+                None => Ok(()),
+            }
         }
     }
 
@@ -1054,7 +1080,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_leaves_stdio_environment_lazy() {
+    async fn environment_startup_observer_keeps_stdio_environment_lazy() {
         let environment = Environment::remote_with_transport(
             ExecServerTransportParams::StdioCommand {
                 command: StdioExecServerCommand {
@@ -1078,8 +1104,18 @@ mod tests {
         .expect("environment manager");
         let environment = manager.get_environment("stdio").expect("stdio environment");
 
+        let observer = tokio::spawn(environment.observe_startup());
+        tokio::task::yield_now().await;
         assert!(!environment.startup_finished());
-        assert!(environment.wait_until_ready().await.is_err());
+        assert!(!observer.is_finished());
+
+        Environment::start_connecting_for_use(&environment);
+        assert!(
+            observer
+                .await
+                .expect("startup observer task should finish")
+                .is_err()
+        );
         assert!(environment.startup_finished());
     }
 

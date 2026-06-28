@@ -166,7 +166,8 @@ impl SkillCatalogEntry {
         self
     }
 
-    pub(crate) fn rendered_path(&self) -> &str {
+    /// Returns the stable locator rendered to clients and the model.
+    pub fn rendered_path(&self) -> &str {
         self.display_path
             .as_deref()
             .unwrap_or_else(|| self.main_prompt.as_str())
