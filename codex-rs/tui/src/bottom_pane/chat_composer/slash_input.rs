@@ -360,8 +360,12 @@ impl ChatComposer {
                     }
 
                     self.stage_selected_slash_command_history(&sel);
-                    self.draft.textarea.set_text_clearing_elements("");
-                    self.draft.is_bash_mode = false;
+                    let preserve_review_draft = self.is_task_running
+                        && matches!(sel, CommandItem::Builtin(SlashCommand::Review));
+                    if !preserve_review_draft {
+                        self.draft.textarea.set_text_clearing_elements("");
+                        self.draft.is_bash_mode = false;
+                    }
                     return (
                         match sel {
                             CommandItem::Builtin(cmd) => InputResult::Command(cmd),

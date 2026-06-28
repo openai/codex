@@ -2904,9 +2904,13 @@ impl ChatComposer {
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
+        let preserve_review_draft = self.is_task_running
+            && matches!(command, SlashCommandItem::Builtin(SlashCommand::Review));
         self.stage_slash_command_history(&command);
-        self.draft.textarea.set_text_clearing_elements("");
-        self.draft.is_bash_mode = false;
+        if !preserve_review_draft {
+            self.draft.textarea.set_text_clearing_elements("");
+            self.draft.is_bash_mode = false;
+        }
         Some(match command {
             SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
             SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),

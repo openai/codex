@@ -74,8 +74,13 @@ async fn review_command_during_mcp_startup_opens_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.dispatch_command(SlashCommand::Review);
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
+    assert!(chat.bottom_pane.composer_text().is_empty());
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("review_command_during_mcp_startup_opens_popup", popup);
 }
@@ -257,17 +262,22 @@ async fn lag_recovery_during_review_does_not_promote_skipped_terminal_round() {
 }
 
 #[tokio::test]
-async fn review_command_remains_blocked_during_agent_turn() {
+async fn bare_review_submission_during_agent_turn_preserves_draft() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
 
-    chat.dispatch_command(SlashCommand::Review);
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let error = drain_insert_history(&mut rx)
         .into_iter()
         .map(|lines| lines_to_single_string(&lines))
         .collect::<String>();
     assert!(error.contains("'/review' is disabled while a task is in progress."));
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
 }
 
 #[tokio::test]

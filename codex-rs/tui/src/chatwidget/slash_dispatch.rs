@@ -45,7 +45,13 @@ impl ChatWidget {
     /// that staged entry after dispatch so slash-command recall follows the same "submitted input"
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
+        let clear_review_draft = cmd == SlashCommand::Review
+            && !self.slash_command_blocked_by_active_task(SlashCommand::Review);
         self.dispatch_command(cmd);
+        if clear_review_draft {
+            self.bottom_pane
+                .set_composer_text(String::new(), Vec::new(), Vec::new());
+        }
         if cmd == SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
@@ -158,7 +164,9 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
+            if cmd != SlashCommand::Review {
+                self.bottom_pane.drain_pending_submission_state();
+            }
             self.request_redraw();
             return;
         }
