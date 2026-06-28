@@ -70,11 +70,13 @@ pub(crate) async fn run_update_prompt_if_needed(
         }
     }
 
+    // The prompt owns the full frame while it is visible. Clear it before
+    // startup continues so slower initialization cannot leave stale prompt
+    // contents on screen after any dismissal path.
+    tui.terminal.clear()?;
+
     match screen.selection() {
-        Some(UpdateSelection::UpdateNow) => {
-            tui.terminal.clear()?;
-            Ok(UpdatePromptOutcome::RunUpdate(update_action))
-        }
+        Some(UpdateSelection::UpdateNow) => Ok(UpdatePromptOutcome::RunUpdate(update_action)),
         Some(UpdateSelection::NotNow) | None => Ok(UpdatePromptOutcome::Continue),
         Some(UpdateSelection::DontRemind) => {
             if let Err(err) = updates::dismiss_version(config, screen.latest_version()).await {
