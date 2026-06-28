@@ -18,6 +18,7 @@
 
 mod refresh_lock;
 mod refresh_transaction;
+mod resolution_state;
 mod resolved_store;
 mod store_lock;
 
@@ -54,6 +55,8 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
+use self::resolution_state::StoreResolutionReason;
+use self::resolution_state::record_store_resolution;
 use self::store_lock::OAuthStore;
 use self::store_lock::OAuthStoreLock;
 use self::store_lock::OAuthStoreLockFailure;
@@ -267,21 +270,53 @@ fn save_oauth_tokens_with_keyring_store<K: KeyringStore + Clone + 'static>(
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<()> {
-    match store_mode {
-        OAuthCredentialsStoreMode::Auto => save_oauth_tokens_with_keyring_with_fallback_to_file(
-            keyring_store,
-            keyring_backend_kind,
-            server_name,
-            tokens,
-        ),
-        OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file(tokens),
-        OAuthCredentialsStoreMode::Keyring => save_oauth_tokens_with_keyring_and_cleanup_file(
-            keyring_store,
-            keyring_backend_kind,
-            server_name,
-            tokens,
-        ),
-    }
+    let (resolved_store, reason) = match store_mode {
+        OAuthCredentialsStoreMode::Auto => {
+            let resolved_store = save_oauth_tokens_with_keyring_with_fallback_to_file(
+                keyring_store,
+                keyring_backend_kind,
+                server_name,
+                tokens,
+            )?;
+            let reason = match resolved_store {
+                ResolvedOAuthCredentialStore::File => {
+                    StoreResolutionReason::AutoSaveToFileAfterKeyringError
+                }
+                ResolvedOAuthCredentialStore::Keyring(_) => {
+                    StoreResolutionReason::AutoSaveToKeyring
+                }
+            };
+            (resolved_store, reason)
+        }
+        OAuthCredentialsStoreMode::File => {
+            save_oauth_tokens_to_file(tokens)?;
+            (
+                ResolvedOAuthCredentialStore::File,
+                StoreResolutionReason::ConfiguredSave,
+            )
+        }
+        OAuthCredentialsStoreMode::Keyring => {
+            save_oauth_tokens_with_keyring_and_cleanup_file(
+                keyring_store,
+                keyring_backend_kind,
+                server_name,
+                tokens,
+            )?;
+            (
+                ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind),
+                StoreResolutionReason::ConfiguredSave,
+            )
+        }
+    };
+    record_store_resolution(
+        server_name,
+        &tokens.url,
+        store_mode,
+        keyring_backend_kind,
+        resolved_store,
+        reason,
+    );
+    Ok(())
 }
 
 fn save_oauth_tokens_with_keyring<K: KeyringStore + Clone + 'static>(
@@ -379,14 +414,14 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
     keyring_backend_kind: AuthKeyringBackendKind,
     server_name: &str,
     tokens: &StoredOAuthTokens,
-) -> Result<()> {
+) -> Result<ResolvedOAuthCredentialStore> {
     match save_oauth_tokens_with_keyring_and_cleanup_file(
         keyring_store,
         keyring_backend_kind,
         server_name,
         tokens,
     ) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind)),
         // As on load, a store lock failure is a coordination failure rather than evidence that
         // the keyring backend is unavailable. Falling back could leave a newer File token hidden
         // behind a stale Secrets entry.
@@ -395,7 +430,8 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
             let message = error.to_string();
             warn!("falling back to file storage for OAuth tokens: {message}");
             save_oauth_tokens_to_file(tokens)
-                .with_context(|| format!("failed to write OAuth tokens to keyring: {message}"))
+                .with_context(|| format!("failed to write OAuth tokens to keyring: {message}"))?;
+            Ok(ResolvedOAuthCredentialStore::File)
         }
     }
 }

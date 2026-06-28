@@ -1,8 +1,8 @@
-//! Cross-process serialization for MCP OAuth stores shared by multiple credentials.
+//! Cross-process serialization for MCP OAuth state shared by multiple credentials.
 //!
-//! File and Secrets each keep credentials for multiple MCP servers in one aggregate document.
-//! Their lock therefore protects the complete read-modify-write operation. Direct keyring entries
-//! are already stored independently per credential and do not use this lock.
+//! File, Secrets, and the token-free resolution diagnostic each keep entries for multiple MCP
+//! servers in one aggregate document. Their locks protect complete read-modify-write operations.
+//! Direct keyring entries are already independent per credential and do not use this lock.
 
 use std::fs;
 use std::fs::File;
@@ -37,6 +37,7 @@ pub(super) struct OAuthStoreLockFailure {
 pub(super) enum OAuthStore {
     File,
     Secrets,
+    ResolutionState,
 }
 
 impl OAuthStore {
@@ -44,6 +45,7 @@ impl OAuthStore {
         match self {
             Self::File => "file-store.lock",
             Self::Secrets => "secrets-store.lock",
+            Self::ResolutionState => "resolution-state.lock",
         }
     }
 
@@ -51,6 +53,7 @@ impl OAuthStore {
         match self {
             Self::File => "fallback file",
             Self::Secrets => "encrypted secrets",
+            Self::ResolutionState => "store resolution diagnostics",
         }
     }
 }
