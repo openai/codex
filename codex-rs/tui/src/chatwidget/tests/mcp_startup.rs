@@ -323,6 +323,26 @@ async fn compact_task_blocks_review_when_mcp_startup_arrives() {
 }
 
 #[tokio::test]
+async fn side_conversation_rejection_preserves_review_draft_during_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.set_side_conversation_active(/*active*/ true);
+
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let error = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(error.contains("'/review' is unavailable in side conversations."));
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

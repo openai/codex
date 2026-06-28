@@ -46,6 +46,7 @@ impl ChatWidget {
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
         let clear_review_draft = cmd == SlashCommand::Review
+            && (!self.active_side_conversation || cmd.available_in_side_conversation())
             && !self.slash_command_blocked_by_active_task(SlashCommand::Review);
         self.dispatch_command(cmd);
         if clear_review_draft {
