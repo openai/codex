@@ -42,6 +42,7 @@ impl ChatWidget {
             return;
         }
 
+        let mcp_startup_was_inactive = self.mcp_startup_status.is_none();
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             // Ignore-mode buffers the next plausible round so stale post-finish
@@ -105,6 +106,9 @@ impl ChatWidget {
                     self.on_warning(error);
                 }
             }
+        }
+        if mcp_startup_was_inactive {
+            self.mcp_startup_started_while_idle = !self.bottom_pane.is_task_running();
         }
         self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
@@ -202,6 +206,7 @@ impl ChatWidget {
 
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
+        self.mcp_startup_started_while_idle = false;
         self.mcp_startup_ignore_updates_until_next_start = true;
         self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();
@@ -220,6 +225,7 @@ impl ChatWidget {
         self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();
         self.mcp_startup_pending_next_round_saw_starting = false;
+        self.mcp_startup_started_while_idle = false;
         if self.mcp_startup_status.is_none() {
             return;
         }

@@ -596,6 +596,8 @@ pub(crate) struct ChatWidget {
     /// as "running" while this is populated, even if no agent turn is currently
     /// executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Whether the active MCP startup round began while no other task was running.
+    mcp_startup_started_while_idle: bool,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
