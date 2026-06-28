@@ -9,6 +9,7 @@ use oauth2::AccessToken;
 use reqwest::StatusCode;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use tokio::time;
 use tracing::warn;
@@ -85,14 +86,27 @@ impl RmcpClient {
                     None => Self::create_pending_transport(&self.transport_recipe).await?,
                 };
                 let mut retry_context = InitializeAttemptContext::default();
-                self.connect_pending_transport_with_initialize_retries(
-                    transport,
-                    client_service,
-                    timeout,
-                    &mut initialize_deadline,
-                    &mut retry_context,
-                )
-                .await
+                let result = self
+                    .connect_pending_transport_with_initialize_retries(
+                        transport,
+                        client_service,
+                        timeout,
+                        &mut initialize_deadline,
+                        &mut retry_context,
+                    )
+                    .await;
+                if result
+                    .as_ref()
+                    .err()
+                    .and_then(Self::rejected_access_token_from_initialize_error)
+                    .is_some()
+                {
+                    // The first 401 identifies which access token failed. If the reconstructed
+                    // transport still rejects the refreshed token, preserve Codex's established
+                    // signal that the user must authenticate again.
+                    return Err(AuthError::AuthorizationRequired.into());
+                }
+                result
             }
         }
     }

@@ -1050,6 +1050,16 @@ impl RmcpClient {
                 &operation,
             )
             .await;
+            if result
+                .as_ref()
+                .err()
+                .and_then(Self::rejected_access_token_from_operation_error)
+                .is_some()
+            {
+                // The rejected token is needed only to attribute the first 401. A second 401
+                // after the one allowed refresh means this lifecycle needs reauthentication.
+                return Err(AuthError::AuthorizationRequired.into());
+            }
         }
 
         if result.as_ref().is_err_and(Self::is_session_expired_404) {
