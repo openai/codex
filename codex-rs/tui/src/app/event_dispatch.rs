@@ -918,20 +918,18 @@ impl App {
             }
             AppEvent::RateLimitResetCreditsLoaded { request_id, result } => match result {
                 Ok(response) => {
-                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+                    let snapshots = response
+                        .rate_limits
+                        .map(app_server_rate_limit_snapshots)
+                        .unwrap_or_default();
                     self.chat_widget.finish_rate_limit_reset_credits_refresh(
                         request_id,
-                        app_server_rate_limit_snapshots(response),
-                        rate_limit_reset_credits.ok_or_else(|| {
-                            "account/rateLimits/read response did not include rateLimitResetCredits"
-                                .to_string()
-                        }),
+                        snapshots,
+                        Ok(response.reset_credits),
                     );
                 }
                 Err(err) => {
-                    tracing::warn!(
-                        "account/rateLimits/read failed during reset-credit refresh: {err}"
-                    );
+                    tracing::warn!("usage limit reset refresh failed: {err}");
                     self.chat_widget.finish_rate_limit_reset_credits_refresh(
                         request_id,
                         Vec::new(),
@@ -939,13 +937,22 @@ impl App {
                     );
                 }
             },
-            AppEvent::ConsumeRateLimitResetCredit { idempotency_key } => {
+            AppEvent::ConsumeRateLimitResetCredit {
+                idempotency_key,
+                credit_id,
+            } => {
                 let request_id = self.chat_widget.show_rate_limit_reset_consuming_popup();
-                self.consume_rate_limit_reset_credit(app_server, request_id, idempotency_key);
+                self.consume_rate_limit_reset_credit(
+                    app_server,
+                    request_id,
+                    idempotency_key,
+                    credit_id,
+                );
             }
             AppEvent::RateLimitResetCreditConsumed {
                 request_id,
                 idempotency_key,
+                credit_id,
                 result,
             } => {
                 if let Err(err) = &result {
@@ -956,6 +963,7 @@ impl App {
                 if self.chat_widget.finish_rate_limit_reset_consume(
                     request_id,
                     idempotency_key,
+                    credit_id,
                     result,
                 ) {
                     self.refresh_rate_limits(
