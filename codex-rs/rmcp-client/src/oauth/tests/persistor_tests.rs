@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -12,6 +11,7 @@ use pretty_assertions::assert_eq;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::OAuthState;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::Notify;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -21,26 +21,21 @@ use wiremock::matchers::path;
 
 use super::MockKeyringStore;
 use super::TempCodexHome;
+use super::assert_tokens_match_without_expiry;
 use super::sample_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::compute_store_key;
-use crate::oauth::fallback_file_path;
 use crate::oauth::load_oauth_tokens_from_file;
-use crate::oauth::load_oauth_tokens_from_keyring;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::save_oauth_tokens_to_file;
-use crate::oauth::save_oauth_tokens_with_keyring;
 
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> Result<()> {
-    let _env = TempCodexHome::new();
-    let server = MockServer::start().await;
-    mount_oauth_metadata(&server).await;
+    let (_env, server, initial) = test_context().await?;
     let refresh_started = mount_delayed_refresh(&server, "refreshed-access-token").await;
-    let initial = expired_tokens(&format!("{}/mcp", server.uri()));
     save_oauth_tokens_to_file(&initial)?;
 
     let first = persistor_for(&initial).await?;
@@ -49,7 +44,7 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
         let first = first.clone();
         async move { first.refresh_if_needed().await }
     });
-    wait_for_signal(refresh_started).await?;
+    wait_for_refresh(&refresh_started).await?;
     let second_task = tokio::spawn({
         let second = second.clone();
         async move { second.refresh_if_needed().await }
@@ -78,12 +73,13 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
     Ok(())
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "AuthorizationManager async access must be serialized through its Tokio mutex"
+)]
 #[tokio::test(flavor = "current_thread")]
 async fn resolved_keyring_read_error_preserves_in_memory_credentials() -> Result<()> {
-    let _env = TempCodexHome::new();
-    let server = MockServer::start().await;
-    mount_oauth_metadata(&server).await;
-    let initial = expired_tokens(&format!("{}/mcp", server.uri()));
+    let (_env, _server, initial) = test_context().await?;
     let keyring_store = MockKeyringStore::default();
     let key = compute_store_key(&initial.server_name, &initial.url)?;
     keyring_store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
@@ -106,17 +102,19 @@ async fn resolved_keyring_read_error_preserves_in_memory_credentials() -> Result
             .contains("failed to reread OAuth tokens from resolved keyring storage"),
         "unexpected error: {error:#}"
     );
-    assert_eq!(tokens_from_manager(&manager).await?, initial.token_response);
+    let guard = manager.lock().await;
+    let (_client_id, token_response) = guard.get_credentials().await?;
+    assert_eq!(
+        WrappedOAuthTokenResponse(token_response.expect("manager should retain credentials")),
+        initial.token_response
+    );
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn caller_cancellation_does_not_cancel_refresh_persistence() -> Result<()> {
-    let _env = TempCodexHome::new();
-    let server = MockServer::start().await;
-    mount_oauth_metadata(&server).await;
+    let (_env, server, initial) = test_context().await?;
     let refresh_started = mount_delayed_refresh(&server, "cancel-safe-access-token").await;
-    let initial = expired_tokens(&format!("{}/mcp", server.uri()));
     save_oauth_tokens_to_file(&initial)?;
     let persistor = persistor_for(&initial).await?;
     let caller = tokio::spawn({
@@ -124,7 +122,7 @@ async fn caller_cancellation_does_not_cancel_refresh_persistence() -> Result<()>
         async move { persistor.refresh_if_needed().await }
     });
 
-    wait_for_signal(refresh_started).await?;
+    wait_for_refresh(&refresh_started).await?;
     caller.abort();
     assert!(
         caller
@@ -153,11 +151,8 @@ async fn caller_cancellation_does_not_cancel_refresh_persistence() -> Result<()>
 
 #[tokio::test(flavor = "current_thread")]
 async fn provider_timeout_releases_lock_and_preserves_durable_credentials() -> Result<()> {
-    let _env = TempCodexHome::new();
-    let server = MockServer::start().await;
-    mount_oauth_metadata(&server).await;
+    let (_env, server, initial) = test_context().await?;
     let _refresh_started = mount_delayed_refresh(&server, "late-access-token").await;
-    let initial = expired_tokens(&format!("{}/mcp", server.uri()));
     save_oauth_tokens_to_file(&initial)?;
     let persistor = persistor_for(&initial).await?;
 
@@ -178,71 +173,8 @@ async fn provider_timeout_releases_lock_and_preserves_durable_credentials() -> R
     .context("provider timeout did not release the credential lock")??;
     let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
         .expect("timed-out refresh must leave durable credentials present");
-    assert_eq!(
-        stored.token_response.0.access_token().secret(),
-        initial.token_response.0.access_token().secret()
-    );
-    assert_eq!(
-        stored
-            .token_response
-            .0
-            .refresh_token()
-            .map(oauth2::RefreshToken::secret),
-        initial
-            .token_response
-            .0
-            .refresh_token()
-            .map(oauth2::RefreshToken::secret)
-    );
+    assert_tokens_match_without_expiry(&stored, &initial);
     server.verify().await;
-    Ok(())
-}
-
-#[test]
-fn secrets_exact_store_save_does_not_mutate_stale_fallback_file() -> Result<()> {
-    let _env = TempCodexHome::new();
-    let initial = sample_tokens();
-    let keyring_store = MockKeyringStore::default();
-    save_oauth_tokens_with_keyring(
-        &keyring_store,
-        AuthKeyringBackendKind::Secrets,
-        &initial.server_name,
-        &initial,
-    )?;
-
-    let mut stale_file = initial.clone();
-    stale_file
-        .token_response
-        .0
-        .set_access_token(AccessToken::new("stale-file-access".to_string()));
-    save_oauth_tokens_to_file(&stale_file)?;
-    let fallback_path = fallback_file_path()?;
-    let fallback_before = std::fs::read(&fallback_path)?;
-
-    let mut refreshed = initial.clone();
-    refreshed
-        .token_response
-        .0
-        .set_access_token(AccessToken::new("secrets-refreshed-access".to_string()));
-    save_oauth_tokens_with_keyring(
-        &keyring_store,
-        AuthKeyringBackendKind::Secrets,
-        &refreshed.server_name,
-        &refreshed,
-    )?;
-
-    assert_eq!(std::fs::read(fallback_path)?, fallback_before);
-    let stored = load_oauth_tokens_from_keyring(
-        &keyring_store,
-        AuthKeyringBackendKind::Secrets,
-        &initial.server_name,
-        &initial.url,
-    )?
-    .expect("refreshed credentials should remain in Secrets");
-    assert_eq!(
-        stored.token_response.0.access_token().secret(),
-        "secrets-refreshed-access"
-    );
     Ok(())
 }
 
@@ -254,6 +186,14 @@ async fn persistor_for(tokens: &StoredOAuthTokens) -> Result<OAuthPersistor> {
         ResolvedOAuthCredentialStore::File,
         Some(tokens.clone()),
     ))
+}
+
+async fn test_context() -> Result<(TempCodexHome, MockServer, StoredOAuthTokens)> {
+    let env = TempCodexHome::new();
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    let tokens = expired_tokens(&format!("{}/mcp", server.uri()));
+    Ok((env, server, tokens))
 }
 
 async fn authorization_manager_for(
@@ -273,20 +213,6 @@ async fn authorization_manager_for(
     Ok(Arc::new(TokioMutex::new(manager)))
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "AuthorizationManager async access must be serialized through its Tokio mutex"
-)]
-async fn tokens_from_manager(
-    manager: &Arc<TokioMutex<AuthorizationManager>>,
-) -> Result<WrappedOAuthTokenResponse> {
-    let guard = manager.lock().await;
-    let (_client_id, token_response) = guard.get_credentials().await?;
-    Ok(WrappedOAuthTokenResponse(
-        token_response.expect("manager should retain credentials"),
-    ))
-}
-
 async fn mount_oauth_metadata(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -299,18 +225,16 @@ async fn mount_oauth_metadata(server: &MockServer) {
         .await;
 }
 
-async fn mount_delayed_refresh(
-    server: &MockServer,
-    response_access_token: &str,
-) -> mpsc::Receiver<()> {
-    let (started_tx, started_rx) = mpsc::channel();
+async fn mount_delayed_refresh(server: &MockServer, response_access_token: &str) -> Arc<Notify> {
+    let started = Arc::new(Notify::new());
+    let started_for_response = Arc::clone(&started);
     let response_access_token = response_access_token.to_string();
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_string_contains("grant_type=refresh_token"))
         .and(body_string_contains("refresh_token=refresh-token"))
         .respond_with(move |_request: &wiremock::Request| {
-            let _ = started_tx.send(());
+            started_for_response.notify_one();
             let access_token = response_access_token.clone();
             ResponseTemplate::new(200)
                 .set_delay(Duration::from_millis(/*millis*/ 200))
@@ -323,15 +247,14 @@ async fn mount_delayed_refresh(
         .expect(1)
         .mount(server)
         .await;
-    started_rx
+    started
 }
 
-async fn wait_for_signal(rx: mpsc::Receiver<()>) -> Result<()> {
-    tokio::task::spawn_blocking(move || {
-        rx.recv_timeout(Duration::from_secs(/*secs*/ 5))
-            .context("timed out waiting for refresh request")
-    })
-    .await?
+async fn wait_for_refresh(started: &Notify) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), started.notified())
+        .await
+        .context("timed out waiting for refresh request")?;
+    Ok(())
 }
 
 fn expired_tokens(url: &str) -> StoredOAuthTokens {

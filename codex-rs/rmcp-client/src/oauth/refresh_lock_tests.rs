@@ -14,16 +14,14 @@ async fn acquisition_times_out_without_stealing() -> Result<()> {
     )
     .await?;
 
-    let error = match RefreshCredentialLock::acquire_in(
+    let error = RefreshCredentialLock::acquire_in(
         codex_home.path(),
         store_key,
         Duration::from_millis(/*millis*/ 50),
     )
     .await
-    {
-        Ok(_) => panic!("contending lock acquisition should time out"),
-        Err(error) => error,
-    };
+    .err()
+    .expect("contending lock acquisition should time out");
     assert!(
         error
             .to_string()

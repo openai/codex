@@ -105,8 +105,7 @@ pub enum AuthCredentialsStoreMode {
 pub enum OAuthCredentialsStoreMode {
     /// Prefer `Keyring` and use `File` when keyring storage is unavailable.
     /// Once an MCP client loads credentials from one store, that client keeps the resolved store
-    /// for its lifetime: refresh reads and writes surface store failures instead of switching to
-    /// the other store and risking replay of an older rotating refresh token.
+    /// for its lifetime so refreshes cannot switch to a possibly stale credential source.
     /// Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
     #[default]
     Auto,
