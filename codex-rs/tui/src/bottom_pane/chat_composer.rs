@@ -1826,42 +1826,10 @@ impl ChatComposer {
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
-                if Self::is_image_path(&sel_path) {
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            let cursor_offset = self.draft.textarea.cursor();
-                            let text = self.draft.textarea.text();
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.draft.textarea.replace_range(start_idx..end_idx, "");
-                            self.draft.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            self.draft.textarea.insert_str(" ");
-                        }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            self.insert_selected_path(&sel_path);
-                        }
-                    }
-                } else {
-                    self.insert_selected_path(&sel_path);
+                if let Some((token_range, _)) =
+                    self.current_editable_at_token_range_with_options(/*allow_empty*/ false)
+                {
+                    self.insert_selected_file_path(token_range, &sel_path);
                 }
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
@@ -1936,7 +1904,9 @@ impl ChatComposer {
 
         if close_popup {
             if let Some((insert_text, path)) = selected_mention {
-                self.insert_selected_mention(&insert_text, path.as_deref());
+                if let Some((token_range, _)) = self.current_mention_token_range() {
+                    self.insert_selected_mention(token_range, &insert_text, path.as_deref());
+                }
             }
             self.popups.active = ActivePopup::None;
         }
@@ -2040,13 +2010,19 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some(selected) = selected {
+            let token_range = self
+                .current_editable_at_token_range_with_options(/*allow_empty*/ true)
+                .map(|(range, _)| range);
+            if let (Some(selected), Some(token_range)) = (selected, token_range) {
                 match selected {
                     MentionV2Selection::File(path) => {
-                        self.insert_selected_file_path(path.to_string_lossy().as_ref());
+                        self.insert_selected_file_path(
+                            token_range,
+                            path.to_string_lossy().as_ref(),
+                        );
                     }
                     MentionV2Selection::Tool { insert_text, path } => {
-                        self.insert_selected_mention(&insert_text, path.as_deref());
+                        self.insert_selected_mention(token_range, &insert_text, path.as_deref());
                     }
                 }
             }
@@ -2068,42 +2044,31 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
-    fn insert_selected_file_path(&mut self, selected_path: &str) {
+    fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
             match image::image_dimensions(&path_buf) {
                 Ok((width, height)) => {
                     tracing::debug!("selected image dimensions={}x{}", width, height);
-                    let cursor_offset = self.draft.textarea.cursor();
-                    let text = self.draft.textarea.text();
-                    let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                    let before_cursor = &text[..safe_cursor];
-                    let after_cursor = &text[safe_cursor..];
-
-                    let start_idx = before_cursor
-                        .char_indices()
-                        .rfind(|(_, c)| c.is_whitespace())
-                        .map(|(idx, c)| idx + c.len_utf8())
-                        .unwrap_or(0);
-                    let end_rel_idx = after_cursor
-                        .char_indices()
-                        .find(|(_, c)| c.is_whitespace())
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(after_cursor.len());
-                    let end_idx = safe_cursor + end_rel_idx;
-
-                    self.draft.textarea.replace_range(start_idx..end_idx, "");
+                    let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_whitespace);
+                    let start_idx = token_range.start;
+                    self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
                     self.attach_image(path_buf);
-                    self.draft.textarea.insert_str(" ");
+                    if !has_trailing_whitespace {
+                        self.draft.textarea.insert_str(" ");
+                    }
                 }
                 Err(err) => {
                     tracing::trace!("image dimensions lookup failed: {err}");
-                    self.insert_selected_path(selected_path);
+                    self.insert_selected_path(token_range, selected_path);
                 }
             }
         } else {
-            self.insert_selected_path(selected_path);
+            self.insert_selected_path(token_range, selected_path);
         }
     }
 
@@ -2288,18 +2253,23 @@ impl ChatComposer {
             false
         };
 
-        // Left candidate: token containing the cursor position.
-        let start_left = before_cursor
+        // Left candidate: token containing the cursor position. When the cursor is on separator
+        // whitespace, use the token immediately to the left of the entire whitespace run.
+        let end_left = if at_whitespace {
+            before_cursor.trim_end_matches(char::is_whitespace).len()
+        } else {
+            let end_left_rel = after_cursor
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(idx, _)| idx)
+                .unwrap_or(after_cursor.len());
+            safe_cursor + end_left_rel
+        };
+        let start_left = text[..end_left]
             .char_indices()
             .rfind(|(_, c)| c.is_whitespace())
             .map(|(idx, c)| idx + c.len_utf8())
             .unwrap_or(0);
-        let end_left_rel = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_left = safe_cursor + end_left_rel;
         let token_left = if start_left < end_left {
             Some(&text[start_left..end_left])
         } else {
@@ -2335,13 +2305,10 @@ impl ChatComposer {
             right_match.map(|t| (start_right..end_right, t[prefix.len_utf8()..].to_string()));
 
         if at_whitespace {
-            if right_prefixed.is_some() {
+            if token_left.is_some_and(|t| t == prefix_str) && !allow_empty {
                 return right_prefixed;
             }
-            if token_left.is_some_and(|t| t == prefix_str) {
-                return allow_empty.then(|| (start_left..end_left, String::new()));
-            }
-            return left_prefixed;
+            return left_prefixed.or(right_prefixed);
         }
         if after_cursor.starts_with(prefix) {
             let prefix_starts_token = before_cursor
@@ -2372,9 +2339,13 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
-    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+    fn current_editable_prefixed_token_range(
+        &self,
+        prefix: char,
+        allow_empty: bool,
+    ) -> Option<(Range<usize>, String)> {
         let (range, token) =
-            Self::current_prefixed_token_range(&self.draft.textarea, '@', allow_empty)?;
+            Self::current_prefixed_token_range(&self.draft.textarea, prefix, allow_empty)?;
         if self
             .draft
             .textarea
@@ -2389,7 +2360,7 @@ impl ChatComposer {
             .iter()
             .take_while(|byte| is_mention_name_char(**byte))
             .count();
-        let mention_end = range.start + '@'.len_utf8() + name_len;
+        let mention_end = range.start + prefix.len_utf8() + name_len;
         if name_len > 0
             && mention_end < range.end
             && ends_plaintext_at_mention(self.draft.textarea.text().as_bytes(), mention_end)
@@ -2402,7 +2373,19 @@ impl ChatComposer {
             return None;
         }
 
-        Some(token)
+        Some((range, token))
+    }
+
+    fn current_editable_at_token_range_with_options(
+        &self,
+        allow_empty: bool,
+    ) -> Option<(Range<usize>, String)> {
+        self.current_editable_prefixed_token_range('@', allow_empty)
+    }
+
+    fn current_editable_at_token_with_options(&self, allow_empty: bool) -> Option<String> {
+        self.current_editable_at_token_range_with_options(allow_empty)
+            .map(|(_, token)| token)
     }
 
     fn current_editable_at_token(&self) -> Option<String> {
@@ -2417,40 +2400,18 @@ impl ChatComposer {
     }
 
     fn current_mention_token(&self) -> Option<String> {
+        self.current_mention_token_range().map(|(_, token)| token)
+    }
+
+    fn current_mention_token_range(&self) -> Option<(Range<usize>, String)> {
         if !self.mentions_enabled() {
             return None;
         }
-        Self::current_prefixed_token(&self.draft.textarea, '$', /*allow_empty*/ true)
+        self.current_editable_prefixed_token_range('$', /*allow_empty*/ true)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
-    fn insert_selected_path(&mut self, path: &str) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        // Clamp to a valid char boundary to avoid panics when slicing.
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        // Determine token boundaries.
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_path(&mut self, token_range: Range<usize>, path: &str) {
         // If the path contains whitespace, wrap it in double quotes so the
         // local prompt arg parser treats it as a single argument. Avoid adding
         // quotes when the path already contains one to keep behavior simple.
@@ -2463,36 +2424,34 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
+        let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+        let start_idx = token_range.start;
+        let trailing_space = if has_trailing_whitespace { "" } else { " " };
         self.draft
             .textarea
-            .replace_range(start_idx..end_idx, &format!("{inserted} "));
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+            .replace_range(token_range, &format!("{inserted}{trailing_space}"));
+        let new_cursor = start_idx
+            .saturating_add(inserted.len())
+            .saturating_add(trailing_space.len());
         self.draft.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
-        let cursor_offset = self.draft.textarea.cursor();
-        let text = self.draft.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
+    fn insert_selected_mention(
+        &mut self,
+        token_range: Range<usize>,
+        insert_text: &str,
+        path: Option<&str>,
+    ) {
         // Remove the active token and insert the selected mention as an atomic element.
-        self.draft.textarea.replace_range(start_idx..end_idx, "");
+        let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+        let start_idx = token_range.start;
+        self.draft.textarea.replace_range(token_range, "");
         self.draft.textarea.set_cursor(start_idx);
         let id = self.draft.textarea.insert_element(insert_text);
 
@@ -2509,10 +2468,12 @@ impl ChatComposer {
             );
         }
 
-        self.draft.textarea.insert_str(" ");
+        if !has_trailing_whitespace {
+            self.draft.textarea.insert_str(" ");
+        }
         let new_cursor = start_idx
             .saturating_add(insert_text.len())
-            .saturating_add(1);
+            .saturating_add(usize::from(!has_trailing_whitespace));
         self.draft.textarea.set_cursor(new_cursor);
     }
 
@@ -6229,6 +6190,112 @@ mod tests {
             .expect("expected plugin mention to be selected");
         assert_eq!(mention.insert_text, "$sample".to_string());
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
+    }
+
+    fn configure_partially_bound_skill_mentions(composer: &mut ChatComposer) {
+        let rustdoc_path = test_path_buf("/tmp/rustdoc/SKILL.md").abs();
+        let simplify_path = test_path_buf("/tmp/simplify-code/SKILL.md").abs();
+        composer.set_skill_mentions(Some(vec![
+            SkillMetadata {
+                name: "rustdoc".to_string(),
+                description: "Add focused RustDoc comments.".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                path_to_skills_md: rustdoc_path,
+                scope: crate::test_support::skill_scope_user(),
+                plugin_id: None,
+            },
+            SkillMetadata {
+                name: "simplify-code".to_string(),
+                description: "Review code changes for simpler implementation.".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                path_to_skills_md: simplify_path.clone(),
+                scope: crate::test_support::skill_scope_user(),
+                plugin_id: None,
+            },
+        ]));
+
+        composer.set_text_content_with_mention_bindings(
+            "$rustdoc  $simplify-code without changing behavior".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![MentionBinding {
+                sigil: '$',
+                mention: "simplify-code".to_string(),
+                path: simplify_path.display().to_string(),
+            }],
+        );
+        composer.draft.textarea.set_cursor("$rustdoc ".len());
+        composer.sync_popups();
+    }
+
+    #[test]
+    fn skill_popup_targets_unbound_mention_left_of_bound_mention() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        configure_partially_bound_skill_mentions(&mut composer);
+
+        assert_eq!(composer.current_mention_token().as_deref(), Some("rustdoc"));
+        let ActivePopup::Skill(popup) = &composer.popups.active else {
+            panic!("expected skill popup");
+        };
+        assert_eq!(
+            popup
+                .selected_mention()
+                .map(|mention| mention.insert_text.as_str()),
+            Some("$rustdoc")
+        );
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(consumed);
+        assert_eq!(
+            composer.current_text(),
+            "$rustdoc  $simplify-code without changing behavior"
+        );
+        assert_eq!(
+            composer.mention_bindings(),
+            vec![
+                MentionBinding {
+                    sigil: '$',
+                    mention: "rustdoc".to_string(),
+                    path: test_path_buf("/tmp/rustdoc/SKILL.md")
+                        .abs()
+                        .display()
+                        .to_string(),
+                },
+                MentionBinding {
+                    sigil: '$',
+                    mention: "simplify-code".to_string(),
+                    path: test_path_buf("/tmp/simplify-code/SKILL.md")
+                        .abs()
+                        .display()
+                        .to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn skill_popup_targets_unbound_mention_left_of_bound_mention_snapshot() {
+        snapshot_composer_state(
+            "skill_popup_targets_unbound_mention_left_of_bound_mention",
+            /*enhanced_keys_supported*/ false,
+            configure_partially_bound_skill_mentions,
+        );
     }
 
     #[test]
