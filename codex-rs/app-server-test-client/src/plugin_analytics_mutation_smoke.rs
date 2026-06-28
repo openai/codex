@@ -124,7 +124,6 @@ pub(super) fn run_cleanup(
     overrides.extend([
         "analytics.enabled=false".to_string(),
         "features.plugins=true".to_string(),
-        "features.remote_plugin=true".to_string(),
     ]);
     let mut client = CodexClient::spawn_stdio(codex_bin, &overrides)?;
     client.initialize()?;
@@ -199,7 +198,6 @@ fn spawn_client(
     overrides.extend([
         "analytics.enabled=true".to_string(),
         "features.plugins=true".to_string(),
-        "features.remote_plugin=true".to_string(),
     ]);
     let environment = vec![(
         OsString::from(ANALYTICS_CAPTURE_ENV_VAR),

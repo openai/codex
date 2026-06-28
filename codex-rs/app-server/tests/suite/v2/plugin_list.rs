@@ -71,6 +71,23 @@ plugins = true
     )
 }
 
+fn write_remote_plugins_disabled_config_with_base_url(
+    codex_home: &std::path::Path,
+    base_url: &str,
+) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"chatgpt_base_url = "{base_url}"
+
+[features]
+plugins = true
+remote_plugin = false
+"#,
+        ),
+    )
+}
+
 #[tokio::test]
 async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -197,7 +214,6 @@ async fn plugin_installed_prefers_remote_curated_conflicts_when_remote_plugin_en
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 
 [plugins."linear@openai-curated"]
@@ -1987,10 +2003,11 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
 }
 
 #[tokio::test]
-async fn plugin_list_includes_openai_curated_remote_collection_when_requested() -> Result<()> {
+async fn plugin_list_includes_openai_curated_remote_collection_when_remote_plugin_disabled_and_requested()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
+    write_remote_plugins_disabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
@@ -2092,10 +2109,11 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_requested() 
 }
 
 #[tokio::test]
-async fn plugin_list_propagates_explicit_openai_curated_remote_collection_errors() -> Result<()> {
+async fn plugin_list_propagates_openai_curated_remote_collection_errors_when_remote_plugin_disabled()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
+    write_remote_plugins_disabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
@@ -2148,10 +2166,11 @@ async fn plugin_list_propagates_explicit_openai_curated_remote_collection_errors
 }
 
 #[tokio::test]
-async fn plugin_list_skips_explicit_openai_curated_remote_collection_for_api_auth() -> Result<()> {
+async fn plugin_list_skips_openai_curated_remote_collection_for_api_auth_when_remote_plugin_disabled()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
+    write_remote_plugins_disabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
@@ -2391,7 +2410,8 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
 }
 
 #[tokio::test]
-async fn plugin_installed_includes_remote_shared_with_me_plugins() -> Result<()> {
+async fn plugin_installed_includes_remote_shared_with_me_plugins_when_remote_plugin_disabled()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -2493,7 +2513,8 @@ plugin_sharing = true
 }
 
 #[tokio::test]
-async fn plugin_installed_includes_workspace_directory_without_plugin_sharing() -> Result<()> {
+async fn plugin_installed_includes_workspace_directory_without_plugin_sharing_when_remote_plugin_disabled()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -2590,7 +2611,6 @@ async fn plugin_installed_includes_created_by_me_when_remote_plugins_enabled() -
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -2681,7 +2701,6 @@ async fn plugin_installed_starts_remote_installed_bundle_sync() -> Result<()> {
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -2750,10 +2769,10 @@ plugin_sharing = false
 }
 
 #[tokio::test]
-async fn plugin_list_fetches_workspace_directory_kind_without_remote_plugin_flag() -> Result<()> {
+async fn plugin_list_fetches_workspace_directory_kind_when_remote_plugin_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    write_plugins_enabled_config_with_base_url(
+    write_remote_plugins_disabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
@@ -2848,7 +2867,6 @@ async fn plugin_list_fetches_user_plugins_in_created_by_me_remote_marketplace() 
 
 [features]
 plugins = true
-remote_plugin = true
 plugin_sharing = false
 "#,
             server.uri()
@@ -4032,7 +4050,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )

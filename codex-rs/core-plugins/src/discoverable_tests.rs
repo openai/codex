@@ -37,6 +37,13 @@ use wiremock::matchers::query_param;
 #[tokio::test]
 async fn returns_fallback_plugins_when_remote_disabled_for_codex_auth() {
     let codex_home = tempdir().expect("tempdir should succeed");
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = false
+"#,
+    );
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample", "slack", "openai-developers"]);
 
@@ -69,8 +76,7 @@ async fn returns_api_curated_fallback_plugins_for_direct_provider_auth() {
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_api_curated_marketplace(&curated_root, &["sample", "slack", "openai-developers"]);
 
-    let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
-    plugins.remote_plugin_enabled = true;
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     plugins_manager.set_auth_mode(Some(AuthMode::ApiKey));
     let auth = CodexAuth::from_api_key("test-api-key");
@@ -153,7 +159,6 @@ async fn omits_openai_curated_but_keeps_configured_marketplaces_for_remote_codex
         &format!(
             r#"[features]
 plugins = true
-remote_plugin = true
 
 [marketplaces.{bundled_marketplace_name}]
 source_type = "git"
@@ -188,8 +193,7 @@ async fn includes_openai_curated_when_remote_enabled_without_auth() {
     let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
 
-    let mut plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
-    plugins.remote_plugin_enabled = true;
+    let plugins = load_plugins_config(codex_home.path(), codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
     let discoverable_plugins = list_discoverable_plugins(
         &plugins_manager,
@@ -788,7 +792,6 @@ async fn expands_cached_remote_plugins_by_loaded_apps() {
         &codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
 plugins = true
-remote_plugin = true
 "#,
     );
 
