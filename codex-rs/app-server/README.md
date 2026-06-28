@@ -1879,7 +1879,9 @@ review when allowed by configuration requirements.
 
 Use `apps._default.default_tools_approval_mode` to set the approval mode for
 tools without a per-app or per-tool override. Supported values are `"auto"`,
-`"prompt"`, and `"approve"`. Tool-level `approval_mode` takes precedence over
+`"prompt"`, `"writes"`, and `"approve"`. The `"writes"` mode prompts for tools
+that do not advertise `readOnlyHint = true` and skips declared read-only tools.
+Tool-level `approval_mode` takes precedence over
 the per-app `default_tools_approval_mode`, which takes precedence over the
 `apps._default` value. Managed tool requirements take precedence over all of
 these settings. When none are configured, the mode defaults to `"auto"`.
