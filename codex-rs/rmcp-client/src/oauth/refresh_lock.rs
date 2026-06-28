@@ -6,6 +6,7 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_utils_home_dir::find_codex_home;
 use sha2::Digest;
 use sha2::Sha256;
@@ -13,7 +14,6 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -43,7 +43,14 @@ impl RefreshCredentialLock {
         store_key: &str,
         acquire_timeout: Duration,
     ) -> Result<Self> {
-        let path = refresh_lock_path(codex_home, store_key);
+        // Scope coordination to CODEX_HOME alongside File and Secrets state. Direct keyring
+        // coordination across homes needs a separate cross-platform rendezvous.
+        // TODO(stevenlee): define that rendezvous before expanding this lock's scope.
+        let mut hasher = Sha256::new();
+        hasher.update(store_key.as_bytes());
+        let path = codex_home
+            .join(REFRESH_LOCK_DIR)
+            .join(format!("{:x}.lock", hasher.finalize()));
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -60,7 +67,7 @@ impl RefreshCredentialLock {
         // persistence transaction. Releasing it while awaiting the provider would allow concurrent
         // use of a rotating refresh token.
         let mut reported_contention = false;
-        match timeout(acquire_timeout, async {
+        timeout(acquire_timeout, async {
             loop {
                 match file.try_lock() {
                     Ok(()) => return Ok(()),
@@ -80,35 +87,16 @@ impl RefreshCredentialLock {
             }
         })
         .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                return Err(error).with_context(|| {
-                    format!("failed to lock OAuth refresh lock {}", path.display())
-                });
-            }
-            Err(_) => anyhow::bail!(
+        .map_err(|_| {
+            anyhow!(
                 "timed out after {acquire_timeout:?} waiting for OAuth refresh lock {}",
                 path.display()
-            ),
-        }
+            )
+        })?
+        .with_context(|| format!("failed to lock OAuth refresh lock {}", path.display()))?;
 
         Ok(Self { _file: file })
     }
-}
-
-fn refresh_lock_path(codex_home: &Path, store_key: &str) -> PathBuf {
-    // Credential coordination is deliberately scoped to the active CODEX_HOME, alongside File
-    // and Secrets state. Coordinating the process-global Direct keyring across distinct homes
-    // would require a separately defined global lock namespace and is outside this transaction.
-    // TODO(stevenlee): define a safe per-user, cross-platform rendezvous before extending Direct
-    // keyring coordination across distinct CODEX_HOME values.
-    let mut hasher = Sha256::new();
-    hasher.update(store_key.as_bytes());
-    let digest = hasher.finalize();
-    codex_home
-        .join(REFRESH_LOCK_DIR)
-        .join(format!("{digest:x}.lock"))
 }
 
 #[cfg(test)]
