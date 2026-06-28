@@ -44,6 +44,8 @@ const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
 const FINAL_ACCESS_TOKEN: &str = "final-access-token";
 const FINAL_REFRESH_TOKEN: &str = "final-refresh-token";
+const REJECTED_RETRY_ACCESS_TOKEN: &str = "rejected-retry-access-token";
+const REJECTED_RETRY_REFRESH_TOKEN: &str = "rejected-retry-refresh-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 const UNEXPIRED_SERVER_URL: &str = "https://unexpired.example/mcp";
@@ -154,6 +156,13 @@ async fn recovers_initialization_and_operation_401_once() -> anyhow::Result<()> 
         FINAL_REFRESH_TOKEN,
     )
     .await;
+    mount_refresh(
+        &server,
+        FINAL_REFRESH_TOKEN,
+        REJECTED_RETRY_ACCESS_TOKEN,
+        REJECTED_RETRY_REFRESH_TOKEN,
+    )
+    .await;
 
     Mock::given(method("POST"))
         .and(path("/mcp"))
@@ -192,12 +201,30 @@ async fn recovers_initialization_and_operation_401_once() -> anyhow::Result<()> 
         ))
         .respond_with(|request: &Request| {
             let body: Value = request.body_json().expect("valid JSON-RPC request");
-            ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc": "2.0",
-                "id": body.get("id").cloned().unwrap_or(Value::Null),
-                "result": { "tools": [] },
-            }))
+            match body.get("method").and_then(Value::as_str) {
+                Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": { "tools": [] },
+                })),
+                Some("resources/list") => ResponseTemplate::new(401)
+                    .insert_header("www-authenticate", "Bearer realm=\"mcp\""),
+                method => ResponseTemplate::new(400)
+                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+            }
         })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REJECTED_RETRY_ACCESS_TOKEN}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer realm=\"mcp\""),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -215,6 +242,71 @@ async fn recovers_initialization_and_operation_401_once() -> anyhow::Result<()> 
         .status()
         .await?;
     assert!(status.success(), "OAuth recovery child failed: {status}");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn rejected_initialize_retry_requires_reauthentication() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "scopes_supported": ["scope-a"],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_refresh(
+        &server,
+        REFRESH_TOKEN,
+        REFRESHED_ACCESS_TOKEN,
+        ROTATED_REFRESH_TOKEN,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {EXPIRED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer realm=\"mcp\""),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer realm=\"mcp\""),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "oauth_rejected_initialize_retry_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(CHILD_SERVER_URL_ENV, format!("{}/mcp", server.uri()))
+        .status()
+        .await?;
+    assert!(
+        status.success(),
+        "OAuth rejected-retry child failed: {status}"
+    );
     server.verify().await;
     Ok(())
 }
@@ -576,6 +668,24 @@ async fn oauth_401_recovery_child() -> anyhow::Result<()> {
         .list_tools(/*params*/ None, Some(Duration::from_secs(/*secs*/ 5)))
         .await?;
     assert!(tools.tools.is_empty());
+
+    let error = client
+        .list_resources(/*params*/ None, Some(Duration::from_secs(/*secs*/ 5)))
+        .await
+        .expect_err("a rejected one-shot OAuth retry should require reauthentication");
+    assert!(is_authentication_required_error(&error));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by rejected_initialize_retry_requires_reauthentication"]
+async fn oauth_rejected_initialize_retry_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
+    let client = refreshable_oauth_client(&server_url).await?;
+    let error = initialize_client(&client)
+        .await
+        .expect_err("a rejected initialize retry should require reauthentication");
+    assert!(is_authentication_required_error(&error));
     Ok(())
 }
 

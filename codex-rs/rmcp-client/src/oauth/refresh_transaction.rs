@@ -149,10 +149,12 @@ impl OAuthPersistor {
                 .await
                 .set_credential_store(InMemoryCredentialStore::new());
             *self.inner.last_credentials.lock().await = None;
-            anyhow::bail!(
-                "OAuth tokens for server {} were removed before refresh; authorization required",
-                self.inner.server_name
-            );
+            return Err(AuthError::AuthorizationRequired).with_context(|| {
+                format!(
+                    "OAuth tokens for server {} were removed before refresh; authorization required",
+                    self.inner.server_name
+                )
+            });
         };
 
         let latest_access_token = latest.token_response.0.access_token().secret();
