@@ -16,6 +16,7 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
+mod resolved_store;
 mod store_lock;
 
 use anyhow::Context;
@@ -62,6 +63,11 @@ use tokio::sync::Mutex;
 
 use codex_utils_home_dir::find_codex_home;
 
+pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
+pub(crate) use self::resolved_store::ResolvedOAuthTokens;
+pub(crate) use self::resolved_store::load_oauth_tokens_from_store;
+pub(crate) use self::resolved_store::resolve_oauth_tokens;
+
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const MCP_OAUTH_SECRET_PREFIX: &str = "MCP_OAUTH";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
@@ -96,41 +102,24 @@ pub(crate) enum StoredOAuthTokenStatus {
     AuthorizationRequired,
 }
 
-pub(crate) fn load_oauth_tokens(
-    server_name: &str,
-    url: &str,
-    store_mode: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-) -> Result<Option<StoredOAuthTokens>> {
-    let keyring_store = DefaultKeyringStore;
-    match store_mode {
-        OAuthCredentialsStoreMode::Auto => load_oauth_tokens_from_keyring_with_fallback_to_file(
-            &keyring_store,
-            keyring_backend_kind,
-            server_name,
-            url,
-        ),
-        OAuthCredentialsStoreMode::File => load_oauth_tokens_from_file(server_name, url),
-        OAuthCredentialsStoreMode::Keyring => {
-            load_oauth_tokens_from_keyring(&keyring_store, keyring_backend_kind, server_name, url)
-                .with_context(|| "failed to read OAuth tokens from keyring".to_string())
-        }
-    }
-}
-
 pub(crate) fn oauth_token_status(
     server_name: &str,
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<StoredOAuthTokenStatus> {
-    Ok(
-        match load_oauth_tokens(server_name, url, store_mode, keyring_backend_kind)?.as_ref() {
-            None => StoredOAuthTokenStatus::Missing,
-            Some(tokens) if oauth_tokens_are_usable(tokens) => StoredOAuthTokenStatus::Usable,
-            Some(_) => StoredOAuthTokenStatus::AuthorizationRequired,
-        },
-    )
+    let resolved = resolve_oauth_tokens(
+        &DefaultKeyringStore,
+        server_name,
+        url,
+        store_mode,
+        keyring_backend_kind,
+    )?;
+    Ok(match resolved.as_ref().map(|resolved| &resolved.tokens) {
+        None => StoredOAuthTokenStatus::Missing,
+        Some(tokens) if oauth_tokens_are_usable(tokens) => StoredOAuthTokenStatus::Usable,
+        Some(_) => StoredOAuthTokenStatus::AuthorizationRequired,
+    })
 }
 
 fn oauth_tokens_are_usable(tokens: &StoredOAuthTokens) -> bool {
@@ -166,28 +155,6 @@ fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
                 .token_response
                 .0
                 .set_expires_in(Some(&Duration::ZERO));
-        }
-    }
-}
-
-fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    keyring_backend_kind: AuthKeyringBackendKind,
-    server_name: &str,
-    url: &str,
-) -> Result<Option<StoredOAuthTokens>> {
-    match load_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url) {
-        Ok(Some(tokens)) => Ok(Some(tokens)),
-        Ok(None) => load_oauth_tokens_from_file(server_name, url),
-        // A store lock failure means the configured aggregate authority could be changing, or
-        // that coordination itself is unavailable. It is not evidence that the keyring backend
-        // is unavailable, so consulting File here could replay credentials hidden behind a
-        // newer Secrets entry. This is the load-side counterpart of the save guard below.
-        Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
-        Err(error) => {
-            warn!("failed to read OAuth tokens from keyring: {error}");
-            load_oauth_tokens_from_file(server_name, url)
-                .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
         }
     }
 }
@@ -269,7 +236,7 @@ pub fn save_oauth_tokens(
             tokens,
         ),
         OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file(tokens),
-        OAuthCredentialsStoreMode::Keyring => save_oauth_tokens_with_keyring(
+        OAuthCredentialsStoreMode::Keyring => save_oauth_tokens_with_keyring_and_cleanup_file(
             &keyring_store,
             keyring_backend_kind,
             server_name,
@@ -284,6 +251,8 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
+    // This exact-store writer is used after a client resolves its authority. Only login-time
+    // policy resolution may clean up or update the non-selected store.
     match keyring_backend_kind {
         AuthKeyringBackendKind::Direct => {
             save_oauth_tokens_to_direct_keyring(keyring_store, server_name, tokens)
@@ -303,12 +272,7 @@ fn save_oauth_tokens_to_direct_keyring<K: KeyringStore>(
 
     let key = compute_store_key(server_name, &tokens.url)?;
     match keyring_store.save(KEYRING_SERVICE, &key, &serialized) {
-        Ok(()) => {
-            if let Err(error) = delete_oauth_tokens_from_file(&key) {
-                warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
-            }
-            Ok(())
-        }
+        Ok(()) => Ok(()),
         Err(error) => {
             let message = format!(
                 "failed to write OAuth tokens to keyring: {}",
@@ -321,29 +285,19 @@ fn save_oauth_tokens_to_direct_keyring<K: KeyringStore>(
 }
 
 /// Saves one credential while holding the Secrets aggregate-store lock across the mutation.
-///
-/// The Secrets lock is released before fallback File cleanup to preserve aggregate-lock ordering.
 fn save_oauth_tokens_to_secrets_keyring<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     server_name: &str,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
-    {
-        let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
-        save_oauth_tokens_to_secrets_keyring_with_lock_held(
-            keyring_store,
-            server_name,
-            tokens,
-            &serialized,
-        )?;
-    }
-
-    let key = compute_store_key(server_name, &tokens.url)?;
-    if let Err(error) = delete_oauth_tokens_from_file(&key) {
-        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
-    }
-    Ok(())
+    let _store_lock = OAuthStoreLock::acquire(OAuthStore::Secrets)?;
+    save_oauth_tokens_to_secrets_keyring_with_lock_held(
+        keyring_store,
+        server_name,
+        tokens,
+        &serialized,
+    )
 }
 
 /// Writes one credential to Secrets. The caller must hold the Secrets aggregate-store lock.
@@ -366,13 +320,33 @@ fn save_oauth_tokens_to_secrets_keyring_with_lock_held<K: KeyringStore + Clone +
         .context("failed to write OAuth tokens to encrypted storage")
 }
 
+/// Saves to the selected keyring backend, then best-effort removes the fallback File entry.
+fn save_oauth_tokens_with_keyring_and_cleanup_file<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+) -> Result<()> {
+    save_oauth_tokens_with_keyring(keyring_store, keyring_backend_kind, server_name, tokens)?;
+    let key = compute_store_key(server_name, &tokens.url)?;
+    if let Err(error) = delete_oauth_tokens_from_file(&key) {
+        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
+    }
+    Ok(())
+}
+
 fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone + 'static>(
     keyring_store: &K,
     keyring_backend_kind: AuthKeyringBackendKind,
     server_name: &str,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
-    match save_oauth_tokens_with_keyring(keyring_store, keyring_backend_kind, server_name, tokens) {
+    match save_oauth_tokens_with_keyring_and_cleanup_file(
+        keyring_store,
+        keyring_backend_kind,
+        server_name,
+        tokens,
+    ) {
         Ok(()) => Ok(()),
         // As on load, a store lock failure is a coordination failure rather than evidence that
         // the keyring backend is unavailable. Falling back could leave a newer File token hidden
@@ -491,8 +465,7 @@ struct OAuthPersistorInner {
     server_name: String,
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
-    store_mode: OAuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
+    credential_store: ResolvedOAuthCredentialStore,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
 }
 
@@ -501,8 +474,7 @@ impl OAuthPersistor {
         server_name: String,
         url: String,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
-        store_mode: OAuthCredentialsStoreMode,
-        keyring_backend_kind: AuthKeyringBackendKind,
+        credential_store: ResolvedOAuthCredentialStore,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
         Self {
@@ -510,15 +482,13 @@ impl OAuthPersistor {
                 server_name,
                 url,
                 authorization_manager,
-                store_mode,
-                keyring_backend_kind,
+                credential_store,
                 last_credentials: Mutex::new(initial_credentials),
             }),
         }
     }
 
-    /// Persists the latest stored credentials if they have changed.
-    /// Deletes the credentials if they are no longer present.
+    /// Persists RMCP-managed credential changes back to this client's resolved authority.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
@@ -536,10 +506,12 @@ impl OAuthPersistor {
                 let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
                 let same_token = last_credentials
                     .as_ref()
-                    .map(|prev| prev.token_response == new_token_response)
+                    .map(|previous| previous.token_response == new_token_response)
                     .unwrap_or(false);
                 let expires_at = if same_token {
-                    last_credentials.as_ref().and_then(|prev| prev.expires_at)
+                    last_credentials
+                        .as_ref()
+                        .and_then(|previous| previous.expires_at)
                 } else {
                     compute_expires_at_millis(&credentials)
                 };
@@ -551,28 +523,24 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
-                    save_oauth_tokens(
-                        &self.inner.server_name,
-                        &stored,
-                        self.inner.store_mode,
-                        self.inner.keyring_backend_kind,
-                    )?;
+                    save_to_resolved_store(&DefaultKeyringStore, &self.inner, &stored)?;
                     *last_credentials = Some(stored);
                 }
             }
             None => {
-                let mut last_serialized = self.inner.last_credentials.lock().await;
-                if last_serialized.take().is_some()
-                    && let Err(error) = delete_oauth_tokens(
+                let mut last_credentials = self.inner.last_credentials.lock().await;
+                if last_credentials.take().is_some()
+                    && let Err(error) = delete_from_resolved_store(
+                        &DefaultKeyringStore,
                         &self.inner.server_name,
                         &self.inner.url,
-                        self.inner.store_mode,
-                        self.inner.keyring_backend_kind,
+                        self.inner.credential_store,
                     )
                 {
                     warn!(
-                        "failed to remove OAuth tokens for server {}: {error}",
-                        self.inner.server_name
+                        server_name = %self.inner.server_name,
+                        error = %error,
+                        "failed to remove MCP OAuth credentials from the resolved store"
                     );
                 }
             }
@@ -607,6 +575,44 @@ impl OAuthPersistor {
         }
 
         self.persist_if_needed().await
+    }
+}
+
+fn save_to_resolved_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    inner: &OAuthPersistorInner,
+    tokens: &StoredOAuthTokens,
+) -> Result<()> {
+    match inner.credential_store {
+        ResolvedOAuthCredentialStore::File => save_oauth_tokens_to_file(tokens),
+        ResolvedOAuthCredentialStore::Keyring(keyring_backend_kind) => {
+            save_oauth_tokens_with_keyring(
+                keyring_store,
+                keyring_backend_kind,
+                &inner.server_name,
+                tokens,
+            )
+        }
+    }
+}
+
+fn delete_from_resolved_store<K: KeyringStore + Clone + 'static>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+    credential_store: ResolvedOAuthCredentialStore,
+) -> Result<bool> {
+    match credential_store {
+        ResolvedOAuthCredentialStore::File => {
+            let key = compute_store_key(server_name, url)?;
+            delete_oauth_tokens_from_file(&key)
+        }
+        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct) => {
+            delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
+        }
+        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Secrets) => {
+            delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
+        }
     }
 }
 
@@ -913,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn load_oauth_tokens_reads_from_keyring_when_available() -> Result<()> {
+    fn resolve_oauth_tokens_uses_keyring_when_available() -> Result<()> {
         let _env = TempCodexHome::new();
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
@@ -922,14 +928,19 @@ mod tests {
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         store.save(KEYRING_SERVICE, &key, &serialized)?;
 
-        let loaded = super::load_oauth_tokens_from_keyring(
+        let resolved = super::resolve_oauth_tokens(
             &store,
-            AuthKeyringBackendKind::Direct,
             &tokens.server_name,
             &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
         )?
         .expect("tokens should load from keyring");
-        assert_tokens_match_without_expiry(&loaded, &expected);
+        assert_eq!(
+            resolved.store,
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct)
+        );
+        assert_tokens_match_without_expiry(&resolved.tokens, &expected);
         Ok(())
     }
 
@@ -942,14 +953,16 @@ mod tests {
 
         super::save_oauth_tokens_to_file(&tokens)?;
 
-        let loaded = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
+        let resolved = super::resolve_oauth_tokens(
             &store,
-            AuthKeyringBackendKind::Direct,
             &tokens.server_name,
             &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
         )?
         .expect("tokens should load from fallback");
-        assert_tokens_match_without_expiry(&loaded, &expected);
+        assert_eq!(resolved.store, ResolvedOAuthCredentialStore::File);
+        assert_tokens_match_without_expiry(&resolved.tokens, &expected);
         Ok(())
     }
 
@@ -964,14 +977,49 @@ mod tests {
 
         super::save_oauth_tokens_to_file(&tokens)?;
 
-        let loaded = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
+        let resolved = super::resolve_oauth_tokens(
             &store,
-            AuthKeyringBackendKind::Direct,
             &tokens.server_name,
             &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+            AuthKeyringBackendKind::Direct,
         )?
         .expect("tokens should load from fallback");
-        assert_tokens_match_without_expiry(&loaded, &expected);
+        assert_eq!(resolved.store, ResolvedOAuthCredentialStore::File);
+        assert_tokens_match_without_expiry(&resolved.tokens, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_store_operations_do_not_adopt_or_mutate_the_other_store() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let file_tokens = sample_tokens();
+        let mut keyring_tokens = file_tokens.clone();
+        keyring_tokens
+            .token_response
+            .0
+            .set_access_token(AccessToken::new("keyring-access-token".to_string()));
+
+        super::save_oauth_tokens_to_file(&file_tokens)?;
+        let fallback_path = super::fallback_file_path()?;
+        let fallback_before = fs::read(&fallback_path)?;
+        super::save_oauth_tokens_with_keyring(
+            &store,
+            AuthKeyringBackendKind::Direct,
+            &keyring_tokens.server_name,
+            &keyring_tokens,
+        )?;
+
+        assert_eq!(fs::read(fallback_path)?, fallback_before);
+        let loaded = super::load_oauth_tokens_from_store(
+            &store,
+            &keyring_tokens.server_name,
+            &keyring_tokens.url,
+            ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+        )?
+        .expect("tokens should load from the selected keyring store");
+        assert_tokens_match_without_expiry(&loaded, &keyring_tokens);
         Ok(())
     }
 
