@@ -168,6 +168,21 @@ async fn esc_during_mcp_startup_does_not_interrupt_agent_draft() {
 }
 
 #[tokio::test]
+async fn esc_during_mcp_startup_and_agent_turn_does_not_interrupt() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    handle_turn_started(&mut chat, "turn-1");
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(op_rx.try_recv().is_err());
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
+#[tokio::test]
 async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
