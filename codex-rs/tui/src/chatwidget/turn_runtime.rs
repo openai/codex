@@ -170,6 +170,7 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start = false;
         self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
+        self.clear_safety_buffering();
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
