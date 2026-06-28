@@ -58,7 +58,6 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.orchestrator_mcp_enabled = false;
     per_turn_config.mcp_servers = codex_config::Constrained::allow_only(HashMap::new());
     let _ = per_turn_config.features.disable(Feature::Apps);
-    let _ = per_turn_config.features.disable(Feature::Plugins);
     let _ = per_turn_config
         .features
         .disable(Feature::SkillMcpDependencyInstall);

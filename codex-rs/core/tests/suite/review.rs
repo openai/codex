@@ -6,7 +6,10 @@ use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_plugin::PluginHookSource;
+use codex_plugin::PluginId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
@@ -21,8 +24,10 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::hooks::trust_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
@@ -347,6 +352,149 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
         !request.body_contains_text("mcp__rmcp"),
         "review request unexpectedly exposed configured MCP tools: {:?}",
         request.body_json()["tools"]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_preserves_plugin_pre_tool_use_hooks() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "review-plugin-pretooluse";
+    let file_name = "review_plugin_hook_apply_patch.txt";
+    let patch = format!(
+        r#"*** Begin Patch
+*** Add File: {file_name}
++blocked
+*** End Patch"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_apply_patch_custom_tool_call(call_id, &patch),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-1", "plugin hook blocked it"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    let hooks_dir = plugin_root.join("hooks");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(&hooks_dir)?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let hook_script = hooks_dir.join("pre_tool_use_hook.py");
+    std::fs::write(
+        &hook_script,
+        r#"import json
+import sys
+
+json.load(sys.stdin)
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "blocked by plugin hook"
+    }
+}))
+"#,
+    )?;
+    let plugin_hooks_json = r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^apply_patch$",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/pre_tool_use_hook.py"
+      }]
+    }]
+  }
+}"#;
+    let plugin_hooks_path = hooks_dir.join("hooks.json");
+    std::fs::write(&plugin_hooks_path, plugin_hooks_json)?;
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id: PluginId::parse("sample@test")?,
+        plugin_root: AbsolutePathBuf::try_from(plugin_root.clone())?,
+        plugin_data_root: AbsolutePathBuf::try_from(plugin_root.join("data"))?,
+        source_path: AbsolutePathBuf::try_from(plugin_hooks_path)?,
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)?.hooks,
+    }];
+
+    let test = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Plugins)
+                .expect("test config should allow plugins");
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow hooks");
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabling the sandbox");
+            let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
+                feature_enabled: true,
+                config_layer_stack: Some(config.config_layer_stack.clone()),
+                plugin_hook_sources,
+                ..codex_hooks::HooksConfig::default()
+            });
+            trust_hooks(config, listed.hooks);
+        })
+        .build(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Apply the patch while reviewing".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].custom_tool_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(serde_json::Value::as_str)
+        .expect("apply_patch output");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by plugin hook"),
+        "unexpected apply_patch output: {output}"
+    );
+    assert!(
+        !test.workspace_path(file_name).exists(),
+        "plugin hook should block apply_patch execution"
     );
     Ok(())
 }
