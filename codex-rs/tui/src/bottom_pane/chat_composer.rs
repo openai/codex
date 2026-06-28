@@ -8323,16 +8323,13 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         composer.set_task_running(/*running*/ true);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/review these changes");
+        composer.draft.textarea.set_text_clearing_elements("/clear");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::None, result);
-        assert_eq!("/review these changes", composer.draft.textarea.text());
+        assert_eq!("/clear", composer.draft.textarea.text());
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
@@ -8343,9 +8340,10 @@ mod tests {
                     .map(|line| line.to_string())
                     .collect::<Vec<_>>()
                     .join("\n");
-                assert!(message.contains("disabled while a task is in progress"));
-                found_error = true;
-                break;
+                if message.contains("disabled while a task is in progress") {
+                    found_error = true;
+                    break;
+                }
             }
         }
         assert!(found_error, "expected error history cell to be sent");

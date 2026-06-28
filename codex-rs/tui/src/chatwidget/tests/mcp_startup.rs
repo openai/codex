@@ -100,12 +100,6 @@ async fn review_with_args_during_mcp_startup_skips_local_startup_round() {
     assert!(chat.mcp_startup_status.is_none());
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.status_state.current_status.header, "Working");
-
-    handle_entered_review_mode(&mut chat, "current changes");
-    handle_exited_review_mode(&mut chat);
-    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
-    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
-    assert!(chat.mcp_startup_status.is_some());
 }
 
 #[tokio::test]
@@ -128,6 +122,12 @@ async fn skipped_mcp_startup_updates_do_not_reopen_or_finish_review_task() {
     assert!(chat.mcp_startup_status.is_none());
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.status_state.current_status.header, "Working");
+
+    handle_entered_review_mode(&mut chat, "current changes");
+    handle_exited_review_mode(&mut chat);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    assert!(chat.mcp_startup_status.is_some());
 }
 
 #[tokio::test]
