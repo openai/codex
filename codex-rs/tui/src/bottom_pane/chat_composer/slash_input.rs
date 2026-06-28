@@ -255,6 +255,9 @@ impl ChatComposer {
                 code: KeyCode::Esc, ..
             } => {
                 // Dismiss the slash popup; keep the current input untouched.
+                let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
+                self.popups.dismissed_command_token =
+                    command_popup_filter_text(first_line, /*cursor*/ 0);
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }

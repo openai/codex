@@ -9,6 +9,7 @@ use crate::bottom_pane::skill_popup::SkillPopup;
 #[derive(Default)]
 pub(super) struct PopupState {
     pub(super) active: ActivePopup,
+    pub(super) dismissed_command_token: Option<String>,
     pub(super) dismissed_file_token: Option<String>,
     pub(super) current_file_query: Option<String>,
     pub(super) dismissed_mention_token: Option<String>,
