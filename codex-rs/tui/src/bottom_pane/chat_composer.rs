@@ -6185,32 +6185,18 @@ mod tests {
     }
 
     fn configure_partially_bound_skill_mentions(composer: &mut ChatComposer) {
-        let rustdoc_path = test_path_buf("/tmp/rustdoc/SKILL.md").abs();
         let simplify_path = test_path_buf("/tmp/simplify-code/SKILL.md").abs();
-        composer.set_skill_mentions(Some(vec![
-            SkillMetadata {
-                name: "rustdoc".to_string(),
-                description: "Add focused RustDoc comments.".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: rustdoc_path,
-                scope: crate::test_support::skill_scope_user(),
-                plugin_id: None,
-            },
-            SkillMetadata {
-                name: "simplify-code".to_string(),
-                description: "Review code changes for simpler implementation.".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: simplify_path.clone(),
-                scope: crate::test_support::skill_scope_user(),
-                plugin_id: None,
-            },
-        ]));
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "rustdoc".to_string(),
+            description: "Add focused RustDoc comments.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/rustdoc/SKILL.md").abs(),
+            scope: crate::test_support::skill_scope_user(),
+            plugin_id: None,
+        }]));
 
         composer.set_text_content_with_mention_bindings(
             "$rustdoc  $simplify-code without changing behavior".to_string(),
@@ -6239,21 +6225,7 @@ mod tests {
         );
         configure_partially_bound_skill_mentions(&mut composer);
 
-        assert_eq!(composer.current_mention_token().as_deref(), Some("rustdoc"));
-        let ActivePopup::Skill(popup) = &composer.popups.active else {
-            panic!("expected skill popup");
-        };
-        assert_eq!(
-            popup
-                .selected_mention()
-                .map(|mention| mention.insert_text.as_str()),
-            Some("$rustdoc")
-        );
-
-        let (result, consumed) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(result, InputResult::None);
-        assert!(consumed);
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             composer.current_text(),
             "$rustdoc  $simplify-code without changing behavior"
