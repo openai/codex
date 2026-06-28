@@ -38,7 +38,6 @@ use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use core_test_support::responses;
 use futures::SinkExt;
-use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::BooleanSchema;
@@ -64,13 +63,13 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+
+use super::exec_server_test_support::accept_exec_server_environment;
+use super::exec_server_test_support::read_exec_server_json;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_SERVER_NAME: &str = "tool_server";
@@ -841,35 +840,11 @@ async fn serve_environment_until_shutdown(
     filesystem_request_tx: oneshot::Sender<()>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
-    let (stream, _) = listener.accept().await?;
-    let mut websocket = accept_async(stream).await?;
-
-    let initialize = read_exec_server_json(&mut websocket).await?;
-    assert_eq!(initialize["method"], "initialize");
-    websocket
-        .send(Message::Text(
-            json!({
-                "id": initialize["id"],
-                "result": {"sessionId": "test-session"},
-            })
-            .to_string()
-            .into(),
-        ))
-        .await?;
-    let initialized = read_exec_server_json(&mut websocket).await?;
-    assert_eq!(initialized["method"], "initialized");
-    let environment_info = read_exec_server_json(&mut websocket).await?;
-    assert_eq!(environment_info["method"], "environment/info");
-    websocket
-        .send(Message::Text(
-            json!({
-                "id": environment_info["id"],
-                "result": {"shell": {"name": "zsh", "path": "/bin/zsh"}},
-            })
-            .to_string()
-            .into(),
-        ))
-        .await?;
+    let mut websocket = accept_exec_server_environment(
+        listener,
+        json!({"shell": {"name": "zsh", "path": "/bin/zsh"}}),
+    )
+    .await?;
 
     let mut filesystem_request_tx = Some(filesystem_request_tx);
     loop {
@@ -895,23 +870,6 @@ async fn serve_environment_until_shutdown(
                     .into(),
                 ))
                 .await?;
-        }
-    }
-}
-
-async fn read_exec_server_json(
-    websocket: &mut WebSocketStream<TcpStream>,
-) -> Result<serde_json::Value> {
-    loop {
-        match websocket
-            .next()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("exec-server websocket closed"))??
-        {
-            Message::Text(text) => return Ok(serde_json::from_str(text.as_ref())?),
-            Message::Binary(bytes) => return Ok(serde_json::from_slice(bytes.as_ref())?),
-            Message::Ping(_) | Message::Pong(_) => {}
-            message => anyhow::bail!("expected JSON-RPC message, got {message:?}"),
         }
     }
 }
