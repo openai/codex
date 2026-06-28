@@ -138,6 +138,14 @@ impl AccountRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn account_rate_limit_reset_credit_list(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.account_rate_limit_reset_credit_list_response()
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn get_account_token_usage(
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {

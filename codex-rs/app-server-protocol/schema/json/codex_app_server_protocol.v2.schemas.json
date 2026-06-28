@@ -101,6 +101,34 @@
       "title": "AccountLoginCompletedNotification",
       "type": "object"
     },
+    "AccountRateLimitResetCreditListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Parameters for listing available reset credits.\n\nThe upstream API counts every available credit but returns details for at most the first 10 and does not expose a pagination cursor, so this method cannot truthfully expose `cursor` or `limit`.",
+      "title": "AccountRateLimitResetCreditListParams",
+      "type": "object"
+    },
+    "AccountRateLimitResetCreditListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Available reset credits returned by the backend.\n\nThis is a non-pageable snapshot because the upstream API does not expose a cursor. `data` contains details for at most 10 credits, so it can contain fewer rows than `availableCount`.",
+      "properties": {
+        "availableCount": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/RateLimitResetCredit"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "availableCount",
+        "data"
+      ],
+      "title": "AccountRateLimitResetCreditListResponse",
+      "type": "object"
+    },
     "AccountRateLimitsUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Sparse rolling rate-limit update.\n\nClients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.",
@@ -2894,6 +2922,30 @@
             },
             "method": {
               "enum": [
+                "account/rateLimitResetCredit/list"
+              ],
+              "title": "Account/rateLimitResetCredit/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AccountRateLimitResetCreditListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/rateLimitResetCredit/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/rateLimitResetCredit/consume"
               ],
               "title": "Account/rateLimitResetCredit/consumeRequestMethod",
@@ -4928,6 +4980,13 @@
     "ConsumeAccountRateLimitResetCreditParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "creditId": {
+          "description": "Opaque reset-credit identifier to redeem. When omitted, the backend selects the next available credit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idempotencyKey": {
           "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
           "type": "string"
@@ -10913,6 +10972,48 @@
       ],
       "type": "string"
     },
+    "RateLimitResetCredit": {
+      "properties": {
+        "expiresAt": {
+          "description": "Unix timestamp in seconds when the credit expires, or `null` if it does not expire.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "grantedAt": {
+          "description": "Unix timestamp in seconds when the credit was granted.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "description": "Opaque backend identifier for this reset credit.",
+          "type": "string"
+        },
+        "resetType": {
+          "$ref": "#/definitions/RateLimitResetType"
+        },
+        "status": {
+          "$ref": "#/definitions/RateLimitResetCreditStatus"
+        }
+      },
+      "required": [
+        "grantedAt",
+        "id",
+        "resetType",
+        "status"
+      ],
+      "type": "object"
+    },
+    "RateLimitResetCreditStatus": {
+      "enum": [
+        "available",
+        "redeeming",
+        "redeemed"
+      ],
+      "type": "string"
+    },
     "RateLimitResetCreditsSummary": {
       "properties": {
         "availableCount": {
@@ -10924,6 +11025,12 @@
         "availableCount"
       ],
       "type": "object"
+    },
+    "RateLimitResetType": {
+      "enum": [
+        "codexRateLimits"
+      ],
+      "type": "string"
     },
     "RateLimitSnapshot": {
       "properties": {
