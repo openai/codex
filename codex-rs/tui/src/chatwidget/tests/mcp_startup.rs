@@ -70,6 +70,53 @@ async fn mcp_startup_ignores_status_for_other_thread() {
 }
 
 #[tokio::test]
+async fn review_command_during_mcp_startup_opens_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    chat.dispatch_command(SlashCommand::Review);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("review_command_during_mcp_startup_opens_popup", popup);
+}
+
+#[tokio::test]
+async fn review_with_args_during_mcp_startup_skips_local_startup_round() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "check regressions".to_string(),
+        Vec::new(),
+    );
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::Review {
+            target: ReviewTarget::Custom { instructions }
+        }) if instructions == "check regressions"
+    );
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn review_command_remains_blocked_during_agent_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+
+    chat.dispatch_command(SlashCommand::Review);
+
+    let error = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(error.contains("'/review' is disabled while a task is in progress."));
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

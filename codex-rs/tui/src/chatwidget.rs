@@ -1810,9 +1810,6 @@ impl ChatWidget {
     {
         let op: AppCommand = op.into();
         self.prepare_local_op_submission(&op);
-        if op.is_review() && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
-        }
         match &self.codex_op_target {
             CodexOpTarget::Direct(codex_op_tx) => {
                 crate::session_log::log_outbound_op(&op);
@@ -1838,6 +1835,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
+        if op.is_review() && !self.turn_lifecycle.agent_turn_running {
+            self.skip_mcp_startup_for_review();
+            if !self.bottom_pane.is_task_running() {
+                self.bottom_pane.set_task_running(/*running*/ true);
+            }
+        }
         if let AppCommand::Interrupt { behavior } = op
             && self.turn_lifecycle.agent_turn_running
         {

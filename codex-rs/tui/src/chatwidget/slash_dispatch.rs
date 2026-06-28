@@ -132,6 +132,13 @@ impl ChatWidget {
     }
 
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
+        if cmd == SlashCommand::Review {
+            let mcp_startup_is_only_task = self.mcp_startup_status.is_some()
+                && !self.turn_lifecycle.agent_turn_running
+                && !self.input_queue.user_turn_pending_start
+                && !self.review.is_review_mode;
+            return self.bottom_pane.is_task_running() && !mcp_startup_is_only_task;
+        }
         (!cmd.available_during_task() && self.bottom_pane.is_task_running())
             || (cmd == SlashCommand::Resume
                 && (self.input_queue.user_turn_pending_start
