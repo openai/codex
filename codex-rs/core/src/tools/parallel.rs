@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -9,6 +10,7 @@ use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
+use tracing::info;
 use tracing::instrument;
 use tracing::trace_span;
 
@@ -26,6 +28,16 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+
+struct ToolCallTimingGuard {
+    started_at: Instant,
+    execution_started_at: Arc<OnceLock<Instant>>,
+    conversation_id: String,
+    turn_id: String,
+    call_id: String,
+    tool_name: codex_tools::ToolName,
+    source: ToolCallSource,
+}
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -96,6 +108,11 @@ impl ToolCallRuntime {
         let invocation_cancellation_token = cancellation_token.clone();
         let wait_for_runtime_cancellation = self.router.tool_waits_for_runtime_cancellation(&call);
         let started = Instant::now();
+        let tool_call_timing_guard =
+            ToolCallTimingGuard::capture(started, &session.thread_id, &turn.sub_id, &call, &source);
+        let execution_started_at = tool_call_timing_guard
+            .as_ref()
+            .map(|timing| Arc::clone(&timing.execution_started_at));
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
@@ -119,6 +136,9 @@ impl ToolCallRuntime {
                 } else {
                     Either::Right(lock.write().await)
                 };
+                if let Some(execution_started_at) = execution_started_at {
+                    let _ = execution_started_at.set(Instant::now());
+                }
 
                 router
                     .dispatch_tool_call_with_terminal_outcome(
@@ -135,6 +155,7 @@ impl ToolCallRuntime {
             }));
 
         async move {
+            let _tool_call_timing_guard = tool_call_timing_guard;
             tokio::select! {
                 res = &mut handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
@@ -234,6 +255,67 @@ impl ToolCallRuntime {
         } else {
             format!("aborted by user after {secs:.1}s")
         }
+    }
+}
+
+impl ToolCallTimingGuard {
+    fn capture(
+        started_at: Instant,
+        conversation_id: &impl std::fmt::Display,
+        turn_id: &str,
+        call: &ToolCall,
+        source: &ToolCallSource,
+    ) -> Option<Self> {
+        if !tracing::enabled!(tracing::Level::INFO) {
+            return None;
+        }
+
+        Some(Self {
+            started_at,
+            execution_started_at: Arc::new(OnceLock::new()),
+            conversation_id: conversation_id.to_string(),
+            turn_id: turn_id.to_string(),
+            call_id: call.call_id.clone(),
+            tool_name: call.tool_name.clone(),
+            source: source.clone(),
+        })
+    }
+}
+
+impl Drop for ToolCallTimingGuard {
+    fn drop(&mut self) {
+        let completed_at = Instant::now();
+        info!(
+            event.name = "codex.tool_call",
+            trace_id = %codex_otel::current_span_trace_id().unwrap_or_default(),
+            conversation.id = %self.conversation_id,
+            turn_id = %self.turn_id,
+            tool_name = %self.tool_name,
+            call_id = %self.call_id,
+            tool_source = match &self.source {
+                ToolCallSource::Direct => "direct",
+                ToolCallSource::CodeMode { .. } => "code_mode",
+            },
+            code_mode_cell_id = match &self.source {
+                ToolCallSource::Direct => "",
+                ToolCallSource::CodeMode { cell_id, .. } => cell_id.as_str(),
+            },
+            code_mode_runtime_tool_call_id = match &self.source {
+                ToolCallSource::Direct => "",
+                ToolCallSource::CodeMode { runtime_tool_call_id, .. } => runtime_tool_call_id.as_str(),
+            },
+            execution_started = self.execution_started_at.get().is_some(),
+            dispatch_duration_seconds = self.execution_started_at.get().map_or_else(
+                || completed_at.duration_since(self.started_at).as_secs_f64(),
+                |execution_started_at| execution_started_at.duration_since(self.started_at).as_secs_f64(),
+            ),
+            handler_duration_seconds = self.execution_started_at.get().map_or(
+                0.0,
+                |execution_started_at| completed_at.duration_since(*execution_started_at).as_secs_f64(),
+            ),
+            total_duration_seconds = completed_at.duration_since(self.started_at).as_secs_f64(),
+            "tool call completed"
+        );
     }
 }
 
