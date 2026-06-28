@@ -10,10 +10,12 @@ use oauth2::basic::BasicTokenType;
 use reqwest::header::HeaderMap;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::auth::AuthClient;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
+use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use serde_json::json;
 use tempfile::TempDir;
@@ -27,7 +29,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::OAuthTransportClient;
+use super::authorization_required_after_retry;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
+use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::ResolvedOAuthCredentialStore;
 use crate::oauth::StoredOAuthTokens;
@@ -42,6 +46,20 @@ const ACCESS_TOKEN_A: &str = "response-access-a";
 const REFRESH_TOKEN_A: &str = "response-refresh-a";
 const ACCESS_TOKEN_B: &str = "response-access-b";
 const REFRESH_TOKEN_B: &str = "response-refresh-b";
+
+#[test]
+fn exhausted_transport_retry_requires_reauthentication() {
+    let result = authorization_required_after_retry::<()>(Err(StreamableHttpError::Client(
+        StreamableHttpClientAdapterError::AccessTokenRejected {
+            rejected_access_token: AccessToken::new(ACCESS_TOKEN_B.to_string()),
+        },
+    )));
+
+    assert!(matches!(
+        result,
+        Err(StreamableHttpError::Auth(AuthError::AuthorizationRequired))
+    ));
+}
 
 #[tokio::test]
 async fn server_response_post_receives_one_shot_oauth_recovery() -> anyhow::Result<()> {

@@ -20,6 +20,7 @@ use reqwest::header::HeaderValue;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::JsonRpcMessage;
 use rmcp::transport::auth::AuthClient;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
@@ -126,9 +127,11 @@ impl StreamableHttpClient for OAuthTransportClient {
             .recover_after_unauthorized("post_message", rejected_access_token)
             .await?
         {
-            self.auth_client
-                .post_message(uri, message, session_id, auth_token, custom_headers)
-                .await
+            authorization_required_after_retry(
+                self.auth_client
+                    .post_message(uri, message, session_id, auth_token, custom_headers)
+                    .await,
+            )
         } else {
             result
         }
@@ -156,9 +159,11 @@ impl StreamableHttpClient for OAuthTransportClient {
             .recover_after_unauthorized("delete_session", rejected_access_token)
             .await?
         {
-            self.auth_client
-                .delete_session(uri, session_id, auth_token, custom_headers)
-                .await
+            authorization_required_after_retry(
+                self.auth_client
+                    .delete_session(uri, session_id, auth_token, custom_headers)
+                    .await,
+            )
         } else {
             result
         }
@@ -190,12 +195,27 @@ impl StreamableHttpClient for OAuthTransportClient {
             .recover_after_unauthorized("get_stream", rejected_access_token)
             .await?
         {
-            self.auth_client
-                .get_stream(uri, session_id, last_event_id, auth_token, custom_headers)
-                .await
+            authorization_required_after_retry(
+                self.auth_client
+                    .get_stream(uri, session_id, last_event_id, auth_token, custom_headers)
+                    .await,
+            )
         } else {
             result
         }
+    }
+}
+
+fn authorization_required_after_retry<T>(result: TransportResult<T>) -> TransportResult<T> {
+    match result {
+        // The first 401 carries the token that was actually rejected so concurrent recovery can
+        // distinguish A from a newer B. Once the single retry also rejects B, attribution is no
+        // longer useful: surface the existing reauthentication marker instead of leaking the
+        // adapter-only error past the Codex-owned recovery boundary.
+        Err(StreamableHttpError::Client(
+            StreamableHttpClientAdapterError::AccessTokenRejected { .. },
+        )) => Err(StreamableHttpError::Auth(AuthError::AuthorizationRequired)),
+        result => result,
     }
 }
 
