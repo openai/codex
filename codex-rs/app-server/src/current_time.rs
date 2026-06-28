@@ -15,14 +15,13 @@ use codex_core::TimeFuture;
 use codex_core::TimeProvider;
 use codex_protocol::ThreadId;
 use tokio::time::Duration;
-use tokio::time::Instant;
-use tokio::time::timeout_at;
+use tokio::time::timeout;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
-const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CURRENT_TIME_SUBSCRIBER_TIMEOUT: Duration = Duration::from_secs(10);
 const CURRENT_TIME_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn app_server_time_provider(
@@ -87,16 +86,15 @@ async fn request_current_time(
     thread_state_manager: ThreadStateManager,
     thread_id: ThreadId,
 ) -> Result<DateTime<Utc>> {
-    let deadline = Instant::now() + CURRENT_TIME_REQUEST_TIMEOUT;
-    timeout_at(
-        deadline,
+    timeout(
+        CURRENT_TIME_SUBSCRIBER_TIMEOUT,
         thread_state_manager.wait_for_thread_subscriber(thread_id),
     )
     .await
     .map_err(|_| {
         anyhow!(
             "timed out waiting for a client to subscribe to the thread after {}s",
-            CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
+            CURRENT_TIME_SUBSCRIBER_TIMEOUT.as_secs()
         )
     })?;
     let connection_ids = thread_state_manager
@@ -104,7 +102,7 @@ async fn request_current_time(
         .await;
     let connection_id = require_single_current_time_connection(&connection_ids)?;
     let connection_ids = [connection_id];
-    let (request_id, rx) = outgoing
+    let (_, rx) = outgoing
         .send_request_to_connections(
             Some(&connection_ids),
             ServerRequestPayload::CurrentTimeRead(CurrentTimeReadParams {
@@ -114,23 +112,16 @@ async fn request_current_time(
         )
         .await;
 
-    let result = match timeout_at(deadline, rx).await {
-        Ok(Ok(Ok(result))) => result,
-        Ok(Ok(Err(err))) => {
+    let result = match rx.await {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => {
             bail!(
                 "current-time request failed: code={} message={}",
                 err.code,
                 err.message
             );
         }
-        Ok(Err(err)) => bail!("current-time request was canceled: {err}"),
-        Err(_) => {
-            let _canceled = outgoing.cancel_request(&request_id).await;
-            bail!(
-                "current-time request timed out after {}s",
-                CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
-            );
-        }
+        Err(err) => bail!("current-time request was canceled: {err}"),
     };
     let response: CurrentTimeReadResponse =
         serde_json::from_value(result).context("invalid current-time response")?;
