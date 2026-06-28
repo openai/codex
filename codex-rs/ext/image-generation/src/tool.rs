@@ -73,9 +73,17 @@ impl ImageGenerationTool {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
+    /// A prompt describing the desired output. Do not use a local filename in
+    /// this text as a substitute for attaching a required reference image.
     prompt: String,
+    /// Absolute local image paths to include as real image inputs. Use this for
+    /// every required local reference image instead of falling back to text-only
+    /// generation when the user asked to base the result on those files.
     #[schemars(length(max = 5))]
     referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
+    /// The smallest number of recent conversation images needed when at least
+    /// one required image has no local path. Do not use this when all required
+    /// reference images are still local files.
     #[schemars(range(min = 1, max = 5))]
     num_last_images_to_include: Option<usize>,
 }
