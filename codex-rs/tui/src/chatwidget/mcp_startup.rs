@@ -233,6 +233,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if self.mcp_startup_updates_suppressed_for_review {
+            return;
+        }
+
         if self.mcp_startup_ignore_updates_until_next_start {
             if self.mcp_startup_pending_next_round.is_empty() {
                 self.mcp_startup_pending_next_round_saw_starting = false;

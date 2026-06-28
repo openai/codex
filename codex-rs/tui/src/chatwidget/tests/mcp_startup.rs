@@ -224,6 +224,39 @@ async fn replayed_active_review_rearms_mcp_startup_suppression() {
 }
 
 #[tokio::test]
+async fn lag_recovery_during_review_does_not_promote_skipped_terminal_round() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "review unrelated branch".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+
+    chat.finish_mcp_startup_after_lag();
+    handle_error(
+        &mut chat,
+        "failed to resolve merge base",
+        Some(CodexErrorInfo::Other),
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: stale failure",
+    );
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn review_command_remains_blocked_during_agent_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
