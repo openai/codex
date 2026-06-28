@@ -85,6 +85,7 @@ mod streamable_http_retry;
 
 use self::streamable_http_retry::HandshakeError;
 use self::streamable_http_retry::STREAMABLE_HTTP_RETRY_DELAYS_MS;
+use self::streamable_http_retry::remaining_initialize_timeout;
 use self::streamable_http_retry::sleep_with_retry_deadline;
 
 enum PendingTransport {
@@ -451,11 +452,13 @@ impl RmcpClient {
             }
         };
 
+        let mut initialize_deadline = timeout.map(|duration| Instant::now() + duration);
         let (service, oauth_persistor) = self
             .connect_pending_transport_with_initialize_retries(
                 pending_transport,
                 client_service.clone(),
                 timeout,
+                &mut initialize_deadline,
             )
             .await?;
 
@@ -498,7 +501,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -515,7 +518,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -560,7 +563,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
                 let params = params.clone();
@@ -576,7 +579,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/templates/list", timeout, move |service| {
                 let params = params.clone();
@@ -592,7 +595,7 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/read", timeout, move |service| {
                 let params = params.clone();
@@ -610,7 +613,7 @@ impl RmcpClient {
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let arguments = match arguments {
             Some(Value::Object(map)) => Some(map),
             Some(other) => {
@@ -666,7 +669,7 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         self.run_service_operation(
             "notifications/custom",
             /*timeout*/ None,
@@ -696,7 +699,7 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let response = self
             .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
@@ -750,8 +753,8 @@ impl RmcpClient {
         drop(previous_state);
     }
 
-    /// This should be called after every tool call so that if a given tool call triggered
-    /// a refresh of the OAuth tokens, they are persisted.
+    /// Preserve refreshes that RMCP may still perform until Codex becomes the sole owner in the
+    /// next stack layer.
     async fn persist_oauth_tokens(&self) {
         if let Some(runtime) = self.oauth_persistor().await
             && let Err(error) = runtime.persist_if_needed().await
@@ -760,12 +763,11 @@ impl RmcpClient {
         }
     }
 
-    async fn refresh_oauth_if_needed(&self) {
-        if let Some(runtime) = self.oauth_persistor().await
-            && let Err(error) = runtime.refresh_if_needed().await
-        {
-            warn!("failed to refresh OAuth tokens: {error}");
+    async fn refresh_oauth_if_needed(&self) -> Result<()> {
+        if let Some(runtime) = self.oauth_persistor().await {
+            runtime.refresh_if_needed().await?;
         }
+        Ok(())
     }
 
     async fn create_pending_transport(
@@ -818,8 +820,10 @@ impl RmcpClient {
                         ) {
                             Ok(tokens) => {
                                 if let Some(resolved) = tokens.as_ref() {
-                                    // Retries and session recovery rebuild this transport. Pin the
-                                    // first concrete source so Auto is not reevaluated mid-client.
+                                    // Transport retries and session recovery are part of the same
+                                    // client lifecycle. Pin the first concrete source in memory so
+                                    // rebuilding a transport never re-evaluates Auto and adopts a
+                                    // possibly stale credential from another store.
                                     resolved_store.set(resolved.store).map_err(|_| {
                                         anyhow!(
                                             "OAuth credential store resolved concurrently for MCP server `{server_name}`"
@@ -913,6 +917,7 @@ impl RmcpClient {
         pending_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
+        initialize_deadline: &mut Option<Instant>,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
@@ -933,13 +938,26 @@ impl RmcpClient {
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
+            } => {
+                // `startup_timeout_sec` bounds MCP transport setup, retry delays, and the
+                // initialization handshake. OAuth refresh has independent lock and provider
+                // request bounds, and persistence must finish after a successful response, so the
+                // complete refresh transaction is deliberately excluded from that deadline.
+                let refresh_started_at = Instant::now();
+                let refresh_result = oauth_persistor.refresh_if_needed().await;
+                if let Some(deadline) = initialize_deadline.as_mut() {
+                    *deadline += refresh_started_at.elapsed();
+                }
+                refresh_result?;
+                (
+                    service::serve_client(client_service, transport).boxed(),
+                    Some(oauth_persistor),
+                )
+            }
         };
 
-        let service_result = match timeout {
+        let handshake_timeout = remaining_initialize_timeout(timeout, *initialize_deadline)?;
+        let service_result = match handshake_timeout {
             Some(duration) => match time::timeout(duration, transport).await {
                 Ok(result) => {
                     result.map_err(|source| anyhow::Error::from(HandshakeError { source }))
@@ -1157,11 +1175,15 @@ impl RmcpClient {
             .clone()
             .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
+        let mut initialize_deadline = initialize_context
+            .timeout
+            .map(|duration| Instant::now() + duration);
         let (service, oauth_persistor) = self
             .connect_pending_transport_with_initialize_retries(
                 pending_transport,
                 initialize_context.client_service,
                 initialize_context.timeout,
+                &mut initialize_deadline,
             )
             .await?;
 
