@@ -56,6 +56,7 @@ pub(crate) struct StreamableHttpClientAdapter {
     http_client: Arc<dyn HttpClient>,
     default_headers: HeaderMap,
     auth_provider: Option<SharedAuthProvider>,
+    attribute_rejected_access_token: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -82,7 +83,14 @@ impl StreamableHttpClientAdapter {
             http_client,
             default_headers,
             auth_provider,
+            attribute_rejected_access_token: false,
         }
+    }
+
+    /// Preserves the access token associated with a 401 for Codex-owned OAuth recovery.
+    pub(crate) fn with_rejected_token_attribution(mut self) -> Self {
+        self.attribute_rejected_access_token = true;
+        self
     }
 }
 
@@ -167,7 +175,8 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 StreamableHttpClientAdapterError::SessionExpired404,
             ));
         }
-        if response.status == StatusCode::UNAUTHORIZED.as_u16()
+        if self.attribute_rejected_access_token
+            && response.status == StatusCode::UNAUTHORIZED.as_u16()
             && let Some(error) = access_token_rejected(auth_token.as_deref())
         {
             return Err(error);
@@ -284,7 +293,8 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Ok(());
         }
-        if response.status == StatusCode::UNAUTHORIZED.as_u16()
+        if self.attribute_rejected_access_token
+            && response.status == StatusCode::UNAUTHORIZED.as_u16()
             && let Some(error) = access_token_rejected(auth_token.as_deref())
         {
             return Err(error);
@@ -364,7 +374,8 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 StreamableHttpClientAdapterError::SessionExpired404,
             ));
         }
-        if response.status == StatusCode::UNAUTHORIZED.as_u16()
+        if self.attribute_rejected_access_token
+            && response.status == StatusCode::UNAUTHORIZED.as_u16()
             && let Some(error) = access_token_rejected(auth_token.as_deref())
         {
             return Err(error);

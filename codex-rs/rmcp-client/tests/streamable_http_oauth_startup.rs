@@ -1,5 +1,8 @@
 mod streamable_http_test_support;
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -199,21 +202,31 @@ async fn recovers_initialization_and_operation_401_once() -> anyhow::Result<()> 
             "authorization",
             format!("Bearer {FINAL_ACCESS_TOKEN}"),
         ))
-        .respond_with(|request: &Request| {
-            let body: Value = request.body_json().expect("valid JSON-RPC request");
-            match body.get("method").and_then(Value::as_str) {
-                Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
-                    "jsonrpc": "2.0",
-                    "id": body.get("id").cloned().unwrap_or(Value::Null),
-                    "result": { "tools": [] },
-                })),
-                Some("resources/list") => ResponseTemplate::new(401)
-                    .insert_header("www-authenticate", "Bearer realm=\"mcp\""),
-                method => ResponseTemplate::new(400)
-                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+        .respond_with({
+            let resource_attempts = Arc::new(AtomicUsize::new(0));
+            move |request: &Request| {
+                let body: Value = request.body_json().expect("valid JSON-RPC request");
+                match body.get("method").and_then(Value::as_str) {
+                    Some("tools/list") => ResponseTemplate::new(200).set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id").cloned().unwrap_or(Value::Null),
+                        "result": { "tools": [] },
+                    })),
+                    Some("resources/list")
+                        if resource_attempts.fetch_add(1, Ordering::SeqCst) == 0 =>
+                    {
+                        ResponseTemplate::new(404)
+                    }
+                    Some("resources/list") => ResponseTemplate::new(401)
+                        .insert_header("www-authenticate", "Bearer realm=\"mcp\""),
+                    Some("initialize") => initialize_response(&body),
+                    Some("notifications/initialized") => ResponseTemplate::new(202),
+                    method => ResponseTemplate::new(400)
+                        .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+                }
             }
         })
-        .expect(2)
+        .expect(5)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -785,19 +798,21 @@ async fn mount_refresh(
 }
 
 fn initialize_response(body: &Value) -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(json!({
-        "jsonrpc": "2.0",
-        "id": body.get("id").cloned().unwrap_or(Value::Null),
-        "result": {
-            "protocolVersion": body
-                .pointer("/params/protocolVersion")
-                .cloned()
-                .unwrap_or_else(|| json!("2025-06-18")),
-            "capabilities": {},
-            "serverInfo": {
-                "name": "oauth-401-recovery-test",
-                "version": "0.0.0-test",
+    ResponseTemplate::new(200)
+        .insert_header("mcp-session-id", "oauth-recovery-session")
+        .set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": body.get("id").cloned().unwrap_or(Value::Null),
+            "result": {
+                "protocolVersion": body
+                    .pointer("/params/protocolVersion")
+                    .cloned()
+                    .unwrap_or_else(|| json!("2025-06-18")),
+                "capabilities": {},
+                "serverInfo": {
+                    "name": "oauth-401-recovery-test",
+                    "version": "0.0.0-test",
+                },
             },
-        },
-    }))
+        }))
 }

@@ -233,6 +233,19 @@ fn rejected_access_token(
 fn oauth_transport_error(
     error: anyhow::Error,
 ) -> StreamableHttpError<StreamableHttpClientAdapterError> {
+    if let Some(auth_error) =
+        error
+            .chain()
+            .find_map(|source| match source.downcast_ref::<AuthError>() {
+                Some(AuthError::AuthorizationRequired) => Some(AuthError::AuthorizationRequired),
+                Some(AuthError::TokenExpired) => Some(AuthError::TokenExpired),
+                _ => None,
+            })
+    {
+        // Preserve RMCP's established reauthentication variants across Codex's transport policy
+        // boundary. Other OAuth failures retain their context-rich adapter error.
+        return StreamableHttpError::Auth(auth_error);
+    }
     StreamableHttpError::Client(StreamableHttpClientAdapterError::OAuth(error))
 }
 

@@ -30,6 +30,7 @@ use wiremock::matchers::path;
 
 use super::OAuthTransportClient;
 use super::authorization_required_after_retry;
+use super::oauth_transport_error;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::oauth::OAuthPersistor;
@@ -58,6 +59,17 @@ fn exhausted_transport_retry_requires_reauthentication() {
     assert!(matches!(
         result,
         Err(StreamableHttpError::Auth(AuthError::AuthorizationRequired))
+    ));
+}
+
+#[test]
+fn oauth_transport_preserves_reauthentication_errors() {
+    let error = anyhow::Error::new(AuthError::AuthorizationRequired)
+        .context("refreshing rejected MCP access token");
+
+    assert!(matches!(
+        oauth_transport_error(error),
+        StreamableHttpError::Auth(AuthError::AuthorizationRequired)
     ));
 }
 
@@ -155,7 +167,8 @@ async fn server_response_post_child() -> anyhow::Result<()> {
             Arc::clone(&http_client),
             HeaderMap::new(),
             /*auth_provider*/ None,
-        ),
+        )
+        .with_rejected_token_attribution(),
         manager,
     );
     let persistor = OAuthPersistor::new(
