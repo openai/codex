@@ -1,0 +1,62 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load(":defs.bzl", "BWRAP_EXEC_PROPERTIES")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["defs.bzl"])
+
+rust_library(
+    name = "bwrap_test_support",
+    testonly = True,
+    srcs = [
+        "src/lib.rs",
+        "src/lib_tests.rs",
+        "src/sandbox_init.rs",
+    ],
+    crate_name = "bwrap_test_support",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//codex-rs/utils/cargo-bin",
+        "@crates//:anyhow",
+        "@crates//:libc",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "bwrap-smoke",
+    testonly = True,
+    srcs = ["fixtures/bwrap_smoke.rs"],
+    crate_name = "bwrap_smoke",
+    crate_root = "fixtures/bwrap_smoke.rs",
+    edition = "2024",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:libc",
+    ],
+)
+
+rust_test(
+    name = "bwrap-test-support-smoke-test",
+    crate = ":bwrap_test_support",
+    data = [
+        ":bwrap-smoke",
+        "//codex-rs/bwrap",
+    ],
+    env = {
+        "CARGO_BIN_EXE_bwrap": "$(rlocationpath //codex-rs/bwrap:bwrap)",
+        "CARGO_BIN_EXE_bwrap-smoke": "$(rlocationpath :bwrap-smoke)",
+    },
+    exec_properties = BWRAP_EXEC_PROPERTIES,
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "@crates//:futures",
+        "@crates//:libc",
+        "@crates//:pretty_assertions",
+    ],
+)
