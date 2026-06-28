@@ -2,6 +2,8 @@ use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
+use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
@@ -18,6 +20,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
@@ -248,6 +251,61 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
     let _codex_home_guard = codex_home;
     server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+    let codex_home = Arc::new(TempDir::new()?);
+    let codex = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow apps");
+            config.chatgpt_base_url = apps_base_url;
+        })
+        .build(&server)
+        .await?
+        .codex;
+    let request_log = mount_sse_sequence(&server, vec![responses::sse(completed_sse())]).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Review without MCP tools".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+    let entered = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::EnteredReviewMode(_) | EventMsg::Error(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        matches!(entered, EventMsg::EnteredReviewMode(_)),
+        "review did not start: {entered:?}"
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    assert!(
+        !request.body_contains_text("mcp__codex_apps"),
+        "review request unexpectedly exposed MCP tools: {:?}",
+        request.body_json()["tools"]
+    );
+    Ok(())
 }
 
 /// Ensure review flow suppresses assistant-specific streaming/completion events:
