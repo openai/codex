@@ -155,6 +155,16 @@ impl ChatWidget {
             return;
         }
 
+        // MCP startup is background work rather than an agent turn. Keep its visible interrupt
+        // hint authoritative even after typing opens a composer popup such as slash completion.
+        if self.mcp_startup_status.is_some()
+            && !self.turn_lifecycle.agent_turn_running
+            && self.chat_keymap.interrupt_turn.is_pressed(key_event)
+        {
+            self.submit_op(AppCommand::interrupt());
+            return;
+        }
+
         if self.handle_plugins_popup_key_event(key_event) {
             return;
         }

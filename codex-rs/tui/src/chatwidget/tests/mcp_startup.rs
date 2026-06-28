@@ -125,6 +125,20 @@ async fn mcp_startup_header_booting_snapshot() {
 }
 
 #[tokio::test]
+async fn esc_interrupts_mcp_startup_while_slash_popup_is_open() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt { .. }));
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
+#[tokio::test]
 async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
