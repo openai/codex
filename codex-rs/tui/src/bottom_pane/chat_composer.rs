@@ -1903,10 +1903,10 @@ impl ChatComposer {
         };
 
         if close_popup {
-            if let Some((insert_text, path)) = selected_mention {
-                if let Some((token_range, _)) = self.current_mention_token_range() {
-                    self.insert_selected_mention(token_range, &insert_text, path.as_deref());
-                }
+            if let Some((insert_text, path)) = selected_mention
+                && let Some((token_range, _)) = self.current_mention_token_range()
+            {
+                self.insert_selected_mention(token_range, &insert_text, path.as_deref());
             }
             self.popups.active = ActivePopup::None;
         }
@@ -2044,23 +2044,32 @@ impl ChatComposer {
             || lower.ends_with(".webp")
     }
 
+    /// Ensure a completion is followed by whitespace and leave the cursor after that separator.
+    fn advance_past_completion_separator(&mut self) {
+        let cursor = self.draft.textarea.cursor();
+        let existing_separator_len = self.draft.textarea.text()[cursor..]
+            .chars()
+            .next()
+            .filter(|c| c.is_whitespace())
+            .map(char::len_utf8);
+        if let Some(separator_len) = existing_separator_len {
+            self.draft.textarea.set_cursor(cursor + separator_len);
+        } else {
+            self.draft.textarea.insert_str(" ");
+        }
+    }
+
     fn insert_selected_file_path(&mut self, token_range: Range<usize>, selected_path: &str) {
         if Self::is_image_path(selected_path) {
             let path_buf = PathBuf::from(selected_path);
             match image::image_dimensions(&path_buf) {
                 Ok((width, height)) => {
                     tracing::debug!("selected image dimensions={}x{}", width, height);
-                    let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
-                        .chars()
-                        .next()
-                        .is_some_and(char::is_whitespace);
                     let start_idx = token_range.start;
                     self.draft.textarea.replace_range(token_range, "");
                     self.draft.textarea.set_cursor(start_idx);
                     self.attach_image(path_buf);
-                    if !has_trailing_whitespace {
-                        self.draft.textarea.insert_str(" ");
-                    }
+                    self.advance_past_completion_separator();
                 }
                 Err(err) => {
                     tracing::trace!("image dimensions lookup failed: {err}");
@@ -2424,19 +2433,12 @@ impl ChatComposer {
 
         // Replace just the active `@token` so unrelated text elements, such as
         // large-paste placeholders, remain atomic and can still expand on submit.
-        let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace);
         let start_idx = token_range.start;
-        let trailing_space = if has_trailing_whitespace { "" } else { " " };
+        self.draft.textarea.replace_range(token_range, &inserted);
         self.draft
             .textarea
-            .replace_range(token_range, &format!("{inserted}{trailing_space}"));
-        let new_cursor = start_idx
-            .saturating_add(inserted.len())
-            .saturating_add(trailing_space.len());
-        self.draft.textarea.set_cursor(new_cursor);
+            .set_cursor(start_idx.saturating_add(inserted.len()));
+        self.advance_past_completion_separator();
     }
 
     fn insert_selected_mention(
@@ -2446,10 +2448,6 @@ impl ChatComposer {
         path: Option<&str>,
     ) {
         // Remove the active token and insert the selected mention as an atomic element.
-        let has_trailing_whitespace = self.draft.textarea.text()[token_range.end..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace);
         let start_idx = token_range.start;
         self.draft.textarea.replace_range(token_range, "");
         self.draft.textarea.set_cursor(start_idx);
@@ -2468,13 +2466,7 @@ impl ChatComposer {
             );
         }
 
-        if !has_trailing_whitespace {
-            self.draft.textarea.insert_str(" ");
-        }
-        let new_cursor = start_idx
-            .saturating_add(insert_text.len())
-            .saturating_add(usize::from(!has_trailing_whitespace));
-        self.draft.textarea.set_cursor(new_cursor);
+        self.advance_past_completion_separator();
     }
 
     fn mention_token_from_insert_text(insert_text: &str) -> Option<(char, String)> {
@@ -6290,6 +6282,28 @@ mod tests {
     }
 
     #[test]
+    fn skill_completion_advances_past_existing_separator() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        configure_partially_bound_skill_mentions(&mut composer);
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        composer.insert_str("foo");
+
+        assert_eq!(
+            composer.current_text(),
+            "$rustdoc foo $simplify-code without changing behavior"
+        );
+    }
+
+    #[test]
     fn skill_popup_targets_unbound_mention_left_of_bound_mention_snapshot() {
         snapshot_composer_state(
             "skill_popup_targets_unbound_mention_left_of_bound_mention",
@@ -9100,6 +9114,75 @@ mod tests {
             }
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn file_completion_advances_past_existing_separator() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("@ma  next".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@ma ".len());
+        composer.sync_popups();
+        composer.on_file_search_result(
+            "ma".to_string(),
+            vec![FileMatch {
+                score: 1,
+                path: PathBuf::from("src/main.rs"),
+                match_type: codex_file_search::MatchType::File,
+                root: PathBuf::from("/tmp"),
+                indices: None,
+            }],
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        composer.insert_str("foo");
+
+        assert_eq!(composer.current_text(), "src/main.rs foo next");
+    }
+
+    #[test]
+    fn image_completion_advances_past_existing_separator() {
+        let tmp = tempdir().expect("create TempDir");
+        let image_path = tmp.path().join("image.png");
+        let image: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
+        image.save(&image_path).expect("write temp png");
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("@image  next".to_string(), Vec::new(), Vec::new());
+        composer.draft.textarea.set_cursor("@image ".len());
+        composer.sync_popups();
+        composer.on_file_search_result(
+            "image".to_string(),
+            vec![FileMatch {
+                score: 1,
+                path: image_path.clone(),
+                match_type: codex_file_search::MatchType::File,
+                root: tmp.path().to_path_buf(),
+                indices: None,
+            }],
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        composer.insert_str("foo");
+
+        assert_eq!(composer.current_text(), "[Image #1] foo next");
+        assert_eq!(composer.local_image_paths(), vec![image_path]);
     }
 
     /// Behavior: multiple paste operations can coexist; placeholders should be expanded to their
