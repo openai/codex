@@ -28,7 +28,6 @@ impl RmcpClient {
         initial_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
-        initialize_deadline: &mut Option<Instant>,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
@@ -38,6 +37,7 @@ impl RmcpClient {
             PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
+        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
         for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -50,7 +50,7 @@ impl RmcpClient {
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
                 None => {
-                    let remaining = remaining_initialize_timeout(timeout, *initialize_deadline)?;
+                    let remaining = remaining_initialize_timeout(timeout, retry_deadline)?;
                     match remaining {
                         Some(remaining) => time::timeout(
                             remaining,
@@ -62,11 +62,12 @@ impl RmcpClient {
                     }
                 }
             };
+            let attempt_timeout = remaining_initialize_timeout(timeout, retry_deadline)?;
+
             match Self::connect_pending_transport(
                 transport,
                 client_service.clone(),
-                timeout,
-                initialize_deadline,
+                attempt_timeout,
             )
             .await
             {
@@ -83,7 +84,7 @@ impl RmcpClient {
                         error = %error,
                         "streamable HTTP MCP initialize failed with a retryable error; retrying"
                     );
-                    if !sleep_with_retry_deadline(delay, *initialize_deadline).await {
+                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
                         let duration = timeout.unwrap_or(delay);
                         return Err(anyhow!(
                             "timed out handshaking with MCP server after {duration:?}"
@@ -193,7 +194,7 @@ fn is_retryable_http_status(status: StatusCode) -> bool {
     )
 }
 
-pub(super) fn remaining_initialize_timeout(
+fn remaining_initialize_timeout(
     timeout: Option<Duration>,
     deadline: Option<Instant>,
 ) -> Result<Option<Duration>> {
@@ -208,10 +209,7 @@ pub(super) fn remaining_initialize_timeout(
     }
 }
 
-pub(super) fn initialize_timeout_error(
-    timeout: Option<Duration>,
-    fallback: Duration,
-) -> anyhow::Error {
+fn initialize_timeout_error(timeout: Option<Duration>, fallback: Duration) -> anyhow::Error {
     let duration = timeout.unwrap_or(fallback);
     anyhow!("timed out handshaking with MCP server after {duration:?}")
 }
