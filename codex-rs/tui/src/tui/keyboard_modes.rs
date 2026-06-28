@@ -126,10 +126,12 @@ pub(super) fn enable_keyboard_enhancement() {
     let _ = execute!(
         stdout(),
         DisableModifyOtherKeys,
+        // Some Kitty-protocol terminals emit duplicate non-ASCII text when
+        // alternate keycodes are requested. Codex does not consume alternate
+        // keycodes, so keep only the enhancements needed for key routing.
         PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                 | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
         )
     );
 
