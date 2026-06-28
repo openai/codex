@@ -26,6 +26,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::hooks::trust_hooks;
@@ -319,7 +320,7 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
                 )]))
                 .expect("test MCP server config should be allowed");
         })
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?
         .codex;
     wait_for_mcp_server(&codex, "rmcp").await?;
@@ -469,7 +470,7 @@ print(json.dumps({
             });
             trust_hooks(config, listed.hooks);
         })
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     test.codex
@@ -498,8 +499,12 @@ print(json.dumps({
         output.contains("Command blocked by PreToolUse hook: blocked by plugin hook"),
         "unexpected apply_patch output: {output}"
     );
+    let patched_file = PathUri::from_abs_path(&test.config.cwd).join(file_name)?;
     assert!(
-        !test.workspace_path(file_name).exists(),
+        test.fs()
+            .get_metadata(&patched_file, /*sandbox*/ None)
+            .await
+            .is_err(),
         "plugin hook should block apply_patch execution"
     );
     Ok(())
@@ -526,7 +531,7 @@ apps = true
         .with_config(move |config| {
             config.chatgpt_base_url = apps_base_url;
         })
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     let mut pinned_features = test.config.features.clone();
@@ -617,7 +622,7 @@ apps = true
             }
             config.chatgpt_base_url = apps_base_url;
         })
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     let suggested_requests_before_review = server
@@ -705,7 +710,10 @@ enabled = true
 "#,
     )?;
 
-    let test = test_codex().with_home(codex_home).build(&server).await?;
+    let test = test_codex()
+        .with_home(codex_home)
+        .build_with_auto_env(&server)
+        .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::McpStartupComplete(_))
     })
