@@ -1257,12 +1257,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn exit_review_mode_after_item(&mut self) {
+    fn exit_review_mode_after_item(&mut self, render_source: ThreadItemRenderSource) {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
         self.review.is_review_mode = false;
         self.mcp_startup_updates_suppressed_for_review = false;
+        if render_source.is_replay() {
+            self.mcp_startup_ignore_updates_until_next_start = false;
+            self.mcp_startup_allow_terminal_only_next_round = false;
+            self.mcp_startup_pending_next_round.clear();
+            self.mcp_startup_pending_next_round_saw_starting = false;
+            self.mcp_startup_started_while_idle = false;
+        }
         self.restore_pre_review_token_info();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),

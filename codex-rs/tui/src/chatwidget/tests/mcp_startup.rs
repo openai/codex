@@ -229,6 +229,26 @@ async fn replayed_active_review_rearms_mcp_startup_suppression() {
 }
 
 #[tokio::test]
+async fn completed_replayed_review_does_not_hide_fresh_mcp_round() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    replay_entered_review_mode(&mut chat, "current changes");
+    chat.replay_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: String::new(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn lag_recovery_during_review_does_not_promote_skipped_terminal_round() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

@@ -165,7 +165,7 @@ impl ChatWidget {
                 }
             }
             ThreadItem::ExitedReviewMode { .. } => {
-                self.exit_review_mode_after_item();
+                self.exit_review_mode_after_item(render_source);
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
