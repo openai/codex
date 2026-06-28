@@ -334,7 +334,7 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
-    turn_context.config.orchestrator_mcp_enabled
+    !turn_context.is_review_subagent()
         && features.enabled(Feature::ToolSuggest)
         && features.enabled(Feature::Apps)
         && features.enabled(Feature::Plugins)
