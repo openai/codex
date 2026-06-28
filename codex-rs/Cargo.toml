@@ -83,6 +83,7 @@ members = [
     "responses-api-proxy",
     "response-debug-context",
     "sandboxing",
+    "schema-evolution",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -219,6 +220,7 @@ codex-rmcp-client = { path = "rmcp-client" }
 codex-rollout = { path = "rollout" }
 codex-rollout-trace = { path = "rollout-trace" }
 codex-sandboxing = { path = "sandboxing" }
+codex-schema-evolution = { path = "schema-evolution" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
