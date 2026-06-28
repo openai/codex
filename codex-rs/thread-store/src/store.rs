@@ -1,4 +1,6 @@
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadGoal;
+use codex_rollout::StateDbHandle;
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
@@ -32,6 +34,55 @@ pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResul
 pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the SQLite state runtime that backs durable, process-local projections for this
+    /// store, when one exists.
+    ///
+    /// Most non-local stores should leave this as `None`. Stores that opt into external thread
+    /// goal state must return a handle so GoalService can keep its existing runtime/accounting
+    /// implementation while the store remains the durable source of truth.
+    fn state_db_handle(&self) -> Option<StateDbHandle> {
+        None
+    }
+
+    /// Whether this store durably owns thread-goal snapshots outside local rollout JSONL.
+    ///
+    /// The default is deliberately false: a thread without a local rollout path remains
+    /// ephemeral and does not support goals unless its store explicitly opts in here.
+    fn supports_external_thread_goal_state(&self) -> bool {
+        false
+    }
+
+    /// Loads the durable externally-owned goal snapshot for a thread.
+    ///
+    /// Implementations that return `true` from [`Self::supports_external_thread_goal_state`]
+    /// must implement this method. `Ok(None)` is the durable clear/tombstone state.
+    fn load_external_thread_goal(
+        &self,
+        _thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, Option<ThreadGoal>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "thread_goal/load_external",
+            })
+        })
+    }
+
+    /// Persists the externally-owned goal snapshot for a thread.
+    ///
+    /// Implementations that return `true` from [`Self::supports_external_thread_goal_state`]
+    /// must implement this method. `None` must durably represent a cleared goal.
+    fn persist_external_thread_goal(
+        &self,
+        _thread_id: ThreadId,
+        _goal: Option<ThreadGoal>,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "thread_goal/persist_external",
+            })
+        })
+    }
 
     /// Creates a new live thread.
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()>;

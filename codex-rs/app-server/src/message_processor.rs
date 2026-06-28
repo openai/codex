@@ -340,6 +340,9 @@ impl MessageProcessor {
         let thread_store = thread_store.unwrap_or_else(|| {
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone())
         });
+        // External durable stores can own the same SQLite projection/runtime used by goal
+        // extensions without exposing a local rollout path.
+        let state_db = thread_store.state_db_handle().or(state_db);
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();
@@ -483,6 +486,7 @@ impl MessageProcessor {
             thread_state_manager.clone(),
             state_db.clone(),
             Arc::clone(&goal_service),
+            Arc::clone(&thread_store),
         );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),

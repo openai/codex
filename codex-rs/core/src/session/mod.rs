@@ -149,7 +149,6 @@ use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
-use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
 use codex_thread_store::ThreadPersistenceMetadata;

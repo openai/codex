@@ -229,6 +229,10 @@ impl ThreadStore for LocalThreadStore {
         self
     }
 
+    fn state_db_handle(&self) -> Option<StateDbHandle> {
+        self.state_db.clone()
+    }
+
     fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::create_thread(self, params).await })
     }

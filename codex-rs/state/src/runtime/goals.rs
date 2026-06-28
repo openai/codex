@@ -122,6 +122,82 @@ RETURNING
         thread_goal_from_row(&row)
     }
 
+    /// Restores a durable goal snapshot from an external thread store.
+    ///
+    /// External stores intentionally persist the protocol-visible goal shape rather than the
+    /// SQLite-only optimistic-concurrency id. Restoring creates a fresh goal id while preserving
+    /// the user-visible status, budget, accounting, and timestamps.
+    pub async fn restore_thread_goal(
+        &self,
+        goal: &codex_protocol::protocol::ThreadGoal,
+    ) -> anyhow::Result<crate::ThreadGoal> {
+        let goal_id = Uuid::new_v4().to_string();
+        let status = match goal.status {
+            codex_protocol::protocol::ThreadGoalStatus::Active => crate::ThreadGoalStatus::Active,
+            codex_protocol::protocol::ThreadGoalStatus::Paused => crate::ThreadGoalStatus::Paused,
+            codex_protocol::protocol::ThreadGoalStatus::Blocked => crate::ThreadGoalStatus::Blocked,
+            codex_protocol::protocol::ThreadGoalStatus::UsageLimited => {
+                crate::ThreadGoalStatus::UsageLimited
+            }
+            codex_protocol::protocol::ThreadGoalStatus::BudgetLimited => {
+                crate::ThreadGoalStatus::BudgetLimited
+            }
+            codex_protocol::protocol::ThreadGoalStatus::Complete => {
+                crate::ThreadGoalStatus::Complete
+            }
+        };
+        let status = status_after_budget_limit(status, goal.tokens_used, goal.token_budget);
+        let created_at_ms = goal.created_at.saturating_mul(1000);
+        let updated_at_ms = goal.updated_at.saturating_mul(1000);
+        let row = sqlx::query(
+            r#"
+INSERT INTO thread_goals (
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+    goal_id = excluded.goal_id,
+    objective = excluded.objective,
+    status = excluded.status,
+    token_budget = excluded.token_budget,
+    tokens_used = excluded.tokens_used,
+    time_used_seconds = excluded.time_used_seconds,
+    created_at_ms = excluded.created_at_ms,
+    updated_at_ms = excluded.updated_at_ms
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+            "#,
+        )
+        .bind(goal.thread_id.to_string())
+        .bind(goal_id)
+        .bind(goal.objective.as_str())
+        .bind(status.as_str())
+        .bind(goal.token_budget)
+        .bind(goal.tokens_used)
+        .bind(goal.time_used_seconds)
+        .bind(created_at_ms)
+        .bind(updated_at_ms)
+        .fetch_one(self.pool.as_ref())
+        .await?;
+
+        thread_goal_from_row(&row)
+    }
+
     pub async fn insert_thread_goal(
         &self,
         thread_id: ThreadId,
@@ -568,6 +644,38 @@ mod tests {
             .upsert_thread(&metadata)
             .await
             .expect("test thread should be upserted");
+    }
+
+    #[tokio::test]
+    async fn restore_thread_goal_preserves_external_snapshot_accounting() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        let snapshot = codex_protocol::protocol::ThreadGoal {
+            thread_id,
+            objective: "resume external work".to_string(),
+            status: codex_protocol::protocol::ThreadGoalStatus::Paused,
+            token_budget: Some(500),
+            tokens_used: 123,
+            time_used_seconds: 45,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+        };
+
+        let restored = runtime
+            .thread_goals()
+            .restore_thread_goal(&snapshot)
+            .await
+            .expect("external goal snapshot should restore");
+
+        assert_eq!(restored.thread_id, thread_id);
+        assert_eq!(restored.objective, snapshot.objective);
+        assert_eq!(restored.status, crate::ThreadGoalStatus::Paused);
+        assert_eq!(restored.token_budget, snapshot.token_budget);
+        assert_eq!(restored.tokens_used, snapshot.tokens_used);
+        assert_eq!(restored.time_used_seconds, snapshot.time_used_seconds);
+        assert_eq!(restored.created_at.timestamp(), snapshot.created_at);
+        assert_eq!(restored.updated_at.timestamp(), snapshot.updated_at);
     }
 
     #[tokio::test]
