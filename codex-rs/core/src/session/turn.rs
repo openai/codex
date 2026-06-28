@@ -1181,11 +1181,16 @@ pub(crate) async fn built_tools(
 ) -> CodexResult<Arc<ToolRouter>> {
     let turn_context = step_context.turn.as_ref();
     let mcp_connection_manager = step_context.mcp.manager();
-    let has_mcp_servers = mcp_connection_manager.has_servers();
-    let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
-        .or_cancel(cancellation_token)
-        .await?;
+    let mcp_tools_enabled = !turn_context.is_review_subagent();
+    let has_mcp_servers = mcp_tools_enabled && mcp_connection_manager.has_servers();
+    let all_mcp_tools = if mcp_tools_enabled {
+        mcp_connection_manager
+            .list_all_tools()
+            .or_cancel(cancellation_token)
+            .await?
+    } else {
+        Vec::new()
+    };
     let loaded_plugins = sess
         .services
         .plugins_manager

@@ -1,3 +1,5 @@
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
@@ -26,12 +28,16 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -260,6 +266,7 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     let apps_base_url = apps_server.chatgpt_base_url.clone();
+    let rmcp_test_server_bin = stdio_server_bin()?;
     let codex_home = Arc::new(TempDir::new()?);
     let codex = test_codex()
         .with_home(codex_home)
@@ -270,10 +277,41 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
                 .enable(Feature::Apps)
                 .expect("test config should allow apps");
             config.chatgpt_base_url = apps_base_url;
+            config
+                .mcp_servers
+                .set(HashMap::from([(
+                    "rmcp".to_string(),
+                    McpServerConfig {
+                        auth: Default::default(),
+                        transport: McpServerTransportConfig::Stdio {
+                            command: rmcp_test_server_bin,
+                            args: Vec::new(),
+                            env: None,
+                            env_vars: Vec::new(),
+                            cwd: None,
+                        },
+                        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                        enabled: true,
+                        required: false,
+                        supports_parallel_tool_calls: false,
+                        disabled_reason: None,
+                        startup_timeout_sec: Some(Duration::from_secs(10)),
+                        tool_timeout_sec: None,
+                        default_tools_approval_mode: None,
+                        enabled_tools: None,
+                        disabled_tools: None,
+                        scopes: None,
+                        oauth: None,
+                        oauth_resource: None,
+                        tools: HashMap::new(),
+                    },
+                )]))
+                .expect("test MCP server config should be allowed");
         })
         .build(&server)
         .await?
         .codex;
+    wait_for_mcp_server(&codex, "rmcp").await?;
     let request_log = mount_sse_sequence(&server, vec![responses::sse(completed_sse())]).await;
 
     codex
@@ -303,6 +341,11 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
     assert!(
         !request.body_contains_text("mcp__codex_apps"),
         "review request unexpectedly exposed MCP tools: {:?}",
+        request.body_json()["tools"]
+    );
+    assert!(
+        !request.body_contains_text("mcp__rmcp"),
+        "review request unexpectedly exposed configured MCP tools: {:?}",
         request.body_json()["tools"]
     );
     Ok(())
