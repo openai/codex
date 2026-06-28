@@ -43,6 +43,8 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
@@ -7785,6 +7787,32 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
             .any(|name| name.to_string() == "list_mcp_resources")
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn review_step_uses_isolated_mcp_runtime_without_publishing_it() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    session.services.selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "review-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: PathUri::from_abs_path(&turn_context.config.cwd),
+        },
+    }];
+    turn_context.session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let published_before = session.services.latest_mcp_runtime();
+
+    let step_context = session.capture_step_context(turn_context).await;
+
+    let published_after = session.services.latest_mcp_runtime();
+    assert!(Arc::ptr_eq(&published_before, &published_after));
+    assert!(!Arc::ptr_eq(&step_context.mcp, &published_before));
+    assert_eq!(
+        step_context.mcp.available_environment_ids(),
+        &[codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()]
+    );
 }
 
 #[tokio::test]

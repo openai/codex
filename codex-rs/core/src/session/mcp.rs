@@ -173,6 +173,45 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn isolated_mcp_runtime_for_step(
+        &self,
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+        selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
+    ) -> Arc<McpRuntimeSnapshot> {
+        let available_environment_ids =
+            Self::available_selected_environment_ids(selected_capability_roots);
+        let mcp_config = self
+            .services
+            .mcp_manager
+            .runtime_config_for_step(
+                &turn_context.config,
+                &self.services.mcp_thread_init,
+                &self.services.thread_extension_data,
+                &available_environment_ids,
+            )
+            .await;
+        let environment_manager = self.services.turn_environments.environment_manager();
+        #[allow(deprecated)]
+        let cwd = environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| turn_context.cwd.to_path_buf());
+        let runtime_context = McpRuntimeContext::new(environment_manager, cwd);
+        let manager = McpConnectionManager::new_uninitialized_with_permission_profile(
+            &turn_context.approval_policy,
+            &turn_context.permission_profile(),
+            mcp_config.prefix_mcp_tool_names,
+        );
+        Arc::new(McpRuntimeSnapshot::new(
+            Arc::new(mcp_config),
+            Arc::new(manager),
+            runtime_context,
+            available_environment_ids,
+        ))
+    }
+
     pub(crate) async fn resolve_selected_capability_roots_for_step(
         &self,
         environments: &TurnEnvironmentSnapshot,

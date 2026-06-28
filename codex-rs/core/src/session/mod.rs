@@ -2855,13 +2855,21 @@ impl Session {
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
             .await;
-        let mcp = self
-            .mcp_runtime_for_step(
+        let mcp = if turn_context.is_review_subagent() {
+            self.isolated_mcp_runtime_for_step(
                 turn_context.as_ref(),
                 &environments,
                 &selected_capability_roots,
             )
-            .await;
+            .await
+        } else {
+            self.mcp_runtime_for_step(
+                turn_context.as_ref(),
+                &environments,
+                &selected_capability_roots,
+            )
+            .await
+        };
         Arc::new(StepContext::new(
             turn_context,
             environments,
