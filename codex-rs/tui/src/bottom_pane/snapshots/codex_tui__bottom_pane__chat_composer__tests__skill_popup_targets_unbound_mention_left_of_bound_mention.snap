@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"› $rustdoc  $simplify-code without changing behavior                                                "
+"› $unbound-skill  $bound-skill continue                                                             "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  rustdoc  [Skill] Add focused RustDoc comments.                                                    "
+"  unbound-skill  [Skill] Example skill used in tests.                                               "
 "                                                                                                    "
 "  Press enter to insert or esc to close                                                             "

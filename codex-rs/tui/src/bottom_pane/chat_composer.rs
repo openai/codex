@@ -6185,30 +6185,30 @@ mod tests {
     }
 
     fn configure_partially_bound_skill_mentions(composer: &mut ChatComposer) {
-        let simplify_path = test_path_buf("/tmp/simplify-code/SKILL.md").abs();
+        let bound_skill_path = test_path_buf("/tmp/bound-skill/SKILL.md").abs();
         composer.set_skill_mentions(Some(vec![SkillMetadata {
-            name: "rustdoc".to_string(),
-            description: "Add focused RustDoc comments.".to_string(),
+            name: "unbound-skill".to_string(),
+            description: "Example skill used in tests.".to_string(),
             short_description: None,
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: test_path_buf("/tmp/rustdoc/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/unbound-skill/SKILL.md").abs(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,
         }]));
 
         composer.set_text_content_with_mention_bindings(
-            "$rustdoc  $simplify-code without changing behavior".to_string(),
+            "$unbound-skill  $bound-skill continue".to_string(),
             Vec::new(),
             Vec::new(),
             vec![MentionBinding {
                 sigil: '$',
-                mention: "simplify-code".to_string(),
-                path: simplify_path.display().to_string(),
+                mention: "bound-skill".to_string(),
+                path: bound_skill_path.display().to_string(),
             }],
         );
-        composer.draft.textarea.set_cursor("$rustdoc ".len());
+        composer.draft.textarea.set_cursor("$unbound-skill ".len());
         composer.sync_popups();
     }
 
@@ -6228,23 +6228,23 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
             composer.current_text(),
-            "$rustdoc  $simplify-code without changing behavior"
+            "$unbound-skill  $bound-skill continue"
         );
         assert_eq!(
             composer.mention_bindings(),
             vec![
                 MentionBinding {
                     sigil: '$',
-                    mention: "rustdoc".to_string(),
-                    path: test_path_buf("/tmp/rustdoc/SKILL.md")
+                    mention: "unbound-skill".to_string(),
+                    path: test_path_buf("/tmp/unbound-skill/SKILL.md")
                         .abs()
                         .display()
                         .to_string(),
                 },
                 MentionBinding {
                     sigil: '$',
-                    mention: "simplify-code".to_string(),
-                    path: test_path_buf("/tmp/simplify-code/SKILL.md")
+                    mention: "bound-skill".to_string(),
+                    path: test_path_buf("/tmp/bound-skill/SKILL.md")
                         .abs()
                         .display()
                         .to_string(),
@@ -6271,7 +6271,7 @@ mod tests {
 
         assert_eq!(
             composer.current_text(),
-            "$rustdoc foo $simplify-code without changing behavior"
+            "$unbound-skill foo $bound-skill continue"
         );
     }
 
