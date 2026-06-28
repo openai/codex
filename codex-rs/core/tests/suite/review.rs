@@ -668,6 +668,92 @@ apps = true
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_does_not_discover_auth_for_plugin_mcp_servers() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let plugin_mcp_server = MockServer::start().await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        format!(
+            r#"{{
+  "mcpServers": {{
+    "sample": {{
+      "type": "http",
+      "url": "{}/mcp"
+    }}
+  }}
+}}"#,
+            plugin_mcp_server.uri()
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+
+    let test = test_codex().with_home(codex_home).build(&server).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+    let plugin_mcp_requests_before_review = plugin_mcp_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .len();
+    assert!(
+        plugin_mcp_requests_before_review > 0,
+        "parent session should exercise the plugin MCP endpoint"
+    );
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+    )
+    .await;
+    test.codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Review without MCP auth discovery".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(responses.requests().len(), 1);
+    let plugin_mcp_requests_after_review = plugin_mcp_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .len();
+    assert_eq!(
+        plugin_mcp_requests_after_review, plugin_mcp_requests_before_review,
+        "review should not perform auth discovery for plugin MCP servers"
+    );
+    Ok(())
+}
+
 /// Ensure review flow suppresses assistant-specific streaming/completion events:
 /// - AgentMessageContentDelta
 /// - ItemCompleted for TurnItem::AgentMessage

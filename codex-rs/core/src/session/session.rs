@@ -693,14 +693,18 @@ impl Session {
                 .await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                config_for_mcp.auth_keyring_backend_kind(),
-                auth.as_ref(),
-                &mcp_runtime_context_for_auth,
-            )
-            .await;
+            let auth_statuses = if start_mcp_clients {
+                compute_auth_statuses(
+                    mcp_servers.iter(),
+                    config_for_mcp.mcp_oauth_credentials_store_mode,
+                    config_for_mcp.auth_keyring_backend_kind(),
+                    auth.as_ref(),
+                    &mcp_runtime_context_for_auth,
+                )
+                .await
+            } else {
+                Default::default()
+            };
             (
                 auth,
                 mcp_config,
