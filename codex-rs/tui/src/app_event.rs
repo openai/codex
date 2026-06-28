@@ -40,6 +40,7 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::RateLimitResetCreditsState;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
 use codex_app_server_protocol::AskForApproval;
@@ -87,6 +88,12 @@ pub(crate) enum WindowsSandboxEnableMode {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RateLimitResetCreditsLoad {
+    pub(crate) rate_limits: Option<GetAccountRateLimitsResponse>,
+    pub(crate) reset_credits: RateLimitResetCreditsState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,18 +333,20 @@ pub(crate) enum AppEvent {
     /// Result of reading the current reset-credit balance.
     RateLimitResetCreditsLoaded {
         request_id: u64,
-        result: Result<GetAccountRateLimitsResponse, String>,
+        result: Result<RateLimitResetCreditsLoad, String>,
     },
 
     /// Consume one reset credit using a stable idempotency key.
     ConsumeRateLimitResetCredit {
         idempotency_key: String,
+        credit_id: Option<String>,
     },
 
     /// Result of consuming one reset credit.
     RateLimitResetCreditConsumed {
         request_id: u64,
         idempotency_key: String,
+        credit_id: Option<String>,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
     },
 
