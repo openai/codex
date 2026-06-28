@@ -16,6 +16,8 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
+mod refresh_lock;
+mod refresh_transaction;
 mod resolved_store;
 mod store_lock;
 
@@ -548,34 +550,6 @@ impl OAuthPersistor {
 
         Ok(())
     }
-
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access must be serialized through its mutex"
-    )]
-    pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let expires_at = {
-            let guard = self.inner.last_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
-        };
-
-        if !token_needs_refresh(expires_at) {
-            return Ok(());
-        }
-
-        {
-            let manager = self.inner.authorization_manager.clone();
-            let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
-        }
-
-        self.persist_if_needed().await
-    }
 }
 
 fn save_to_resolved_store<K: KeyringStore + Clone + 'static>(
@@ -880,6 +854,8 @@ mod tests {
 
     use codex_keyring_store::tests::MockKeyringStore;
 
+    #[path = "persistor_tests.rs"]
+    mod persistor_tests;
     #[path = "store_lock_tests.rs"]
     mod store_lock_tests;
 
