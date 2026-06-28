@@ -65,6 +65,7 @@ use tokio::sync::Mutex;
 
 use codex_utils_home_dir::find_codex_home;
 
+pub(crate) use self::refresh_transaction::request_oauth_token_response;
 pub(crate) use self::resolved_store::ResolvedOAuthCredentialStore;
 pub(crate) use self::resolved_store::ResolvedOAuthTokens;
 pub(crate) use self::resolved_store::load_oauth_tokens_from_store;
@@ -489,67 +490,6 @@ impl OAuthPersistor {
             }),
         }
     }
-
-    /// Persists RMCP-managed credential changes back to this client's resolved authority.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access must be serialized through its mutex"
-    )]
-    pub(crate) async fn persist_if_needed(&self) -> Result<()> {
-        let (client_id, maybe_credentials) = {
-            let manager = self.inner.authorization_manager.clone();
-            let guard = manager.lock().await;
-            guard.get_credentials().await
-        }?;
-
-        match maybe_credentials {
-            Some(credentials) => {
-                let mut last_credentials = self.inner.last_credentials.lock().await;
-                let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
-                let same_token = last_credentials
-                    .as_ref()
-                    .map(|previous| previous.token_response == new_token_response)
-                    .unwrap_or(false);
-                let expires_at = if same_token {
-                    last_credentials
-                        .as_ref()
-                        .and_then(|previous| previous.expires_at)
-                } else {
-                    compute_expires_at_millis(&credentials)
-                };
-                let stored = StoredOAuthTokens {
-                    server_name: self.inner.server_name.clone(),
-                    url: self.inner.url.clone(),
-                    client_id,
-                    token_response: new_token_response,
-                    expires_at,
-                };
-                if last_credentials.as_ref() != Some(&stored) {
-                    save_to_resolved_store(&DefaultKeyringStore, &self.inner, &stored)?;
-                    *last_credentials = Some(stored);
-                }
-            }
-            None => {
-                let mut last_credentials = self.inner.last_credentials.lock().await;
-                if last_credentials.take().is_some()
-                    && let Err(error) = delete_from_resolved_store(
-                        &DefaultKeyringStore,
-                        &self.inner.server_name,
-                        &self.inner.url,
-                        self.inner.credential_store,
-                    )
-                {
-                    warn!(
-                        server_name = %self.inner.server_name,
-                        error = %error,
-                        "failed to remove MCP OAuth credentials from the resolved store"
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 fn save_to_resolved_store<K: KeyringStore + Clone + 'static>(
@@ -566,26 +506,6 @@ fn save_to_resolved_store<K: KeyringStore + Clone + 'static>(
                 &inner.server_name,
                 tokens,
             )
-        }
-    }
-}
-
-fn delete_from_resolved_store<K: KeyringStore + Clone + 'static>(
-    keyring_store: &K,
-    server_name: &str,
-    url: &str,
-    credential_store: ResolvedOAuthCredentialStore,
-) -> Result<bool> {
-    match credential_store {
-        ResolvedOAuthCredentialStore::File => {
-            let key = compute_store_key(server_name, url)?;
-            delete_oauth_tokens_from_file(&key)
-        }
-        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct) => {
-            delete_oauth_tokens_from_direct_keyring(keyring_store, server_name, url)
-        }
-        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Secrets) => {
-            delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
         }
     }
 }

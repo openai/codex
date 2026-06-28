@@ -31,6 +31,7 @@ use crate::oauth::WrappedOAuthTokenResponse;
 use crate::oauth::compute_store_key;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
+use crate::oauth::refresh_transaction::RefreshReason;
 use crate::oauth::save_oauth_tokens_to_file;
 
 #[tokio::test(flavor = "current_thread")]
@@ -55,10 +56,6 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
     second_task.await??;
     server.verify().await;
 
-    // Layer 2 still invokes the legacy RMCP persistence hook after operations. Exercise that hook
-    // so a raw provider response that omitted refresh token/scopes cannot overwrite the merged
-    // authoritative credential.
-    first.persist_if_needed().await?;
     let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
         .expect("refreshed credentials should be stored");
     let mut expected_response = initial.token_response.0.clone();
@@ -71,6 +68,59 @@ async fn concurrent_refreshes_call_provider_once_and_carry_omitted_fields() -> R
         stored.token_response,
         WrappedOAuthTokenResponse(expected_response)
     );
+    Ok(())
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "AuthorizationManager async access must be serialized through its Tokio mutex"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn delayed_unauthorized_retries_adopt_the_winning_token() -> Result<()> {
+    let _env = TempCodexHome::new();
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    let _refresh_started = mount_delayed_refresh(&server, "refreshed-access-token").await;
+    let mut initial = expired_tokens(&format!("{}/mcp", server.uri()));
+    initial.expires_at = None;
+    initial.token_response.0.set_expires_in(None);
+    save_oauth_tokens_to_file(&initial)?;
+
+    let first = persistor_for(&initial).await?;
+    let second_manager = authorization_manager_for(&initial).await?;
+    let second = OAuthPersistor::new(
+        initial.server_name.clone(),
+        initial.url.clone(),
+        Arc::clone(&second_manager),
+        ResolvedOAuthCredentialStore::File,
+        Some(initial.clone()),
+    );
+    let rejected_access_token = initial.token_response.0.access_token().clone();
+
+    first
+        .refresh_after_unauthorized(rejected_access_token.clone())
+        .await?;
+    // Both calls model requests that left with A. Once the first 401 rotates A to B, later 401s
+    // must adopt B and retry their requests instead of rotating B again.
+    first
+        .refresh_after_unauthorized(rejected_access_token.clone())
+        .await?;
+    second
+        .refresh_after_unauthorized(rejected_access_token)
+        .await?;
+
+    server.verify().await;
+    let stored = load_oauth_tokens_from_file(&initial.server_name, &initial.url)?
+        .expect("the winning refresh should be persisted");
+    assert_eq!(
+        stored.token_response.0.access_token().secret(),
+        "refreshed-access-token"
+    );
+    let guard = second_manager.lock().await;
+    let (_client_id, adopted) = guard.get_credentials().await?;
+    let adopted = adopted.expect("second manager should adopt the winning token");
+    assert_eq!(adopted.access_token().secret(), "refreshed-access-token");
+    assert!(adopted.refresh_token().is_none());
     Ok(())
 }
 
@@ -94,7 +144,11 @@ async fn resolved_keyring_read_error_preserves_in_memory_credentials() -> Result
     );
 
     let error = persistor
-        .refresh_if_needed_in(&keyring_store, Duration::from_secs(/*secs*/ 45))
+        .refresh_in(
+            keyring_store,
+            RefreshReason::Expiry,
+            Duration::from_secs(/*secs*/ 45),
+        )
         .await
         .expect_err("the resolved keyring read error should abort refresh");
     assert!(
@@ -174,8 +228,9 @@ async fn provider_timeout_releases_lock_and_preserves_durable_credentials() -> R
     let persistor = persistor_for(&initial).await?;
 
     let error = persistor
-        .refresh_if_needed_in(
-            &MockKeyringStore::default(),
+        .refresh_in(
+            MockKeyringStore::default(),
+            RefreshReason::Expiry,
             Duration::from_millis(/*millis*/ 50),
         )
         .await
