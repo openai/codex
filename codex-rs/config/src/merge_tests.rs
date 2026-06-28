@@ -124,3 +124,44 @@ fn merge_toml_values_normalizes_permission_network_domains_before_overlaying() {
     );
     assert_eq!(base, expected);
 }
+
+#[test]
+fn merge_requirements_toml_values_replaces_named_mcp_requirements_atomically() {
+    let mut base = parse_toml(
+        r#"
+[mcp_servers.proxy.identity]
+command = "legacy-proxy"
+
+[mcp_servers.docs.identity]
+command = "docs-server"
+
+[plugins."sample@test".mcp_servers.proxy.identity]
+command = "legacy-plugin-proxy"
+"#,
+    );
+    let overlay = parse_toml(
+        r#"
+[mcp_servers.proxy.identity]
+url = "https://mcp.example.com/proxy"
+
+[plugins."sample@test".mcp_servers.proxy.identity]
+url = "https://mcp.example.com/plugin-proxy"
+"#,
+    );
+
+    merge_requirements_toml_values(&mut base, &overlay);
+
+    let expected = parse_toml(
+        r#"
+[mcp_servers.proxy.identity]
+url = "https://mcp.example.com/proxy"
+
+[mcp_servers.docs.identity]
+command = "docs-server"
+
+[plugins."sample@test".mcp_servers.proxy.identity]
+url = "https://mcp.example.com/plugin-proxy"
+"#,
+    );
+    assert_eq!(base, expected);
+}
