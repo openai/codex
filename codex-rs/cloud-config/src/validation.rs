@@ -18,17 +18,21 @@ pub(crate) fn validate_bundle(
             )
         })?;
     let CloudConfigBundleLayers {
-        enterprise_managed_config: _,
-        enterprise_managed_requirements,
+        baseline_config: _,
+        system_overlay_config: _,
+        baseline_requirements,
+        system_overlay_requirements,
     } = bundle_layers;
 
-    compose_requirements(enterprise_managed_requirements).map_err(|err| {
-        CloudConfigBundleLoadError::new(
-            CloudConfigBundleLoadErrorCode::InvalidBundle,
-            /*status_code*/ None,
-            format!("invalid cloud config bundle: {err}"),
-        )
-    })?;
+    for requirements_layers in [baseline_requirements, system_overlay_requirements] {
+        compose_requirements(requirements_layers).map_err(|err| {
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::InvalidBundle,
+                /*status_code*/ None,
+                format!("invalid cloud config bundle: {err}"),
+            )
+        })?;
+    }
 
     Ok(())
 }

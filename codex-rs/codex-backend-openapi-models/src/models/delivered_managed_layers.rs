@@ -13,28 +13,28 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DeliveredConfigToml {
+pub struct DeliveredManagedLayers {
     #[serde(
-        rename = "enterprise_managed",
+        rename = "baseline",
         default,
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    pub enterprise_managed: Option<Option<Vec<models::DeliveredTomlFragment>>>,
+    pub baseline: Option<Option<Vec<models::DeliveredTomlFragment>>>,
     #[serde(
-        rename = "managed_layers",
+        rename = "system_overlay",
         default,
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    pub managed_layers: Option<Option<Box<models::DeliveredManagedLayers>>>,
+    pub system_overlay: Option<Option<Vec<models::DeliveredTomlFragment>>>,
 }
 
-impl DeliveredConfigToml {
-    pub fn new() -> DeliveredConfigToml {
-        DeliveredConfigToml {
-            enterprise_managed: None,
-            managed_layers: None,
+impl DeliveredManagedLayers {
+    pub fn new() -> DeliveredManagedLayers {
+        DeliveredManagedLayers {
+            baseline: None,
+            system_overlay: None,
         }
     }
 }

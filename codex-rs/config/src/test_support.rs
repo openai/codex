@@ -32,10 +32,17 @@ impl CloudConfigBundleFixture {
     }
 
     pub fn add_enterprise_requirement(mut self, contents: impl Into<String>) -> Self {
-        let index = self.bundle.requirements_toml.enterprise_managed.len() + 1;
+        let index = self
+            .bundle
+            .requirements_toml
+            .managed_layers
+            .system_overlay
+            .len()
+            + 1;
         self.bundle
             .requirements_toml
-            .enterprise_managed
+            .managed_layers
+            .system_overlay
             .push(CloudRequirementsFragment {
                 id: format!("req_{index}"),
                 name: if index == 1 {
@@ -49,10 +56,11 @@ impl CloudConfigBundleFixture {
     }
 
     pub fn add_enterprise_config(mut self, contents: impl Into<String>) -> Self {
-        let index = self.bundle.config_toml.enterprise_managed.len() + 1;
+        let index = self.bundle.config_toml.managed_layers.system_overlay.len() + 1;
         self.bundle
             .config_toml
-            .enterprise_managed
+            .managed_layers
+            .system_overlay
             .push(CloudConfigFragment {
                 id: format!("cfg_{index}"),
                 name: if index == 1 {

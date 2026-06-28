@@ -2,8 +2,10 @@ use super::*;
 use codex_config::AbsolutePathBuf;
 use codex_config::CloudConfigFragment;
 use codex_config::CloudConfigTomlBundle;
+use codex_config::CloudConfigTomlManagedLayers;
 use codex_config::CloudRequirementsFragment;
 use codex_config::CloudRequirementsTomlBundle;
+use codex_config::CloudRequirementsTomlManagedLayers;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::tempdir;
@@ -11,18 +13,24 @@ use tempfile::tempdir;
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: vec![CloudConfigFragment {
-                id: "cfg_1".to_string(),
-                name: "Base config".to_string(),
-                contents: "model = \"gpt-5\"".to_string(),
-            }],
+            managed_layers: CloudConfigTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudConfigFragment {
+                    id: "cfg_1".to_string(),
+                    name: "Base config".to_string(),
+                    contents: "model = \"gpt-5\"".to_string(),
+                }],
+            },
         },
         requirements_toml: CloudRequirementsTomlBundle {
-            enterprise_managed: vec![CloudRequirementsFragment {
-                id: "req_1".to_string(),
-                name: "Base requirements".to_string(),
-                contents: "allowed_approval_policies = [\"never\"]".to_string(),
-            }],
+            managed_layers: CloudRequirementsTomlManagedLayers {
+                baseline: Vec::new(),
+                system_overlay: vec![CloudRequirementsFragment {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                    contents: "allowed_approval_policies = [\"never\"]".to_string(),
+                }],
+            },
         },
     }
 }
@@ -79,6 +87,8 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     let cache_file: CloudConfigBundleCacheFile =
         serde_json::from_slice(&std::fs::read(cache.path()).expect("read cache"))
             .expect("parse cache");
+    let cache_json = serde_json::to_string(&cache_file).expect("serialize cache as JSON");
+    assert!(!cache_json.contains("enterprise_managed"));
     assert!(
         cache_file.signed_payload.expires_at
             <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(60)
@@ -99,6 +109,21 @@ async fn save_writes_signed_payload_and_loads_for_matching_identity() {
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
         Ok(cache_file.signed_payload)
+    );
+}
+
+#[tokio::test]
+async fn load_rejects_v1_cache() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = create_test_cache(codex_home.path());
+    let mut signed_payload = valid_signed_payload();
+    signed_payload.version = 1;
+    let cache_file = signed_cache_file(signed_payload);
+    write_cache_file(&cache, &cache_file);
+
+    assert_eq!(
+        cache.load(Some("user-12345"), Some("account-12345")).await,
+        Err(CacheLoadStatus::CacheVersionUnsupported(1))
     );
 }
 
@@ -145,7 +170,8 @@ async fn load_rejects_tampered_payload() {
         .signed_payload
         .bundle
         .requirements_toml
-        .enterprise_managed[0]
+        .managed_layers
+        .system_overlay[0]
         .contents = "allowed_approval_policies = [\"on-request\"]".to_string();
     write_cache_file(&cache, &cache_file);
 
@@ -196,11 +222,13 @@ async fn load_rejects_unsupported_cache_version() {
     let codex_home = tempdir().expect("tempdir");
     let cache = create_test_cache(codex_home.path());
     let mut signed_payload = valid_signed_payload();
-    signed_payload.version = 2;
+    signed_payload.version = CLOUD_CONFIG_BUNDLE_CACHE_VERSION + 1;
     write_cache_file(&cache, &signed_cache_file(signed_payload));
 
     assert_eq!(
         cache.load(Some("user-12345"), Some("account-12345")).await,
-        Err(CacheLoadStatus::CacheVersionUnsupported(2))
+        Err(CacheLoadStatus::CacheVersionUnsupported(
+            CLOUD_CONFIG_BUNDLE_CACHE_VERSION + 1
+        ))
     );
 }
