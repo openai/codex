@@ -55,6 +55,7 @@ pub use manager::PluginUninstallError;
 pub use manager::PluginsConfigInput;
 pub use manager::PluginsManager;
 pub use manager::RecommendedPluginCandidatesInput;
+pub use marketplace_policy::allowed_configured_marketplace_names;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use provider::ExecutorPluginProvider;

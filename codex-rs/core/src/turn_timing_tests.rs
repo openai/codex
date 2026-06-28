@@ -121,6 +121,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             status: None,
             call_id: "call-2".to_string(),
             name: "custom".to_string(),
+            namespace: None,
             input: "echo hi".to_string(),
             internal_chat_message_metadata_passthrough: None,
         }
