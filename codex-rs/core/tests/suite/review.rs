@@ -1,3 +1,4 @@
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
@@ -496,6 +497,72 @@ print(json.dumps({
         !test.workspace_path(file_name).exists(),
         "plugin hook should block apply_patch execution"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_does_not_start_mcp_when_apps_feature_is_pinned_on() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+    let codex_home = Arc::new(TempDir::new()?);
+    let test = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[features]
+apps = true
+"#,
+            ),
+        )
+        .with_config(move |config| {
+            config.chatgpt_base_url = apps_base_url;
+        })
+        .build(&server)
+        .await?;
+
+    let mut pinned_features = test.config.features.clone();
+    pinned_features
+        .disable(Feature::Apps)
+        .expect("managed feature normalization should succeed");
+    assert!(pinned_features.enabled(Feature::Apps));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+    )
+    .await;
+    test.codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Review without starting pinned Apps MCP".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::McpStartupUpdate(update) => {
+            panic!("review emitted an MCP startup update: {update:?}")
+        }
+        EventMsg::McpStartupComplete(complete) => {
+            panic!("review emitted an MCP startup completion: {complete:?}")
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(responses.requests().len(), 1);
     Ok(())
 }
 
