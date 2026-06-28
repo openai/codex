@@ -146,7 +146,7 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
 }
 
 #[tokio::test]
-async fn safety_buffering_stops_retrying_after_agent_message_starts() {
+async fn safety_buffering_remains_visible_until_turn_completes() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
     chat.handle_server_notification(
@@ -162,6 +162,11 @@ async fn safety_buffering_stops_retrying_after_agent_message_starts() {
     chat.on_agent_message_delta("Visible response".to_string());
 
     assert!(!chat.can_retry_safety_buffered_turn(turn_id));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+
+    handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
+
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
 }
 
 #[tokio::test]
