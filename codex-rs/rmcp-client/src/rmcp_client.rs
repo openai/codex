@@ -705,12 +705,6 @@ impl RmcpClient {
         Ok(response)
     }
 
-    async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {
-        self.service_and_oauth_persistor()
-            .await
-            .map(|(service, _oauth_persistor)| service)
-    }
-
     async fn service_and_oauth_persistor(
         &self,
     ) -> Result<(
@@ -992,56 +986,12 @@ impl RmcpClient {
         // Keep the OAuth persistor paired with the service that performs this operation. Session
         // recovery can replace both while the request is in flight; rereading only the persistor
         // after a 401 could refresh credentials owned by a different transport lifecycle.
-        let (service, oauth_persistor) = self.service_and_oauth_persistor().await?;
-        let mut result = Self::run_service_operation_with_transient_retries(
-            Arc::clone(&service),
-            label,
-            timeout,
-            deadline,
-            self.elicitation_pause_state.clone(),
-            &operation,
-        )
-        .await;
+        let (mut service, mut oauth_persistor) = self.service_and_oauth_persistor().await?;
+        let mut oauth_recovered = false;
+        let mut session_recovered = false;
 
-        if let Some(rejected_access_token) = result
-            .as_ref()
-            .err()
-            .and_then(Self::rejected_access_token_from_operation_error)
-            && let Some(oauth_persistor) = oauth_persistor
-        {
-            // Public request/notification recovery stays here rather than in the transport
-            // wrapper because this layer owns the caller deadline. RMCP can continue processing a
-            // queued transport message after the caller times out; retrying it inside the wrapper
-            // could therefore replay a timed-out tool call. The refresh transaction itself is
-            // independently owned and completes to its bounded provider timeout if this caller is
-            // canceled.
-            let remaining = remaining_operation_timeout(label, timeout, deadline)?;
-            let refresh = oauth_persistor.refresh_after_unauthorized(rejected_access_token);
-            let refresh_result = match remaining {
-                Some(remaining) => match time::timeout(remaining, refresh).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        // `refresh_after_unauthorized` spawns the credential transaction before it
-                        // waits. Dropping this caller wait therefore detaches the JoinHandle while
-                        // the transaction retains the credential lock and continues through its
-                        // own provider/persistence bounds. The public operation still honors the
-                        // timeout it advertised and does not replay the rejected request later.
-                        return Err(ClientOperationError::Timeout {
-                            label: label.to_string(),
-                            duration: timeout.unwrap_or(remaining),
-                        }
-                        .into());
-                    }
-                },
-                None => refresh.await,
-            };
-            if let Err(error) = refresh_result {
-                if let Err(timeout_error) = remaining_operation_timeout(label, timeout, deadline) {
-                    return Err(timeout_error.into());
-                }
-                return Err(error);
-            }
-            result = Self::run_service_operation_with_transient_retries(
+        loop {
+            let result = Self::run_service_operation_with_transient_retries(
                 Arc::clone(&service),
                 label,
                 timeout,
@@ -1050,35 +1000,66 @@ impl RmcpClient {
                 &operation,
             )
             .await;
-            if result
+
+            if let Some(rejected_access_token) = result
                 .as_ref()
                 .err()
                 .and_then(Self::rejected_access_token_from_operation_error)
-                .is_some()
             {
-                // The rejected token is needed only to attribute the first 401. A second 401
-                // after the one allowed refresh means this lifecycle needs reauthentication.
-                return Err(AuthError::AuthorizationRequired.into());
+                if oauth_recovered {
+                    // The rejected token is needed only to attribute the first 401. A second 401
+                    // after the one allowed refresh means this lifecycle needs reauthentication.
+                    return Err(AuthError::AuthorizationRequired.into());
+                }
+                let Some(oauth_persistor) = oauth_persistor.as_ref() else {
+                    return result.map_err(Into::into);
+                };
+
+                // Public request/notification recovery stays here rather than in the transport
+                // wrapper because this layer owns the caller deadline. RMCP can continue
+                // processing a queued transport message after the caller times out; retrying it
+                // inside the wrapper could replay a timed-out tool call.
+                let remaining = remaining_operation_timeout(label, timeout, deadline)?;
+                let refresh = oauth_persistor.refresh_after_unauthorized(rejected_access_token);
+                let refresh_result = match remaining {
+                    Some(remaining) => match time::timeout(remaining, refresh).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            // The owned transaction keeps running after this caller stops waiting,
+                            // but the rejected operation is not replayed after its deadline.
+                            return Err(ClientOperationError::Timeout {
+                                label: label.to_string(),
+                                duration: timeout.unwrap_or(remaining),
+                            }
+                            .into());
+                        }
+                    },
+                    None => refresh.await,
+                };
+                if let Err(error) = refresh_result {
+                    if let Err(timeout_error) =
+                        remaining_operation_timeout(label, timeout, deadline)
+                    {
+                        return Err(timeout_error.into());
+                    }
+                    return Err(error);
+                }
+                oauth_recovered = true;
+                continue;
             }
-        }
 
-        if result.as_ref().is_err_and(Self::is_session_expired_404) {
-            // Session recovery remains one-shot and runs after the optional OAuth retry, so a 401
-            // followed by the old session's 404 still reconstructs the transport before retrying.
-            self.reinitialize_after_session_expiry(&service).await?;
-            let recovered_service = self.service().await?;
-            result = Self::run_service_operation_with_transient_retries(
-                recovered_service,
-                label,
-                timeout,
-                deadline,
-                self.elicitation_pause_state.clone(),
-                &operation,
-            )
-            .await;
-        }
+            if !session_recovered && result.as_ref().is_err_and(Self::is_session_expired_404) {
+                // OAuth and session recovery are each one-shot, but either error may arrive first.
+                // Re-entering this loop lets 404 -> 401 compose just like the existing 401 -> 404
+                // path without allowing either recovery to repeat indefinitely.
+                self.reinitialize_after_session_expiry(&service).await?;
+                (service, oauth_persistor) = self.service_and_oauth_persistor().await?;
+                session_recovered = true;
+                continue;
+            }
 
-        result.map_err(Into::into)
+            return result.map_err(Into::into);
+        }
     }
 
     async fn run_service_operation_with_transient_retries<T, F, Fut>(
@@ -1313,7 +1294,8 @@ async fn create_oauth_transport_client(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None),
+        StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None)
+            .with_rejected_token_attribution(),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
