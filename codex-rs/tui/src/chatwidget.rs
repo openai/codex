@@ -1242,6 +1242,7 @@ impl ChatWidget {
     }
 
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
+        self.skip_mcp_startup_for_review();
         if self.review.pre_review_token_info.is_none() {
             self.review.pre_review_token_info = Some(self.token_info.clone());
         }

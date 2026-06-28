@@ -207,6 +207,23 @@ async fn late_partial_startup_round_after_failed_review_setup_stays_ignored() {
 }
 
 #[tokio::test]
+async fn replayed_active_review_rearms_mcp_startup_suppression() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    replay_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.review.is_review_mode);
+    assert!(chat.mcp_startup_status.is_none());
+
+    handle_exited_review_mode(&mut chat);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+}
+
+#[tokio::test]
 async fn review_command_remains_blocked_during_agent_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
