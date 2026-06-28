@@ -8,6 +8,7 @@ use keyring::Error as KeyringError;
 use oauth2::AccessToken;
 use oauth2::TokenResponse;
 use pretty_assertions::assert_eq;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::OAuthState;
 use tokio::sync::Mutex as TokioMutex;
@@ -108,6 +109,22 @@ async fn resolved_keyring_read_error_preserves_in_memory_credentials() -> Result
         WrappedOAuthTokenResponse(token_response.expect("manager should retain credentials")),
         initial.token_response
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_authoritative_credentials_require_reauthorization() -> Result<()> {
+    let (_env, _server, initial) = test_context().await?;
+    let persistor = persistor_for(&initial).await?;
+
+    let error = persistor
+        .refresh_if_needed()
+        .await
+        .expect_err("a removed authoritative credential should abort refresh");
+    assert!(error.chain().any(|source| matches!(
+        source.downcast_ref::<AuthError>(),
+        Some(AuthError::AuthorizationRequired)
+    )));
     Ok(())
 }
 
