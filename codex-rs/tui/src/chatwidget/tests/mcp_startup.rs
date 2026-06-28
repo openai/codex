@@ -281,6 +281,26 @@ async fn bare_review_submission_during_agent_turn_preserves_draft() {
 }
 
 #[tokio::test]
+async fn queued_prompt_blocks_review_during_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.queue_user_message("queued prompt".into());
+
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let error = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(error.contains("'/review' is disabled while a task is in progress."));
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

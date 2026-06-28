@@ -142,6 +142,7 @@ impl ChatWidget {
             let mcp_startup_is_only_task = self.mcp_startup_status.is_some()
                 && !self.turn_lifecycle.agent_turn_running
                 && !self.input_queue.user_turn_pending_start
+                && !self.has_queued_follow_up_messages()
                 && !self.review.is_review_mode;
             return self.bottom_pane.is_task_running() && !mcp_startup_is_only_task;
         }
