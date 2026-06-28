@@ -176,6 +176,37 @@ async fn failed_review_setup_reenables_mcp_startup_updates() {
 }
 
 #[tokio::test]
+async fn late_partial_startup_round_after_failed_review_setup_stays_ignored() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "review unrelated branch".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+
+    handle_error(
+        &mut chat,
+        "failed to resolve merge base",
+        Some(CodexErrorInfo::Other),
+    );
+    assert!(!chat.bottom_pane.is_task_running());
+
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn review_command_remains_blocked_during_agent_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");

@@ -216,16 +216,16 @@ impl ChatWidget {
 
     pub(super) fn skip_mcp_startup_for_review(&mut self) {
         self.mcp_startup_updates_suppressed_for_review = true;
+        self.mcp_startup_ignore_updates_until_next_start = true;
+        self.mcp_startup_allow_terminal_only_next_round = false;
+        self.mcp_startup_pending_next_round.clear();
+        self.mcp_startup_pending_next_round_saw_starting = false;
         if self.mcp_startup_status.is_none() {
             return;
         }
 
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
-        self.mcp_startup_ignore_updates_until_next_start = true;
-        self.mcp_startup_allow_terminal_only_next_round = false;
-        self.mcp_startup_pending_next_round.clear();
-        self.mcp_startup_pending_next_round_saw_starting = false;
         if mcp_startup_owned_status {
             self.set_status_header(String::from("Working"));
         }
