@@ -38,6 +38,10 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
+        if self.mcp_startup_updates_suppressed_for_review {
+            return;
+        }
+
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             // Ignore-mode buffers the next plausible round so stale post-finish
@@ -221,6 +225,7 @@ impl ChatWidget {
         self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();
         self.mcp_startup_pending_next_round_saw_starting = false;
+        self.mcp_startup_updates_suppressed_for_review = true;
         if mcp_startup_owned_status {
             self.set_status_header(String::from("Working"));
         }

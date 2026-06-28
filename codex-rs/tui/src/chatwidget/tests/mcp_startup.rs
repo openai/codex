@@ -100,6 +100,34 @@ async fn review_with_args_during_mcp_startup_skips_local_startup_round() {
     assert!(chat.mcp_startup_status.is_none());
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.status_state.current_status.header, "Working");
+
+    handle_entered_review_mode(&mut chat, "current changes");
+    handle_exited_review_mode(&mut chat);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    assert!(chat.mcp_startup_status.is_some());
+}
+
+#[tokio::test]
+async fn skipped_mcp_startup_updates_do_not_reopen_or_finish_review_task() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "check regressions".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
 }
 
 #[tokio::test]

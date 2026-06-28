@@ -606,6 +606,8 @@ pub(crate) struct ChatWidget {
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     /// Tracks whether the buffered next round has seen any `Starting` update yet.
     mcp_startup_pending_next_round_saw_starting: bool,
+    /// Ignore startup notifications while a review that skipped MCP startup is active.
+    mcp_startup_updates_suppressed_for_review: bool,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
@@ -1257,6 +1259,7 @@ impl ChatWidget {
         self.flush_interrupt_queue();
         self.flush_active_cell();
         self.review.is_review_mode = false;
+        self.mcp_startup_updates_suppressed_for_review = false;
         self.restore_pre_review_token_info();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
