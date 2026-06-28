@@ -34,18 +34,18 @@ impl RmcpClient {
         initial_transport: PendingTransport,
         client_service: ElicitationClientService,
         timeout: Option<Duration>,
-        initialize_deadline: &mut Option<Instant>,
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
+        let mut initialize_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut attempt_context = InitializeAttemptContext::default();
         match self
             .connect_pending_transport_with_initialize_retries(
                 initial_transport,
                 client_service.clone(),
                 timeout,
-                initialize_deadline,
+                &mut initialize_deadline,
                 &mut attempt_context,
             )
             .await
@@ -65,7 +65,7 @@ impl RmcpClient {
                 // startup deadline gates whether recovery starts and bounds transport setup plus
                 // the retry handshake, but the refresh transaction has its own bounds and is
                 // deliberately excluded from the startup budget.
-                remaining_initialize_timeout(timeout, *initialize_deadline)?;
+                remaining_initialize_timeout(timeout, initialize_deadline)?;
                 let refresh_started_at = Instant::now();
                 let refresh_result = oauth_persistor
                     .refresh_after_unauthorized(rejected_access_token)
@@ -74,7 +74,7 @@ impl RmcpClient {
                     *deadline += refresh_started_at.elapsed();
                 }
                 refresh_result?;
-                let remaining = remaining_initialize_timeout(timeout, *initialize_deadline)?;
+                let remaining = remaining_initialize_timeout(timeout, initialize_deadline)?;
                 let transport = match remaining {
                     Some(remaining) => time::timeout(
                         remaining,
@@ -89,7 +89,7 @@ impl RmcpClient {
                     transport,
                     client_service,
                     timeout,
-                    initialize_deadline,
+                    &mut initialize_deadline,
                     &mut retry_context,
                 )
                 .await
@@ -137,6 +137,18 @@ impl RmcpClient {
                     }
                 }
             };
+            if let PendingTransport::StreamableHttpWithOAuth {
+                oauth_persistor, ..
+            } = &transport
+            {
+                // OAuth has independent bounds; pause the MCP handshake budget until refreshed
+                // credentials are durably committed.
+                let refresh_started_at = Instant::now();
+                oauth_persistor.refresh_if_needed().await?;
+                if let Some(deadline) = initialize_deadline.as_mut() {
+                    *deadline += refresh_started_at.elapsed();
+                }
+            }
             // Keep the persistor paired with the transport attempt that returned 401. Rebuilt
             // transports reuse the recipe's lifecycle-pinned credential source, and this pairing
             // also keeps the authorization manager and snapshot aligned with the failed attempt.
@@ -148,11 +160,11 @@ impl RmcpClient {
                 | PendingTransport::Stdio { .. }
                 | PendingTransport::StreamableHttp { .. } => None,
             };
+            let attempt_timeout = remaining_initialize_timeout(timeout, *initialize_deadline)?;
             match Self::connect_pending_transport(
                 transport,
                 client_service.clone(),
-                timeout,
-                initialize_deadline,
+                attempt_timeout,
             )
             .await
             {
@@ -310,7 +322,7 @@ fn is_retryable_http_status(status: StatusCode) -> bool {
     )
 }
 
-pub(super) fn remaining_initialize_timeout(
+fn remaining_initialize_timeout(
     timeout: Option<Duration>,
     deadline: Option<Instant>,
 ) -> Result<Option<Duration>> {
@@ -325,10 +337,7 @@ pub(super) fn remaining_initialize_timeout(
     }
 }
 
-pub(super) fn initialize_timeout_error(
-    timeout: Option<Duration>,
-    fallback: Duration,
-) -> anyhow::Error {
+fn initialize_timeout_error(timeout: Option<Duration>, fallback: Duration) -> anyhow::Error {
     let duration = timeout.unwrap_or(fallback);
     anyhow!("timed out handshaking with MCP server after {duration:?}")
 }

@@ -341,7 +341,7 @@ fn configured_marketplace_sources_by_root(
     codex_home: &Path,
     plugins_input: &PluginsConfigInput,
 ) -> HashMap<PathBuf, JsonMarketplaceSource> {
-    let marketplace_sources = configured_marketplace_sources(plugins_input);
+    let marketplace_sources = configured_marketplace_sources(plugins_input, codex_home);
     let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
         return HashMap::new();
     };
