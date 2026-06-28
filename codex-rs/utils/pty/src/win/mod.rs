@@ -45,10 +45,14 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
 pub(crate) mod conpty;
+mod job;
 mod procthreadattr;
 mod psuedocon;
 
 pub use conpty::ConPtySystem;
+pub use job::JobProcess;
+pub use job::KillOnCloseJob;
+pub use job::SuspendedProcess;
 pub use psuedocon::PsuedoCon;
 pub use psuedocon::conpty_supported;
 
