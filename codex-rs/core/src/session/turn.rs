@@ -39,8 +39,10 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::responses_retry::is_unsupported_reasoning_effort_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::handlers::update_thread_settings;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -93,6 +95,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -102,6 +105,7 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::ReasoningContentDeltaEvent;
 use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::SafetyBufferingEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -1095,6 +1099,24 @@ async fn run_sampling_request(
     );
     let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
+    let mut reasoning_effort = turn_context.reasoning_effort.clone();
+    let mut used_reasoning_effort_fallback = false;
+    if let Some(requested_effort) = reasoning_effort.clone()
+        && !turn_context
+            .model_info
+            .supported_reasoning_levels
+            .is_empty()
+        && !turn_context
+            .model_info
+            .supported_reasoning_levels
+            .iter()
+            .any(|preset| preset.effort == requested_effort)
+        && turn_context.model_info.default_reasoning_level.as_ref() != Some(&requested_effort)
+    {
+        reasoning_effort =
+            apply_reasoning_effort_fallback(&sess, &turn_context, &requested_effort).await;
+        used_reasoning_effort_fallback = true;
+    }
     let mut initial_input = Some(input);
     let mut original_input = None;
     loop {
@@ -1120,6 +1142,7 @@ async fn run_sampling_request(
             responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
+            reasoning_effort.clone(),
             cancellation_token.child_token(),
         )
         .await
@@ -1141,6 +1164,20 @@ async fn run_sampling_request(
             Err(err) => err,
         };
 
+        if !used_reasoning_effort_fallback
+            && let Some(requested_effort) = reasoning_effort.clone()
+            && is_unsupported_reasoning_effort_error(&err, &requested_effort)
+        {
+            let fallback_effort = turn_context.model_info.default_reasoning_level.clone();
+            if fallback_effort.as_ref() != Some(&requested_effort) {
+                used_reasoning_effort_fallback = true;
+                reasoning_effort =
+                    apply_reasoning_effort_fallback(&sess, &turn_context, &requested_effort).await;
+                turn_context.turn_timing_state.record_sampling_retry();
+                continue;
+            }
+        }
+
         if original_input.is_none() {
             original_input = Some(prompt.input);
         }
@@ -1161,6 +1198,38 @@ async fn run_sampling_request(
         .await?;
         turn_context.turn_timing_state.record_sampling_retry();
     }
+}
+
+async fn apply_reasoning_effort_fallback(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    requested_effort: &ReasoningEffort,
+) -> Option<ReasoningEffort> {
+    let fallback_effort = turn_context.model_info.default_reasoning_level.clone();
+    let fallback_description = fallback_effort.as_ref().map_or_else(
+        || "the provider default".to_string(),
+        |effort| format!("model default `{effort}`"),
+    );
+    sess.send_event(
+        turn_context,
+        EventMsg::Warning(WarningEvent {
+            message: format!(
+                "Reasoning effort `{requested_effort}` is not supported by model `{}`. Falling back to {fallback_description}.",
+                turn_context.model_info.slug
+            ),
+        }),
+    )
+    .await;
+    update_thread_settings(
+        sess,
+        turn_context.sub_id.clone(),
+        ThreadSettingsOverrides {
+            effort: Some(fallback_effort.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    fallback_effort
 }
 
 #[instrument(level = "trace",
@@ -1892,6 +1961,7 @@ async fn try_run_sampling_request(
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
+    reasoning_effort: Option<ReasoningEffort>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     feedback_tags!(
@@ -1913,7 +1983,7 @@ async fn try_run_sampling_request(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort.clone(),
+            reasoning_effort,
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,

@@ -467,33 +467,6 @@ async fn multi_agent_v2_spawn_defaults_to_full_fork_and_rejects_child_model_over
 }
 
 #[tokio::test]
-async fn spawn_agent_unsupported_reasoning_effort_prompts_retry() {
-    let (session, turn) = make_session_and_context().await;
-    let err = SpawnAgentHandler::default()
-        .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "model": "gpt-5.4",
-                "reasoning_effort": "max"
-            })),
-        ))
-        .await
-        .err()
-        .expect("unsupported reasoning effort should be rejected");
-
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel(
-            "Reasoning effort `max` is not supported for model `gpt-5.4`. Retry `spawn_agent` with one of these supported reasoning efforts: low, medium, high, xhigh; or omit `reasoning_effort` to use the model default."
-                .to_string()
-        )
-    );
-}
-
-#[tokio::test]
 async fn spawn_agent_service_tier_override_validates_the_effective_child_model() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {

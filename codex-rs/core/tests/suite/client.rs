@@ -42,6 +42,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -62,11 +63,13 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
@@ -2195,6 +2198,170 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
         Some("medium")
+    );
+
+    Ok(())
+}
+
+fn max_reasoning_collaboration_mode() -> CollaborationMode {
+    CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Custom("max".to_string())),
+            developer_instructions: None,
+        },
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_catalog_reasoning_effort_uses_model_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-default"),
+            ev_completed("resp-default"),
+        ]),
+    )
+    .await;
+    let test = test_codex().with_model("gpt-5.4").build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                collaboration_mode: Some(max_reasoning_collaboration_mode()),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock.single_request();
+    let snapshot = test.codex.config_snapshot().await;
+    let EventMsg::Warning(warning) = warning else {
+        panic!("expected reasoning effort fallback warning");
+    };
+    assert_eq!(
+        (
+            warning.message,
+            request.body_json()["reasoning"]["effort"]
+                .as_str()
+                .map(str::to_string),
+            snapshot.reasoning_effort,
+        ),
+        (
+            "Reasoning effort `max` is not supported by model `gpt-5.4`. Falling back to model default `medium`."
+                .to_string(),
+            Some("medium".to_string()),
+            Some(ReasoningEffort::Medium),
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsupported_reasoning_effort_retries_with_model_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let response_mock = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "message": "Invalid value: 'max'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', and 'xhigh'.",
+                    "type": "invalid_request_error",
+                    "param": "reasoning.effort",
+                    "code": "invalid_value"
+                }
+            })),
+            sse_response(sse(vec![
+                ev_response_created("resp-retry"),
+                ev_completed("resp-retry"),
+            ])),
+        ],
+    )
+    .await;
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    model
+        .supported_reasoning_levels
+        .push(ReasoningEffortPreset {
+            effort: ReasoningEffort::Custom("max".to_string()),
+            description: "Maximum".to_string(),
+        });
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                collaboration_mode: Some(max_reasoning_collaboration_mode()),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    let reasoning_efforts = requests
+        .iter()
+        .map(|request| {
+            request.body_json()["reasoning"]["effort"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    let snapshot = test.codex.config_snapshot().await;
+    let EventMsg::Warning(warning) = warning else {
+        panic!("expected reasoning effort fallback warning");
+    };
+    assert_eq!(
+        (
+            warning.message,
+            reasoning_efforts,
+            snapshot.reasoning_effort,
+        ),
+        (
+            "Reasoning effort `max` is not supported by model `gpt-5.4`. Falling back to model default `medium`."
+                .to_string(),
+            vec![Some("max".to_string()), Some("medium".to_string())],
+            Some(ReasoningEffort::Medium),
+        )
     );
 
     Ok(())

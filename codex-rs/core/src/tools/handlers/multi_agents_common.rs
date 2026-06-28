@@ -418,6 +418,6 @@ fn validate_spawn_agent_reasoning_effort(
         .collect::<Vec<_>>()
         .join(", ");
     Err(FunctionCallError::RespondToModel(format!(
-        "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Retry `spawn_agent` with one of these supported reasoning efforts: {supported}; or omit `reasoning_effort` to use the model default."
+        "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     )))
 }

@@ -3,10 +3,12 @@
 use std::time::Duration;
 
 use crate::client::ModelClientSession;
+use crate::client::reasoning_effort_for_request;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
 use tracing::warn;
@@ -15,6 +17,36 @@ use tracing::warn;
 pub(crate) enum ResponsesStreamRequest {
     Sampling,
     RemoteCompactionV2,
+}
+
+pub(crate) fn is_unsupported_reasoning_effort_error(
+    err: &CodexErr,
+    requested_effort: &ReasoningEffort,
+) -> bool {
+    let CodexErr::InvalidRequest(body) = err else {
+        return false;
+    };
+    let request_effort = reasoning_effort_for_request(requested_effort.clone()).to_string();
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(error) = payload.get("error")
+    {
+        if matches!(
+            error.get("param").and_then(serde_json::Value::as_str),
+            Some("reasoning.effort" | "reasoning_effort")
+        ) {
+            return true;
+        }
+        if let Some(message) = error.get("message").and_then(serde_json::Value::as_str) {
+            return invalid_value_message_matches_effort(message, &request_effort);
+        }
+    }
+
+    invalid_value_message_matches_effort(body, &request_effort)
+}
+
+fn invalid_value_message_matches_effort(message: &str, request_effort: &str) -> bool {
+    message.contains(&format!("Invalid value: '{request_effort}'"))
+        && message.contains("Supported values")
 }
 
 /// Handles a retryable stream error and returns `Ok(())` when the caller should
@@ -103,3 +135,7 @@ fn log_retry(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "responses_retry_tests.rs"]
+mod tests;
