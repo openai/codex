@@ -179,7 +179,6 @@ struct ListAgentsResult {
 struct ListedAgentResult {
     agent_name: String,
     agent_status: serde_json::Value,
-    last_task_message: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1592,7 +1591,6 @@ async fn multi_agent_v2_list_agents_returns_completed_status() {
         .find(|agent| agent.agent_name == "/root/worker")
         .expect("worker agent should be listed");
     assert_eq!(worker.agent_status, json!({"completed": "done"}));
-    assert_eq!(worker.last_task_message, serde_json::Value::Null);
     assert_eq!(success, Some(true));
 }
 
