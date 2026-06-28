@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
@@ -9,7 +11,9 @@ use tempfile::tempdir;
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
     assert_eq!(
-        system_bwrap_warning_for_path(/*system_bwrap_path*/ None),
+        system_bwrap_warning_for_path(
+            /*system_bwrap_path*/ None, /*unshare_network*/ false
+        ),
         Some(MISSING_BWRAP_WARNING.to_string())
     );
 }
@@ -26,7 +30,7 @@ exit 1
         let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
         assert_eq!(
-            system_bwrap_warning_for_path(Some(fake_bwrap_path)),
+            system_bwrap_warning_for_path(Some(fake_bwrap_path), /*unshare_network*/ false,),
             Some(USER_NAMESPACE_WARNING.to_string()),
             "{failure}",
         );
@@ -34,7 +38,7 @@ exit 1
 }
 
 #[test]
-fn system_bwrap_warning_skips_unrelated_bwrap_failures() {
+fn system_bwrap_warning_ignores_unclassified_probe_failures() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
 echo 'bwrap: Unknown option --argv0' >&2
@@ -43,11 +47,36 @@ exit 1
     );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
-    assert_eq!(system_bwrap_warning_for_path(Some(fake_bwrap_path)), None);
+    assert_eq!(
+        system_bwrap_warning_for_path(Some(fake_bwrap_path), /*unshare_network*/ false),
+        None
+    );
 }
 
 #[test]
-fn system_bwrap_probe_times_out_without_reporting_a_warning() {
+fn system_bwrap_warning_reports_disconnected_proc_sys() {
+    for failure in [
+        "Transport endpoint is not connected",
+        "Socket not connected",
+    ] {
+        let fake_bwrap = write_fake_bwrap(&format!(
+            r#"#!/bin/sh
+echo "bwrap: Can't read /proc/sys/kernel/overflowuid: {failure}" >&2
+exit 1
+"#
+        ));
+        let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+        assert_eq!(
+            system_bwrap_warning_for_path(Some(fake_bwrap_path), /*unshare_network*/ false,),
+            Some(PROC_SYS_DISCONNECTED_WARNING.to_string()),
+            "{failure}"
+        );
+    }
+}
+
+#[test]
+fn system_bwrap_probe_reports_timeout() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
 sleep 1
@@ -57,10 +86,14 @@ exit 0
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
     let started_at = Instant::now();
 
-    assert!(system_bwrap_has_user_namespace_access(
-        fake_bwrap_path,
-        Duration::from_millis(10),
-    ));
+    assert_eq!(
+        probe_system_bwrap(
+            fake_bwrap_path,
+            Duration::from_millis(10),
+            /*unshare_network*/ false,
+        ),
+        SystemBwrapProbeResult::Failed
+    );
     assert!(started_at.elapsed() < Duration::from_millis(500));
 }
 
@@ -76,11 +109,73 @@ exit 1
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
     let started_at = Instant::now();
 
-    assert!(!system_bwrap_has_user_namespace_access(
-        fake_bwrap_path,
-        Duration::from_millis(100),
-    ));
+    assert_eq!(
+        probe_system_bwrap(
+            fake_bwrap_path,
+            Duration::from_millis(100),
+            /*unshare_network*/ false,
+        ),
+        SystemBwrapProbeResult::UserNamespaceUnavailable
+    );
     assert!(started_at.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn system_bwrap_probe_drains_stderr_after_retention_limit() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+echo 'No permissions to create a new namespace' >&2
+dd if=/dev/zero bs=1024 count=128 >&2
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+    assert_eq!(
+        probe_system_bwrap(
+            fake_bwrap_path,
+            SYSTEM_BWRAP_PROBE_TIMEOUT,
+            /*unshare_network*/ false,
+        ),
+        SystemBwrapProbeResult::UserNamespaceUnavailable
+    );
+}
+
+#[test]
+fn active_managed_proxy_probes_network_for_network_enabled_profile() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "--unshare-net" ]; then
+    echo 'loopback: Failed RTM_NEWLINK' >&2
+    exit 1
+  fi
+done
+exit 0
+"#,
+    );
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::unrestricted(),
+        NetworkSandboxPolicy::Enabled,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+    assert_eq!(
+        system_bwrap_warning_with_path(
+            &permission_profile,
+            /*managed_network_active*/ false,
+            Some(fake_bwrap_path),
+        ),
+        None
+    );
+    assert_eq!(
+        system_bwrap_warning_with_path(
+            &permission_profile,
+            /*managed_network_active*/ true,
+            Some(fake_bwrap_path),
+        ),
+        Some(USER_NAMESPACE_WARNING.to_string())
+    );
 }
 
 #[test]
