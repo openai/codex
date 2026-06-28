@@ -139,6 +139,35 @@ async fn esc_interrupts_mcp_startup_while_slash_popup_is_open() {
 }
 
 #[tokio::test]
+async fn esc_during_mcp_startup_leaves_vim_insert_mode_without_interrupting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.toggle_vim_mode_and_notify();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(chat.should_handle_vim_insert_escape(esc));
+
+    chat.handle_key_event(esc);
+
+    assert!(!chat.should_handle_vim_insert_escape(esc));
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn esc_during_mcp_startup_does_not_interrupt_agent_draft() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.bottom_pane
+        .set_composer_text("/agent ".to_string(), Vec::new(), Vec::new());
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(op_rx.try_recv().is_err());
+    assert_eq!(chat.bottom_pane.composer_text(), "/agent ");
+}
+
+#[tokio::test]
 async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

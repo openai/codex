@@ -1298,6 +1298,14 @@ impl BottomPane {
     }
 
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
+        self.should_interrupt_running_task_allowing_composer_popup(key_event)
+            && !self.composer.popup_active()
+    }
+
+    pub(crate) fn should_interrupt_running_task_allowing_composer_popup(
+        &self,
+        key_event: KeyEvent,
+    ) -> bool {
         let is_agent_command = self
             .composer_text()
             .lines()
@@ -1308,7 +1316,7 @@ impl BottomPane {
         self.keymap.chat.interrupt_turn.is_pressed(key_event)
             && self.is_task_running
             && !(is_agent_command && key_event.code == KeyCode::Esc)
-            && self.no_modal_or_popup_active()
+            && self.view_stack.is_empty()
             && !self.composer_should_handle_vim_insert_escape(key_event)
             && self.status.is_some()
     }

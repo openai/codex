@@ -159,7 +159,9 @@ impl ChatWidget {
         // hint authoritative even after typing opens a composer popup such as slash completion.
         if self.mcp_startup_status.is_some()
             && !self.turn_lifecycle.agent_turn_running
-            && self.chat_keymap.interrupt_turn.is_pressed(key_event)
+            && self
+                .bottom_pane
+                .should_interrupt_running_task_allowing_composer_popup(key_event)
         {
             self.submit_op(AppCommand::interrupt());
             return;
