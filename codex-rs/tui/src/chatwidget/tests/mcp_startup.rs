@@ -131,6 +131,26 @@ async fn skipped_mcp_startup_updates_do_not_reopen_or_finish_review_task() {
 }
 
 #[tokio::test]
+async fn review_before_first_mcp_update_suppresses_startup_round() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Review,
+        "check regressions".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
 async fn review_command_remains_blocked_during_agent_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
