@@ -37,6 +37,7 @@ pub struct PluginInstallResult {
 
 #[derive(Debug, Clone)]
 pub struct PluginStore {
+    codex_home: AbsolutePathBuf,
     root: AbsolutePathBuf,
     data_root: AbsolutePathBuf,
 }
@@ -59,12 +60,22 @@ impl PluginStore {
         let data_root =
             AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_DATA_DIR))
                 .map_err(|err| PluginStoreError::io("failed to resolve plugin data root", err))?;
+        let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)
+            .map_err(|err| PluginStoreError::io("failed to resolve Codex home", err))?;
 
-        Ok(Self { root, data_root })
+        Ok(Self {
+            codex_home,
+            root,
+            data_root,
+        })
     }
 
     pub fn root(&self) -> &AbsolutePathBuf {
         &self.root
+    }
+
+    pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
+        &self.codex_home
     }
 
     pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
