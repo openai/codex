@@ -360,6 +360,17 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
         "review request unexpectedly exposed configured MCP tools: {:?}",
         request.body_json()["tools"]
     );
+    for tool_name in [
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ] {
+        assert!(
+            !request.body_contains_text(tool_name),
+            "review request unexpectedly exposed {tool_name}: {:?}",
+            request.body_json()["tools"]
+        );
+    }
     Ok(())
 }
 
