@@ -47,7 +47,12 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
 /// EnteredReviewMode -> ExitedReviewMode(None) -> TurnComplete
@@ -563,6 +568,103 @@ apps = true
     .await;
 
     assert_eq!(responses.requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_does_not_suggest_tools_when_apps_feature_is_pinned_on() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/suggested"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "enabled": true,
+            "plugins": [{
+                "id": "plugin_github",
+                "name": "github",
+                "status": "ENABLED",
+                "installation_policy": "AVAILABLE",
+                "release": {"display_name": "GitHub"}
+            }]
+        })))
+        .mount(&server)
+        .await;
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+    let codex_home = Arc::new(TempDir::new()?);
+    let test = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[features]
+apps = true
+"#,
+            ),
+        )
+        .with_config(move |config| {
+            for feature in [
+                Feature::Plugins,
+                Feature::RemotePlugin,
+                Feature::ToolSuggest,
+            ] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should allow feature update");
+            }
+            config.chatgpt_base_url = apps_base_url;
+        })
+        .build(&server)
+        .await?;
+
+    let suggested_requests_before_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    let responses = mount_sse_sequence(
+        &server,
+        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+    )
+    .await;
+    test.codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Review without tool suggestions".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = responses.single_request();
+    assert!(
+        !request.body_contains_text("request_plugin_install"),
+        "review request unexpectedly exposed request_plugin_install: {:?}",
+        request.body_json()["tools"]
+    );
+    let suggested_requests_after_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    assert_eq!(
+        suggested_requests_after_review, suggested_requests_before_review,
+        "review should not fetch recommended plugins"
+    );
     Ok(())
 }
 
