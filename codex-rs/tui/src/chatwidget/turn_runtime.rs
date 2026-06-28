@@ -350,6 +350,11 @@ impl ChatWidget {
 
     pub(super) fn on_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        if !self.review.is_review_mode {
+            // Review setup errors do not emit ExitedReviewMode, so release any MCP startup
+            // suppression armed when the request was submitted.
+            self.mcp_startup_updates_suppressed_for_review = false;
+        }
         self.flush_answer_stream_with_separator();
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
