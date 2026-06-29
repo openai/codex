@@ -5,8 +5,9 @@ use serde::Deserialize;
 use std::borrow::Cow;
 use tracing::warn;
 
-pub(super) const INVALID_TOOL_SEARCH_QUERY: &str = "[invalid tool_search arguments omitted]";
+const INVALID_TOOL_SEARCH_QUERY: &str = "[invalid tool_search arguments omitted]";
 
+/// Applies response-item-specific normalization before model-visible history and persistence.
 pub(super) fn prepare_for_durable_history<'a>(
     thread_id: &ThreadId,
     items: &'a [ResponseItem],
