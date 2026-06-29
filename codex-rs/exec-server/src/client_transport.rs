@@ -275,7 +275,8 @@ impl ExecServerClient {
                 request,
                 Some(noise_relay_websocket_config()),
                 // Rendezvous sends small, latency-sensitive frames, so avoid Nagle's coalescing delay.
-                /*disable_nagle*/ true,
+                /*disable_nagle*/
+                true,
             ),
         )
         .await
