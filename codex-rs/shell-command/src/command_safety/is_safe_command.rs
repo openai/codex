@@ -308,6 +308,60 @@ mod tests {
     }
 
     #[test]
+    fn git_repo_selected_helper_and_transport_variants_require_approval() {
+        for args in [
+            // `status` can invoke a repository-selected fsmonitor.
+            vec_str(&["git", "status", "--short"]),
+            // Diff-producing commands can invoke external diff and textconv helpers.
+            vec_str(&["git", "diff", "--ext-diff", "HEAD"]),
+            vec_str(&["git", "log", "--textconv", "-1"]),
+            vec_str(&["git", "show", "--textconv", "HEAD"]),
+            // Filters and transport were not in the old safelist, but keep them
+            // in the regression matrix so future safelist expansion fails closed.
+            vec_str(&["git", "cat-file", "--filters", "HEAD:file.txt"]),
+            vec_str(&["git", "remote", "show", "origin"]),
+            vec_str(&["git", "fetch", "origin"]),
+            // Shell lowering must preserve the same decision.
+            vec_str(&["bash", "-lc", "git status --short"]),
+            vec_str(&["bash", "-lc", "git diff --ext-diff HEAD"]),
+            vec_str(&["bash", "-lc", "git log --textconv -1"]),
+            vec_str(&["bash", "-lc", "git show --textconv HEAD"]),
+            vec_str(&["bash", "-lc", "git branch --show-current"]),
+        ] {
+            assert!(
+                !is_known_safe_command(&args),
+                "expected repository-sensitive Git variant {args:?} to require approval",
+            );
+        }
+    }
+
+    #[test]
+    fn path_qualified_git_variants_require_approval() {
+        let absolute_git = if cfg!(windows) {
+            r"C:\Program Files\Git\cmd\git.exe"
+        } else {
+            "/usr/bin/git"
+        };
+        let current_relative_git = if cfg!(windows) { r".\git.exe" } else { "./git" };
+        let parent_relative_git = if cfg!(windows) {
+            r"..\git.exe"
+        } else {
+            "../git"
+        };
+
+        for args in [
+            vec_str(&[absolute_git, "status"]),
+            vec_str(&[current_relative_git, "status"]),
+            vec_str(&[parent_relative_git, "status"]),
+        ] {
+            assert!(
+                !is_known_safe_command(&args),
+                "expected path-qualified Git executable {args:?} to require approval",
+            );
+        }
+    }
+
+    #[test]
     fn git_branch_mutating_flags_are_not_safe() {
         assert!(!is_known_safe_command(&vec_str(&[
             "git", "branch", "-d", "feature"

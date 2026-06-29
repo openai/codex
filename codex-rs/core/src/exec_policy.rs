@@ -337,15 +337,17 @@ impl ExecPolicyManager {
                     },
                     None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
-                        proposed_execpolicy_amendment: requested_amendment.or_else(|| {
-                            if auto_amendment_allowed {
-                                try_derive_execpolicy_amendment_for_prompt_rules(
-                                    &evaluation.matched_rules,
-                                )
-                            } else {
-                                None
-                            }
-                        }),
+                        proposed_execpolicy_amendment: suppress_repo_sensitive_git_amendment(
+                            requested_amendment.or_else(|| {
+                                if auto_amendment_allowed {
+                                    try_derive_execpolicy_amendment_for_prompt_rules(
+                                        &evaluation.matched_rules,
+                                    )
+                                } else {
+                                    None
+                                }
+                            }),
+                        ),
                     },
                 }
             }
@@ -364,11 +366,13 @@ impl ExecPolicyManager {
                             is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                         })
                 }),
-                proposed_execpolicy_amendment: if auto_amendment_allowed {
-                    try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
-                } else {
-                    None
-                },
+                proposed_execpolicy_amendment: suppress_repo_sensitive_git_amendment(
+                    if auto_amendment_allowed {
+                        try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
+                    } else {
+                        None
+                    },
+                ),
             },
         }
     }
@@ -846,6 +850,33 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
             } => Some(ExecPolicyAmendment::from(command.clone())),
             _ => None,
         })
+}
+
+/// Generic Git safety depends on the repository discovered at execution time,
+/// so an approval for one checkout must not become a durable allow rule that
+/// silently applies to another checkout. Explicit user-authored policy rules
+/// still take precedence during evaluation; this only removes amendments that
+/// Codex would otherwise offer to persist from a runtime approval.
+fn suppress_repo_sensitive_git_amendment(
+    amendment: Option<ExecPolicyAmendment>,
+) -> Option<ExecPolicyAmendment> {
+    amendment.filter(|amendment| !starts_with_git_executable(&amendment.command))
+}
+
+fn starts_with_git_executable(command: &[String]) -> bool {
+    let Some(executable_name) = command
+        .first()
+        .and_then(|executable| Path::new(executable).file_name())
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    let executable_name = executable_name.to_ascii_lowercase();
+    let executable_name = [".exe", ".cmd", ".bat", ".com"]
+        .into_iter()
+        .find_map(|suffix| executable_name.strip_suffix(suffix))
+        .unwrap_or(&executable_name);
+    executable_name == "git"
 }
 
 fn derive_requested_execpolicy_amendment_from_prefix_rule(
