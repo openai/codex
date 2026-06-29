@@ -1,5 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
+use crate::elicitation::ElicitationRegistration;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -162,7 +163,7 @@ pub struct CodexThread {
     pub(crate) session_source: SessionSource,
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
-    out_of_band_elicitation_count: Mutex<u64>,
+    out_of_band_elicitations: Mutex<Vec<ElicitationRegistration>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -187,7 +188,7 @@ impl CodexThread {
             session_source,
             session_configured,
             rollout_path,
-            out_of_band_elicitation_count: Mutex::new(0),
+            out_of_band_elicitations: Mutex::new(Vec::new()),
         }
     }
 
@@ -656,37 +657,21 @@ impl CodexThread {
     }
 
     pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        let was_zero = *guard == 0;
-        *guard = guard.checked_add(1).ok_or_else(|| {
-            CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
-        })?;
-
-        if was_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ true);
-        }
-
-        Ok(*guard)
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        elicitations.push(self.codex.session.services.elicitations.register());
+        u64::try_from(elicitations.len())
+            .map_err(|_| CodexErr::Fatal("out-of-band elicitation count overflowed".to_string()))
     }
 
     pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
-        let mut guard = self.out_of_band_elicitation_count.lock().await;
-        if *guard == 0 {
+        let mut elicitations = self.out_of_band_elicitations.lock().await;
+        if elicitations.pop().is_none() {
             return Err(CodexErr::InvalidRequest(
                 "out-of-band elicitation count is already zero".to_string(),
             ));
         }
 
-        *guard -= 1;
-        let now_zero = *guard == 0;
-        if now_zero {
-            self.codex
-                .session
-                .set_out_of_band_elicitation_pause_state(/*paused*/ false);
-        }
-
-        Ok(*guard)
+        u64::try_from(elicitations.len())
+            .map_err(|_| CodexErr::Fatal("out-of-band elicitation count overflowed".to_string()))
     }
 }
