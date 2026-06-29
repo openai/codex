@@ -3576,6 +3576,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-client",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "codex-utils-rustls-provider",

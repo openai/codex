@@ -24,10 +24,13 @@ const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
 const SYSTEM_PROXY_UNAVAILABLE_CACHE_TTL: Duration = Duration::from_secs(5);
 const SYSTEM_PROXY_CACHE_MAX_ENTRIES: usize = 256;
 
+mod async_resolver;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+
+pub use async_resolver::resolve_system_proxy_for_url_async;
 
 /// Coarse semantic bucket for the HTTP or WebSocket client being constructed.
 ///
@@ -82,6 +85,14 @@ impl fmt::Display for RouteFailureClass {
             Self::ResolverError => "resolver_error",
         })
     }
+}
+
+/// URL-specific system proxy decision from the platform resolver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemProxyRouteDecision {
+    Direct,
+    Proxy { url: String },
+    Unavailable { failure: RouteFailureClass },
 }
 
 /// Marker enabling fixed system/PAC/WPAD, environment, then direct routing.
@@ -239,6 +250,27 @@ enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
     Unavailable { failure: RouteFailureClass },
+}
+
+impl From<SystemProxyDecision> for SystemProxyRouteDecision {
+    fn from(decision: SystemProxyDecision) -> Self {
+        match decision {
+            SystemProxyDecision::Direct => Self::Direct,
+            SystemProxyDecision::Proxy { url } => Self::Proxy { url },
+            SystemProxyDecision::Unavailable { failure } => Self::Unavailable { failure },
+        }
+    }
+}
+
+/// Resolves system proxy/PAC/WPAD routing for a single outbound URL.
+pub fn resolve_system_proxy_for_url(request_url: &str) -> SystemProxyRouteDecision {
+    let Some(origin) = RequestOrigin::parse(request_url) else {
+        return SystemProxyRouteDecision::Unavailable {
+            failure: RouteFailureClass::InvalidProxyConfig,
+        };
+    };
+
+    resolve_system_proxy(request_url, &origin).into()
 }
 
 fn resolve_system_proxy(request_url: &str, origin: &RequestOrigin) -> SystemProxyDecision {

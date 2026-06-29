@@ -66,6 +66,7 @@ pub struct MitmState {
 
 pub(crate) struct MitmUpstreamConfig {
     pub(crate) allow_upstream_proxy: bool,
+    pub(crate) respect_system_proxy: bool,
     pub(crate) allow_local_binding: bool,
 }
 
@@ -160,13 +161,18 @@ impl MitmState {
         let upstream_tls_root_store =
             crate::certs::upstream_tls_root_store(&crate::certs::ca_env_from_process())?;
 
-        let upstream = if config.allow_upstream_proxy {
-            UpstreamClient::from_env_proxy_with_allow_local_binding(
+        let upstream = if !config.allow_upstream_proxy {
+            UpstreamClient::direct_with_allow_local_binding(
+                config.allow_local_binding,
+                upstream_tls_root_store,
+            )
+        } else if config.respect_system_proxy {
+            UpstreamClient::from_system_proxy_with_allow_local_binding(
                 config.allow_local_binding,
                 upstream_tls_root_store,
             )
         } else {
-            UpstreamClient::direct_with_allow_local_binding(
+            UpstreamClient::from_env_proxy_with_allow_local_binding(
                 config.allow_local_binding,
                 upstream_tls_root_store,
             )
