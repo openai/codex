@@ -317,8 +317,19 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     let codex_home = Arc::new(TempDir::new()?);
-    let mut builder =
-        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_home(codex_home);
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        format!(
+            r#"{{"mcpServers":{{"sample":{{"type":"http","url":"{}/api/codex/apps"}}}}}}"#,
+            apps_server.chatgpt_base_url
+        ),
+    )?;
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_home(codex_home)
+        .with_model_info_override("gpt-5.4", |model| {
+            model.supports_search_tool = false;
+        });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::McpStartupComplete(_))
@@ -354,9 +365,24 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
 
     let requests = request_log.requests();
     assert!(requests[0].body_contains_text("list_mcp_resources"));
+    assert!(
+        requests[0]
+            .tool_by_name("mcp__sample", "calendar_create_event")
+            .is_some(),
+        "normal request should expose the configured MCP tool: {:?}",
+        requests[0].body_json()["tools"]
+    );
     let request = &requests[1];
+    assert!(
+        request
+            .tool_by_name("mcp__sample", "calendar_create_event")
+            .is_none(),
+        "review request unexpectedly exposed the configured MCP tool: {:?}",
+        request.body_json()["tools"]
+    );
     for tool_name in [
         "mcp__codex_apps",
+        "mcp__sample",
         "list_mcp_resources",
         "list_mcp_resource_templates",
         "read_mcp_resource",
