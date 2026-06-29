@@ -168,7 +168,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
+            self.handle_rejected_slash_command_state(cmd);
             self.request_redraw();
             return;
         }
@@ -1148,7 +1148,7 @@ impl ChatWidget {
             "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
             cmd.command()
         ));
-        self.bottom_pane.drain_pending_submission_state();
+        self.handle_rejected_slash_command_state(cmd);
         false
     }
 
@@ -1161,7 +1161,13 @@ impl ChatWidget {
         self.add_error_message(format!(
             "'/{command}' is unavailable while code review is running."
         ));
-        self.bottom_pane.drain_pending_submission_state();
+        self.handle_rejected_slash_command_state(cmd);
         false
+    }
+
+    fn handle_rejected_slash_command_state(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_background_task_only() {
+            self.bottom_pane.drain_pending_submission_state();
+        }
     }
 }

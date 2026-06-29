@@ -333,12 +333,15 @@ async fn queued_prompt_blocks_review_during_mcp_startup() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     chat.queue_user_message("queued prompt".into());
+    let attachment = "https://example.com/review-context.png".to_string();
+    chat.set_remote_image_urls(vec![attachment.clone()]);
 
     assert_bare_review_rejected(
         &mut chat,
         &mut rx,
         "'/review' is disabled while a task is in progress.",
     );
+    assert_eq!(chat.remote_image_urls(), vec![attachment]);
 }
 
 #[tokio::test]
