@@ -7,6 +7,8 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::ErrorKind;
 use std::io::Write;
+#[cfg(any(test, windows))]
+use std::path::Path;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
@@ -17,6 +19,10 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
+#[cfg(any(test, windows))]
+const WINDOWS_POWERSHELL_EXE: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+#[cfg(any(test, windows))]
+const WINDOWS_PWSH_EXE: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
 
 /// Cache one long-lived parser process per executable path so repeated safety checks reuse
 /// PowerShell startup work while still consulting the real parser every time.
@@ -24,7 +30,7 @@ const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 /// We keep the cache behind one mutex because each child process speaks a simple
 /// request/response protocol over a single stdin/stdout pair, so callers targeting the same
 /// executable must serialize access anyway.
-pub(super) fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
+fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     static PARSER_PROCESSES: LazyLock<Mutex<HashMap<String, PowershellParserProcess>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -38,10 +44,47 @@ pub(crate) fn try_parse_powershell_ast_commands(
     executable: &str,
     script: &str,
 ) -> Option<Vec<Vec<String>>> {
-    match parse_with_powershell_ast(executable, script) {
+    let parser_executable = trusted_powershell_parser_executable(executable)?;
+    match parse_with_powershell_ast(parser_executable, script) {
         PowershellParseOutcome::Commands(commands) => Some(commands),
         PowershellParseOutcome::Unsupported | PowershellParseOutcome::Failed => None,
     }
+}
+
+/// Selects the host-side parser only when the command itself names that same trusted binary.
+///
+/// The parser runs before the command approval and sandbox boundaries. Bare executable names and
+/// arbitrary paths are therefore not eligible: their eventual resolution can depend on the
+/// workspace, current directory, or `PATH`. Returning a fixed path also ensures the parser spawn
+/// never receives the command's attacker-controlled `argv[0]`.
+fn trusted_powershell_parser_executable(executable: &str) -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        resolve_trusted_powershell_parser_executable(executable, Path::is_file)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = executable;
+        None
+    }
+}
+
+#[cfg(any(test, windows))]
+fn resolve_trusted_powershell_parser_executable(
+    executable: &str,
+    is_file: impl Fn(&Path) -> bool,
+) -> Option<&'static str> {
+    let normalized_executable = executable
+        .strip_prefix(r"\\?\")
+        .unwrap_or(executable)
+        .replace('/', "\\");
+
+    let trusted_path = [WINDOWS_POWERSHELL_EXE, WINDOWS_PWSH_EXE]
+        .into_iter()
+        .find(|candidate| normalized_executable.eq_ignore_ascii_case(candidate))?;
+
+    is_file(Path::new(trusted_path)).then_some(trusted_path)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -263,6 +306,10 @@ fn kill_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[cfg(test)]
+#[path = "powershell_parser_trust_tests.rs"]
+mod trust_tests;
 
 #[cfg(all(test, windows))]
 mod tests {

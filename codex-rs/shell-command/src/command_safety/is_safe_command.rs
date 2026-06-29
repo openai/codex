@@ -621,12 +621,10 @@ mod tests {
             return;
         }
 
-        let Some(powershell) = crate::powershell::try_find_pwsh_executable_blocking()
-            .or_else(crate::powershell::try_find_powershell_executable_blocking)
-        else {
+        let powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        if !std::path::Path::new(powershell).is_file() {
             return;
-        };
-        let powershell = powershell.as_path().to_str().unwrap();
+        }
 
         assert!(is_known_safe_command(&vec_str(&[
             powershell,
