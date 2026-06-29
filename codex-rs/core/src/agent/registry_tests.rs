@@ -15,6 +15,20 @@ fn agent_metadata(thread_id: ThreadId) -> AgentMetadata {
 }
 
 #[test]
+fn cold_status_text_stays_compact_when_json_escaped() {
+    let control_characters = (0..=31).map(char::from).collect::<String>();
+    let status = AgentStatus::Errored(bound_cold_status_text(control_characters.repeat(32)));
+
+    let AgentStatus::Errored(message) = &status else {
+        panic!("expected errored status");
+    };
+    assert_eq!(message.len(), COLD_STATUS_MAX_BYTES);
+    assert!(message.ends_with(COLD_STATUS_TRUNCATION_MARKER));
+    assert!(message.contains('\0'));
+    assert!(serde_json::to_vec(&status).expect("serialize status").len() < 1024);
+}
+
+#[test]
 fn format_agent_nickname_adds_ordinals_after_reset() {
     assert_eq!(
         format_agent_nickname("Plato", /*nickname_reset_count*/ 0),

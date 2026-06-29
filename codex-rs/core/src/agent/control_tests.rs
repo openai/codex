@@ -623,29 +623,85 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .await
         .expect("child thread should shut down");
 
-    assert!(
-        harness
-            .manager
-            .remove_thread(&spawned_agent.thread_id)
-            .await
-            .is_some()
+    let metadata = harness
+        .control
+        .get_agent_metadata(spawned_agent.thread_id)
+        .expect("registered child metadata");
+    let cold_status = AgentStatus::Completed(Some("child persisted".to_string()));
+    harness.control.state.publish_cold_status_if_current(
+        spawned_agent.thread_id,
+        &metadata,
+        &child_thread,
+        cold_status.clone(),
     );
+    assert_eq!(
+        harness.control.get_status(spawned_agent.thread_id).await,
+        cold_status
+    );
+    let state = harness.control.upgrade().expect("thread manager is live");
+    let result = harness
+        .control
+        .handle_thread_request_result(
+            spawned_agent.thread_id,
+            &state,
+            Err(CodexErr::InternalAgentDied),
+        )
+        .await;
+    assert_matches!(result, Err(CodexErr::InternalAgentDied));
     match harness.manager.get_thread(spawned_agent.thread_id).await {
         Err(CodexErr::ThreadNotFound(id)) => assert_eq!(id, spawned_agent.thread_id),
         Err(err) => panic!("expected ThreadNotFound, got {err:?}"),
         Ok(_) => panic!("expected thread to be removed"),
     }
+    assert!(
+        harness
+            .control
+            .get_agent_metadata(spawned_agent.thread_id)
+            .is_some()
+    );
 
     harness
         .control
         .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id)
         .await
         .expect("known v2 agent should reload");
-    let _ = harness
+    let reloaded_thread = harness
         .manager
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    assert_eq!(
+        harness
+            .control
+            .state
+            .cold_status(spawned_agent.thread_id, Some(&reloaded_thread)),
+        None
+    );
+    let mut status = harness
+        .control
+        .subscribe_status(spawned_agent.thread_id)
+        .await
+        .expect("reloaded agent status should be subscribable");
+    let turn = reloaded_thread.codex.session.new_default_turn().await;
+    reloaded_thread
+        .codex
+        .session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.sub_id.clone(),
+                last_agent_message: Some("reloaded done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    status.changed().await.expect("live status update");
+    assert_eq!(
+        *status.borrow(),
+        AgentStatus::Completed(Some("reloaded done".to_string()))
+    );
 
     let communication = InterAgentCommunication::new(
         AgentPath::root(),

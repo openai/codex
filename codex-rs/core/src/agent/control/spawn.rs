@@ -120,14 +120,15 @@ impl AgentControl {
         thread_id: ThreadId,
     ) -> CodexResult<()> {
         let state = self.upgrade()?;
+        let metadata = self
+            .state
+            .agent_metadata_for_thread(thread_id)
+            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
         if state.get_thread(thread_id).await.is_ok() {
+            metadata.clear_cold_status();
             self.touch_loaded_v2_residency(&state, thread_id).await;
             return Ok(());
         }
-        if self.state.agent_metadata_for_thread(thread_id).is_none() {
-            return Err(CodexErr::ThreadNotFound(thread_id));
-        }
-
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id,
@@ -179,12 +180,14 @@ impl AgentControl {
             .await
         {
             Ok(reloaded_thread) => {
+                metadata.clear_cold_status();
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
                 Ok(())
             }
             Err(err) => {
                 if state.get_thread(thread_id).await.is_ok() {
+                    metadata.clear_cold_status();
                     drop(residency_slot);
                     self.touch_loaded_v2_residency(&state, thread_id).await;
                     return Ok(());

@@ -219,9 +219,15 @@ impl AgentControl {
         result: CodexResult<String>,
     ) -> CodexResult<String> {
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
-            let _ = state.remove_thread(&agent_id).await;
+            let removed_thread = state.remove_thread(&agent_id).await;
             self.forget_v2_residency(agent_id);
-            self.state.release_spawned_thread(agent_id);
+            if self
+                .state
+                .cold_status(agent_id, removed_thread.as_ref())
+                .is_none()
+            {
+                self.state.release_spawned_thread(agent_id);
+            }
         }
         result
     }
@@ -229,13 +235,28 @@ impl AgentControl {
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
     pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
         let Ok(state) = self.upgrade() else {
-            // No agent available if upgrade fails.
-            return AgentStatus::NotFound;
+            return self
+                .state
+                .cold_status(agent_id, /*live_thread*/ None)
+                .unwrap_or(AgentStatus::NotFound);
         };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return AgentStatus::NotFound;
+        let thread = match state.get_thread(agent_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                let cold_status = self.state.cold_status(agent_id, /*live_thread*/ None);
+                match state.get_thread(agent_id).await {
+                    Ok(thread) => thread,
+                    Err(_) => return cold_status.unwrap_or(AgentStatus::NotFound),
+                }
+            }
         };
-        thread.agent_status().await
+        if let Some(status) = self.state.cold_status(agent_id, Some(&thread)) {
+            return status;
+        }
+        let status = thread.agent_status().await;
+        self.state
+            .cold_status(agent_id, Some(&thread))
+            .unwrap_or(status)
     }
 
     pub(crate) fn register_session_root(
@@ -307,8 +328,29 @@ impl AgentControl {
         agent_id: ThreadId,
     ) -> CodexResult<watch::Receiver<AgentStatus>> {
         let state = self.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        Ok(thread.subscribe_status())
+        let thread = match state.get_thread(agent_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                let cold_status = self.state.cold_status(agent_id, /*live_thread*/ None);
+                match state.get_thread(agent_id).await {
+                    Ok(thread) => thread,
+                    Err(_) => {
+                        return cold_status
+                            .map(|status| watch::channel(status).1)
+                            .ok_or(err);
+                    }
+                }
+            }
+        };
+        if let Some(status) = self.state.cold_status(agent_id, Some(&thread)) {
+            return Ok(watch::channel(status).1);
+        }
+        let status = thread.subscribe_status();
+        Ok(self
+            .state
+            .cold_status(agent_id, Some(&thread))
+            .map(|status| watch::channel(status).1)
+            .unwrap_or(status))
     }
 
     pub(crate) async fn format_environment_context_subagents(
@@ -531,6 +573,7 @@ impl AgentControl {
             agent_nickname,
             agent_role,
             last_task_message: None,
+            ..Default::default()
         };
         Ok((session_source, agent_metadata))
     }

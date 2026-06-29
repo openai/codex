@@ -1,5 +1,7 @@
 use crate::ThreadManager;
 use crate::agent::AgentControl;
+use crate::agent::AgentStatus;
+use crate::agent::registry::AgentMetadata;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
@@ -8,6 +10,7 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -46,7 +49,19 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     let first =
         spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-1").await;
     first_slot.commit(first.thread_id);
-    mark_thread_completed(first.thread.as_ref()).await;
+    let reservation = control
+        .state
+        .reserve_spawn_slot(/*max_threads*/ None)
+        .expect("reserve registry slot");
+    reservation.commit(AgentMetadata {
+        agent_id: Some(first.thread_id),
+        ..Default::default()
+    });
+    mark_thread_status(
+        first.thread.as_ref(),
+        AgentStatus::Errored("é".repeat(3000)),
+    )
+    .await;
 
     let second_slot = control
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
@@ -57,8 +72,21 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         Err(err) => panic!("expected evicted thread to be missing, got {err:?}"),
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
+    let expected_status = AgentStatus::Errored(format!("{}...[truncated]", "é".repeat(57)));
+    assert_eq!(control.get_status(first.thread_id).await, expected_status);
+    let status = control
+        .subscribe_status(first.thread_id)
+        .await
+        .expect("evicted agent status should remain subscribable");
+    assert_eq!(*status.borrow(), expected_status);
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
+    assert_eq!(
+        control
+            .state
+            .cold_status(first.thread_id, Some(&second.thread)),
+        None
+    );
 
     assert!(manager.get_thread(root.thread_id).await.is_ok());
     assert!(manager.get_thread(second.thread_id).await.is_ok());
@@ -92,7 +120,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     let first =
         spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-1").await;
     first_slot.commit(first.thread_id);
-    mark_thread_interrupted(first.thread.as_ref()).await;
+    mark_thread_status(first.thread.as_ref(), AgentStatus::Interrupted).await;
 
     let second_slot = control
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
@@ -106,7 +134,11 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     let second =
         spawn_v2_subagent(&control, &state, config.clone(), root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
-    mark_thread_completed(second.thread.as_ref()).await;
+    mark_thread_status(
+        second.thread.as_ref(),
+        AgentStatus::Completed(Some("done".to_string())),
+    )
+    .await;
 
     let err = control
         .ensure_v2_agent_loaded(config, first.thread_id)
@@ -150,40 +182,32 @@ async fn spawn_v2_subagent(
         .expect("spawn v2 subagent")
 }
 
-async fn mark_thread_completed(thread: &CodexThread) {
+async fn mark_thread_status(thread: &CodexThread, status: AgentStatus) {
     let turn = thread.codex.session.new_default_turn().await;
-    thread
-        .codex
-        .session
-        .send_event(
-            turn.as_ref(),
-            EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn.sub_id.clone(),
-                last_agent_message: Some("done".to_string()),
-                completed_at: None,
-                duration_ms: None,
-                time_to_first_token_ms: None,
-            }),
-        )
-        .await;
-    clear_active_turn(thread).await;
-}
-
-async fn mark_thread_interrupted(thread: &CodexThread) {
-    let turn = thread.codex.session.new_default_turn().await;
-    thread
-        .codex
-        .session
-        .send_event(
-            turn.as_ref(),
-            EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id: Some(turn.sub_id.clone()),
-                reason: TurnAbortReason::Interrupted,
-                completed_at: None,
-                duration_ms: None,
-            }),
-        )
-        .await;
+    let event = match status {
+        AgentStatus::Completed(last_agent_message) => EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn.sub_id.clone(),
+            last_agent_message,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        }),
+        AgentStatus::Errored(message) => EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: None,
+        }),
+        AgentStatus::Interrupted => EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(turn.sub_id.clone()),
+            reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
+        }),
+        status @ (AgentStatus::PendingInit
+        | AgentStatus::Running
+        | AgentStatus::Shutdown
+        | AgentStatus::NotFound) => panic!("unsupported fixture status: {status:?}"),
+    };
+    thread.codex.session.send_event(turn.as_ref(), event).await;
     clear_active_turn(thread).await;
 }
 

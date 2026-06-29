@@ -1,7 +1,9 @@
 use super::AgentControl;
 use crate::agent::AgentStatus;
+use crate::agent::registry::AgentRegistry;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::thread_manager::RemoveThreadIfSameResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -55,7 +57,7 @@ impl AgentControl {
             .effective_agent_max_threads(MultiAgentVersion::V2)
             .unwrap_or(usize::MAX);
         Arc::clone(&self.v2_residency)
-            .reserve_slot(state, capacity, protected_thread_id)
+            .reserve_slot(state, self.state.as_ref(), capacity, protected_thread_id)
             .await
     }
 
@@ -80,6 +82,7 @@ impl V2Residency {
     async fn reserve_slot(
         self: Arc<Self>,
         manager: &Arc<ThreadManagerState>,
+        registry: &AgentRegistry,
         capacity: usize,
         protected_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
@@ -91,7 +94,7 @@ impl V2Residency {
                 });
             }
             if !self
-                .try_unload_one_resident(manager, protected_thread_id)
+                .try_unload_one_resident(manager, registry, protected_thread_id)
                 .await
             {
                 return Err(CodexErr::AgentLimitReached {
@@ -116,6 +119,7 @@ impl V2Residency {
     async fn try_unload_one_resident(
         &self,
         manager: &Arc<ThreadManagerState>,
+        registry: &AgentRegistry,
         protected_thread_id: Option<ThreadId>,
     ) -> bool {
         let candidates_to_scan = self.resident_count();
@@ -123,6 +127,7 @@ impl V2Residency {
             let Some(candidate_thread_id) = self.pop_lru_candidate(protected_thread_id) else {
                 return false;
             };
+            let metadata = registry.agent_metadata_for_thread(candidate_thread_id);
             let Some(candidate_thread) = manager
                 .get_thread(candidate_thread_id)
                 .await
@@ -131,10 +136,22 @@ impl V2Residency {
             else {
                 continue;
             };
-            if !is_unloadable(candidate_thread.as_ref()).await {
+            let status = candidate_thread.agent_status().await;
+            if !is_unloadable(candidate_thread.as_ref(), &status).await {
                 self.touch(candidate_thread_id);
                 continue;
             }
+            let cold_status = match status {
+                AgentStatus::Completed(_) | AgentStatus::Errored(_) => Some(status),
+                AgentStatus::Interrupted => None,
+                AgentStatus::PendingInit
+                | AgentStatus::Running
+                | AgentStatus::Shutdown
+                | AgentStatus::NotFound => {
+                    self.touch(candidate_thread_id);
+                    continue;
+                }
+            };
             candidate_thread.ensure_rollout_materialized().await;
             if let Err(err) = candidate_thread.shutdown_and_wait().await {
                 warn!(
@@ -143,8 +160,24 @@ impl V2Residency {
                 self.touch(candidate_thread_id);
                 continue;
             }
-            let _ = manager.remove_thread(&candidate_thread_id).await;
-            return true;
+            let removal = manager
+                .remove_thread_if_same(&candidate_thread_id, &candidate_thread, || {
+                    if let (Some(metadata), Some(status)) = (&metadata, cold_status) {
+                        registry.publish_cold_status_if_current(
+                            candidate_thread_id,
+                            metadata,
+                            &candidate_thread,
+                            status,
+                        );
+                    }
+                })
+                .await;
+            match removal {
+                RemoveThreadIfSameResult::Removed | RemoveThreadIfSameResult::Missing => {
+                    return true;
+                }
+                RemoveThreadIfSameResult::Replaced => {}
+            }
         }
         false
     }
@@ -222,9 +255,9 @@ pub(super) fn is_v2_resident_session_source(session_source: &SessionSource) -> b
     matches!(session_source, SessionSource::SubAgent(_))
 }
 
-async fn is_unloadable(thread: &CodexThread) -> bool {
+async fn is_unloadable(thread: &CodexThread, status: &AgentStatus) -> bool {
     matches!(
-        thread.agent_status().await,
+        status,
         AgentStatus::Completed(_) | AgentStatus::Errored(_) | AgentStatus::Interrupted
     ) && thread.codex.session.active_turn.lock().await.is_none()
         && !thread

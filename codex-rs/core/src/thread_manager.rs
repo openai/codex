@@ -1160,6 +1160,24 @@ impl ThreadManagerState {
         self.threads.write().await.remove(thread_id)
     }
 
+    pub(crate) async fn remove_thread_if_same(
+        &self,
+        thread_id: &ThreadId,
+        expected: &Arc<CodexThread>,
+        on_removed: impl FnOnce(),
+    ) -> RemoveThreadIfSameResult {
+        let mut threads = self.threads.write().await;
+        match threads.get(thread_id) {
+            Some(thread) if Arc::ptr_eq(thread, expected) => {
+                threads.remove(thread_id);
+                on_removed();
+                RemoveThreadIfSameResult::Removed
+            }
+            Some(_) => RemoveThreadIfSameResult::Replaced,
+            None => RemoveThreadIfSameResult::Missing,
+        }
+    }
+
     pub(crate) async fn effective_multi_agent_version_for_spawn(
         &self,
         initial_history: &InitialHistory,
@@ -1695,6 +1713,12 @@ impl ThreadManagerState {
             .map(|thread| thread.codex.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
     }
+}
+
+pub(crate) enum RemoveThreadIfSameResult {
+    Removed,
+    Missing,
+    Replaced,
 }
 
 fn stored_thread_to_initial_history(
