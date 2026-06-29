@@ -17,9 +17,11 @@ const HIDDEN_EXECUTOR_SKILLS_BODY: &str = "\n## Skills update\nSelected-environm
 pub(crate) fn executor_skills_world_state_section(
     catalog: &SkillCatalog,
     include_instructions: bool,
+    include_skills_usage_instructions: bool,
 ) -> WorldStateSectionContribution {
     let body = if include_instructions {
-        available_skills_fragment(catalog).map(|fragment| fragment.body())
+        available_skills_fragment(catalog, include_skills_usage_instructions)
+            .map(|fragment| fragment.body())
     } else {
         None
     };

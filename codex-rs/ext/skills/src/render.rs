@@ -21,6 +21,7 @@ pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 )]
 pub(crate) fn available_skills_fragment(
     catalog: &SkillCatalog,
+    include_skills_usage_instructions: bool,
 ) -> Option<AvailableSkillsInstructions> {
     let mut total_bytes = 0usize;
     let mut omitted = 0usize;
@@ -56,7 +57,10 @@ pub(crate) fn available_skills_fragment(
         ));
     }
 
-    Some(AvailableSkillsInstructions::from_skill_lines(skill_lines))
+    Some(AvailableSkillsInstructions::from_skill_lines(
+        skill_lines,
+        include_skills_usage_instructions,
+    ))
 }
 
 pub(crate) fn truncate_catalog_skill_description(description: &str) -> Cow<'_, str> {

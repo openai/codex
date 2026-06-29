@@ -370,6 +370,8 @@ pub struct ModelInfo {
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
+    #[serde(default)]
+    pub include_skills_usage_instructions: bool,
     pub supports_reasoning_summaries: bool,
     #[serde(default)]
     pub default_reasoning_summary: ReasoningSummary,
@@ -665,6 +667,7 @@ mod tests {
             upgrade: None,
             base_instructions: "base".to_string(),
             model_messages: spec,
+            include_skills_usage_instructions: false,
             supports_reasoning_summaries: false,
             default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
@@ -948,6 +951,7 @@ mod tests {
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert!(!model.include_skills_usage_instructions);
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);

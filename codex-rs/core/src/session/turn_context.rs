@@ -701,6 +701,9 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        self.services
+            .thread_extension_data
+            .insert(model_info.clone());
 
         let multi_agent_version = match multi_agent_runtime {
             TurnMultiAgentRuntime::ResolveAndStore => {

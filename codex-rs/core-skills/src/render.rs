@@ -75,14 +75,6 @@ pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[
     lines.push("### Available skills".to_string());
     lines.extend(skill_lines.iter().cloned());
 
-    lines.push("### How to use skills".to_string());
-    let how_to_use = if skill_root_lines.is_empty() {
-        SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS
-    } else {
-        SKILLS_HOW_TO_USE_WITH_ALIASES
-    };
-    lines.push(how_to_use.to_string());
-
     format!("\n{}\n", lines.join("\n"))
 }
 

@@ -34,6 +34,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         upgrade: preset.upgrade.as_ref().map(Into::into),
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,

@@ -21,6 +21,7 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -129,7 +130,10 @@ where
             for warning in &catalog.warnings {
                 self.emit_warning(thread_store.level_id(), warning.clone());
             }
-            available_skills_fragment(&catalog)
+            let include_usage = thread_store
+                .get::<ModelInfo>()
+                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+            available_skills_fragment(&catalog, include_usage)
                 .map(|fragment| PromptFragment::developer_capability(fragment.render()))
                 .into_iter()
                 .collect()
@@ -162,9 +166,14 @@ where
             input
                 .turn_store
                 .insert(ExecutorSkillsStepState(catalog.clone()));
+            let include_usage = input
+                .thread_store
+                .get::<ModelInfo>()
+                .is_some_and(|model_info| model_info.include_skills_usage_instructions);
             vec![executor_skills_world_state_section(
                 &catalog,
                 config.include_instructions,
+                include_usage,
             )]
         })
     }
@@ -239,7 +248,10 @@ where
                     entry.authority.kind != SkillSourceKind::Executor
                         && entry.authority.kind != SkillSourceKind::Orchestrator
                 });
-                if let Some(fragment) = available_skills_fragment(&turn_catalog) {
+                let include_usage = thread_store
+                    .get::<ModelInfo>()
+                    .is_some_and(|model_info| model_info.include_skills_usage_instructions);
+                if let Some(fragment) = available_skills_fragment(&turn_catalog, include_usage) {
                     fragments.push(Box::new(fragment));
                 }
             }
