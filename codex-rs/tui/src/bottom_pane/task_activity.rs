@@ -1,3 +1,7 @@
+/// Tracks foreground work independently from MCP startup running in the background.
+///
+/// The aggregate busy state preserves the existing composer and spinner behavior, while the
+/// individual states let command gating and status ownership distinguish the two lifecycles.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TaskActivity {
     foreground_task_running: bool,

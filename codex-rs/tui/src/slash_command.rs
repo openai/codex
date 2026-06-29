@@ -248,6 +248,10 @@ impl SlashCommand {
         self == SlashCommand::Review || self.available_during_task()
     }
 
+    /// Whether this command is allowed during MCP startup but not during foreground work.
+    ///
+    /// Callers use this distinction to preserve the draft until dispatch confirms that no
+    /// foreground task blocks the command.
     pub fn available_during_background_task_only(self) -> bool {
         self.available_during_mcp_startup() && !self.available_during_task()
     }
