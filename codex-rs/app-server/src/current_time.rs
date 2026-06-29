@@ -20,6 +20,7 @@ use tokio::time::timeout_at;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestSendError;
 use crate::thread_state::ThreadStateManager;
 
 const CURRENT_TIME_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -103,16 +104,28 @@ async fn request_current_time(
         .subscribed_connection_ids(thread_id)
         .await;
     let connection_id = require_single_current_time_connection(&connection_ids)?;
-    let connection_ids = [connection_id];
-    let (request_id, rx) = outgoing
-        .send_request_to_connections(
-            Some(&connection_ids),
+    let (request_id, rx) = match outgoing
+        .send_request_to_connection_with_deadline(
+            connection_id,
             ServerRequestPayload::CurrentTimeRead(CurrentTimeReadParams {
                 thread_id: thread_id.to_string(),
             }),
             /*thread_id*/ None,
+            deadline,
         )
-        .await;
+        .await
+    {
+        Ok(request) => request,
+        Err(RequestSendError::TimedOut) => {
+            bail!(
+                "current-time request timed out after {}s",
+                CURRENT_TIME_REQUEST_TIMEOUT.as_secs()
+            );
+        }
+        Err(RequestSendError::Closed) => {
+            bail!("current-time request could not be queued because the client channel closed");
+        }
+    };
 
     let result = match timeout_at(deadline, rx).await {
         Ok(Ok(Ok(result))) => result,

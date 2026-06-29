@@ -10,10 +10,12 @@ use codex_core::AttestationProvider;
 use codex_core::GenerateAttestationFuture;
 use serde::Serialize;
 use tokio::time::Duration;
-use tokio::time::timeout;
+use tokio::time::Instant;
+use tokio::time::timeout_at;
 use tracing::warn;
 
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestSendError;
 use crate::thread_state::ThreadStateManager;
 
 const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_millis(100);
@@ -70,16 +72,39 @@ async fn request_attestation_header_value_with_timeout(
         .first_attestation_capable_connection_for_thread(thread_id)
         .await?;
 
-    let connection_ids = [connection_id];
-    let (request_id, rx) = outgoing
-        .send_request_to_connections(
-            Some(&connection_ids),
+    let deadline = Instant::now() + timeout_duration;
+    let (request_id, rx) = match outgoing
+        .send_request_to_connection_with_deadline(
+            connection_id,
             ServerRequestPayload::AttestationGenerate(AttestationGenerateParams {}),
             /*thread_id*/ None,
+            deadline,
         )
-        .await;
+        .await
+    {
+        Ok(request) => request,
+        Err(RequestSendError::TimedOut) => {
+            warn!(
+                timeout_seconds = timeout_duration.as_secs_f64(),
+                "attestation generation request timed out before it was queued"
+            );
+            return app_server_attestation_header_value(
+                AppServerAttestationStatus::Timeout,
+                /*token*/ None,
+            );
+        }
+        Err(RequestSendError::Closed) => {
+            warn!(
+                "attestation generation request could not be queued because the client channel closed"
+            );
+            return app_server_attestation_header_value(
+                AppServerAttestationStatus::RequestFailed,
+                /*token*/ None,
+            );
+        }
+    };
 
-    let result = match timeout(timeout_duration, rx).await {
+    let result = match timeout_at(deadline, rx).await {
         Ok(Ok(Ok(result))) => result,
         Ok(Ok(Err(err))) => {
             warn!(
