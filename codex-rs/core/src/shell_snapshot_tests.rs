@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -83,7 +85,14 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
 async fn get_snapshot(shell_type: ShellType) -> Result<String> {
     let dir = tempdir()?;
     let path = dir.path().join("snapshot.sh");
-    write_shell_snapshot(shell_type, &path.abs(), &dir.path().abs()).await?;
+    let shell_environment_policy = ShellEnvironmentPolicy::default();
+    write_shell_snapshot(
+        shell_type,
+        &path.abs(),
+        &dir.path().abs(),
+        &shell_environment_policy,
+    )
+    .await?;
     let content = fs::read_to_string(&path).await?;
     Ok(content)
 }
@@ -148,6 +157,130 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
 }
 
 #[cfg(unix)]
+fn assert_snapshot_preserves_profile_rust_log(
+    shell: &str,
+    snapshot_script: String,
+    profile_name: &str,
+) -> Result<()> {
+    let home = tempdir()?;
+    let profile_path = home.path().join(profile_name);
+    std::fs::write(&profile_path, "export RUST_LOG=profile\n")?;
+
+    let mut snapshot = Command::new(shell);
+    snapshot
+        .arg("-c")
+        .arg(snapshot_script)
+        .env("HOME", home.path())
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
+        .env("RUST_LOG", "warn")
+        .env("RUST_LOG_STYLE", "always");
+    if shell == "/bin/sh" {
+        snapshot.env("ENV", &profile_path);
+    }
+    snapshot.env_remove("RUST_LOG");
+    let output = snapshot.output()?;
+
+    assert!(output.status.success());
+
+    let snapshot_path = home.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, &output.stdout)?;
+    let validate = Command::new(shell)
+        .arg("-c")
+        .arg(". \"$1\"; printf '%s' \"$RUST_LOG\"")
+        .arg(shell)
+        .arg(&snapshot_path)
+        .env("HOME", home.path())
+        .env("BASH_ENV", "/dev/null")
+        .env_remove("ENV")
+        .env_remove("RUST_LOG")
+        .output()?;
+
+    assert!(validate.status.success());
+    assert_eq!(String::from_utf8_lossy(&validate.stdout), "profile");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/bash", bash_snapshot_script(), ".bashrc")
+}
+
+#[cfg(unix)]
+#[test]
+fn sh_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/sh", sh_snapshot_script(), ".profile")
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn zsh_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/zsh", zsh_snapshot_script(), ".zshrc")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_shell_does_not_inherit_rust_log() -> Result<()> {
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("printf '%s' \"${RUST_LOG-unset}\"")
+        .env("RUST_LOG", "warn");
+    apply_inherited_rust_log_policy(&mut command, &ShellEnvironmentPolicy::default());
+
+    let output = command.output().await?;
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn explicitly_included_rust_log_is_visible_to_snapshot_profile() -> Result<()> {
+    let home = tempdir()?;
+    let profile_path = home.path().join(".bashrc");
+    std::fs::write(
+        &profile_path,
+        "if [ \"${RUST_LOG-}\" = warn ]; then export PROFILE_SAW_RUST_LOG=yes; fi\n",
+    )?;
+    let shell_environment_policy = ShellEnvironmentPolicy {
+        include_only: vec![EnvironmentVariablePattern::new_case_insensitive("RUST_LOG")],
+        ..Default::default()
+    };
+
+    let mut snapshot = tokio::process::Command::new("/bin/bash");
+    snapshot
+        .arg("-c")
+        .arg(bash_snapshot_script())
+        .env("HOME", home.path())
+        .env_remove("BASH_ENV")
+        .env("RUST_LOG", "warn");
+    apply_inherited_rust_log_policy(&mut snapshot, &shell_environment_policy);
+    let output = snapshot.output().await?;
+
+    assert!(output.status.success());
+
+    let snapshot_path = home.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, &output.stdout)?;
+    let validate = tokio::process::Command::new("/bin/bash")
+        .arg("-c")
+        .arg(". \"$1\"; printf '%s' \"${PROFILE_SAW_RUST_LOG-unset}\"")
+        .arg("bash")
+        .arg(&snapshot_path)
+        .env("HOME", home.path())
+        .env("BASH_ENV", "/dev/null")
+        .env_remove("RUST_LOG")
+        .output()
+        .await?;
+
+    assert!(validate.status.success());
+    assert_eq!(String::from_utf8_lossy(&validate.stdout), "yes");
+    Ok(())
+}
+
+#[cfg(unix)]
 #[test]
 fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
@@ -195,12 +328,14 @@ async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
     };
+    let shell_environment_policy = ShellEnvironmentPolicy::default();
 
     let snapshot = ShellSnapshot::try_create(
         &dir.path().abs(),
         ThreadId::new(),
         &dir.path().abs(),
         &shell,
+        &shell_environment_policy,
         /*state_db*/ None,
     )
     .await
@@ -224,12 +359,14 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
     };
+    let shell_environment_policy = ShellEnvironmentPolicy::default();
 
     let initial_snapshot = ShellSnapshot::try_create(
         &dir.path().abs(),
         session_id,
         &dir.path().abs(),
         &shell,
+        &shell_environment_policy,
         /*state_db*/ None,
     )
     .await
@@ -239,6 +376,7 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         session_id,
         &dir.path().abs(),
         &shell,
+        &shell_environment_policy,
         /*state_db*/ None,
     )
     .await
@@ -285,9 +423,11 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         "HOME=\"{home_display}\"; export HOME; {}",
         bash_snapshot_script()
     );
+    let shell_environment_policy = ShellEnvironmentPolicy::default();
     let output = run_script_with_timeout(
         &shell,
         &script,
+        &shell_environment_policy,
         Duration::from_secs(2),
         /*use_login_shell*/ true,
         &home,
@@ -327,10 +467,12 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         shell_type: ShellType::Sh,
         shell_path: PathBuf::from("/bin/sh"),
     };
+    let shell_environment_policy = ShellEnvironmentPolicy::default();
 
     let err = run_script_with_timeout(
         &shell,
         &script,
+        &shell_environment_policy,
         Duration::from_secs(1),
         /*use_login_shell*/ true,
         &dir.path().abs(),

@@ -203,11 +203,12 @@ pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
 
 /// Deriving the `env` based on this policy works as follows:
 /// 1. Create an initial map based on the `inherit` policy.
-/// 2. If `ignore_default_excludes` is false, filter the map using the default
+/// 2. Remove inherited `RUST_LOG` unless `include_only` explicitly retains it.
+/// 3. If `ignore_default_excludes` is false, filter the map using the default
 ///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
-/// 3. If `exclude` is not empty, filter the map using the provided patterns.
-/// 4. Insert any entries from `r#set` into the map.
-/// 5. If non-empty, filter the map using the `include_only` patterns.
+/// 4. If `exclude` is not empty, filter the map using the provided patterns.
+/// 5. Insert any entries from `r#set` into the map.
+/// 6. If non-empty, filter the map using the `include_only` patterns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShellEnvironmentPolicy {
     /// Starting point when building the environment.
