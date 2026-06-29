@@ -22,6 +22,7 @@ use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::turn_context::McpAccess;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
@@ -122,6 +123,17 @@ async fn start_review_conversation(
         .clone()
         .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
+    let mcp_access = if session
+        .clone_session()
+        .services
+        .latest_mcp_runtime()
+        .manager()
+        .startup_is_complete()
+    {
+        McpAccess::Enabled
+    } else {
+        McpAccess::Disabled
+    };
     (run_codex_thread_one_shot(
         sub_agent_config,
         session.auth_manager(),
@@ -131,6 +143,7 @@ async fn start_review_conversation(
         ctx.clone(),
         cancellation_token,
         SubAgentSource::Review,
+        mcp_access,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
     )

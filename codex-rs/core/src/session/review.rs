@@ -117,6 +117,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        mcp_access: parent_turn_context.mcp_access,
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
         environments: parent_turn_context.environments.clone(),

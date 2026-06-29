@@ -1588,6 +1588,7 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             requested_history_mode: history_mode,
             session_source,
+            mcp_access: crate::session::turn_context::McpAccess::Enabled,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,

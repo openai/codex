@@ -38,6 +38,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(super) mcp_access: McpAccess,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
@@ -490,6 +491,7 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        mcp_access: McpAccess,
         skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
@@ -677,7 +679,6 @@ impl Session {
         let mcp_runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), mcp_runtime_cwd);
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
-        let mcp_access = McpAccess::for_session_source(&session_configuration.session_source);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_config = mcp_manager_for_mcp
@@ -1142,6 +1143,7 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                mcp_access,
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),

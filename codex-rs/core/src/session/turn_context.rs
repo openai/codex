@@ -10,7 +10,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -112,6 +111,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) mcp_access: McpAccess,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
     pub(crate) environments: TurnEnvironmentSnapshot,
@@ -155,30 +155,9 @@ pub(crate) enum McpAccess {
     Disabled,
 }
 
-impl McpAccess {
-    pub(crate) fn for_session_source(session_source: &SessionSource) -> Self {
-        match session_source {
-            SessionSource::SubAgent(SubAgentSource::Review) => Self::Disabled,
-            SessionSource::Cli
-            | SessionSource::VSCode
-            | SessionSource::Exec
-            | SessionSource::Mcp
-            | SessionSource::Custom(_)
-            | SessionSource::Internal(_)
-            | SessionSource::Unknown
-            | SessionSource::SubAgent(
-                SubAgentSource::Compact
-                | SubAgentSource::MemoryConsolidation
-                | SubAgentSource::ThreadSpawn { .. }
-                | SubAgentSource::Other(_),
-            ) => Self::Enabled,
-        }
-    }
-}
-
 impl TurnContext {
     pub(crate) fn mcp_access(&self) -> McpAccess {
-        McpAccess::for_session_source(&self.session_source)
+        self.mcp_access
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -296,6 +275,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            mcp_access: self.mcp_access,
             parent_thread_id: self.parent_thread_id,
             originator: self.originator.clone(),
             environments: self.environments.clone(),
@@ -506,6 +486,7 @@ impl Session {
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
+        mcp_access: McpAccess,
         multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
         shell_zsh_path: Option<&PathBuf>,
@@ -574,6 +555,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            mcp_access,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
             environments,
@@ -775,6 +757,7 @@ impl Session {
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
+            self.mcp_access,
             multi_agent_version,
             self.services.user_shell.as_ref(),
             self.services.shell_zsh_path.as_ref(),

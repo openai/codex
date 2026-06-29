@@ -51,6 +51,7 @@ use crate::session::CodexSpawnOk;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
+use crate::session::turn_context::McpAccess;
 use crate::session::turn_context::TurnContext;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -81,6 +82,7 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    mcp_access: McpAccess,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -110,6 +112,7 @@ pub(crate) async fn run_codex_thread_interactive(
         conversation_history,
         requested_history_mode: None,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        mcp_access,
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
@@ -202,6 +205,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    mcp_access: McpAccess,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
@@ -216,6 +220,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_ctx,
         child_cancel.clone(),
         subagent_source,
+        mcp_access,
         initial_history,
     ))
     .await?;
