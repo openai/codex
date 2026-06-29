@@ -53,7 +53,7 @@ impl NeutralGitCwd {
         Ok(Self { directory })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn from_prebuilt_directory(directory: TempDir) -> Self {
         Self { directory }
     }
