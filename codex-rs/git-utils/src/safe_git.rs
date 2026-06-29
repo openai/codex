@@ -7,9 +7,14 @@ pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|
 pub(crate) const EXECUTABLE_PATCH_CONFIG_PATTERN: &str =
     r"^(filter\..*\.(clean|smudge|process)|merge\..*\.driver)$";
 
-pub(crate) fn ensure_no_executable_git_config(cwd: &Path, pattern: &str) -> io::Result<()> {
+pub(crate) fn ensure_no_executable_git_config(
+    cwd: &Path,
+    pattern: &str,
+    git_config_args: &[String],
+) -> io::Result<()> {
     let output = Command::new("git")
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(git_config_args)
         .args([
             "config",
             "--null",
@@ -76,6 +81,9 @@ mod tests {
         ));
         assert!(config_output_has_untrusted_executable_helpers(
             b"command\0merge.example.driver\nhelper\0"
+        ));
+        assert!(config_output_has_untrusted_executable_helpers(
+            b"worktree\0filter.example.process\nhelper\0"
         ));
     }
 

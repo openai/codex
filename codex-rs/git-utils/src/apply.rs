@@ -44,8 +44,10 @@ pub struct ApplyGitResult {
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
-    let git_root = resolve_git_root(&req.cwd)?;
-    ensure_no_executable_git_config(&git_root, EXECUTABLE_PATCH_CONFIG_PATTERN)?;
+    let mut cfg_parts = configured_git_config_parts();
+    let git_root = resolve_git_root(&req.cwd, &cfg_parts)?;
+    ensure_no_executable_git_config(&git_root, EXECUTABLE_PATCH_CONFIG_PATTERN, &cfg_parts)?;
+    ensure_paths_do_not_enter_submodules(&git_root, &extract_paths_from_patch(&req.diff))?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
@@ -62,18 +64,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         args.push("-R".into());
     }
 
-    // Optional: additional git config via env knob (defaults OFF)
-    let mut cfg_parts: Vec<String> = Vec::new();
-    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
-        for pair in cfg.split(',') {
-            let p = pair.trim();
-            if p.is_empty() || !p.contains('=') {
-                continue;
-            }
-            cfg_parts.push("-c".into());
-            cfg_parts.push(p.to_string());
-        }
-    }
     cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
@@ -129,9 +119,10 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     })
 }
 
-fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
+fn resolve_git_root(cwd: &Path, git_config_args: &[String]) -> io::Result<PathBuf> {
     let requested_cwd = std::fs::canonicalize(cwd)?;
     let out = std::process::Command::new("git")
+        .args(git_config_args)
         .arg("rev-parse")
         .arg("--show-toplevel")
         .current_dir(&requested_cwd)
@@ -146,17 +137,45 @@ fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
     }
     let reported_root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
     let root = std::fs::canonicalize(&reported_root)?;
-    if !requested_cwd.starts_with(&root) {
+    let expected_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to apply a patch because Git resolved worktree {} without a .git marker above requested cwd {}",
+                    root.display(),
+                    requested_cwd.display()
+                ),
+            )
+        })
+        .and_then(std::fs::canonicalize)?;
+    if root != expected_root {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "refusing to apply a patch because Git resolved worktree {} outside requested cwd {}",
+                "refusing to apply a patch because Git resolved worktree {} instead of expected worktree {} for requested cwd {}",
                 root.display(),
+                expected_root.display(),
                 requested_cwd.display()
             ),
         ));
     }
     Ok(root)
+}
+
+fn configured_git_config_parts() -> Vec<String> {
+    let mut cfg_parts = Vec::new();
+    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
+        for pair in cfg.split(',') {
+            let pair = pair.trim();
+            if pair.is_empty() || !pair.contains('=') {
+                continue;
+            }
+            cfg_parts.push("-c".to_string());
+            cfg_parts.push(pair.to_string());
+        }
+    }
+    cfg_parts
 }
 
 fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
@@ -345,7 +364,7 @@ fn unescape_c_string(input: &str) -> String {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
-    ensure_no_executable_git_config(git_root, EXECUTABLE_FILTER_CONFIG_PATTERN)?;
+    ensure_no_executable_git_config(git_root, EXECUTABLE_FILTER_CONFIG_PATTERN, &[])?;
     let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
@@ -702,7 +721,7 @@ mod tests {
             .replace("\r\n", "\n")
     }
 
-    fn configure_clean_filter(root: &Path, tracked_path: &str) {
+    fn commit_filter_attributes(root: &Path, tracked_path: &str) {
         std::fs::write(
             root.join(".gitattributes"),
             format!("{tracked_path} filter=x=y\n"),
@@ -712,6 +731,10 @@ mod tests {
         assert_eq!(add_code, 0, "add attributes: {add_err}");
         let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "attributes"]);
         assert_eq!(commit_code, 0, "commit attributes: {commit_err}");
+    }
+
+    fn configure_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
         let (config_code, _, config_err) = run(
             root,
             &[
@@ -722,6 +745,26 @@ mod tests {
             ],
         );
         assert_eq!(config_code, 0, "configure filter: {config_err}");
+    }
+
+    fn configure_worktree_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
+        let (extension_code, _, extension_err) = run(
+            root,
+            &["git", "config", "extensions.worktreeConfig", "true"],
+        );
+        assert_eq!(extension_code, 0, "enable worktree config: {extension_err}");
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "--worktree",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure worktree filter: {config_err}");
     }
 
     fn configured_filter_ran(root: &Path) -> bool {
@@ -834,10 +877,12 @@ mod tests {
         let _g = env_lock().lock().unwrap();
         let repo = init_repo();
         let root = repo.path();
+        let nested_cwd = root.join("nested");
+        std::fs::create_dir(&nested_cwd).expect("nested cwd");
 
         let diff = "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1,2 @@\n+hello\n+world\n";
         let req = ApplyGitRequest {
-            cwd: root.to_path_buf(),
+            cwd: nested_cwd,
             diff: diff.to_string(),
             revert: false,
             preflight: false,
@@ -1067,25 +1112,68 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
     }
 
     #[test]
-    fn resolve_git_root_rejects_core_worktree_outside_requested_cwd() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let buried_repo = temp.path().join("attacker");
-        let victim = temp.path().join("victim");
-        std::fs::create_dir_all(buried_repo.join("objects")).expect("objects");
-        std::fs::create_dir_all(buried_repo.join("refs")).expect("refs");
-        std::fs::create_dir_all(&victim).expect("victim");
-        std::fs::write(buried_repo.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
-        std::fs::write(
-            buried_repo.join("config"),
-            format!(
-                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = {}\n",
-                victim.display()
-            ),
-        )
-        .expect("config");
+    fn apply_rejects_worktree_scoped_clean_filter_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_worktree_clean_filter(root, "file.txt");
 
-        let error = resolve_git_root(&buried_repo).expect_err("reject redirected worktree");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&request).expect_err("reject worktree filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+    }
+
+    #[test]
+    fn apply_probe_rejects_command_scoped_clean_filter() {
+        let repo = init_repo();
+        let config_args = vec![
+            "-c".to_string(),
+            "filter.codex-test.clean=git hash-object --stdin".to_string(),
+        ];
+
+        let error = ensure_no_executable_git_config(
+            repo.path(),
+            EXECUTABLE_PATCH_CONFIG_PATTERN,
+            &config_args,
+        )
+        .expect_err("reject command-scoped filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn resolve_git_root_rejects_core_worktree_redirection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attacker = temp.path().join("attacker");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&attacker).expect("attacker");
+        std::fs::create_dir_all(&victim).expect("victim");
+        let (init_code, _, init_err) = run(&attacker, &["git", "init"]);
+        assert_eq!(init_code, 0, "init attacker repo: {init_err}");
+
+        for redirected_worktree in [&victim, temp.path()] {
+            let redirected_worktree = redirected_worktree.to_string_lossy();
+            let (config_code, _, config_err) = run(
+                &attacker,
+                &["git", "config", "core.worktree", &redirected_worktree],
+            );
+            assert_eq!(config_code, 0, "configure core.worktree: {config_err}");
+
+            let error = resolve_git_root(&attacker, &[]).expect_err("reject redirected worktree");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains("instead of expected worktree"));
+        }
     }
 
     #[test]
@@ -1099,5 +1187,26 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
         let error = stage_paths(root, diff).expect_err("reject gitlink staging");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(!configured_filter_ran(&root.join("nested")));
+    }
+
+    #[test]
+    fn patch_variants_reject_paths_inside_submodules() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        init_submodule_with_clean_filter(root);
+        let diff = "diff --git a/nested/file.txt b/nested/file.txt\n--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1 +1 @@\n-original\n+modified\n";
+
+        for (revert, preflight) in [(false, true), (false, false), (true, false)] {
+            let request = ApplyGitRequest {
+                cwd: root.to_path_buf(),
+                diff: diff.to_string(),
+                revert,
+                preflight,
+            };
+            let error = apply_git_patch(&request).expect_err("reject path inside submodule");
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert!(!configured_filter_ran(&root.join("nested")));
+        }
     }
 }
