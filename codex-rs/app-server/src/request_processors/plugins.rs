@@ -542,6 +542,7 @@ impl PluginRequestProcessor {
         let PluginListParams {
             cwds,
             marketplace_kinds,
+            force_refetch,
         } = params;
         let roots = cwds.unwrap_or_default();
         let explicit_marketplace_kinds = marketplace_kinds.is_some();
@@ -569,6 +570,10 @@ impl PluginRequestProcessor {
         let auth_mode = auth.as_ref().map(CodexAuth::api_auth_mode);
         plugins_manager.set_auth_mode(auth_mode);
         let plugins_input = config.plugins_config_input();
+        if force_refetch {
+            self.force_refresh_app_caches_for_plugin_list(&config, auth.as_ref())
+                .await;
+        }
         let include_shared_with_me =
             marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe);
         let include_created_by_me_remote = marketplace_kinds
@@ -742,11 +747,9 @@ impl PluginRequestProcessor {
                 }
             }
         }
-        if include_local
-            || include_created_by_me_remote
-            || include_shared_with_me
-            || include_global_remote
-        {
+        let include_remote_sources = !remote_sources.is_empty();
+        if include_local || include_remote_sources {
+            let on_effective_plugins_changed = Some(self.effective_plugins_changed_callback());
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),
@@ -754,8 +757,15 @@ impl PluginRequestProcessor {
                 PluginListBackgroundTaskOptions {
                     refresh_global_remote_catalog_cache,
                 },
-                Some(self.effective_plugins_changed_callback()),
+                on_effective_plugins_changed.clone(),
             );
+            if force_refetch {
+                plugins_manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
+                    &plugins_input,
+                    auth.clone(),
+                    on_effective_plugins_changed,
+                );
+            }
         }
 
         let featured_plugin_ids = if data.iter().any(|marketplace| {
@@ -784,6 +794,64 @@ impl PluginRequestProcessor {
             marketplace_load_errors,
             featured_plugin_ids,
         })
+    }
+
+    async fn force_refresh_app_caches_for_plugin_list(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) {
+        if !config
+            .features
+            .apps_enabled_for_auth(auth.is_some_and(CodexAuth::uses_codex_backend))
+        {
+            return;
+        }
+
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let plugin_apps = plugins_manager
+            .plugins_for_config(&config.plugins_config_input())
+            .await
+            .effective_apps();
+        let environment_manager = self.thread_manager.environment_manager();
+        let (all_connectors_result, accessible_connectors_result) = tokio::join!(
+            connectors::list_all_connectors_with_options(
+                config,
+                /*force_refetch*/ true,
+                &plugin_apps,
+            ),
+            connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                config,
+                /*force_refetch*/ true,
+                Arc::clone(&environment_manager),
+                self.thread_manager.mcp_manager(),
+            ),
+        );
+
+        match all_connectors_result {
+            Ok(_) => {}
+            Err(err) => {
+                warn!("plugin/list forceRefetch failed to refresh app directory cache: {err:#}");
+            }
+        }
+        let mut refreshed_codex_apps_tools_cache = false;
+        match accessible_connectors_result {
+            Ok(status) => {
+                refreshed_codex_apps_tools_cache = true;
+                if !status.codex_apps_ready {
+                    warn!(
+                        "plugin/list forceRefetch refreshed Codex Apps cache before codex-apps was ready"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!("plugin/list forceRefetch failed to refresh Codex Apps tools cache: {err:#}");
+            }
+        }
+
+        if refreshed_codex_apps_tools_cache {
+            self.on_effective_plugins_changed();
+        }
     }
 
     async fn plugin_installed_response(

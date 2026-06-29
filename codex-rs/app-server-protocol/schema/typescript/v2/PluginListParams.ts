@@ -14,4 +14,8 @@ cwds?: Array<AbsolutePathBuf> | null,
  * Optional marketplace kind filter. When omitted, only local marketplaces are queried, plus
  * the default remote catalog when enabled by feature flag.
  */
-marketplaceKinds?: Array<PluginListMarketplaceKind> | null, };
+marketplaceKinds?: Array<PluginListMarketplaceKind> | null,
+/**
+ * When true, bypass app/tool caches that can stay stale after external app re-auth.
+ */
+forceRefetch?: boolean, };
