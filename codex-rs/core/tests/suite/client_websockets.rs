@@ -72,6 +72,8 @@ const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
+const X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-ordinal";
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
@@ -204,6 +206,10 @@ async fn responses_websocket_streams_request() {
         .parse::<i64>()
         .expect("websocket stream request start timestamp should be an integer");
     assert!(stream_request_start_ms > 0);
+    assert_eq!(
+        body["client_metadata"][X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY].as_str(),
+        Some("0")
+    );
 
     server.shutdown().await;
 }
@@ -288,6 +294,16 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
         .body_json();
     assert_request_trace_matches(&first_request, &first_trace);
     assert_request_trace_matches(&second_request, &second_trace);
+    assert_eq!(
+        first_request["client_metadata"][X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY]
+            .as_str(),
+        Some("0")
+    );
+    assert_eq!(
+        second_request["client_metadata"][X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY]
+            .as_str(),
+        Some("1")
+    );
 
     let first_traceparent = first_request["client_metadata"]
         [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
@@ -423,6 +439,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["tools"], serde_json::json!([]));
+    assert_eq!(
+        warmup["client_metadata"][X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY].as_str(),
+        Some("0")
+    );
     let warmup_turn_metadata: serde_json::Value = serde_json::from_str(
         warmup["client_metadata"]["x-codex-turn-metadata"]
             .as_str()
@@ -436,6 +456,11 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(follow_up["type"].as_str(), Some("response.create"));
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
+    assert_eq!(
+        follow_up["client_metadata"][X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY]
+            .as_str(),
+        Some("1")
+    );
 
     server.shutdown().await;
 }
