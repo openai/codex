@@ -108,6 +108,24 @@ async fn mcp_startup_ignores_status_for_other_thread() {
 }
 
 #[tokio::test]
+async fn restored_mcp_only_thread_clears_busy_state_when_startup_finishes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    let input_state = chat.capture_thread_input_state();
+
+    chat.restore_thread_input_state(/*input_state*/ None);
+    chat.restore_thread_input_state(input_state);
+
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn review_command_during_mcp_startup_opens_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
