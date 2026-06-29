@@ -150,6 +150,28 @@ async fn status_surface_preview_lines_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
+async fn status_surface_preview_no_sandbox_with_approval_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("set permission profile");
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())
+        .expect("set approval policy");
+
+    assert_chatwidget_snapshot!(
+        "status_surface_previews_no_sandbox_with_approval",
+        status_preview_line(
+            &mut chat,
+            &[StatusLineItem::Permissions, StatusLineItem::ApprovalMode],
+        )
+    );
+}
+
+#[tokio::test]
 async fn thread_title_falls_back_to_thread_id_when_unnamed() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
