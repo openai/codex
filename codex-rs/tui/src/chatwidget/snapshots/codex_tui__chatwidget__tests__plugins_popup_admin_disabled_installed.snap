@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Plugins
+  Browse plugins from available marketplaces.
+  Installed 1 of 1 available plugins.
+
+  [All Plugins]  Installed (1)  OpenAI Curated  Workspace  Add Marketplace
+
+  Type to search plugins
+› [!] Admin Blocked  Disabled   Press Enter to view plugin details.
+
+  space enable/disable · ←/→ select marketplace · enter view details · esc close

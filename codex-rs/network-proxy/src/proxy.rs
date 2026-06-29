@@ -1,4 +1,6 @@
 use crate::config;
+use crate::credential_broker::BROKERED_CREDENTIALS_ENV_KEY;
+use crate::credential_broker::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
@@ -10,6 +12,8 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
@@ -308,10 +312,7 @@ struct NetworkProxyRuntimeSettings {
 impl NetworkProxyRuntimeSettings {
     fn from_config(config: &config::NetworkProxyConfig) -> Result<Self> {
         let mitm_ca_trust_bundle = if config.network.mitm {
-            let env = crate::certs::CUSTOM_CA_ENV_KEYS
-                .into_iter()
-                .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
-                .collect();
+            let env = crate::certs::ca_env_from_process();
             Some(crate::certs::managed_ca_trust_bundle(&env)?)
         } else {
             None
@@ -329,6 +330,27 @@ impl NetworkProxyRuntimeSettings {
 struct EnvironmentProxyAddrs {
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
+}
+
+/// Portable managed-network facts needed by an operating-system sandbox.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedNetworkSandboxContext {
+    /// Loopback proxy ports that sandboxed commands may connect to.
+    #[serde(default)]
+    pub loopback_ports: Vec<u16>,
+    /// Whether the command may bind local sockets and exchange loopback traffic.
+    #[serde(default)]
+    pub allow_local_binding: bool,
+}
+
+/// Environment-specific managed-network settings prepared for one command launch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedManagedNetwork {
+    /// Complete command environment with managed proxy variables applied.
+    pub env: HashMap<String, String>,
+    /// Matching portable sandbox inputs for the command environment.
+    pub sandbox_context: ManagedNetworkSandboxContext,
 }
 
 struct EnvironmentProxy {
@@ -399,6 +421,8 @@ const NODE_USE_ENV_PROXY_ENV_KEY: &str = "NODE_USE_ENV_PROXY";
 const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
 pub const PROXY_ENV_KEYS: &[&str] = &[
     PROXY_ACTIVE_ENV_KEY,
+    CREDENTIAL_BROKER_ACTIVE_ENV_KEY,
+    BROKERED_CREDENTIALS_ENV_KEY,
     ALLOW_LOCAL_BINDING_ENV_KEY,
     ELECTRON_GET_USE_PROXY_ENV_KEY,
     NODE_USE_ENV_PROXY_ENV_KEY,
@@ -656,22 +680,50 @@ impl NetworkProxy {
             })
     }
 
-    fn apply_to_env_for_addrs(
+    fn prepare_for_addrs(
         &self,
-        env: &mut HashMap<String, String>,
+        mut env: HashMap<String, String>,
         addrs: EnvironmentProxyAddrs,
-    ) {
+    ) -> PreparedManagedNetwork {
         let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
         // managed MITM CA vars preserve child-scoped overrides after proxy startup.
         apply_proxy_env_overrides(
-            env,
+            &mut env,
             addrs.http_addr,
             addrs.socks_addr,
             self.socks_enabled,
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+        self.state.virtualize_child_credentials(&mut env);
+        let mut loopback_ports = [
+            Some(addrs.http_addr),
+            self.socks_enabled.then_some(addrs.socks_addr),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|addr| addr.ip().is_loopback())
+        .map(|addr| addr.port())
+        .collect::<Vec<_>>();
+        loopback_ports.sort_unstable();
+        loopback_ports.dedup();
+        PreparedManagedNetwork {
+            env,
+            sandbox_context: ManagedNetworkSandboxContext {
+                loopback_ports,
+                allow_local_binding: runtime_settings.allow_local_binding,
+            },
+        }
+    }
+
+    fn apply_to_env_for_addrs(
+        &self,
+        env: &mut HashMap<String, String>,
+        addrs: EnvironmentProxyAddrs,
+    ) {
+        let prepared = self.prepare_for_addrs(std::mem::take(env), addrs);
+        *env = prepared.env;
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
@@ -706,6 +758,23 @@ impl NetworkProxy {
                 Ok(())
             }
         }
+    }
+
+    /// Applies the environment-specific proxy settings and returns the matching portable sandbox
+    /// projection from the same runtime configuration snapshot.
+    pub fn prepare_for_optional_environment(
+        &self,
+        env: HashMap<String, String>,
+        environment_id: Option<&str>,
+    ) -> Result<PreparedManagedNetwork> {
+        let addrs = match environment_id {
+            Some(environment_id) => self.environment_proxy_addrs(environment_id)?,
+            None => EnvironmentProxyAddrs {
+                http_addr: self.http_addr,
+                socks_addr: self.socks_addr,
+            },
+        };
+        Ok(self.prepare_for_addrs(env, addrs))
     }
 
     fn environment_proxy_addrs(&self, environment_id: &str) -> Result<EnvironmentProxyAddrs> {
@@ -1074,27 +1143,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_to_env_for_environment_uses_distinct_proxy_ports() -> Result<()> {
+    async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
         let state = Arc::new(network_proxy_state_for_policy(
             NetworkProxySettings::default(),
         ));
         let proxy = NetworkProxy::builder().state(state).build().await?;
         let handle = proxy.run().await?;
 
-        let mut local_env = HashMap::new();
-        proxy.apply_to_env_for_environment(&mut local_env, "local")?;
-        let mut remote_env = HashMap::new();
-        proxy.apply_to_env_for_environment(&mut remote_env, "remote")?;
+        let base_env = HashMap::from([("PRESERVED".to_string(), "value".to_string())]);
+        let local = proxy.prepare_for_optional_environment(base_env.clone(), Some("local"))?;
+        let remote = proxy.prepare_for_optional_environment(HashMap::new(), Some("remote"))?;
 
-        assert_ne!(local_env.get("HTTP_PROXY"), remote_env.get("HTTP_PROXY"));
+        assert_eq!(
+            local.env.get("PRESERVED").map(String::as_str),
+            Some("value")
+        );
+        assert_ne!(local.env.get("HTTP_PROXY"), remote.env.get("HTTP_PROXY"));
         assert_ne!(
-            local_env.get("HTTP_PROXY"),
+            local.env.get("HTTP_PROXY"),
             Some(&format!("http://{}", proxy.http_addr()))
         );
         assert_ne!(
-            remote_env.get("HTTP_PROXY"),
+            remote.env.get("HTTP_PROXY"),
             Some(&format!("http://{}", proxy.http_addr()))
         );
+        for prepared in [&local, &remote] {
+            let http_port = prepared
+                .env
+                .get("HTTP_PROXY")
+                .and_then(|value| value.strip_prefix("http://"))
+                .and_then(|value| value.parse::<SocketAddr>().ok())
+                .map(|addr| addr.port())
+                .expect("managed HTTP proxy address");
+            let socks_port = prepared
+                .env
+                .get("ALL_PROXY")
+                .and_then(|value| value.strip_prefix("socks5h://"))
+                .and_then(|value| value.parse::<SocketAddr>().ok())
+                .map(|addr| addr.port())
+                .expect("managed SOCKS proxy address");
+            let mut expected_ports = vec![http_port, socks_port];
+            expected_ports.sort_unstable();
+            expected_ports.dedup();
+            assert_eq!(
+                prepared.sandbox_context,
+                ManagedNetworkSandboxContext {
+                    loopback_ports: expected_ports,
+                    allow_local_binding: false,
+                }
+            );
+        }
+        let mut legacy_env = base_env;
+        proxy.apply_to_env_for_environment(&mut legacy_env, "local")?;
+        assert_eq!(legacy_env, local.env);
 
         handle.shutdown().await?;
         Ok(())

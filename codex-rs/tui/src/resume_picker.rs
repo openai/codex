@@ -1822,6 +1822,7 @@ fn thread_list_params(
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         parent_thread_id: None,
+        ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
         search_term: None,
@@ -5720,11 +5721,13 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: String::from("remote thread"),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
@@ -5756,11 +5759,13 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
@@ -5826,11 +5831,13 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,
@@ -5885,11 +5892,13 @@ session_picker_view = "dense"
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
             parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
+            history_mode: Default::default(),
             model_provider: String::from("openai"),
             created_at: 1,
             updated_at: 2,

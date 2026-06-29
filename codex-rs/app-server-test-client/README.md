@@ -18,6 +18,10 @@ cargo run -p codex-app-server-test-client -- \
 cargo run -p codex-app-server-test-client -- model-list
 ```
 
+`send-message` and `send-message-v2` handle `request_user_input` server requests interactively.
+When Codex asks a question, choose a numbered option (or `o` for a free-form answer when offered)
+and the client will send the response and continue streaming the same turn.
+
 ## Testing Plugin Analytics
 
 The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
@@ -42,12 +46,13 @@ cargo run -p codex-app-server-test-client -- \
 
 Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
 The command validates one `codex_plugin_disabled`, `codex_plugin_enabled`, and
-`codex_plugin_used` event with the expected local plugin identity and capability
-metadata. The enabled and disabled events come from successful writes to the
-temporary config; the command does not mutate the remote enabled state. It
-prints the events and leaves the JSONL file in place for inspection. It does not
-install or uninstall plugins and does not modify the profile's persistent
-config.
+`codex_plugin_used` event with the expected local and remote plugin identities
+and capability metadata. Each event includes the local ID in `plugin_id` and the
+backend ID in `remote_plugin_id`. The enabled and disabled events come from
+successful writes to the temporary config; the command does not mutate the
+remote enabled state. It prints the events and leaves the JSONL file in place
+for inspection. It does not install or uninstall plugins and does not modify
+the profile's persistent config.
 
 ### Testing remote install and uninstall analytics
 
@@ -59,9 +64,11 @@ or CI.
 Choose a remote plugin that is available to the active account and is not
 currently installed. The command refuses to run when the plugin is already
 installed, installs it, validates `codex_plugin_installed`, uninstalls it, and
-verifies that the original uninstalled state was restored. The current install
-event uses the backend ID as `plugin_id`. Uninstall is part of cleanup but is
-not yet an analytics assertion.
+validates `codex_plugin_uninstalled`, and verifies that the original
+uninstalled state was restored.
+
+The mutation events include the local Codex ID in `plugin_id` and the backend ID
+in `remote_plugin_id`.
 
 `--remote-plugin-id` takes the backend ID, such as `plugins~Plugin_...`, not the
 local `<plugin>@<marketplace>` ID.
@@ -79,7 +86,7 @@ Analytics use the normal queue, reduction, batching, and serialization path,
 but the debug capture destination suppresses analytics network delivery. The
 command prints one of these final states:
 
-- `PASS`: the install event validated and the plugin is uninstalled.
+- `PASS`: the install and uninstall events validated and the plugin is uninstalled.
 - `FAIL-CLEAN`: validation failed, but the original uninstalled state was
   restored.
 - `FAIL-LOCAL-CACHE`: the backend is uninstalled, but local cleanup reported

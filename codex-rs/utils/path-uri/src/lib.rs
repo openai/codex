@@ -18,7 +18,10 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod absolute_path_normalization;
 mod api_path_string;
+
+use absolute_path_normalization::path_uri_from_segments;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
@@ -45,13 +48,9 @@ const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";
 /// are not resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
-/// also accepts an absolute native path for compatibility with fields that
-/// previously used [`AbsolutePathBuf`]; relative paths are rejected. Valid
-/// `file:` strings round-trip through their canonical URL form, including
-/// encoded non-UTF-8 path bytes, but conversion to a native path remains
-/// host-dependent as described by [RFC 8089].
+/// accepts only valid `file:` URI strings. These strings round-trip through
+/// their canonical URL form, including encoded non-UTF-8 path bytes.
 ///
-/// [RFC 8089]: https://www.rfc-editor.org/rfc/rfc8089.html
 /// [VS Code resources]: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/resources.ts
 #[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
@@ -121,7 +120,7 @@ impl PathUri {
     /// Relative paths are reported as invalid input. Absolute paths without a
     /// valid URI representation use the fallback documented on
     /// [`Self::from_abs_path`].
-    pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn from_host_native_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = AbsolutePathBuf::from_absolute_path_checked(path)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         Ok(Self::from_abs_path(&path))
@@ -245,6 +244,41 @@ impl PathUri {
     /// Returns this URI and each lexical parent up to its inferred native path root.
     pub fn ancestors(&self) -> impl Iterator<Item = Self> {
         std::iter::successors(Some(self.clone()), Self::parent)
+    }
+
+    /// Returns true when this URI is lexically equal to or below `base`.
+    ///
+    /// Containment is computed using URI authority and path-segment boundaries,
+    /// without consulting the host filesystem. Percent-encoded native path
+    /// separators fail closed because native path conversion may interpret them
+    /// as segment boundaries. Opaque fallback URIs created by
+    /// [`Self::from_abs_path`] only contain themselves.
+    pub fn starts_with(&self, base: &Self) -> bool {
+        if self == base {
+            return true;
+        }
+        if decode_bad_path_uri(&self.0).is_some() || decode_bad_path_uri(&base.0).is_some() {
+            return false;
+        }
+        if self.0.host_str() != base.0.host_str() {
+            return false;
+        }
+
+        let Some(path_segments) = containment_path_segments(
+            &self.0,
+            self.infer_path_convention()
+                .unwrap_or(PathConvention::Posix),
+        ) else {
+            return false;
+        };
+        let Some(base_segments) = containment_path_segments(
+            &base.0,
+            base.infer_path_convention()
+                .unwrap_or(PathConvention::Posix),
+        ) else {
+            return false;
+        };
+        path_segments.starts_with(&base_segments)
     }
 
     /// Lexically resolves native absolute or relative path text against this URI.
@@ -443,30 +477,7 @@ impl<'de> Deserialize<'de> for PathUri {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        let unsupported_scheme = match Url::parse(&value) {
-            Ok(url) => match Self::try_from(url) {
-                Ok(uri) => return Ok(uri),
-                // `Url` parses a Windows drive prefix such as `C:\` as the
-                // scheme `c`. Give any unsupported URI one chance to satisfy
-                // the native absolute-path invariant before reporting it.
-                Err(error @ PathUriParseError::UnsupportedScheme(_)) => Some(error),
-                Err(error) => return Err(serde::de::Error::custom(error)),
-            },
-            Err(url::ParseError::RelativeUrlWithoutBase) => None,
-            Err(error) => {
-                return Err(serde::de::Error::custom(PathUriParseError::InvalidUri(
-                    error,
-                )));
-            }
-        };
-
-        let path = AbsolutePathBuf::from_absolute_path_checked(value).map_err(|path_error| {
-            serde::de::Error::custom(
-                unsupported_scheme
-                    .map_or_else(|| path_error.to_string(), |error| error.to_string()),
-            )
-        })?;
-        Ok(Self::from_abs_path(&path))
+        Self::parse(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -542,6 +553,19 @@ fn is_windows_drive_uri_segment(segment: &str) -> bool {
     matches!(segment.as_bytes(), [drive, b':'] if drive.is_ascii_alphabetic())
 }
 
+fn containment_path_segments(url: &Url, convention: PathConvention) -> Option<Vec<&str>> {
+    let segments = url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    (!segments.iter().any(|segment| {
+        urlencoding::decode_binary(segment.as_bytes())
+            .iter()
+            .any(|byte| *byte == b'/' || (convention == PathConvention::Windows && *byte == b'\\'))
+    }))
+    .then_some(segments)
+}
+
 fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
     if path_bytes.starts_with(b"/") {
         return Some(PathConvention::Posix);
@@ -568,7 +592,7 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
             format!("/{path}").as_bytes(),
         ));
     }
-    path_uri_from_segments(/*host*/ None, path.split('/'))
+    path_uri_from_segments(PathConvention::Posix, /*host*/ None, path.split('/'))
 }
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
@@ -591,6 +615,7 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
             if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
     ) {
         return path_uri_from_segments(
+            PathConvention::Windows,
             /*host*/ None,
             std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
         );
@@ -602,29 +627,15 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
         let mut components = path[2..].split(is_windows_separator_char);
         let host = components.next().filter(|host| !host.is_empty())?;
         let share = components.next().filter(|share| !share.is_empty())?;
-        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
-            .or_else(|| Some(windows_opaque_path_uri(path)));
+        return path_uri_from_segments(
+            PathConvention::Windows,
+            Some(host),
+            std::iter::once(share).chain(components),
+        )
+        .or_else(|| Some(windows_opaque_path_uri(path)));
     }
 
     None
-}
-
-fn path_uri_from_segments<'a>(
-    host: Option<&str>,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<PathUri> {
-    let mut url = Url::parse("file:///").ok()?;
-    if let Some(host) = host {
-        url.set_host(Some(host)).ok()?;
-    }
-    {
-        let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear();
-        for segment in segments {
-            url_segments.push(segment);
-        }
-    }
-    PathUri::try_from(url).ok()
 }
 
 fn windows_opaque_path_uri(path: &str) -> PathUri {

@@ -1,7 +1,7 @@
 use super::*;
 
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;

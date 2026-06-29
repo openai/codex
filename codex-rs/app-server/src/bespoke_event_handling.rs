@@ -200,18 +200,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::McpStartupUpdate(update) => {
-            let (status, error) = match update.status {
+            let (status, error, failure_reason) = match update.status {
                 codex_protocol::protocol::McpStartupStatus::Starting => {
-                    (McpServerStartupState::Starting, None)
+                    (McpServerStartupState::Starting, None, None)
                 }
                 codex_protocol::protocol::McpStartupStatus::Ready => {
-                    (McpServerStartupState::Ready, None)
+                    (McpServerStartupState::Ready, None, None)
                 }
-                codex_protocol::protocol::McpStartupStatus::Failed { error } => {
-                    (McpServerStartupState::Failed, Some(error))
-                }
+                codex_protocol::protocol::McpStartupStatus::Failed { error, reason } => (
+                    McpServerStartupState::Failed,
+                    Some(error),
+                    reason.map(Into::into),
+                ),
                 codex_protocol::protocol::McpStartupStatus::Cancelled => {
-                    (McpServerStartupState::Cancelled, None)
+                    (McpServerStartupState::Cancelled, None, None)
                 }
             };
             let notification = McpServerStatusUpdatedNotification {
@@ -219,6 +221,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 name: update.server,
                 status,
                 error,
+                failure_reason,
             };
             outgoing
                 .send_server_notification(ServerNotification::McpServerStatusUpdated(notification))
@@ -359,6 +362,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: event.model,
                 use_cases: event.use_cases,
                 reasons: event.reasons,
+                show_buffering_ui: event.show_buffering_ui,
+                faster_model: event.faster_model,
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelSafetyBufferingUpdated(
@@ -2282,6 +2287,7 @@ mod tests {
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
+            history_mode: Default::default(),
             thread_source: None,
             agent_nickname: None,
             agent_role: None,

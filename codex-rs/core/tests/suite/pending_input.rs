@@ -2,6 +2,7 @@ use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::items::SleepItem;
@@ -20,6 +21,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -290,11 +292,13 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     const WAIT_CALL_ID: &str = "wait-call";
     const INITIAL_PROMPT: &str = "wait for an agent";
     const STEER_PROMPT: &str = "stop waiting and continue";
+    const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             WAIT_CALL_ID,
+            MULTI_AGENT_V2_NAMESPACE,
             "wait_agent",
             r#"{"timeout_ms":10000}"#,
         )),
@@ -358,8 +362,9 @@ async fn any_new_input_interrupts_sleep() {
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             FIRST_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),
@@ -367,8 +372,9 @@ async fn any_new_input_interrupts_sleep() {
     ];
     let second_chunks = vec![
         chunk(ev_response_created("resp-2")),
-        chunk(ev_function_call(
+        chunk(ev_function_call_with_namespace(
             SECOND_SLEEP_CALL_ID,
+            "clock",
             "sleep",
             &sleep_arguments,
         )),
@@ -385,8 +391,12 @@ async fn any_new_input_interrupts_sleep() {
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::SleepTool)
-                .expect("test config should allow feature update");
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow current-time reminders");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                sleep_tool: true,
+                ..CurrentTimeReminderConfig::default()
+            });
         })
         .build_with_streaming_server(&server)
         .await

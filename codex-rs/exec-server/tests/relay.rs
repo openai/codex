@@ -144,7 +144,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         .exec(ExecParams {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
-            cwd: PathUri::from_path(std::env::current_dir()?)?,
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
             env_policy: None,
             env: HashMap::new(),
             tty: false,
@@ -152,6 +152,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             arg0: None,
             sandbox: None,
             enforce_managed_network: false,
+            managed_network: None,
         })
         .await?;
     assert_eq!(
@@ -167,7 +168,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     std::fs::write(&large_file_path, &large_file_contents)?;
     let read_response = client
         .fs_read_file(FsReadFileParams {
-            path: PathUri::from_path(large_file_path)?,
+            path: PathUri::from_host_native_path(large_file_path)?,
             sandbox: None,
         })
         .await?;

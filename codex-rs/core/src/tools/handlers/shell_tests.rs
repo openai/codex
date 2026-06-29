@@ -1,12 +1,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ShellCommandToolCallParams;
 use pretty_assertions::assert_eq;
 
+use crate::config::PermissionProfileSnapshot;
+use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_permission_profile_env;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
@@ -20,6 +26,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::powershell::try_find_powershell_executable_blocking;
 use codex_shell_command::powershell::try_find_pwsh_executable_blocking;
+use codex_utils_path_uri::PathUri;
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -67,8 +74,16 @@ fn assert_safe(shell: &Shell, command: &str) {
 }
 
 #[tokio::test]
-async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
-    let (session, turn_context) = make_session_and_context().await;
+async fn shell_command_handler_to_exec_params_uses_selected_environment() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let permission_profile = turn_context.config.permissions.permission_profile().clone();
+    Arc::make_mut(&mut turn_context.config)
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            permission_profile,
+            ActivePermissionProfile::new("test-profile"),
+        ))
+        .expect("set active permission profile");
 
     let command = "echo hello".to_string();
     let workdir = Some("subdir".to_string());
@@ -77,15 +92,31 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
     let justification = Some("because tests".to_string());
 
-    let expected_command = session
-        .user_shell()
-        .derive_exec_args(&command, /*use_login_shell*/ true);
-    #[allow(deprecated)]
-    let expected_cwd = turn_context.resolve_path(workdir.clone());
-    let expected_env = create_env(
+    let selected_shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/selected/bin/bash"),
+    };
+    let expected_command = selected_shell.derive_exec_args(&command, /*use_login_shell*/ true);
+    let selected_cwd = turn_context.config.cwd.join("selected-environment");
+    let expected_cwd = selected_cwd.join("subdir");
+    let selected_environment = TurnEnvironment::new(
+        "selected-environment".to_string(),
+        Arc::clone(
+            &turn_context
+                .environments
+                .primary()
+                .expect("primary environment")
+                .environment,
+        ),
+        PathUri::from_abs_path(&selected_cwd),
+        Some(selected_shell),
+    );
+    let mut expected_env = create_env(
         &turn_context.config.permissions.shell_environment_policy,
         Some(session.thread_id),
     );
+    let active_permission_profile = turn_context.config.permissions.active_permission_profile();
+    inject_permission_profile_env(&mut expected_env, active_permission_profile.as_ref());
 
     let params = ShellCommandToolCallParams {
         command,
@@ -102,7 +133,8 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
         &params,
         &session,
         &turn_context,
-        session.thread_id,
+        &selected_environment,
+        expected_cwd.clone(),
         /*allow_login_shell*/ true,
     )
     .expect("login shells should be allowed");
@@ -111,7 +143,17 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     assert_eq!(exec_params.command, expected_command);
     assert_eq!(exec_params.cwd, expected_cwd);
     assert_eq!(exec_params.env, expected_env);
+    assert_eq!(
+        exec_params.env.get(CODEX_PERMISSION_PROFILE_ENV_VAR),
+        active_permission_profile
+            .as_ref()
+            .map(|profile| &profile.id)
+    );
     assert_eq!(exec_params.network, turn_context.network);
+    assert_eq!(
+        exec_params.network_environment_id.as_deref(),
+        Some("selected-environment")
+    );
     assert_eq!(exec_params.expiration.timeout_ms(), timeout_ms);
     assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
     assert_eq!(exec_params.justification, justification);
@@ -149,6 +191,14 @@ fn shell_command_handler_respects_explicit_login_flag() {
 #[tokio::test]
 async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
     let (session, turn_context) = make_session_and_context().await;
+    let turn_environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment");
+    let cwd = turn_environment
+        .cwd()
+        .to_abs_path()
+        .expect("native environment cwd");
     let params = ShellCommandToolCallParams {
         command: "echo hello".to_string(),
         workdir: None,
@@ -164,7 +214,8 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
         &params,
         &session,
         &turn_context,
-        session.thread_id,
+        turn_environment,
+        cwd,
         /*allow_login_shell*/ false,
     )
     .expect("non-login shells should still be allowed");
@@ -196,12 +247,14 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
             session: session.into(),
-            turn: turn.into(),
+            step_context: StepContext::for_test(Arc::clone(&turn)),
+            turn,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
@@ -228,9 +281,11 @@ async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     };
     let handler = ShellCommandHandler::from(codex_tools::ShellCommandBackendConfig::Classic);
     let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
     let invocation = ToolInvocation {
         session: session.into(),
-        turn: turn.into(),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+        turn,
         cancellation_token: tokio_util::sync::CancellationToken::new(),
         tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
         call_id: "call-42".to_string(),

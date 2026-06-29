@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -47,6 +48,7 @@ use core_test_support::wait_for_event_with_timeout;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_profile;
 use core_test_support::zsh_fork::zsh_fork_runtime;
+use core_test_support::zsh_fork::zsh_fork_test_builder;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -131,6 +133,8 @@ enum ActionKind {
 
 const DEFAULT_UNIFIED_EXEC_JUSTIFICATION: &str =
     "Requires escalated permissions to bypass the sandbox in tests.";
+const WORKSPACE_PERMISSION_PROFILE_CONFIG: &str = r#"default_permissions = ":workspace"
+"#;
 
 impl ActionKind {
     fn policy_src(&self) -> Option<&'static str> {
@@ -640,6 +644,7 @@ enum ScenarioGroup {
     UnifiedExec,
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct CommandResult {
     exit_code: Option<i64>,
     stdout: String,
@@ -681,6 +686,52 @@ async fn submit_turn(
         .await?;
 
     Ok(())
+}
+
+async fn submit_turn_preserving_active_permission_profile(
+    test: &TestCodex,
+    prompt: &str,
+    approval_policy: AskForApproval,
+) -> Result<()> {
+    let session_model = test.session_configured.model.clone();
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    Ok(())
+}
+
+fn assert_active_workspace_permission_profile(test: &TestCodex) {
+    assert_eq!(
+        test.session_configured
+            .active_permission_profile
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
+    );
 }
 
 fn parse_result(item: &Value) -> CommandResult {
@@ -1086,40 +1137,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "danger_full_access_on_failure_allows_outside_write",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure.txt"),
-                content: "danger-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::FileCreated {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure.txt"),
-                content: "danger-on-failure",
-            },
-        },
-        ScenarioSpec {
-            name: "danger_full_access_on_failure_allows_outside_write_gpt_5_1_no_exit",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure_5_1.txt"),
-                content: "danger-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.4"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::FileCreatedNoExitCode {
-                target: TargetPath::OutsideWorkspace("dfa_on_failure_5_1.txt"),
-                content: "danger-on-failure",
-            },
-        },
-        ScenarioSpec {
             name: "danger_full_access_unless_trusted_requests_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1295,48 +1312,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::Workspace("ro_on_request_denied.txt"),
                 message_contains: &["exec command rejected by user"],
-            },
-        },
-        #[cfg(not(target_os = "linux"))] // TODO (pakrym): figure out why linux behaves differently
-        ScenarioSpec {
-            name: "read_only_on_failure_escalates_after_sandbox_error",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            action: ActionKind::WriteFile {
-                target: TargetPath::Workspace("ro_on_failure.txt"),
-                content: "read-only-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreated {
-                target: TargetPath::Workspace("ro_on_failure.txt"),
-                content: "read-only-on-failure",
-            },
-        },
-        #[cfg(not(target_os = "linux"))]
-        ScenarioSpec {
-            name: "read_only_on_failure_escalates_after_sandbox_error_gpt_5_1_no_exit",
-            approval_policy: OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            action: ActionKind::WriteFile {
-                target: TargetPath::Workspace("ro_on_failure_5_1.txt"),
-                content: "read-only-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.4"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreatedNoExitCode {
-                target: TargetPath::Workspace("ro_on_failure_5_1.txt"),
-                content: "read-only-on-failure",
             },
         },
         ScenarioSpec {
@@ -1674,27 +1649,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkSuccess {
                 body_contains: "workspace-network-ok",
-            },
-        },
-        #[cfg(not(target_os = "linux"))] // TODO (pakrym): figure out why linux behaves differently
-        ScenarioSpec {
-            name: "workspace_write_on_failure_escalates_outside_workspace",
-            approval_policy: OnFailure,
-            sandbox_policy: workspace_write(false),
-            action: ActionKind::WriteFile {
-                target: TargetPath::OutsideWorkspace("ww_on_failure.txt"),
-                content: "workspace-on-failure",
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::ExecApproval {
-                decision: ReviewDecision::Approved,
-                expected_reason: Some("command failed; retry without sandbox?"),
-            },
-            expectation: Expectation::FileCreated {
-                target: TargetPath::OutsideWorkspace("ww_on_failure.txt"),
-                content: "workspace-on-failure",
             },
         },
         ScenarioSpec {
@@ -2793,6 +2747,325 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     Ok(())
 }
 
+/// Verifies that an allowlisted script retains the originating named profile
+/// when its shell tool call requests escalated, unsandboxed execution.
+///
+/// Tool owners use this pattern when a trusted wrapper must run outside the
+/// current sandbox, but then needs to launch child commands back inside the
+/// same sandbox with `codex sandbox -P`. The nested invocation must also pass
+/// `--include-managed-config` so it continues to honor enterprise requirements.
+/// The test proves both halves of that contract: the wrapper writes outside the
+/// `:workspace` sandbox, while its inherited profile name remains `:workspace`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn allowed_escalated_shell_command_inherits_active_permission_profile() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        WORKSPACE_PERMISSION_PROFILE_CONFIG,
+    )?;
+
+    let script_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let script_path = script_dir.path().join("print-permission-profile.sh");
+    let outside_path = script_dir.path().join("unsandboxed-marker");
+    fs::write(
+        &script_path,
+        format!(
+            r#"#!/bin/sh
+# Print the inherited profile so the test can verify that it reached this script.
+printenv CODEX_PERMISSION_PROFILE
+touch {outside_path:?}
+"#
+        ),
+    )?;
+
+    let rules_dir = home.path().join("rules");
+    fs::create_dir_all(&rules_dir)?;
+    let script_pattern = serde_json::to_string(&script_path.to_string_lossy())?;
+    fs::write(
+        rules_dir.join("default.rules"),
+        format!(r#"prefix_rule(pattern=["/bin/sh", {script_pattern}], decision="allow")"#),
+    )?;
+
+    let approval_policy = AskForApproval::OnRequest;
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+    });
+    let test = builder.build(&server).await?;
+    assert!(!outside_path.starts_with(test.config.cwd.as_path()));
+    assert_active_workspace_permission_profile(&test);
+
+    let call_id = "allowed-escalated-shell-inherits-permission-profile";
+    let command = format!("/bin/sh {script_path:?}");
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 5_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-escalated-profile-1"),
+            event,
+            ev_completed("resp-escalated-profile-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-escalated-profile-1", "done"),
+            ev_completed("resp-escalated-profile-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn_preserving_active_permission_profile(
+        &test,
+        "run the allowed script with escalated permissions",
+        approval_policy,
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result,
+        CommandResult {
+            exit_code: Some(0),
+            stdout: format!("{BUILT_IN_PERMISSION_PROFILE_WORKSPACE}\n"),
+        },
+        "the unsandboxed script should inherit CODEX_PERMISSION_PROFILE from the shell command"
+    );
+    assert!(
+        outside_path.exists(),
+        "allowed escalated script should run outside the :workspace sandbox"
+    );
+
+    Ok(())
+}
+
+/// Verifies that zsh-fork applies an inner script's allow rule even when the
+/// model invokes an outer wrapper, and that the escalated script retains the
+/// named profile needed to reconstruct the original sandbox remotely without
+/// dropping managed enterprise requirements. The script treats the inherited
+/// environment value as untrusted and accepts only explicitly allowlisted
+/// profile names before passing one to `codex sandbox -P`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn zsh_fork_inner_allowed_script_inherits_active_permission_profile() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork remote sandbox wrapper test")? else {
+        return Ok(());
+    };
+
+    const HOST: &str = "builder.example.com";
+    let approval_policy = AskForApproval::OnRequest;
+    let script_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let wrapper_path = script_dir.path().join("remote-bash");
+    let remote_bash_path = script_dir.path().join("remote_bash.py");
+    let outside_path = script_dir.path().join("remote-bash-unsandboxed-marker");
+    let outside_path_literal = serde_json::to_string(&outside_path.to_string_lossy())?;
+    fs::write(
+        &remote_bash_path,
+        format!(
+            r#"#!/usr/bin/env python3
+import argparse
+import os
+from pathlib import Path
+import re
+import shlex
+import sys
+
+ALLOWED_HOSTS = ("builder.example.com",)
+ALLOWED_PROFILES = (":workspace",)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Print an ssh command that recreates the current Codex sandbox remotely."
+    )
+    parser.add_argument("--host", required=True)
+    try:
+        separator = sys.argv.index("--")
+    except ValueError:
+        parser.error("the remote command must follow --")
+    args = parser.parse_args(sys.argv[1:separator])
+    args.command = sys.argv[separator + 1:]
+    if not args.command:
+        parser.error("the remote command must not be empty")
+    if not re.fullmatch(r"[a-z0-9.-]+", args.host) or args.host not in ALLOWED_HOSTS:
+        parser.error("host is not allowlisted")
+    return args
+
+
+def main():
+    args = parse_args()
+    profile_name = os.environ.get("CODEX_PERMISSION_PROFILE")
+    if not profile_name:
+        raise SystemExit("CODEX_PERMISSION_PROFILE must not be empty")
+    if profile_name not in ALLOWED_PROFILES:
+        raise SystemExit("CODEX_PERMISSION_PROFILE is not allowlisted")
+
+    shell_command = shlex.join(args.command)
+    sandbox_command = shlex.join(
+        [
+            "codex",
+            "sandbox",
+            "-P",
+            profile_name,
+            "--include-managed-config",
+            "--",
+            "bash",
+            "-lc",
+            shell_command,
+        ]
+    )
+    print(shlex.join(["ssh", args.host, sandbox_command]))
+
+    # Test-only proof that this inner script was allowed to run unsandboxed.
+    Path({outside_path_literal}).write_text("unsandboxed", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
+"#
+        ),
+    )?;
+    let remote_bash_exec = shlex::try_join([remote_bash_path.to_string_lossy().as_ref()])?;
+    fs::write(
+        &wrapper_path,
+        format!(
+            r#"#!/usr/bin/env zsh
+exec {remote_bash_exec} "$@"
+"#
+        ),
+    )?;
+    for path in [&wrapper_path, &remote_bash_path] {
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)?;
+    }
+
+    let remote_bash_pattern = serde_json::to_string(&remote_bash_path.to_string_lossy())?;
+    let rules = format!(r#"prefix_rule(pattern=[{remote_bash_pattern}], decision="allow")"#);
+    let server = start_mock_server().await;
+    let mut builder =
+        zsh_fork_test_builder(runtime, approval_policy).with_pre_build_hook(move |home| {
+            fs::write(
+                home.join("config.toml"),
+                WORKSPACE_PERMISSION_PROFILE_CONFIG,
+            )
+            .expect("write config");
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create rules dir");
+            fs::write(rules_dir.join("default.rules"), rules).expect("write rules");
+        });
+    let test = builder.build(&server).await?;
+    assert!(!outside_path.starts_with(test.config.cwd.as_path()));
+    assert_active_workspace_permission_profile(&test);
+
+    let command = shlex::try_join([
+        wrapper_path.to_string_lossy().as_ref(),
+        "--host",
+        HOST,
+        "--",
+        "printf",
+        "%s",
+        "hello world",
+    ])?;
+    let call_id = "zsh-fork-remote-sandbox-wrapper";
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::UseDefault,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-zsh-fork-remote-wrapper-1"),
+            event,
+            ev_completed("resp-zsh-fork-remote-wrapper-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-zsh-fork-remote-wrapper-1", "done"),
+            ev_completed("resp-zsh-fork-remote-wrapper-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn_preserving_active_permission_profile(
+        &test,
+        "run the remote sandbox wrapper",
+        approval_policy,
+    )
+    .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "the inner remote_bash.py script should run successfully: {}",
+        result.stdout
+    );
+    let ssh_argv = shlex::split(result.stdout.trim()).context("parse printed ssh command")?;
+    assert_eq!(
+        ssh_argv.len(),
+        3,
+        "expected ssh HOST LONG_COMMAND, got: {}",
+        result.stdout
+    );
+    assert_eq!(
+        ssh_argv[..2],
+        ["ssh", HOST],
+        "remote_bash.py should target only the allowlisted host"
+    );
+    let sandbox_argv = shlex::split(&ssh_argv[2]).context("parse remote sandbox command")?;
+    assert_eq!(
+        sandbox_argv.len(),
+        9,
+        "expected codex sandbox ... bash -lc CMD"
+    );
+    assert_eq!(
+        sandbox_argv[..8],
+        [
+            "codex",
+            "sandbox",
+            "-P",
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            "--include-managed-config",
+            "--",
+            "bash",
+            "-lc",
+        ],
+        "remote_bash.py should use the allowlisted inherited profile and managed configuration to reconstruct the Codex sandbox"
+    );
+    let command_argv = shlex::split(&sandbox_argv[8]).context("parse remote bash command")?;
+    assert_eq!(
+        command_argv,
+        ["printf", "%s", "hello world"],
+        "remote_bash.py should preserve every argument after --"
+    );
+    assert!(
+        outside_path.exists(),
+        "the inner allowlisted script should run outside the :workspace sandbox"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
 async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
@@ -2982,7 +3255,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
@@ -3467,7 +3740,7 @@ mode = "limited"
 allow_local_binding = true
 "#,
     )?;
-    let approval_policy = AskForApproval::OnFailure;
+    let approval_policy = AskForApproval::OnRequest;
     let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,

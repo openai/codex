@@ -1,7 +1,8 @@
 use super::*;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[test]
 fn deserialize_stdio_command_server_config() {
@@ -52,38 +53,12 @@ fn deserialize_stdio_command_server_config_with_args() {
 }
 
 #[test]
-fn deserialize_remote_stdio_server_requires_absolute_cwd() {
-    let missing_cwd = toml::from_str::<McpServerConfig>(
-        r#"
-            command = "echo"
-            environment_id = "remote"
-        "#,
-    )
-    .expect_err("remote stdio MCP should require cwd");
-    assert!(
-        missing_cwd
-            .to_string()
-            .contains("remote stdio MCP servers require an absolute cwd"),
-        "unexpected error: {missing_cwd}"
-    );
-
-    let relative_cwd = toml::from_str::<McpServerConfig>(
-        r#"
-            command = "echo"
-            environment_id = "remote"
-            cwd = "relative"
-        "#,
-    )
-    .expect_err("remote stdio MCP should require absolute cwd");
-    assert!(
-        relative_cwd.to_string().contains("got `relative`"),
-        "unexpected error: {relative_cwd}"
-    );
-}
-
-#[test]
-fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
-    let cwd = std::env::temp_dir();
+fn deserialize_remote_stdio_server_accepts_foreign_absolute_cwd() {
+    #[cfg(not(windows))]
+    let cwd = r"C:\Users\openai\share";
+    #[cfg(windows)]
+    let cwd = "/home/openai/share";
+    let expected_cwd = LegacyAppPathString::from_path(Path::new(cwd));
     let cfg: McpServerConfig = match toml::from_str(&format!(
         r#"
             command = "echo"
@@ -102,7 +77,7 @@ fn deserialize_remote_stdio_server_accepts_absolute_cwd() {
             args: vec![],
             env: None,
             env_vars: Vec::new(),
-            cwd: Some(cwd),
+            cwd: Some(expected_cwd),
         }
     );
 }
@@ -223,7 +198,7 @@ fn deserialize_stdio_command_server_config_with_cwd() {
             args: vec![],
             env: None,
             env_vars: Vec::new(),
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(LegacyAppPathString::from_path(Path::new("/tmp"))),
         }
     );
 }
@@ -451,6 +426,7 @@ fn deserialize_ignores_unknown_server_fields() {
     assert_eq!(
         cfg,
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec![],

@@ -1,8 +1,7 @@
-name: ci
+name: repo-checks
 
 on:
-  pull_request: {}
-  push: { branches: [main] }
+  workflow_call:
 
 jobs:
   build-test:
@@ -88,3 +87,7 @@ jobs:
 
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

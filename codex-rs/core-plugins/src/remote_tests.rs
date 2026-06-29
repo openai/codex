@@ -69,12 +69,27 @@ fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
                 default_prompts: None,
                 composer_icon_url: None,
                 logo_url: None,
+                logo_url_dark: None,
                 screenshot_urls: Vec::new(),
             },
             skills: Vec::new(),
             mcp_servers: Vec::new(),
         },
     }
+}
+
+#[test]
+fn remote_plugin_interface_maps_dark_logo_url() {
+    let mut plugin = directory_plugin("plugin-linear", "linear");
+    plugin.release.interface.logo_url_dark =
+        Some("https://example.com/linear/logo-dark.png".to_string());
+
+    assert_eq!(
+        remote_plugin_interface_to_info(&plugin)
+            .expect("plugin interface")
+            .logo_url_dark,
+        Some("https://example.com/linear/logo-dark.png".to_string())
+    );
 }
 fn item(name: &str, display_name: &str) -> RecommendedPluginItem {
     RecommendedPluginItem {

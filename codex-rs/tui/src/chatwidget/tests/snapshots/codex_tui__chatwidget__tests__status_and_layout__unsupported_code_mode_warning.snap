@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "lines_to_single_string(&cells[0])"
+---
+⚠ Code Mode is enabled in configuration, but model `gpt-5.4` does not advertise
+  Code Mode support. This may degrade model performance. Disable
+  `features.code_mode` and `features.code_mode_only`, or select a model whose
+  metadata enables Code Mode.

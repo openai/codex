@@ -22,9 +22,12 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -142,18 +145,29 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    "extract-search-1",
+                    &json!({
+                        "query": "extract text from uploaded document",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
                 ev_function_call_with_namespace(
                     "extract-call-1",
                     DOCUMENT_EXTRACT_NAMESPACE,
                     DOCUMENT_EXTRACT_TOOL,
                     &json!({"file": "report.txt"}).to_string(),
                 ),
-                ev_completed("resp-1"),
+                ev_completed("resp-2"),
             ]),
             sse(vec![
-                ev_response_created("resp-2"),
+                ev_response_created("resp-3"),
                 ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-2"),
+                ev_completed("resp-3"),
             ]),
         ],
     )
@@ -171,6 +185,9 @@ async fn run_extract_turn(test: &TestCodex, server: &MockServer) -> Result<Respo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() -> Result<()> {
+    // TODO(anp): Remove after file-upload fixtures support target-native Windows paths.
+    skip_if_wine_exec!(Ok(()), "uses a host-native file-upload path");
+
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
     mount_file_upload_mocks(&server, STREAMED_FILE_SIZE as u64).await;
@@ -186,17 +203,20 @@ async fn codex_apps_file_params_upload_environment_files_before_mcp_tool_call() 
             .await?;
             Ok(())
         });
-    let test = builder.build_with_remote_env(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let mock = run_extract_turn(&test, &server).await?;
 
     let requests = mock.requests();
-    let body = requests[0].body_json();
+    let search_output = requests[1].tool_search_output("extract-search-1");
     let missing_tool_message = format!(
-        "missing tool {DOCUMENT_EXTRACT_NAMESPACE}{DOCUMENT_EXTRACT_TOOL} in /v1/responses request: {body:?}"
+        "missing tool {DOCUMENT_EXTRACT_NAMESPACE}{DOCUMENT_EXTRACT_TOOL} in tool_search output: {search_output:?}"
     );
-    let extract_tool = requests[0]
-        .tool_by_name(DOCUMENT_EXTRACT_NAMESPACE, DOCUMENT_EXTRACT_TOOL)
-        .expect(&missing_tool_message);
+    let extract_tool = namespace_child_tool(
+        &search_output,
+        DOCUMENT_EXTRACT_NAMESPACE,
+        DOCUMENT_EXTRACT_TOOL,
+    )
+    .expect(&missing_tool_message);
     assert_eq!(
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({

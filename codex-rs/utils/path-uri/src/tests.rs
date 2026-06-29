@@ -1,5 +1,4 @@
 use super::*;
-use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -283,9 +282,16 @@ fn structurally_valid_bad_path_uri_with_invalid_native_payload_fails_conversion(
 fn bad_path_uris_are_opaque_to_lexical_operations() {
     let uri = PathUri::parse("file:///%00/bad/path/YQ")
         .expect("canonical base64 fallback URI should parse");
+    let other = PathUri::parse("file:///%00/bad/path/Yg")
+        .expect("canonical base64 fallback URI should parse");
+    let root = PathUri::parse("file:///").expect("valid root URI");
 
     assert_eq!(uri.basename(), None);
     assert_eq!(uri.parent(), None);
+    assert!(uri.starts_with(&uri));
+    assert!(!uri.starts_with(&root));
+    assert!(!uri.starts_with(&other));
+    assert!(!other.starts_with(&uri));
     assert_eq!(uri.join(""), Ok(uri.clone()));
     assert_eq!(
         uri.join("child"),
@@ -411,31 +417,30 @@ fn path_uri_serializes_as_a_string() {
 }
 
 #[test]
-fn path_uri_deserializes_legacy_absolute_paths() {
+fn path_uri_rejects_native_absolute_paths_during_deserialization() {
     let path = AbsolutePathBuf::current_dir()
         .expect("current directory")
         .join("workspace/src");
     let json = serde_json::to_string(&path).expect("absolute path should serialize");
-    let uri: PathUri = serde_json::from_str(&json).expect("legacy absolute path should parse");
 
-    assert_eq!(uri, PathUri::from_abs_path(&path));
+    serde_json::from_str::<PathUri>(&json)
+        .expect_err("native absolute path should not deserialize as a URI");
 }
 
 #[test]
 fn path_uri_rejects_relative_native_paths() {
-    let error = PathUri::from_path("src/lib.rs").expect_err("relative path should be rejected");
+    let error =
+        PathUri::from_host_native_path("src/lib.rs").expect_err("relative path should be rejected");
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 #[test]
-fn path_uri_rejects_legacy_relative_paths_with_absolute_path_guard() {
-    let base = AbsolutePathBuf::current_dir().expect("current directory");
-    let _guard = AbsolutePathBufGuard::new(base.as_path());
+fn path_uri_rejects_relative_strings_during_deserialization() {
     let error = serde_json::from_str::<PathUri>(r#""src/lib.rs""#)
-        .expect_err("legacy relative path should be rejected");
+        .expect_err("relative path should be rejected");
 
-    assert!(error.to_string().contains("path is not absolute"));
+    assert!(error.to_string().contains("relative URL without a base"));
 }
 
 #[test]
@@ -613,6 +618,133 @@ fn join_replaces_posix_absolute_path() {
 }
 
 #[test]
+fn join_keeps_canonicalized_posix_double_slash_paths_hierarchical() {
+    let base = PathUri::parse("file:///workspace").expect("valid base URI");
+    let cwd = base
+        .join("//server/share/project")
+        .expect("valid absolute path");
+
+    assert_eq!(
+        cwd,
+        PathUri::parse("file:///server/share/project").expect("valid canonical URI")
+    );
+    assert_eq!(
+        cwd.parent(),
+        Some(PathUri::parse("file:///server/share").expect("valid parent URI"))
+    );
+    assert_eq!(
+        cwd.join("AGENTS.md"),
+        Ok(PathUri::parse("file:///server/share/project/AGENTS.md").expect("valid child URI"))
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        cwd.to_abs_path()
+            .expect("cwd should convert to a native path"),
+        AbsolutePathBuf::try_from("/server/share/project")
+            .expect("expected native path should be absolute")
+    );
+}
+
+#[test]
+fn join_normalizes_absolute_parent_segments() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/tmp/a/../b", "file:///tmp/b"),
+        ("file:///C:/workspace", r"D:\tmp\a\..\b", "file:///D:/tmp/b"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\..\b",
+            "file://server/share/b",
+        ),
+        ("file:///workspace", "/tmp//a/../b", "file:///tmp/b"),
+        ("file:///workspace", "/tmp/a/..//b", "file:///tmp/b"),
+        ("file:///workspace", "/tmp/a///../b", "file:///tmp/b"),
+        (
+            "file:///C:/workspace",
+            r"D:\tmp\a\\\..\b",
+            "file:///D:/tmp/b",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\\\..\b",
+            "file://server/share/b",
+        ),
+        ("file:///workspace", "/tmp/a///b/../..", "file:///tmp"),
+        (
+            "file:///C:/workspace",
+            r"D:\tmp\a\\\b\..\..",
+            "file:///D:/tmp",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\\\b\..\..",
+            "file://server/share",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_absolute_parent_segments_stop_at_native_path_roots() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/a/..", "file:///"),
+        ("file:///C:/workspace", r"D:\a\..", "file:///D:/"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\a\..",
+            "file://server/share",
+        ),
+        ("file:///workspace", "/../../b", "file:///b"),
+        ("file:///C:/workspace", r"D:\..\..\b", "file:///D:/b"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\..\..\b",
+            "file://server/share/b",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\\\..\b",
+            "file://server/share/b",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn join_collapses_redundant_absolute_separators() {
+    for (base, path, expected) in [
+        ("file:///workspace", "/tmp///", "file:///tmp/"),
+        ("file:///workspace", "///", "file:///"),
+        (
+            "file:///workspace",
+            "///server/share///",
+            "file:///server/share/",
+        ),
+        ("file:///C:/workspace", r"D:\tmp\\\", "file:///D:/tmp/"),
+        ("file:///C:/workspace", r"D:\\\", "file:///D:/"),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\tmp\\\",
+            "file://server/share/tmp/",
+        ),
+        (
+            "file:///C:/workspace",
+            r"\\server\share\\\",
+            "file://server/share/",
+        ),
+    ] {
+        let base = PathUri::parse(base).expect("valid base URI");
+        let expected = PathUri::parse(expected).expect("valid expected URI");
+        assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
 fn join_replaces_windows_absolute_path() {
     let base = PathUri::parse("file:///C:/workspace/src").expect("valid base URI");
 
@@ -694,6 +826,63 @@ fn join_uses_the_base_uri_path_convention() {
         let base = PathUri::parse(base).expect("valid base URI");
         let expected = PathUri::parse(expected).expect("valid expected URI");
         assert_eq!(base.join(path), Ok(expected), "joining {path}");
+    }
+}
+
+#[test]
+fn starts_with_uses_uri_segment_boundaries() {
+    for (path, base, expected) in [
+        ("file:///workspace/plugin", "file:///", true),
+        ("file:///workspace/plugin", "file:///workspace/plugin", true),
+        (
+            "file:///workspace/plugin/assets/icon.svg",
+            "file:///workspace/plugin",
+            true,
+        ),
+        (
+            "file:///workspace/plugin-other/icon.svg",
+            "file:///workspace/plugin",
+            false,
+        ),
+        (
+            "file:///C:/plugins/foo/assets/icon.svg",
+            "file:///C:/plugins/foo",
+            true,
+        ),
+        (
+            "file:///C:/plugins/foo2/assets/icon.svg",
+            "file:///C:/plugins/foo",
+            false,
+        ),
+        (
+            "file://server/share/plugins/foo/icon.svg",
+            "file://server/share/plugins/foo",
+            true,
+        ),
+        (
+            "file://other/share/plugins/foo/icon.svg",
+            "file://server/share/plugins/foo",
+            false,
+        ),
+        (
+            "file:///workspace/plugin/%2F..%2Foutside",
+            "file:///workspace/plugin",
+            false,
+        ),
+        (
+            "file:///workspace/plugin/%5C..%5Coutside",
+            "file:///workspace/plugin",
+            true,
+        ),
+        (
+            "file:///C:/plugins/foo/%5C..%5Coutside",
+            "file:///C:/plugins/foo",
+            false,
+        ),
+    ] {
+        let path = PathUri::parse(path).expect("valid path URI");
+        let base = PathUri::parse(base).expect("valid base URI");
+        assert_eq!(path.starts_with(&base), expected);
     }
 }
 

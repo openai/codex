@@ -86,11 +86,12 @@ impl MarketplacePluginManifestFallback {
     }
 
     pub(crate) fn parse_for_listing(&self) -> Option<crate::manifest::PluginManifest> {
-        // Git sources have no plugin root before install. Parse against a synthetic absolute root,
-        // then discard path-bearing fields so listings expose metadata only.
+        // Materialized sources have no plugin root before install. Parse against a host-native
+        // synthetic absolute root, then discard path-bearing fields so listings expose metadata only.
+        let plugin_root = Path::new(if cfg!(windows) { r"C:\" } else { "/" });
         let mut manifest = crate::manifest::parse_plugin_manifest(
-            Path::new("/"),
-            Path::new("/.codex-plugin/plugin.json"),
+            plugin_root,
+            &fallback_plugin_manifest_path(plugin_root),
             &self.contents,
         )
         .ok()?;
@@ -103,6 +104,7 @@ impl MarketplacePluginManifestFallback {
         if let Some(interface) = manifest.interface.as_mut() {
             interface.composer_icon = None;
             interface.logo = None;
+            interface.logo_dark = None;
             interface.screenshots.clear();
         }
         Some(manifest)
@@ -131,6 +133,23 @@ pub enum MarketplacePluginSource {
         ref_name: Option<String>,
         sha: Option<String>,
     },
+    Npm {
+        package: String,
+        version: Option<String>,
+        registry: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NpmPackageScope {
+    Scoped,
+    Unscoped,
+}
+
+impl MarketplacePluginSource {
+    pub(crate) fn is_install_materialized(&self) -> bool {
+        matches!(self, Self::Git { .. } | Self::Npm { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,10 +530,12 @@ fn resolve_marketplace_plugin_entry(
                 None
             }
         }
-        MarketplacePluginSource::Git { .. } if manifest_fallback.has_metadata => {
+        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. }
+            if manifest_fallback.has_metadata =>
+        {
             manifest_fallback.parse_for_listing()
         }
-        MarketplacePluginSource::Git { .. } => None,
+        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
     };
     let interface = plugin_interface_with_marketplace_category(
         manifest
@@ -607,6 +628,17 @@ fn resolve_plugin_source(
             path: Some(normalize_remote_plugin_subdir(marketplace_path, &path)?),
             ref_name: normalize_optional_git_selector(&ref_name),
             sha: normalize_optional_git_selector(&sha),
+        }),
+        RawMarketplaceManifestPluginSource::Object(
+            RawMarketplaceManifestPluginSourceObject::Npm {
+                package,
+                version,
+                registry,
+            },
+        ) => Ok(MarketplacePluginSource::Npm {
+            package: normalize_npm_package(marketplace_path, &package)?,
+            version: normalize_optional_npm_version(marketplace_path, version)?,
+            registry: normalize_optional_npm_registry(marketplace_path, registry)?,
         }),
         RawMarketplaceManifestPluginSource::Unsupported(_) => {
             unreachable!("unsupported plugin sources should be filtered before resolution")
@@ -746,6 +778,118 @@ fn normalize_optional_git_selector(value: &Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn normalize_npm_package(
+    marketplace_path: &AbsolutePathBuf,
+    package: &str,
+) -> Result<String, MarketplaceError> {
+    let package = package.trim();
+    let package_scope = if package.starts_with('@') {
+        NpmPackageScope::Scoped
+    } else {
+        NpmPackageScope::Unscoped
+    };
+    let segments = if let Some(scoped_package) = package.strip_prefix('@') {
+        scoped_package.split('/').collect::<Vec<_>>()
+    } else {
+        package.split('/').collect::<Vec<_>>()
+    };
+    let expected_segments = match package_scope {
+        NpmPackageScope::Scoped => 2,
+        NpmPackageScope::Unscoped => 1,
+    };
+    if package.is_empty()
+        || segments.len() != expected_segments
+        || segments
+            .iter()
+            .any(|segment| !is_valid_npm_package_segment(segment, package_scope))
+    {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("invalid npm plugin source package: {package}"),
+        });
+    }
+    Ok(package.to_string())
+}
+
+fn is_valid_npm_package_segment(segment: &str, package_scope: NpmPackageScope) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && (package_scope == NpmPackageScope::Scoped
+            || !matches!(segment.chars().next(), Some('.' | '_')))
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+fn normalize_optional_npm_version(
+    marketplace_path: &AbsolutePathBuf,
+    version: Option<String>,
+) -> Result<Option<String>, MarketplaceError> {
+    let Some(version) = normalize_optional_npm_source_field(marketplace_path, version, "version")?
+    else {
+        return Ok(None);
+    };
+    if !is_registry_npm_version_selector(&version) {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("npm plugin source version must use the registry: {version}"),
+        });
+    }
+    Ok(Some(version))
+}
+
+fn is_registry_npm_version_selector(version: &str) -> bool {
+    version != "." && version != ".." && !version.chars().any(|ch| matches!(ch, '/' | '\\' | ':'))
+}
+
+fn normalize_optional_npm_registry(
+    marketplace_path: &AbsolutePathBuf,
+    registry: Option<String>,
+) -> Result<Option<String>, MarketplaceError> {
+    let Some(registry) =
+        normalize_optional_npm_source_field(marketplace_path, registry, "registry")?
+    else {
+        return Ok(None);
+    };
+    let parsed =
+        url::Url::parse(&registry).map_err(|_| MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("invalid npm plugin source registry: {registry}"),
+        })?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("invalid npm plugin source registry: {registry}"),
+        });
+    }
+    Ok(Some(registry))
+}
+
+fn normalize_optional_npm_source_field(
+    marketplace_path: &AbsolutePathBuf,
+    value: Option<String>,
+    field: &str,
+) -> Result<Option<String>, MarketplaceError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: format!("npm plugin source {field} must not be empty"),
+        });
+    }
+    Ok(Some(value.to_string()))
+}
+
 fn normalize_github_git_url(url: &str) -> String {
     if url.starts_with("https://github.com/") && !url.ends_with(".git") {
         format!("{url}.git")
@@ -883,6 +1027,11 @@ enum RawMarketplaceManifestPluginSourceObject {
         #[serde(rename = "ref")]
         ref_name: Option<String>,
         sha: Option<String>,
+    },
+    Npm {
+        package: String,
+        version: Option<String>,
+        registry: Option<String>,
     },
 }
 

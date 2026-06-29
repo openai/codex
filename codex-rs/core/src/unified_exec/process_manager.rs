@@ -13,8 +13,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::codex_thread::BackgroundTerminalInfo;
+use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
+use crate::exec_env::inject_permission_profile_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
@@ -26,6 +28,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -108,15 +111,19 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
 fn exec_env_policy_from_shell_policy(
     policy: &ShellEnvironmentPolicy,
 ) -> codex_exec_server::ExecEnvPolicy {
+    let mut exclude = policy
+        .exclude
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+    exclude.push(CODEX_PERMISSION_PROFILE_ENV_VAR.to_string());
+    let mut r#set = policy.r#set.clone();
+    r#set.retain(|key, _| !key.eq_ignore_ascii_case(CODEX_PERMISSION_PROFILE_ENV_VAR));
     codex_exec_server::ExecEnvPolicy {
         inherit: policy.inherit.clone(),
         ignore_default_excludes: policy.ignore_default_excludes,
-        exclude: policy
-            .exclude
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect(),
-        r#set: policy.r#set.clone(),
+        exclude,
+        r#set,
         include_only: policy
             .include_only
             .iter()
@@ -131,7 +138,10 @@ fn env_overlay_for_exec_server(
 ) -> HashMap<String, String> {
     request_env
         .iter()
-        .filter(|(key, value)| local_policy_env.get(*key) != Some(*value))
+        .filter(|(key, value)| {
+            key.as_str() == CODEX_PERMISSION_PROFILE_ENV_VAR
+                || local_policy_env.get(*key) != Some(*value)
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
@@ -143,10 +153,16 @@ fn exec_server_env_for_request(
     HashMap<String, String>,
 ) {
     if let Some(exec_server_env_config) = &request.exec_server_env_config {
-        (
-            Some(exec_server_env_config.policy.clone()),
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
-        )
+        let mut env =
+            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env);
+        if request.exec_server_managed_network.is_some() {
+            for (key, value) in &request.env {
+                if is_managed_proxy_env_var(key, value) {
+                    env.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (Some(exec_server_env_config.policy.clone()), env)
     } else {
         (None, request.env.clone())
     }
@@ -175,6 +191,7 @@ fn exec_server_params_for_request(
         arg0: request.arg0.clone(),
         sandbox: request.exec_server_sandbox.clone(),
         enforce_managed_network: request.exec_server_enforce_managed_network,
+        managed_network: request.exec_server_managed_network.clone(),
     }
 }
 
@@ -1102,6 +1119,8 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
+        let active_permission_profile = context.turn.config.permissions.active_permission_profile();
+        inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
             policy: exec_env_policy_from_shell_policy(

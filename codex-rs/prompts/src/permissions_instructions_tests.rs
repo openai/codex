@@ -176,26 +176,6 @@ fn includes_request_permissions_tool_instructions_for_unless_trusted_when_enable
 }
 
 #[test]
-fn includes_request_permissions_tool_instructions_for_on_failure_when_enabled() {
-    let instructions = PermissionsInstructions::from_permissions_with_network(
-        SandboxMode::WorkspaceWrite,
-        NetworkAccess::Enabled,
-        PermissionsPromptConfig {
-            approval_policy: AskForApproval::OnFailure,
-            approvals_reviewer: ApprovalsReviewer::User,
-            exec_policy: &Policy::empty(),
-            exec_permission_approvals_enabled: false,
-            request_permissions_tool_enabled: true,
-        },
-        /*writable_roots*/ None,
-    );
-
-    let text = instructions.body();
-    assert!(text.contains("`approval_policy` is `on-failure`"));
-    assert!(text.contains("# request_permissions Tool"));
-}
-
-#[test]
 fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
     let instructions = PermissionsInstructions::from_permissions_with_network(
         SandboxMode::WorkspaceWrite,
@@ -257,98 +237,17 @@ fn on_request_includes_tool_guidance_alongside_inline_permission_guidance_when_b
 
 #[test]
 fn auto_review_approvals_append_auto_review_specific_guidance() {
-    let mut exec_policy = Policy::empty();
-    exec_policy
-        .add_prefix_rule(&["git".to_string(), "pull".to_string()], Decision::Allow)
-        .expect("add rule");
     let text = approval_text(
         AskForApproval::OnRequest,
         ApprovalsReviewer::AutoReview,
-        &exec_policy,
+        &Policy::empty(),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
 
     assert!(text.contains("`approvals_reviewer` is `auto_review`"));
-    assert!(text.contains("materially safer alternative"));
     assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
-    assert!(text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
-    assert!(text.contains(
-        "When unsure, prefer requesting escalation unnecessarily over failing to request it when needed"
-    ));
-    assert!(
-        text.contains(
-            "Request escalation for commands that need write access outside writable roots"
-        )
-    );
-    assert!(text.contains(
-        "Request escalation for git operations that may write lock files, such as updating the index or refs"
-    ));
-    assert!(!text.contains("Request escalation for GUI commands"));
-    assert!(!text.contains("Use escalation when it is the direct or most reliable way"));
-    assert!(!text.contains("Do not spend extra turns running likely-to-fail sandbox probes first"));
-    assert!(text.contains("Do not include a `prefix_rule` parameter."));
-    assert!(text.contains(
-        "Request escalation for commands that may need network access, including HTTP calls, package registries, internal services, data-service APIs, remote queries, data fetches, or live probes"
-    ));
-    assert!(text.contains(
-        "Request escalation for commands that may need remote authentication, cluster, cloud, or database access"
-    ));
-    assert!(text.contains(
-        "Request escalation for commands that may need process, cache, or other environment access outside the sandbox"
-    ));
-    assert!(
-        text.contains(
-            "including DNS, connection, authentication, retry, or service endpoint errors"
-        )
-    );
-    assert!(text.contains(
-        "Request escalation before potentially destructive actions, such as `rm` or `git reset`"
-    ));
-    assert!(text.contains(
-        "If a command may be hanging on sandbox-blocked access, stop after a short timeout and rerun with `require_escalated`"
-    ));
-    assert!(!text.contains("Be judicious with escalating"));
-    assert!(text.contains("Approved command prefixes"));
-    assert!(text.contains(r#"["git", "pull"]"#));
-    assert!(!text.contains("prefix_rule guidance"));
-}
-
-#[test]
-fn normal_on_request_keeps_user_approval_wording() {
-    let text = approval_text(
-        AskForApproval::OnRequest,
-        ApprovalsReviewer::User,
-        &Policy::empty(),
-        /*exec_permission_approvals_enabled*/ false,
-        /*request_permissions_tool_enabled*/ false,
-    );
-
-    assert!(text.contains("approved by the user"));
-    assert!(text.contains("Be judicious with escalating"));
-    assert!(!text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
-}
-
-#[test]
-fn auto_review_on_request_with_inline_permission_requests_keeps_suffix() {
-    let text = approval_text(
-        AskForApproval::OnRequest,
-        ApprovalsReviewer::AutoReview,
-        &Policy::empty(),
-        /*exec_permission_approvals_enabled*/ true,
-        /*request_permissions_tool_enabled*/ false,
-    );
-
-    assert!(text.contains("with_additional_permissions"));
-    assert!(text.contains("`approvals_reviewer` is `auto_review`"));
     assert!(text.contains("materially safer alternative"));
-    assert!(!text.contains(
-        "When the sandbox is likely to block a command needed for the task, request escalation up front"
-    ));
 }
 
 #[test]

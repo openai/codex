@@ -51,6 +51,7 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
+use crate::managed_new_thread_defaults::apply_managed_new_thread_defaults;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -88,7 +89,6 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -795,7 +795,18 @@ impl App {
             None => app_server.bootstrap(&config).await?,
         };
         let bootstrap_ms = bootstrap.duration.as_millis();
-        let mut model = bootstrap.default_model;
+        if matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        ) {
+            apply_managed_new_thread_defaults(
+                &mut config,
+                app_server.managed_new_thread_defaults(),
+                &cli_kv_overrides,
+                &harness_overrides,
+            );
+        }
+        let mut model = config.model.clone().unwrap_or(bootstrap.default_model);
         let available_models = bootstrap.available_models;
         let remote_connection = crate::status::remote_connection::remote_connection_status_value(
             &app_server_target,

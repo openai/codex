@@ -77,6 +77,7 @@ pub(super) use codex_app_server_protocol::MarketplaceUpgradeResponse;
 pub(super) use codex_app_server_protocol::McpServerStartupState;
 pub(super) use codex_app_server_protocol::McpServerStatusDetail;
 pub(super) use codex_app_server_protocol::McpServerStatusUpdatedNotification;
+pub(super) use codex_app_server_protocol::ModelSafetyBufferingUpdatedNotification;
 pub(super) use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 pub(super) use codex_app_server_protocol::ModelVerificationNotification;
 pub(super) use codex_app_server_protocol::NonSteerableTurnKind;
@@ -244,6 +245,8 @@ mod history_replay;
 mod mcp_startup;
 mod permissions;
 mod plan_mode;
+#[path = "tests/plugin_catalog_tests.rs"]
+mod plugin_catalog;
 mod popups_and_settings;
 mod review_mode;
 mod side;

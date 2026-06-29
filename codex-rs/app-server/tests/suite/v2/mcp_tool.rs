@@ -10,6 +10,8 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
+use codex_app_server_protocol::CapabilityRootLocation;
+use codex_app_server_protocol::EnvironmentAddResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -22,15 +24,20 @@ use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
+use codex_utils_path_uri::PathUri;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use core_test_support::responses;
+use futures::SinkExt;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::BooleanSchema;
@@ -56,8 +63,13 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::Message;
+
+use super::exec_server_test_support::accept_exec_server_environment;
+use super::exec_server_test_support::read_exec_server_json;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_SERVER_NAME: &str = "tool_server";
@@ -68,6 +80,7 @@ const ELICITATION_MESSAGE: &str = "Allow this request?";
 const URL_ELICITATION_TRIGGER_MESSAGE: &str = "auth";
 const URL_ELICITATION_MESSAGE: &str = "Sign in to GitHub to continue.";
 const URL_ELICITATION_URL: &str = "https://github.example/login/device";
+const LATE_ENVIRONMENT_ID: &str = "late-environment";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_returns_tool_result() -> Result<()> {
@@ -94,11 +107,11 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -212,11 +225,11 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
@@ -298,6 +311,145 @@ url = "{mcp_server_url}/mcp"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_server_elicitation_survives_environment_runtime_refresh() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let exec_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let exec_server_url = format!("ws://{}", exec_listener.local_addr()?);
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::from([(Feature::DeferredExecutor, true)]),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.{TEST_SERVER_NAME}]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let add_environment_id = mcp
+        .send_raw_request(
+            "environment/add",
+            Some(json!({
+                "environmentId": LATE_ENVIRONMENT_ID,
+                "execServerUrl": exec_server_url,
+                "connectTimeoutMs": 10_000,
+            })),
+        )
+        .await?;
+    let add_environment_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(add_environment_id)),
+    )
+    .await??;
+    let _: EnvironmentAddResponse = to_response(add_environment_response)?;
+
+    let capability_root = TempDir::new()?;
+    let thread_start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            environments: Some(vec![TurnEnvironmentParams {
+                environment_id: LATE_ENVIRONMENT_ID.to_string(),
+                cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    capability_root.path().to_path_buf(),
+                )?
+                .into(),
+            }]),
+            selected_capability_roots: Some(vec![SelectedCapabilityRoot {
+                id: "late-plugin@1".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: LATE_ENVIRONMENT_ID.to_string(),
+                    path: PathUri::from_host_native_path(capability_root.path())?,
+                },
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    let tool_call_request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread.id.clone(),
+            server: TEST_SERVER_NAME.to_string(),
+            tool: TEST_TOOL_NAME.to_string(),
+            arguments: Some(json!({"message": ELICITATION_TRIGGER_MESSAGE})),
+            meta: None,
+        })
+        .await?;
+    let server_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::McpServerElicitationRequest { request_id, .. } = server_request else {
+        panic!("expected MCP elicitation request, got: {server_request:?}");
+    };
+
+    let (filesystem_request_tx, filesystem_request_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let exec_server_handle = tokio::spawn(serve_environment_until_shutdown(
+        exec_listener,
+        filesystem_request_tx,
+        shutdown_rx,
+    ));
+    let mut filesystem_request_rx = filesystem_request_rx;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let status_request_id = mcp
+                .send_raw_request("mcpServerStatus/list", Some(json!({"threadId": thread.id})))
+                .await?;
+            mcp.read_stream_until_response_message(RequestId::Integer(status_request_id))
+                .await?;
+            if filesystem_request_rx.try_recv().is_ok() {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({"confirmed": true})),
+            meta: None,
+        })?,
+    )
+    .await?;
+    let tool_call_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(tool_call_request_id)),
+    )
+    .await??;
+    let response: McpServerToolCallResponse = to_response(tool_call_response)?;
+    assert_eq!(response.content[0].get("text"), Some(&json!("accepted")));
+
+    let _ = shutdown_tx.send(());
+    exec_server_handle.await??;
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_server_tool_call_forwards_url_elicitation() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
@@ -322,11 +474,11 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
@@ -442,11 +594,11 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -681,6 +833,45 @@ async fn start_mcp_server() -> Result<(String, JoinHandle<()>)> {
     });
 
     Ok((format!("http://{addr}"), handle))
+}
+
+async fn serve_environment_until_shutdown(
+    listener: TcpListener,
+    filesystem_request_tx: oneshot::Sender<()>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+) -> Result<()> {
+    let mut websocket = accept_exec_server_environment(
+        listener,
+        json!({"shell": {"name": "zsh", "path": "/bin/zsh"}}),
+    )
+    .await?;
+
+    let mut filesystem_request_tx = Some(filesystem_request_tx);
+    loop {
+        let request = tokio::select! {
+            request = read_exec_server_json(&mut websocket) => request?,
+            _ = &mut shutdown_rx => return Ok(()),
+        };
+        if request["method"]
+            .as_str()
+            .is_some_and(|method| method.starts_with("fs/"))
+            && let Some(tx) = filesystem_request_tx.take()
+        {
+            let _ = tx.send(());
+        }
+        if request.get("id").is_some() {
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "id": request["id"],
+                        "error": {"code": -32004, "message": "not found"},
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await?;
+        }
+    }
 }
 
 async fn wait_for_mcp_tool_call_completed(

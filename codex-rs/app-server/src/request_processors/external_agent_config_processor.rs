@@ -38,6 +38,7 @@ use codex_app_server_protocol::McpServerMigration;
 use codex_app_server_protocol::MigrationDetails;
 use codex_app_server_protocol::PluginsMigration;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SkillMigration;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::ThreadManager;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
@@ -160,6 +161,11 @@ impl ExternalAgentConfigRequestProcessor {
                                 marketplace_name: plugin.marketplace_name,
                                 plugin_names: plugin.plugin_names,
                             })
+                            .collect(),
+                        skills: details
+                            .skills
+                            .into_iter()
+                            .map(|skill| SkillMigration { name: skill.name })
                             .collect(),
                         sessions: details
                             .sessions
@@ -489,6 +495,11 @@ impl ExternalAgentConfigRequestProcessor {
                                             plugin_names: plugin.plugin_names,
                                         }
                                     })
+                                    .collect(),
+                                skills: details
+                                    .skills
+                                    .into_iter()
+                                    .map(|skill| CoreNamedMigration { name: skill.name })
                                     .collect(),
                                 sessions: details
                                     .sessions

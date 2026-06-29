@@ -21,6 +21,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn::built_tools;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionImplementation;
@@ -55,7 +56,7 @@ const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     client_session: &mut ModelClientSession,
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
@@ -63,7 +64,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 ) -> CodexResult<()> {
     run_remote_compact_task_inner(
         &sess,
-        &turn_context,
+        &step_context,
         Some(client_session),
         initial_context_injection,
         CompactionTrigger::Auto,
@@ -77,6 +78,8 @@ pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    // Standalone compaction is its own request boundary, so it captures a fresh step.
+    let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         trace_id: turn_context.trace_id.clone(),
@@ -88,7 +91,7 @@ pub(crate) async fn run_remote_compact_task(
 
     run_remote_compact_task_inner(
         &sess,
-        &turn_context,
+        &step_context,
         /*client_session*/ None,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,
@@ -100,13 +103,14 @@ pub(crate) async fn run_remote_compact_task(
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     trigger: CompactionTrigger,
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
     let compaction_metadata = CompactionTurnMetadata::new(
         trigger,
         reason,
@@ -144,7 +148,7 @@ async fn run_remote_compact_task_inner(
     }
     let result = run_remote_compact_task_inner_impl(
         sess,
-        turn_context,
+        step_context,
         client_session,
         initial_context_injection,
         compaction_metadata,
@@ -165,28 +169,29 @@ async fn run_remote_compact_task_inner(
     attempt
         .track(sess.as_ref(), status, codex_error, analytics_details)
         .await;
-    if matches!(&result, Err(CodexErr::TurnAborted)) {
-        return result;
+    match result {
+        Ok(()) => Ok(()),
+        Err(err @ CodexErr::TurnAborted) => Err(err),
+        Err(err) => {
+            sess.track_turn_codex_error(turn_context, &err);
+            let event = EventMsg::Error(
+                err.to_error_event(Some("Error running remote compact task".to_string())),
+            );
+            sess.send_event(turn_context, event).await;
+            Err(err)
+        }
     }
-    if let Err(err) = result {
-        sess.track_turn_codex_error(turn_context, &err);
-        let event = EventMsg::Error(
-            err.to_error_event(Some("Error running remote compact task".to_string())),
-        );
-        sess.send_event(turn_context, event).await;
-        return Err(err);
-    }
-    Ok(())
 }
 
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
+    step_context: &Arc<StepContext>,
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
         turn_context.sub_id.as_str(),
@@ -229,14 +234,12 @@ async fn run_remote_compact_task_inner_impl(
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
         sess.as_ref(),
-        turn_context.as_ref(),
+        step_context.as_ref(),
         &CancellationToken::new(),
     )
     .await?;
     let mut input = prompt_input.clone();
-    input.push(ResponseItem::CompactionTrigger {
-        internal_chat_message_metadata_passthrough: None,
-    });
+    input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -295,17 +298,19 @@ async fn run_remote_compact_task_inner_impl(
         build_v2_compacted_history(&prompt_input, compaction_output);
     analytics_details.retained_image_count = Some(retained_images);
     let (new_window_number, new_window_ids) = sess.advance_auto_compact_window().await;
-    let new_history = process_compacted_history(
+    let (new_history, world_state_baseline) = process_compacted_history(
         sess.as_ref(),
         turn_context.as_ref(),
         compacted_history,
-        initial_context_injection,
+        &initial_context_injection,
     )
     .await;
 
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage(_) => {
+            Some(turn_context.to_turn_context_item())
+        }
     };
     let compacted_item = CompactedItem {
         message: String::new(),
@@ -323,6 +328,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         reference_context_item,
+        world_state_baseline,
         compacted_item,
     )
     .await;

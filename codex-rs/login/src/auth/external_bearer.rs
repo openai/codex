@@ -2,7 +2,7 @@ use super::manager::ExternalAuth;
 use super::manager::ExternalAuthFuture;
 use super::manager::ExternalAuthRefreshContext;
 use super::manager::ExternalAuthTokens;
-use codex_app_server_protocol::AuthMode;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use std::fmt;
 use std::io;

@@ -8,6 +8,7 @@ pub(crate) mod images;
 pub(crate) mod provider;
 pub(crate) mod rate_limits;
 pub(crate) mod requests;
+pub(crate) mod safety_buffering;
 pub(crate) mod search;
 pub(crate) mod sse;
 pub(crate) mod telemetry;
@@ -18,6 +19,7 @@ pub use codex_client::ReqwestTransport;
 pub use codex_client::TransportError;
 
 pub use crate::api_bridge::map_api_error;
+pub use crate::auth::AgentIdentityTelemetry;
 pub use crate::auth::AuthError;
 pub use crate::auth::AuthHeaderTelemetry;
 pub use crate::auth::AuthProvider;
