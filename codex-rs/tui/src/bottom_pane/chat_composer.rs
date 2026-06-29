@@ -3595,13 +3595,11 @@ impl ChatComposer {
         let text = self.draft.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
         let first_line = &text[..first_line_end];
+        // Keep an explicitly dismissed popup closed until the command token changes.
         let command_token = slash_input::command_popup_filter_text(first_line, /*cursor*/ 0);
         if let Some(command_token) = command_token.as_deref()
             && self.popups.dismissed_command_token.as_deref() == Some(command_token)
         {
-            if matches!(self.popups.active, ActivePopup::Command(_)) {
-                self.popups.active = ActivePopup::None;
-            }
             return;
         }
         self.popups.dismissed_command_token = None;
