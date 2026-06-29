@@ -436,7 +436,7 @@ impl App {
             };
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
-        self.drain_active_thread_events(tui).await?;
+        self.drain_active_thread_events().await?;
         self.refresh_pending_thread_approvals().await;
 
         Ok(())

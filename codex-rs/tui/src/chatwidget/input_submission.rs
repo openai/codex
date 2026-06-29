@@ -390,7 +390,7 @@ impl ChatWidget {
         }
 
         if render_in_history {
-            self.record_cancel_edit_candidate(UserMessage {
+            self.record_safety_buffering_prompt(UserMessage {
                 text: text.clone(),
                 local_images: local_images.clone(),
                 remote_image_urls: remote_image_urls.clone(),
@@ -413,7 +413,7 @@ impl ChatWidget {
             )
         });
         if let Some(display) = display_user_message {
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, /*turn_id*/ None);
         }
 
         self.transcript.needs_final_message_separator = false;

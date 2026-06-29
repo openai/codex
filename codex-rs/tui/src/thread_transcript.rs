@@ -46,68 +46,72 @@ pub(crate) fn thread_to_transcript_cells(
 ) -> TranscriptCells {
     let cwd = thread.cwd.as_path();
     let mut cells: TranscriptCells = Vec::new();
-    for item in thread.turns.iter().flat_map(|turn| turn.items.iter()) {
-        match item {
-            ThreadItem::UserMessage {
-                id,
-                client_id,
-                content,
-            } => {
-                let item = UserMessageItem {
-                    id: id.clone(),
-                    client_id: client_id.clone(),
-                    content: content
-                        .iter()
-                        .cloned()
-                        .map(codex_app_server_protocol::UserInput::into_core)
-                        .collect(),
-                };
-                cells.push(Arc::new(UserHistoryCell {
-                    message: item.message(),
-                    text_elements: item.text_elements(),
-                    local_image_paths: item.local_image_paths(),
-                    remote_image_urls: item.image_urls(),
-                }));
-            }
-            ThreadItem::AgentMessage { text, .. } => {
-                let parsed = parse_assistant_markdown(text, cwd);
-                if !parsed.visible_markdown.trim().is_empty() {
-                    cells.push(Arc::new(AgentMarkdownCell::new(
-                        parsed.visible_markdown,
-                        cwd,
-                    )));
+    for turn in &thread.turns {
+        for item in &turn.items {
+            match item {
+                ThreadItem::UserMessage {
+                    id,
+                    client_id,
+                    content,
+                } => {
+                    let item = UserMessageItem {
+                        id: id.clone(),
+                        client_id: client_id.clone(),
+                        content: content
+                            .iter()
+                            .cloned()
+                            .map(codex_app_server_protocol::UserInput::into_core)
+                            .collect(),
+                    };
+                    cells.push(Arc::new(UserHistoryCell {
+                        turn_id: turn.is_forkable.then(|| turn.id.clone()),
+                        message: item.message(),
+                        text_elements: item.text_elements(),
+                        local_image_paths: item.local_image_paths(),
+                        remote_image_urls: item.image_urls(),
+                    }));
                 }
-            }
-            ThreadItem::Plan { text, .. } => {
-                if !text.trim().is_empty() {
-                    cells.push(Arc::new(crate::history_cell::new_proposed_plan(
-                        text.clone(),
-                        cwd,
-                    )));
+                ThreadItem::AgentMessage { text, .. } => {
+                    let parsed = parse_assistant_markdown(text, cwd);
+                    if !parsed.visible_markdown.trim().is_empty() {
+                        cells.push(Arc::new(AgentMarkdownCell::new(
+                            parsed.visible_markdown,
+                            cwd,
+                        )));
+                    }
                 }
-            }
-            ThreadItem::Reasoning {
-                summary, content, ..
-            } => {
-                let text = if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
-                    && !content.is_empty()
-                {
-                    content.join("\n\n")
-                } else {
-                    summary.join("\n\n")
-                };
-                if !text.trim().is_empty() {
-                    cells.push(Arc::new(ReasoningSummaryCell::new(
-                        "Reasoning".to_string(),
-                        text,
-                        cwd,
-                        /*transcript_only*/ false,
-                    )));
+                ThreadItem::Plan { text, .. } => {
+                    if !text.trim().is_empty() {
+                        cells.push(Arc::new(crate::history_cell::new_proposed_plan(
+                            text.clone(),
+                            cwd,
+                        )));
+                    }
                 }
-            }
-            other => {
-                if let Some(cell) = fallback_transcript_cell(other) {
-                    cells.push(Arc::new(cell));
+                ThreadItem::Reasoning {
+                    summary, content, ..
+                } => {
+                    let text =
+                        if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
+                            && !content.is_empty()
+                        {
+                            content.join("\n\n")
+                        } else {
+                            summary.join("\n\n")
+                        };
+                    if !text.trim().is_empty() {
+                        cells.push(Arc::new(ReasoningSummaryCell::new(
+                            "Reasoning".to_string(),
+                            text,
+                            cwd,
+                            /*transcript_only*/ false,
+                        )));
+                    }
+                }
+                other => {
+                    if let Some(cell) = fallback_transcript_cell(other) {
+                        cells.push(Arc::new(cell));
+                    }
                 }
             }
         }

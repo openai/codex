@@ -13,7 +13,7 @@ expression: terminal.backend()
 "  / for commands                             ! for shell commands                                   "
 "  shift + enter for newline                  tab to queue message                                   "
 "  @ for file paths                           ctrl + v to paste images                               "
-"  ctrl + g to edit in external editor        esc esc to edit previous message                       "
+"  ctrl + g to edit in external editor        esc esc to fork after a turn                           "
 "  ctrl + r search history                    ctrl + c to exit                                       "
 "  ⌥ + , reasoning down                       ⌥ + . reasoning up                                     "
 "  ctrl + t to view transcript                                                                       "

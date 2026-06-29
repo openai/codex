@@ -275,8 +275,8 @@ impl ChatWidget {
 
     /// Drops transient and completed token cards that must no longer update.
     ///
-    /// Late background responses cannot mutate cards after a transcript reset,
-    /// backtrack, or replacement flow clears this widget-owned state.
+    /// Late background responses cannot mutate cards after a transcript reset or thread
+    /// replacement flow clears this widget-owned state.
     pub(crate) fn clear_pending_token_activity_refreshes(&mut self) {
         let cleared_refresh = self.refreshing_token_activity_output.take().is_some();
         let cleared_completed = self.completed_token_activity_output.take().is_some();

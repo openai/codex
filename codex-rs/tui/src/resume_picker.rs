@@ -5780,44 +5780,76 @@ session_picker_view = "dense"
             agent_role: None,
             git_info: None,
             name: None,
-            turns: vec![codex_app_server_protocol::Turn {
-                id: String::from("turn-1"),
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
-                items: vec![
-                    ThreadItem::UserMessage {
-                        id: String::from("user-1"),
+            turns: vec![
+                codex_app_server_protocol::Turn {
+                    id: String::from("legacy-turn"),
+                    is_forkable: false,
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
+                    items: vec![ThreadItem::UserMessage {
+                        id: String::from("legacy-user"),
                         client_id: None,
                         content: vec![codex_app_server_protocol::UserInput::Text {
-                            text: String::from("hello from user"),
+                            text: String::from("legacy prompt"),
                             text_elements: Vec::new(),
                         }],
-                    },
-                    ThreadItem::AgentMessage {
-                        id: String::from("agent-1"),
-                        text: String::from("hello from assistant"),
-                        phase: None,
-                        memory_citation: None,
-                    },
-                    ThreadItem::Plan {
-                        id: String::from("plan-1"),
-                        text: String::from("1. Do the thing"),
-                    },
-                ],
-                status: codex_app_server_protocol::TurnStatus::Completed,
-                error: None,
-                started_at: None,
-                completed_at: None,
-                duration_ms: None,
-            }],
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+                codex_app_server_protocol::Turn {
+                    id: String::from("turn-1"),
+                    is_forkable: true,
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: String::from("user-1"),
+                            client_id: None,
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: String::from("hello from user"),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: String::from("agent-1"),
+                            text: String::from("hello from assistant"),
+                            phase: None,
+                            memory_citation: None,
+                        },
+                        ThreadItem::Plan {
+                            id: String::from("plan-1"),
+                            text: String::from("1. Do the thing"),
+                        },
+                    ],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            ],
         };
 
-        let rendered = thread_to_transcript_cells(&thread, RawReasoningVisibility::Visible)
-            .into_iter()
+        let cells = thread_to_transcript_cells(&thread, RawReasoningVisibility::Visible);
+        let user_turn_ids = cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<crate::history_cell::UserHistoryCell>()
+            })
+            .map(|cell| cell.turn_id.as_deref())
+            .collect::<Vec<_>>();
+        let rendered = cells
+            .iter()
             .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
 
+        assert_eq!(user_turn_ids, vec![None, Some("turn-1")]);
+        assert!(rendered.contains("legacy prompt"));
         assert!(rendered.contains("hello from user"));
         assert!(rendered.contains("hello from assistant"));
         assert!(rendered.contains("Proposed Plan"));
@@ -5854,6 +5886,7 @@ session_picker_view = "dense"
             name: None,
             turns: vec![codex_app_server_protocol::Turn {
                 id: String::from("turn-1"),
+                is_forkable: true,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::Reasoning {
                     id: String::from("reasoning-1"),
@@ -5915,6 +5948,7 @@ session_picker_view = "dense"
             name: None,
             turns: vec![codex_app_server_protocol::Turn {
                 id: String::from("turn-1"),
+                is_forkable: true,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::Reasoning {
                     id: String::from("reasoning-1"),

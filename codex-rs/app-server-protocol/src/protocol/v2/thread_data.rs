@@ -231,6 +231,13 @@ pub struct Thread {
 pub struct Turn {
     /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
+    /// Whether this turn has a persisted canonical boundary that can be used as
+    /// `lastTurnId` for `thread/fork` once the turn is no longer in progress.
+    ///
+    /// Legacy rollouts can contain synthetic turns without a stable raw rollout
+    /// boundary. Those turns remain visible in history but are not forkable.
+    #[serde(default)]
+    pub is_forkable: bool,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,
     /// Describes how much of `items` has been loaded for this turn.

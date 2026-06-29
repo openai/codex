@@ -16,6 +16,9 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
+use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
+use codex_app_server_protocol::UserInput as AppServerUserInput;
+use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
@@ -141,7 +144,6 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -416,13 +418,25 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
 }
 
 #[tokio::test]
-async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted() {
-    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+async fn interrupting_regular_turn_waiting_on_startup_prewarm_persists_user_item() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
     let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
         let _ = startup_prewarm_rx.await;
         Ok(test_model_client_session())
     });
+    let prompt = "persist this interrupted prompt";
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: prompt.to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
 
     sess.set_session_startup_prewarm(
         crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
@@ -432,12 +446,8 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         ),
     )
     .await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        crate::tasks::RegularTask::new(),
-    )
-    .await;
+    sess.spawn_task(Arc::clone(&tc), input, crate::tasks::RegularTask::new())
+        .await;
 
     let first = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
         .await
@@ -448,31 +458,120 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) if turn_id == tc.sub_id
     ));
 
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        sess.abort_all_tasks(TurnAbortReason::Interrupted),
+    )
+    .await
+    .expect("interrupt should not wait for startup hooks");
 
-    let marker_evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected turn aborted marker event")
-        .expect("channel open");
-    assert!(matches!(marker_evt.msg, EventMsg::RawResponseItem(_)));
-
-    let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected turn aborted event")
-        .expect("channel open");
-    let EventMsg::TurnAborted(TurnAbortedEvent {
-        turn_id,
-        reason,
-        completed_at,
-        duration_ms,
-    }) = second.msg
-    else {
-        panic!("expected turn aborted event");
+    let turn_aborted = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("expected turn aborted event")
+            .expect("channel open");
+        if let EventMsg::TurnAborted(event) = event.msg {
+            break event;
+        }
     };
-    assert_eq!(turn_id, Some(tc.sub_id.clone()));
-    assert_eq!(reason, TurnAbortReason::Interrupted);
-    assert!(completed_at.is_some());
-    assert!(duration_ms.is_some());
+    assert_eq!(turn_aborted.turn_id, Some(tc.sub_id.clone()));
+    assert_eq!(turn_aborted.reason, TurnAbortReason::Interrupted);
+    assert!(turn_aborted.completed_at.is_some());
+    assert!(turn_aborted.duration_ms.is_some());
+
+    let is_turn_aborted_marker = |item: &ResponseItem| {
+        let ResponseItem::Message { content, .. } = item else {
+            return false;
+        };
+        content.iter().any(|content_item| {
+            let ContentItem::InputText { text } = content_item else {
+                return false;
+            };
+            TurnAborted::matches_text(text)
+        })
+    };
+    let live_history = strip_metadata_from_items(sess.clone_history().await.raw_items());
+    assert!(!live_history.contains(&user_message(prompt)));
+    assert_eq!(
+        live_history
+            .iter()
+            .filter(|item| is_turn_aborted_marker(item))
+            .count(),
+        1
+    );
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let user_message_positions = resumed
+        .history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::UserMessage(event)) if event.message == prompt
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let turn_aborted_positions = resumed
+        .history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnAborted(event))
+                    if event.turn_id.as_deref() == Some(tc.sub_id.as_str())
+                        && event.reason == TurnAbortReason::Interrupted
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(user_message_positions.len(), 1);
+    assert_eq!(turn_aborted_positions.len(), 1);
+    assert!(user_message_positions[0] < turn_aborted_positions[0]);
+    assert!(!resumed.history.iter().any(
+        |item| matches!(item, RolloutItem::ResponseItem(item) if item == &user_message(prompt))
+    ));
+
+    let turns = build_turns_from_rollout_items(&resumed.history);
+    let interrupted_turn = turns
+        .iter()
+        .find(|turn| turn.id == tc.sub_id)
+        .expect("interrupted turn should be reconstructed");
+    let transcript_prompts = interrupted_turn
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            AppServerThreadItem::UserMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(transcript_prompts.len(), 1);
+    assert!(matches!(
+        transcript_prompts[0].as_slice(),
+        [AppServerUserInput::Text { text, .. }] if text == prompt
+    ));
+
+    let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(resumed))
+        .await;
+    let resumed_history =
+        strip_metadata_from_items(resumed_session.clone_history().await.raw_items());
+    assert!(!resumed_history.contains(&user_message(prompt)));
+    assert_eq!(
+        resumed_history
+            .iter()
+            .filter(|item| is_turn_aborted_marker(item))
+            .count(),
+        1
+    );
 }
 
 fn test_model_client_session() -> crate::client::ModelClientSession {

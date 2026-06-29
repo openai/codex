@@ -2,4 +2,4 @@
 source: tui/src/app_backtrack.rs
 expression: rendered
 ---
-• No previous message to edit.
+• No completed turn to fork from.

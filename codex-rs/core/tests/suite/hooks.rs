@@ -22,6 +22,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::fs_wait;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
@@ -255,6 +256,43 @@ if payload.get("prompt") == {blocked_prompt_json}:
     });
 
     fs::write(&script_path, script).context("write user prompt submit hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_blocking_user_prompt_submit_hook(home: &Path) -> Result<()> {
+    let script_path = home.join("blocking_user_prompt_submit_hook.py");
+    let started_path = home.join("blocking_user_prompt_submit_hook.started");
+    let release_path = home.join("blocking_user_prompt_submit_hook.release");
+    let script = format!(
+        r#"from pathlib import Path
+import json
+import sys
+import time
+
+json.load(sys.stdin)
+Path(r"{started_path}").touch()
+release_path = Path(r"{release_path}")
+while not release_path.exists():
+    time.sleep(0.01)
+print(json.dumps({{}}))
+"#,
+        started_path = started_path.display(),
+        release_path = release_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "waiting in user prompt submit hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(script_path, script).context("write blocking user prompt submit hook")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -919,6 +957,24 @@ fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
         }
     }
     Ok(texts)
+}
+
+fn rollout_user_message_event_texts(text: &str) -> Result<Vec<String>> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let rollout: Result<RolloutLine> =
+                serde_json::from_str(line).context("parse rollout line");
+            match rollout {
+                Ok(RolloutLine {
+                    item: RolloutItem::EventMsg(EventMsg::UserMessage(event)),
+                    ..
+                }) => Some(Ok(event.message)),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            }
+        })
+        .collect()
 }
 
 fn request_hook_prompt_texts(
@@ -1753,6 +1809,14 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
         "second request should include the accepted prompt",
     );
 
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = fs::read_to_string(rollout_path)?;
+    assert_eq!(
+        rollout_user_message_event_texts(&rollout_text)?,
+        vec!["second prompt".to_string()],
+        "blocked prompts should not become transcript user items",
+    );
+
     let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 2);
     assert_eq!(
@@ -1775,6 +1839,61 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
             .as_str()
             .is_some_and(|turn_id| !turn_id.is_empty())),
         "blocked and accepted prompt hooks should both receive a non-empty turn_id",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interrupt_during_user_prompt_submit_hook_persists_one_transcript_item() -> Result<()> {
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_blocking_user_prompt_submit_hook(home)
+                .expect("failed to write blocking user prompt submit hook fixture");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+    let prompt = "persist the prompt interrupted during its hook";
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    fs_wait::wait_for_path_exists(
+        test.codex_home_path()
+            .join("blocking_user_prompt_submit_hook.started"),
+        Duration::from_secs(5),
+    )
+    .await?;
+
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    fs::write(
+        test.codex_home_path()
+            .join("blocking_user_prompt_submit_hook.release"),
+        b"release",
+    )?;
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = fs::read_to_string(rollout_path)?;
+    assert_eq!(
+        rollout_user_message_event_texts(&rollout_text)?,
+        vec![prompt.to_string()],
     );
 
     Ok(())

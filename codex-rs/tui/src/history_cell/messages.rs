@@ -2,8 +2,13 @@
 
 use super::*;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct UserHistoryCell {
+    /// Canonical app-server turn containing this user message.
+    ///
+    /// Locally rendered prompts begin without an id and are anchored when the matching
+    /// `turn/started` notification arrives. Steers and replayed prompts are anchored at creation.
+    pub(crate) turn_id: Option<String>,
     pub message: String,
     pub text_elements: Vec<TextElement>,
     #[allow(dead_code)]
@@ -459,12 +464,14 @@ impl HistoryCell for StreamingAgentTailCell {
     }
 }
 pub(crate) fn new_user_prompt(
+    turn_id: Option<String>,
     message: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
     remote_image_urls: Vec<String>,
 ) -> UserHistoryCell {
     UserHistoryCell {
+        turn_id,
         message,
         text_elements,
         local_image_paths,

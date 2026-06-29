@@ -4,7 +4,7 @@
 //! entry, Ctrl-L clear, external editor launch, and agent navigation shortcuts.
 
 use super::*;
-use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use crate::app_backtrack::SIDE_FORK_PREVIOUS_UNAVAILABLE_MESSAGE;
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -271,7 +271,7 @@ impl App {
     pub(super) fn reject_side_backtrack_esc(&mut self) {
         self.reset_backtrack_state();
         self.chat_widget
-            .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
+            .add_error_message(SIDE_FORK_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
     }
 
     fn app_keymap_shortcuts_available(&self) -> bool {
