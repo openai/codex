@@ -53,7 +53,12 @@ impl NeutralGitCwd {
         Ok(Self { directory })
     }
 
-    pub(crate) fn configure(&self, command: &mut Command) {
+    #[cfg(test)]
+    fn from_prebuilt_directory(directory: TempDir) -> Self {
+        Self { directory }
+    }
+
+    pub(crate) fn configure_transport_command(&self, command: &mut Command) {
         sanitize_repository_environment(command);
         command
             .current_dir(self.directory.path())
@@ -62,6 +67,9 @@ impl NeutralGitCwd {
 }
 
 fn initialize_empty_repository(root: &std::path::Path) -> std::io::Result<()> {
+    // Build the discovery boundary without invoking Git. Running `git init`
+    // before this repository exists could rediscover and honor a hostile
+    // parent repository, which is exactly the behavior this type prevents.
     let git_dir = root.join(".git");
     std::fs::create_dir(&git_dir)?;
     std::fs::create_dir(git_dir.join("objects"))?;
@@ -98,7 +106,7 @@ mod tests {
         for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
             command.env(name, "hostile");
         }
-        neutral_cwd.configure(&mut command);
+        neutral_cwd.configure_transport_command(&mut command);
 
         assert_eq!(
             command.get_current_dir(),
@@ -130,17 +138,20 @@ mod tests {
     fn preserves_trusted_global_system_and_auth_environment() {
         let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
         let trusted = [
+            ("GIT_ASKPASS", "/trusted/askpass"),
             ("GIT_CONFIG_GLOBAL", "/trusted/global.gitconfig"),
             ("GIT_CONFIG_SYSTEM", "/trusted/system.gitconfig"),
+            ("GIT_SSH", "/trusted/ssh"),
             ("GIT_SSH_COMMAND", "/trusted/ssh-wrapper"),
             ("HOME", "/trusted/home"),
+            ("SSH_AUTH_SOCK", "/trusted/ssh-agent.sock"),
             ("XDG_CONFIG_HOME", "/trusted/config"),
         ];
         let mut command = Command::new("git");
         for (name, value) in trusted {
             command.env(name, value);
         }
-        neutral_cwd.configure(&mut command);
+        neutral_cwd.configure_transport_command(&mut command);
 
         for (name, value) in trusted {
             assert_eq!(
@@ -156,7 +167,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn nested_neutral_directory_does_not_run_parent_repository_transport_helper() {
+    fn nested_neutral_directory_ignores_parent_repository_transport_config() {
         let root = tempfile::tempdir().expect("create test root");
         let fixture = create_transport_fixture(root.path());
 
@@ -165,9 +176,31 @@ mod tests {
             .tempdir_in(&fixture.hostile_repo)
             .expect("create nested neutral directory");
         initialize_empty_repository(directory.path()).expect("initialize neutral repository");
-        let neutral_cwd = NeutralGitCwd { directory };
+        let neutral_cwd = NeutralGitCwd::from_prebuilt_directory(directory);
+        let empty_config = root.path().join("empty.gitconfig");
+        fs::write(&empty_config, "").expect("write empty Git config");
+
+        let mut config_command = Command::new("git");
+        config_command
+            .env("GIT_CONFIG_GLOBAL", &empty_config)
+            .env("GIT_CONFIG_SYSTEM", &empty_config);
+        neutral_cwd.configure_transport_command(&mut config_command);
+        let config_output = config_command
+            .args([
+                "config",
+                "--get-regexp",
+                "^(core\\.sshCommand|credential\\.helper)$",
+            ])
+            .output()
+            .expect("inspect effective transport configuration");
+        assert_eq!(config_output.status.code(), Some(1));
+        assert!(config_output.stdout.is_empty());
+
         let mut command = Command::new("git");
-        neutral_cwd.configure(&mut command);
+        command
+            .env("GIT_CONFIG_GLOBAL", &empty_config)
+            .env("GIT_CONFIG_SYSTEM", &empty_config);
+        neutral_cwd.configure_transport_command(&mut command);
         let output = command
             .args([
                 "ls-remote",
@@ -191,13 +224,82 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn neutral_directory_honors_trusted_global_and_system_transport_config() {
+        let root = tempfile::tempdir().expect("create test root");
+        let fixture = create_transport_fixture(root.path());
+        let global_config = root.path().join("global.gitconfig");
+        let system_config = root.path().join("system.gitconfig");
+        fs::write(
+            &global_config,
+            format!(
+                "[url \"file://{}\"]\n\tinsteadOf = https://trusted.example/repository\n[core]\n\tsshCommand = trusted-ssh-command\n",
+                fixture.source.display()
+            ),
+        )
+        .expect("write trusted global Git config");
+        fs::write(
+            &system_config,
+            "[credential]\n\thelper = trusted-credential-helper\n",
+        )
+        .expect("write trusted system Git config");
+        let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+
+        let mut ssh_config = Command::new("git");
+        ssh_config
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config);
+        neutral_cwd.configure_transport_command(&mut ssh_config);
+        let ssh_output = ssh_config
+            .args(["config", "--get", "core.sshCommand"])
+            .output()
+            .expect("read trusted SSH configuration");
+        assert!(ssh_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&ssh_output.stdout).trim(),
+            "trusted-ssh-command"
+        );
+
+        let mut credential_config = Command::new("git");
+        credential_config
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config);
+        neutral_cwd.configure_transport_command(&mut credential_config);
+        let credential_output = credential_config
+            .args(["config", "--get", "credential.helper"])
+            .output()
+            .expect("read trusted credential configuration");
+        assert!(credential_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&credential_output.stdout).trim(),
+            "trusted-credential-helper"
+        );
+
+        let mut ls_remote = Command::new("git");
+        ls_remote
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config);
+        neutral_cwd.configure_transport_command(&mut ls_remote);
+        let output = ls_remote
+            .args(["ls-remote", "https://trusted.example/repository", "HEAD"])
+            .output()
+            .expect("run git ls-remote through trusted global rewrite");
+        assert!(
+            output.status.success(),
+            "trusted global URL rewrite should remain available: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.stdout.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn neutral_directory_ignores_inherited_git_common_dir() {
         let root = tempfile::tempdir().expect("create test root");
         let fixture = create_transport_fixture(root.path());
         let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
         let mut command = Command::new("git");
         command.env("GIT_COMMON_DIR", fixture.hostile_repo.join(".git"));
-        neutral_cwd.configure(&mut command);
+        neutral_cwd.configure_transport_command(&mut command);
 
         let output = command
             .args([
@@ -237,7 +339,7 @@ mod tests {
                 "GIT_CONFIG_VALUE_1",
                 fixture.source.to_string_lossy().as_ref(),
             );
-        neutral_cwd.configure(&mut command);
+        neutral_cwd.configure_transport_command(&mut command);
 
         let output = command
             .args([
@@ -295,6 +397,14 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&helper, permissions).expect("mark transport helper executable");
         run_git(&hostile_repo, &["config", "protocol.ext.allow", "always"]);
+        run_git(
+            &hostile_repo,
+            &["config", "core.sshCommand", "hostile-ssh-command"],
+        );
+        run_git(
+            &hostile_repo,
+            &["config", "credential.helper", "!hostile-credential-helper"],
+        );
         let rewrite_key = format!("url.ext::{}.insteadOf", helper.display());
         run_git(
             &hostile_repo,

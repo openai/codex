@@ -153,7 +153,7 @@ fn git_command(neutral_cwd: &NeutralGitCwd) -> Command {
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
-    neutral_cwd.configure(&mut command);
+    neutral_cwd.configure_transport_command(&mut command);
     command
 }
 

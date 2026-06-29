@@ -1457,8 +1457,11 @@ fn clone_git_plugin_source(
     sparse_checkout_path: Option<&str>,
     destination: &Path,
 ) -> Result<(), String> {
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     if let Some(sparse_checkout_path) = sparse_checkout_path {
         run_git(
+            &neutral_cwd,
             &[
                 "clone",
                 "--filter=blob:none",
@@ -1470,6 +1473,7 @@ fn clone_git_plugin_source(
             /*cwd*/ None,
         )?;
         run_git(
+            &neutral_cwd,
             &[
                 "sparse-checkout",
                 "set",
@@ -1481,25 +1485,24 @@ fn clone_git_plugin_source(
         )?;
     } else {
         run_git(
+            &neutral_cwd,
             &["clone", url, destination.to_string_lossy().as_ref()],
             /*cwd*/ None,
         )?;
     }
     if let Some(target) = sha.or(ref_name) {
-        run_git(&["checkout", target], Some(destination))?;
+        run_git(&neutral_cwd, &["checkout", target], Some(destination))?;
     } else if sparse_checkout_path.is_some() {
-        run_git(&["checkout"], Some(destination))?;
+        run_git(&neutral_cwd, &["checkout"], Some(destination))?;
     }
     Ok(())
 }
 
-fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
-    let neutral_cwd = NeutralGitCwd::new()
-        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
+fn run_git(neutral_cwd: &NeutralGitCwd, args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
     let mut command = Command::new("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
-    neutral_cwd.configure(&mut command);
+    neutral_cwd.configure_transport_command(&mut command);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

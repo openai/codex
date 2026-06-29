@@ -583,7 +583,7 @@ fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
         .arg("ls-remote")
         .arg("https://github.com/openai/plugins.git")
         .arg("HEAD");
-    neutral_cwd.configure(&mut command);
+    neutral_cwd.configure_transport_command(&mut command);
     let output = run_git_command_with_timeout(
         &mut command,
         "git ls-remote curated plugins repo",
