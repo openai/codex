@@ -33,7 +33,14 @@ pub struct SkillsLoadInput {
     pub effective_skill_roots: Vec<PluginSkillRoot>,
     pub config_layer_stack: ConfigLayerStack,
     pub bundled_skills_enabled: bool,
+    project_root: Option<ProjectRootHint>,
     plugin_skill_snapshots: Option<PluginSkillSnapshots>,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectRootHint {
+    discovery_cwd: AbsolutePathBuf,
+    project_root: AbsolutePathBuf,
 }
 
 impl SkillsLoadInput {
@@ -48,8 +55,23 @@ impl SkillsLoadInput {
             effective_skill_roots,
             config_layer_stack,
             bundled_skills_enabled,
+            project_root: None,
             plugin_skill_snapshots: None,
         }
+    }
+
+    /// Reuses a project root discovered immediately before this load from the same config and cwd.
+    /// Callers must not retain this hint across turns because filesystem markers can change.
+    pub fn with_project_root(
+        mut self,
+        discovery_cwd: AbsolutePathBuf,
+        project_root: AbsolutePathBuf,
+    ) -> Self {
+        self.project_root = Some(ProjectRootHint {
+            discovery_cwd,
+            project_root,
+        });
+        self
     }
 
     /// Attaches plugin skill snapshots parsed during plugin loading, when available.
@@ -156,6 +178,10 @@ impl SkillsService {
             fs,
             &input.config_layer_stack,
             &input.cwd,
+            input
+                .project_root
+                .as_ref()
+                .map(|hint| (&hint.discovery_cwd, &hint.project_root)),
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )
@@ -184,6 +210,10 @@ impl SkillsService {
             fs.clone(),
             &input.config_layer_stack,
             &input.cwd,
+            input
+                .project_root
+                .as_ref()
+                .map(|hint| (&hint.discovery_cwd, &hint.project_root)),
             input.effective_skill_roots.clone(),
             self.extra_roots(),
         )

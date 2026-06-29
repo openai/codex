@@ -1,9 +1,10 @@
 use crate::agents_md::LoadedAgentsMd;
-use crate::agents_md::load_project_instructions;
+use crate::agents_md::load_project_instructions_with_roots;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_extension_api::UserInstructions;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_utils_path_uri::PathUri;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -28,19 +29,29 @@ impl AgentsMdManager {
         }
     }
 
-    pub(crate) async fn refresh(&self, config: &Config, environments: &TurnEnvironmentSnapshot) {
+    pub(crate) async fn refresh(
+        &self,
+        config: &Config,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Option<PathUri> {
         let selections = environments.to_selections();
         if self.cache.lock().await.selections.as_ref() == Some(&selections) {
-            return;
+            return None;
         }
 
-        let loaded =
-            load_project_instructions(config, self.user_instructions.clone(), environments)
-                .await
-                .map(Arc::new);
+        let mut outcome = load_project_instructions_with_roots(
+            config,
+            self.user_instructions.clone(),
+            environments,
+        )
+        .await;
+        let primary_project_root = environments
+            .primary()
+            .and_then(|primary| outcome.project_roots.remove(&primary.environment_id));
         let mut cache = self.cache.lock().await;
         cache.selections = Some(selections);
-        cache.loaded = loaded;
+        cache.loaded = outcome.loaded.map(Arc::new);
+        primary_project_root
     }
 
     pub(crate) async fn get_loaded(&self) -> Option<Arc<LoadedAgentsMd>> {

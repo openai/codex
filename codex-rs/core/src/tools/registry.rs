@@ -34,6 +34,7 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use tracing::Instrument;
 use tracing::instrument;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
@@ -431,9 +432,18 @@ impl ToolRegistry {
         ];
 
         {
-            let mut active = invocation.session.active_turn.lock().await;
+            let mut active = invocation
+                .session
+                .active_turn
+                .lock()
+                .instrument(tracing::info_span!("tool_dispatch.active_turn_lock"))
+                .await;
             if let Some(active_turn) = active.as_mut() {
-                let mut turn_state = active_turn.turn_state.lock().await;
+                let mut turn_state = active_turn
+                    .turn_state
+                    .lock()
+                    .instrument(tracing::info_span!("tool_dispatch.turn_state_lock"))
+                    .await;
                 turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
             }
         }
@@ -460,7 +470,10 @@ impl ToolRegistry {
             }
         };
 
-        let telemetry_tags = tool.telemetry_tags(&invocation).await;
+        let telemetry_tags = tool
+            .telemetry_tags(&invocation)
+            .instrument(tracing::info_span!("tool_dispatch.telemetry_tags"))
+            .await;
         let mut tool_result_tags =
             Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len());
         let mut extra_trace_fields = Vec::new();
@@ -490,7 +503,9 @@ impl ToolRegistry {
             return Err(err);
         }
 
-        notify_tool_start(&invocation).await;
+        notify_tool_start(&invocation)
+            .instrument(tracing::info_span!("tool_dispatch.notify_tool_start"))
+            .await;
 
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             match run_pre_tool_use_hooks(
@@ -500,6 +515,7 @@ impl ToolRegistry {
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
             )
+            .instrument(tracing::info_span!("tool_dispatch.pre_tool_use_hooks"))
             .await
             {
                 PreToolUseHookResult::Blocked(message) => {
@@ -683,6 +699,7 @@ async fn notify_tool_finish_if_unclaimed(
     true
 }
 
+#[instrument(name = "tool_dispatch.invoke_handler", level = "info", skip_all)]
 async fn handle_any_tool(
     tool: &dyn CoreToolRuntime,
     invocation: ToolInvocation,

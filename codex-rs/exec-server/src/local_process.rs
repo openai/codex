@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_protocol::config_types::EnvironmentVariablePattern;
@@ -22,6 +23,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tracing::Instrument;
 
 use crate::ExecBackend;
 use crate::ExecBackendFuture;
@@ -55,7 +57,7 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::protocol::WriteStatus;
 use crate::rpc::RpcNotificationSender;
-use crate::rpc::RpcServerOutboundMessage;
+use crate::rpc::RpcServerOutboundEnvelope;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
@@ -87,6 +89,7 @@ struct RunningProcess {
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
     next_seq: u64,
+    first_output_observed: bool,
     exit_code: Option<i32>,
     wake_tx: watch::Sender<u64>,
     events: ExecProcessEventLog,
@@ -132,6 +135,55 @@ impl AcceptedStdinWriteIds {
 
 struct ProcessStart;
 
+#[derive(Clone, Copy)]
+enum OutputReader {
+    Stdout,
+    Stderr,
+}
+
+impl OutputReader {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OutputReaderCompletion {
+    Eof,
+    ProcessMissing,
+    ProcessNotRunning,
+}
+
+impl OutputReaderCompletion {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Eof => "eof",
+            Self::ProcessMissing => "process_missing",
+            Self::ProcessNotRunning => "process_not_running",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CloseTrigger {
+    ExitObserved,
+    StdoutReaderFinished,
+    StderrReaderFinished,
+}
+
+impl CloseTrigger {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ExitObserved => "exit_observed",
+            Self::StdoutReaderFinished => "stdout_reader_finished",
+            Self::StderrReaderFinished => "stderr_reader_finished",
+        }
+    }
+}
+
 enum ProcessEntry {
     Starting(Arc<ProcessStart>),
     Running(Box<RunningProcess>),
@@ -169,7 +221,7 @@ impl LocalProcess {
 
     fn with_discarded_notifications(runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
         let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+            mpsc::channel::<RpcServerOutboundEnvelope>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
         Self::with_runtime_paths(
             RpcNotificationSender::new(outgoing_tx),
@@ -229,13 +281,21 @@ impl LocalProcess {
         *notification_sender = notifications;
     }
 
+    #[tracing::instrument(
+        name = "exec_server.local.start_process",
+        level = "info",
+        skip_all,
+        fields(process_id = %params.process_id, tty = params.tty)
+    )]
     async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let prepared = {
+            let _span = tracing::info_span!("exec_server.local.prepare_request").entered();
+            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?
+        };
         let (program, args) = prepared
             .command
             .split_first()
@@ -255,35 +315,39 @@ impl LocalProcess {
             );
         }
 
-        let spawned_result = if params.tty {
-            codex_utils_pty::spawn_pty_process(
-                program,
-                args,
-                prepared.cwd.as_path(),
-                &prepared.env,
-                &prepared.arg0,
-                TerminalSize::default(),
-            )
-            .await
-        } else if params.pipe_stdin {
-            codex_utils_pty::spawn_pipe_process(
-                program,
-                args,
-                prepared.cwd.as_path(),
-                &prepared.env,
-                &prepared.arg0,
-            )
-            .await
-        } else {
-            codex_utils_pty::spawn_pipe_process_no_stdin(
-                program,
-                args,
-                prepared.cwd.as_path(),
-                &prepared.env,
-                &prepared.arg0,
-            )
-            .await
-        };
+        let spawned_result = async {
+            if params.tty {
+                codex_utils_pty::spawn_pty_process(
+                    program,
+                    args,
+                    prepared.cwd.as_path(),
+                    &prepared.env,
+                    &prepared.arg0,
+                    TerminalSize::default(),
+                )
+                .await
+            } else if params.pipe_stdin {
+                codex_utils_pty::spawn_pipe_process(
+                    program,
+                    args,
+                    prepared.cwd.as_path(),
+                    &prepared.env,
+                    &prepared.arg0,
+                )
+                .await
+            } else {
+                codex_utils_pty::spawn_pipe_process_no_stdin(
+                    program,
+                    args,
+                    prepared.cwd.as_path(),
+                    &prepared.env,
+                    &prepared.arg0,
+                )
+                .await
+            }
+        }
+        .instrument(tracing::info_span!("exec_server.local.spawn_process"))
+        .await;
         let spawned = match spawned_result {
             Ok(spawned) => spawned,
             Err(err) => {
@@ -328,6 +392,7 @@ impl LocalProcess {
                     output: VecDeque::new(),
                     retained_bytes: 0,
                     next_seq: 1,
+                    first_output_observed: false,
                     exit_code: None,
                     wake_tx: wake_tx.clone(),
                     events: events.clone(),
@@ -341,34 +406,59 @@ impl LocalProcess {
                 })),
             );
         }
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stdout
-            },
-            spawned.stdout_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            if params.tty {
-                ExecOutputStream::Pty
-            } else {
-                ExecOutputStream::Stderr
-            },
-            spawned.stderr_rx,
-            Arc::clone(&self.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(watch_exit(
-            process_id.clone(),
-            spawned.exit_rx,
-            Arc::clone(&self.inner),
-            output_notify,
-        ));
+        let stdout_lifecycle_span = tracing::info_span!(
+            "exec_server.local.output_lifecycle",
+            process_id = %process_id,
+            reader = OutputReader::Stdout.as_str(),
+        );
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                OutputReader::Stdout,
+                if params.tty {
+                    ExecOutputStream::Pty
+                } else {
+                    ExecOutputStream::Stdout
+                },
+                spawned.stdout_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stdout_lifecycle_span),
+        );
+        let stderr_lifecycle_span = tracing::info_span!(
+            "exec_server.local.output_lifecycle",
+            process_id = %process_id,
+            reader = OutputReader::Stderr.as_str(),
+        );
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                OutputReader::Stderr,
+                if params.tty {
+                    ExecOutputStream::Pty
+                } else {
+                    ExecOutputStream::Stderr
+                },
+                spawned.stderr_rx,
+                Arc::clone(&self.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stderr_lifecycle_span),
+        );
+        let exit_lifecycle_span = tracing::info_span!(
+            "exec_server.local.exit_lifecycle",
+            process_id = %process_id,
+        );
+        tokio::spawn(
+            watch_exit(
+                process_id.clone(),
+                spawned.exit_rx,
+                Arc::clone(&self.inner),
+                output_notify,
+            )
+            .instrument(exit_lifecycle_span),
+        );
 
         Ok((ExecResponse { process_id }, wake_tx, events))
     }
@@ -758,23 +848,61 @@ fn map_handler_error(error: JSONRPCErrorError) -> ExecServerError {
     }
 }
 
+#[tracing::instrument(
+    name = "exec_server.local.output_reader",
+    level = "info",
+    skip_all,
+    fields(
+        reader = reader.as_str(),
+        completion_reason = tracing::field::Empty,
+        chunks = tracing::field::Empty,
+        bytes = tracing::field::Empty,
+        receiver_wait_ms = tracing::field::Empty,
+        process_lock_wait_ms = tracing::field::Empty,
+        processing_ms = tracing::field::Empty,
+        notification_lookup_ms = tracing::field::Empty,
+        notification_wait_ms = tracing::field::Empty,
+    )
+)]
 async fn stream_output(
     process_id: ProcessId,
+    reader: OutputReader,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
 ) {
-    while let Some(chunk) = receiver.recv().await {
-        let _chunk_len = chunk.len();
+    let mut chunks = 0_u64;
+    let mut bytes = 0_u64;
+    let mut receiver_wait = Duration::ZERO;
+    let mut process_lock_wait = Duration::ZERO;
+    let mut processing = Duration::ZERO;
+    let mut notification_lookup = Duration::ZERO;
+    let mut notification_wait = Duration::ZERO;
+    let completion_reason = loop {
+        let receiver_wait_started = Instant::now();
+        let chunk = receiver.recv().await;
+        receiver_wait += receiver_wait_started.elapsed();
+        let Some(chunk) = chunk else {
+            break OutputReaderCompletion::Eof;
+        };
+
+        chunks += 1;
+        bytes = bytes.saturating_add(chunk.len() as u64);
+        let chunk_len = chunk.len();
         let notification = {
+            let process_lock_wait_started = Instant::now();
             let mut processes = inner.processes.lock().await;
+            process_lock_wait += process_lock_wait_started.elapsed();
             let Some(entry) = processes.get_mut(&process_id) else {
-                break;
+                break OutputReaderCompletion::ProcessMissing;
             };
             let ProcessEntry::Running(process) = entry else {
-                break;
+                break OutputReaderCompletion::ProcessNotRunning;
             };
+            let processing_started = Instant::now();
+            let is_first_output = !process.first_output_observed;
+            process.first_output_observed = true;
             let seq = process.next_seq;
             process.next_seq += 1;
             process.retained_bytes += chunk.len();
@@ -798,33 +926,99 @@ async fn stream_output(
             process
                 .events
                 .publish(ExecProcessEvent::Output(output.clone()));
-            ExecOutputDeltaNotification {
+            if is_first_output {
+                tracing::info_span!("exec_server.local.first_output", seq, bytes = chunk_len,)
+                    .in_scope(|| {});
+                tracing::info!(
+                    event = "exec_server.local.first_output",
+                    seq,
+                    bytes = chunk_len,
+                );
+            }
+            let notification = ExecOutputDeltaNotification {
                 process_id: process_id.clone(),
                 seq,
                 stream,
                 chunk: output.chunk,
-            }
+            };
+            processing += processing_started.elapsed();
+            notification
         };
         output_notify.notify_waiters();
-        if let Some(notifications) = notification_sender(&inner) {
+        let notification_lookup_started = Instant::now();
+        let notifications = notification_sender(&inner);
+        notification_lookup += notification_lookup_started.elapsed();
+        if let Some(notifications) = notifications {
+            let notification_wait_started = Instant::now();
             let _ = notifications
                 .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
                 .await;
+            notification_wait += notification_wait_started.elapsed();
         }
-    }
+    };
 
-    finish_output_stream(process_id, inner).await;
+    let current_span = tracing::Span::current();
+    current_span.record("completion_reason", completion_reason.as_str());
+    current_span.record("chunks", chunks);
+    current_span.record("bytes", bytes);
+    current_span.record("receiver_wait_ms", duration_ms(receiver_wait));
+    current_span.record("process_lock_wait_ms", duration_ms(process_lock_wait));
+    current_span.record("processing_ms", duration_ms(processing));
+    current_span.record("notification_lookup_ms", duration_ms(notification_lookup));
+    current_span.record("notification_wait_ms", duration_ms(notification_wait));
+    tracing::info_span!(
+        "exec_server.local.output_source_complete",
+        reason = completion_reason.as_str(),
+        chunks,
+        bytes,
+    )
+    .in_scope(|| {});
+
+    finish_output_stream(process_id, inner, reader).await;
+    tracing::info_span!("exec_server.local.output_reader_complete").in_scope(|| {});
 }
 
+#[tracing::instrument(
+    name = "exec_server.local.exit_watcher",
+    level = "info",
+    skip_all,
+    fields(
+        receiver_result = tracing::field::Empty,
+        exit_code = tracing::field::Empty,
+        metrics_lock_wait_ms = tracing::field::Empty,
+        sandbox_sync_wait_ms = tracing::field::Empty,
+        state_lock_wait_ms = tracing::field::Empty,
+        state_update_ms = tracing::field::Empty,
+        notification_lookup_ms = tracing::field::Empty,
+        notification_wait_ms = tracing::field::Empty,
+    )
+)]
 async fn watch_exit(
     process_id: ProcessId,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
 ) {
-    let exit_code = exit_rx.await.unwrap_or(-1);
+    let (exit_code, receiver_result) = match exit_rx.await {
+        Ok(exit_code) => (exit_code, "exit_code"),
+        Err(_) => (-1, "sender_dropped"),
+    };
+    let current_span = tracing::Span::current();
+    current_span.record("receiver_result", receiver_result);
+    current_span.record("exit_code", exit_code);
+    tracing::info_span!(
+        "exec_server.local.exit_receiver_complete",
+        receiver_result,
+        exit_code,
+    )
+    .in_scope(|| {});
+    let metrics_lock_wait_started = Instant::now();
     let sandboxed = {
         let mut processes = inner.processes.lock().await;
+        current_span.record(
+            "metrics_lock_wait_ms",
+            duration_ms(metrics_lock_wait_started.elapsed()),
+        );
         match processes.get_mut(&process_id) {
             Some(ProcessEntry::Running(process)) => {
                 let sandboxed = process.sandbox != SandboxType::None;
@@ -842,11 +1036,22 @@ async fn watch_exit(
             Some(ProcessEntry::Starting(_)) | None => false,
         }
     };
+    let sandbox_sync_wait_started = Instant::now();
     if sandboxed {
         let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
     }
+    current_span.record(
+        "sandbox_sync_wait_ms",
+        duration_ms(sandbox_sync_wait_started.elapsed()),
+    );
+    let state_lock_wait_started = Instant::now();
     let notification = {
         let mut processes = inner.processes.lock().await;
+        current_span.record(
+            "state_lock_wait_ms",
+            duration_ms(state_lock_wait_started.elapsed()),
+        );
+        let state_update_started = Instant::now();
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
             let seq = process.next_seq;
             process.next_seq += 1;
@@ -881,69 +1086,183 @@ async fn watch_exit(
                 exit_code,
                 sandbox_denied: Some(process.sandbox_denied),
             });
-            Some(ExecExitedNotification {
+            let notification = Some(ExecExitedNotification {
                 process_id: process_id.clone(),
                 seq,
                 exit_code,
                 sandbox_denied: Some(process.sandbox_denied),
-            })
+            });
+            current_span.record(
+                "state_update_ms",
+                duration_ms(state_update_started.elapsed()),
+            );
+            notification
         } else {
+            current_span.record(
+                "state_update_ms",
+                duration_ms(state_update_started.elapsed()),
+            );
             None
         }
     };
     output_notify.notify_waiters();
+    if let Some(notification) = notification.as_ref() {
+        tracing::info_span!(
+            "exec_server.local.exited",
+            seq = notification.seq,
+            exit_code = notification.exit_code,
+        )
+        .in_scope(|| {});
+        tracing::info!(
+            event = "exec_server.local.exited",
+            seq = notification.seq,
+            exit_code = notification.exit_code,
+        );
+    }
+    let notification_lookup_started = Instant::now();
+    let notifications = notification_sender(&inner);
+    current_span.record(
+        "notification_lookup_ms",
+        duration_ms(notification_lookup_started.elapsed()),
+    );
     if let Some(notification) = notification
-        && let Some(notifications) = notification_sender(&inner)
+        && let Some(notifications) = notifications
     {
+        let notification_wait_started = Instant::now();
         let _ = notifications
             .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
             .await;
+        current_span.record(
+            "notification_wait_ms",
+            duration_ms(notification_wait_started.elapsed()),
+        );
     }
 
-    maybe_emit_closed(process_id, Arc::clone(&inner)).await;
+    maybe_emit_closed(process_id, Arc::clone(&inner), CloseTrigger::ExitObserved).await;
+    tracing::info_span!("exec_server.local.exit_watcher_complete").in_scope(|| {});
 }
 
-async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
+#[tracing::instrument(
+    name = "exec_server.local.finish_output_reader",
+    level = "info",
+    skip_all,
+    fields(
+        reader = reader.as_str(),
+        outcome = tracing::field::Empty,
+        open_streams_before = tracing::field::Empty,
+        process_lock_wait_ms = tracing::field::Empty,
+    )
+)]
+async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>, reader: OutputReader) {
+    let current_span = tracing::Span::current();
+    let process_lock_wait_started = Instant::now();
     {
         let mut processes = inner.processes.lock().await;
-        let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
+        current_span.record(
+            "process_lock_wait_ms",
+            duration_ms(process_lock_wait_started.elapsed()),
+        );
+        let Some(entry) = processes.get_mut(&process_id) else {
+            current_span.record("outcome", "process_missing");
+            return;
+        };
+        let ProcessEntry::Running(process) = entry else {
+            current_span.record("outcome", "process_not_running");
             return;
         };
 
+        current_span.record("open_streams_before", process.open_streams as u64);
         if process.open_streams > 0 {
             process.open_streams -= 1;
         }
+        current_span.record("outcome", "marked_finished");
     }
 
-    maybe_emit_closed(process_id, inner).await;
+    let trigger = match reader {
+        OutputReader::Stdout => CloseTrigger::StdoutReaderFinished,
+        OutputReader::Stderr => CloseTrigger::StderrReaderFinished,
+    };
+    maybe_emit_closed(process_id, inner, trigger).await;
 }
 
-async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
+#[tracing::instrument(
+    name = "exec_server.local.close_check",
+    level = "info",
+    skip_all,
+    fields(
+        trigger = trigger.as_str(),
+        outcome = tracing::field::Empty,
+        open_streams = tracing::field::Empty,
+        exit_observed = tracing::field::Empty,
+        process_lock_wait_ms = tracing::field::Empty,
+        state_update_ms = tracing::field::Empty,
+        notification_lookup_ms = tracing::field::Empty,
+        notification_result = tracing::field::Empty,
+        notification_wait_ms = tracing::field::Empty,
+    )
+)]
+async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>, trigger: CloseTrigger) {
+    let current_span = tracing::Span::current();
+    let process_lock_wait_started = Instant::now();
     let (notification, output_notify) = {
         let mut processes = inner.processes.lock().await;
-        let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
+        current_span.record(
+            "process_lock_wait_ms",
+            duration_ms(process_lock_wait_started.elapsed()),
+        );
+        let state_update_started = Instant::now();
+        let Some(entry) = processes.get_mut(&process_id) else {
+            current_span.record("outcome", "process_missing");
+            return;
+        };
+        let ProcessEntry::Running(process) = entry else {
+            current_span.record("outcome", "process_not_running");
             return;
         };
 
-        if process.closed || process.open_streams != 0 || process.exit_code.is_none() {
+        current_span.record("open_streams", process.open_streams as u64);
+        current_span.record("exit_observed", process.exit_code.is_some());
+
+        if process.closed {
+            current_span.record("outcome", "already_closed");
+            return;
+        }
+        if process.open_streams != 0 && process.exit_code.is_none() {
+            current_span.record("outcome", "waiting_for_exit_and_streams");
+            return;
+        }
+        if process.open_streams != 0 {
+            current_span.record("outcome", "waiting_for_streams");
+            return;
+        }
+        if process.exit_code.is_none() {
+            current_span.record("outcome", "waiting_for_exit");
             return;
         }
 
+        current_span.record("outcome", "emitted");
         process.closed = true;
         let seq = process.next_seq;
         process.next_seq += 1;
         let _ = process.wake_tx.send(seq);
         process.events.publish(ExecProcessEvent::Closed { seq });
-        (
+        let result = (
             ExecClosedNotification {
                 process_id: process_id.clone(),
                 seq,
             },
             Arc::clone(&process.output_notify),
-        )
+        );
+        current_span.record(
+            "state_update_ms",
+            duration_ms(state_update_started.elapsed()),
+        );
+        result
     };
 
     output_notify.notify_waiters();
+    tracing::info_span!("exec_server.local.closed", seq = notification.seq,).in_scope(|| {});
+    tracing::info!(event = "exec_server.local.closed", seq = notification.seq,);
     let cleanup_process_id = process_id.clone();
     let cleanup_inner = Arc::clone(&inner);
     tokio::spawn(async move {
@@ -959,11 +1278,32 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
         }
     });
 
-    if let Some(notifications) = notification_sender(&inner) {
-        let _ = notifications
+    let notification_lookup_started = Instant::now();
+    let notifications = notification_sender(&inner);
+    current_span.record(
+        "notification_lookup_ms",
+        duration_ms(notification_lookup_started.elapsed()),
+    );
+    if let Some(notifications) = notifications {
+        let notification_wait_started = Instant::now();
+        let result = notifications
             .notify(EXEC_CLOSED_METHOD, &notification)
             .await;
+        current_span.record(
+            "notification_wait_ms",
+            duration_ms(notification_wait_started.elapsed()),
+        );
+        current_span.record(
+            "notification_result",
+            if result.is_ok() { "sent" } else { "failed" },
+        );
+    } else {
+        current_span.record("notification_result", "sender_missing");
     }
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
 }
 
 fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
@@ -984,9 +1324,12 @@ mod tests {
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
     use opentelemetry_sdk::metrics::data::AggregatedMetrics;
     use opentelemetry_sdk::metrics::data::MetricData;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use tokio::sync::oneshot;
     use tokio::time::timeout;
+    use tracing_subscriber::prelude::*;
 
     fn test_exec_params(env: HashMap<String, String>) -> ExecParams {
         ExecParams {
@@ -1260,6 +1603,112 @@ mod tests {
         backend.shutdown().await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn process_lifecycle_trace_separates_output_readers_and_exit_watcher() {
+        use opentelemetry::trace::TracerProvider as _;
+
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("exec-server-test")));
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let backend = LocalProcess::default();
+        let parent = tracing::info_span!("test.process_lifecycle_parent", process_id = "test");
+        let mut process = spawn_test_process(&backend, "trace-process")
+            .instrument(parent)
+            .await;
+        process.exit(/*exit_code*/ 0);
+        drop(process.stdout_tx);
+        drop(process.stderr_tx);
+        timeout(
+            Duration::from_secs(1),
+            read_process_until_closed(&backend, &process.process_id),
+        )
+        .await
+        .expect("process should close");
+        tokio::task::yield_now().await;
+        backend.shutdown().await;
+
+        provider.force_flush().expect("flush traces");
+        let spans = exporter.get_finished_spans().expect("span export");
+        let parent = spans
+            .iter()
+            .find(|span| span.name == "test.process_lifecycle_parent")
+            .expect("lifecycle parent span");
+        let lifecycle_parent_spans = spans
+            .iter()
+            .filter(|span| {
+                matches!(
+                    span.name.as_ref(),
+                    "exec_server.local.output_lifecycle" | "exec_server.local.exit_lifecycle"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lifecycle_parent_spans.len(), 3, "spans: {spans:?}");
+        for span in &lifecycle_parent_spans {
+            assert_eq!(span.parent_span_id, parent.span_context.span_id());
+        }
+
+        let lifecycle_spans = spans
+            .iter()
+            .filter(|span| {
+                matches!(
+                    span.name.as_ref(),
+                    "exec_server.local.output_reader" | "exec_server.local.exit_watcher"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lifecycle_spans.len(), 3, "spans: {spans:?}");
+        for span in &lifecycle_spans {
+            assert!(
+                lifecycle_parent_spans
+                    .iter()
+                    .any(|parent| { span.parent_span_id == parent.span_context.span_id() }),
+                "lifecycle work span is not parented by its process-owned wrapper: {span:?}"
+            );
+            assert!(
+                span.attributes
+                    .iter()
+                    .all(|attribute| attribute.key.as_str() != "process_id"),
+                "nested lifecycle span repeated process id: {span:?}"
+            );
+        }
+
+        let readers = lifecycle_spans
+            .iter()
+            .filter(|span| span.name == "exec_server.local.output_reader")
+            .map(|span| {
+                span.attributes
+                    .iter()
+                    .find(|attribute| attribute.key.as_str() == "reader")
+                    .map(|attribute| attribute.value.clone())
+                    .expect("output reader kind")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(readers.len(), 2);
+        assert!(readers.contains(&opentelemetry::Value::String("stdout".into())));
+        assert!(readers.contains(&opentelemetry::Value::String("stderr".into())));
+
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.name == "exec_server.local.output_source_complete")
+                .count(),
+            2,
+        );
+        assert!(spans.iter().any(|span| {
+            span.name == "exec_server.local.close_check"
+                && span.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "outcome"
+                        && attribute.value == opentelemetry::Value::String("emitted".into())
+                })
+        }));
+    }
+
     struct TestProcess {
         process_id: ProcessId,
         stdout_tx: mpsc::Sender<Vec<u8>>,
@@ -1300,6 +1749,7 @@ mod tests {
                 output: VecDeque::new(),
                 retained_bytes: 0,
                 next_seq: 1,
+                first_output_observed: false,
                 exit_code: None,
                 wake_tx: wake_tx.clone(),
                 events: events.clone(),
@@ -1315,26 +1765,51 @@ mod tests {
         assert!(previous.is_none());
         drop(processes);
 
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            ExecOutputStream::Stdout,
-            stdout_rx,
-            Arc::clone(&backend.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(stream_output(
-            process_id.clone(),
-            ExecOutputStream::Stderr,
-            stderr_rx,
-            Arc::clone(&backend.inner),
-            Arc::clone(&output_notify),
-        ));
-        tokio::spawn(watch_exit(
-            process_id.clone(),
-            exit_rx,
-            Arc::clone(&backend.inner),
-            output_notify,
-        ));
+        let stdout_lifecycle_span = tracing::info_span!(
+            "exec_server.local.output_lifecycle",
+            process_id = %process_id,
+            reader = OutputReader::Stdout.as_str(),
+        );
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                OutputReader::Stdout,
+                ExecOutputStream::Stdout,
+                stdout_rx,
+                Arc::clone(&backend.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stdout_lifecycle_span),
+        );
+        let stderr_lifecycle_span = tracing::info_span!(
+            "exec_server.local.output_lifecycle",
+            process_id = %process_id,
+            reader = OutputReader::Stderr.as_str(),
+        );
+        tokio::spawn(
+            stream_output(
+                process_id.clone(),
+                OutputReader::Stderr,
+                ExecOutputStream::Stderr,
+                stderr_rx,
+                Arc::clone(&backend.inner),
+                Arc::clone(&output_notify),
+            )
+            .instrument(stderr_lifecycle_span),
+        );
+        let exit_lifecycle_span = tracing::info_span!(
+            "exec_server.local.exit_lifecycle",
+            process_id = %process_id,
+        );
+        tokio::spawn(
+            watch_exit(
+                process_id.clone(),
+                exit_rx,
+                Arc::clone(&backend.inner),
+                output_notify,
+            )
+            .instrument(exit_lifecycle_span),
+        );
 
         TestProcess {
             process_id,

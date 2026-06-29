@@ -2833,6 +2833,7 @@ dependencies = [
  "codex-config",
  "codex-context-fragments",
  "codex-exec-server",
+ "codex-file-system",
  "codex-login",
  "codex-model-provider",
  "codex-otel",
@@ -4047,6 +4048,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

@@ -7,9 +7,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -21,7 +23,9 @@ use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
 use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
+use tracing::field;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
@@ -162,6 +166,7 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
+    trace_context: Option<W3cTraceContext>,
 }
 
 #[derive(Default)]
@@ -265,11 +270,17 @@ impl LazyRemoteExecServerClient {
             return None;
         }
         let client = self.clone();
-        Some(AbortOnDropHandle::new(tokio::spawn(async move {
-            if let Err(error) = client.wait_until_ready().await {
-                debug!(%error, "exec-server environment startup failed");
+        Some(AbortOnDropHandle::new(tokio::spawn(
+            async move {
+                if let Err(error) = client.wait_until_ready().await {
+                    debug!(%error, "exec-server environment startup failed");
+                }
             }
-        })))
+            .instrument(tracing::info_span!(
+                "exec_server.environment.start_connecting",
+                trigger = "registration",
+            )),
+        )))
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
@@ -280,26 +291,42 @@ impl LazyRemoteExecServerClient {
         self.initial_client().await.map(drop)
     }
 
+    #[tracing::instrument(
+        name = "exec_server.remote_client.get",
+        level = "info",
+        skip_all,
+        fields(path = field::Empty)
+    )]
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         if let Some(client) = self.connected_client() {
+            Span::current().record("path", "cached_connected");
             return Ok(client);
         }
 
         let Some(cached_client) = self.cached_client() else {
+            Span::current().record("path", "initial_connect");
             let client = self.initial_client().await?;
             if !client.is_disconnected() || !self.can_reconnect() {
                 return Ok(client);
             }
+            Span::current().record("path", "initial_then_reconnect");
             return self.reconnect().await;
         };
 
         if !self.can_reconnect() {
+            Span::current().record("path", "cached_disconnected_nonrecoverable");
             return Ok(cached_client);
         }
 
+        Span::current().record("path", "reconnect");
         self.reconnect().await
     }
 
+    #[tracing::instrument(
+        name = "exec_server.remote_client.initial_client",
+        level = "info",
+        skip_all
+    )]
     async fn initial_client(&self) -> Result<ExecServerClient, ExecServerError> {
         // The first caller starts the work; every other caller waits for that same result.
         let result = self
@@ -321,6 +348,7 @@ impl LazyRemoteExecServerClient {
         }
     }
 
+    #[tracing::instrument(name = "exec_server.remote_client.reconnect", level = "info", skip_all)]
     async fn reconnect(&self) -> Result<ExecServerClient, ExecServerError> {
         // Callers handling the same outage share one reconnect attempt.
         let attempt = {
@@ -382,6 +410,11 @@ impl LazyRemoteExecServerClient {
     }
 }
 
+#[tracing::instrument(
+    name = "exec_server.remote_client.connect_once",
+    level = "info",
+    skip_all
+)]
 async fn connect_once(transport_params: ExecServerTransportParams) -> ConnectionResult {
     ExecServerClient::connect_for_transport(transport_params)
         .await
@@ -645,31 +678,75 @@ impl ExecServerClient {
         self.call(FS_COPY_METHOD, &params).await
     }
 
+    #[tracing::instrument(
+        name = "exec_server.client.start_process",
+        level = "info",
+        skip_all,
+        fields(
+            process_id = %params.process_id,
+            tty = params.tty,
+            connection_ready_ms = field::Empty,
+            session_registered_ms = field::Empty,
+            task_spawned_ms = field::Empty,
+            task_first_polled_ms = field::Empty,
+            response_received_ms = field::Empty,
+        )
+    )]
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<Session, ExecServerError> {
+        let start_process_started_at = Instant::now();
         loop {
-            let rpc_client = self.inner.rpc_client().await?;
+            let rpc_client = self
+                .inner
+                .rpc_client()
+                .instrument(tracing::info_span!("exec_server.client.rpc_client_ready"))
+                .await?;
+            Span::current().record(
+                "connection_ready_ms",
+                start_process_started_at.elapsed().as_secs_f64() * 1_000.0,
+            );
             if !self.inner.begin_process_start(&rpc_client) {
                 continue;
             }
 
             let process_id = params.process_id.clone();
             let state = Arc::new(SessionState::new(/*recoverable*/ false));
-            if let Err(error) = self.inner.insert_session(&process_id, Arc::clone(&state)) {
+            let insert_result = tracing::info_span!("exec_server.client.register_process_session")
+                .in_scope(|| self.inner.insert_session(&process_id, Arc::clone(&state)));
+            if let Err(error) = insert_result {
                 self.inner.finish_process_start();
                 return Err(error);
             }
+            Span::current().record(
+                "session_registered_ms",
+                start_process_started_at.elapsed().as_secs_f64() * 1_000.0,
+            );
             let active_start = ActiveProcessStart {
                 inner: Arc::clone(&self.inner),
             };
             let client = self.clone();
             let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let start_process_span = Span::current();
+            let process_start_task_started_at = start_process_started_at;
             let process_start_task = async move {
+                start_process_span.record(
+                    "task_first_polled_ms",
+                    process_start_task_started_at.elapsed().as_secs_f64() * 1_000.0,
+                );
+                tracing::info_span!(
+                    "exec_server.client.process_start_task_first_poll",
+                    process_id = %process_id,
+                )
+                .in_scope(|| {});
                 let _active_start = active_start;
                 match client
                     .call_rpc::<_, ExecResponse>(&rpc_client, EXEC_METHOD, &params)
+                    .instrument(tracing::info_span!(
+                        "exec_server.client.process_start_rpc",
+                        process_id = %process_id,
+                    ))
                     .await
                 {
                     Ok(_) => {
@@ -699,9 +776,23 @@ impl ExecServerClient {
                 }
             };
             tokio::spawn(process_start_task.in_current_span());
-            return result_rx.await.map_err(|_| {
-                ExecServerError::Protocol("process start task stopped unexpectedly".to_string())
-            })?;
+            Span::current().record(
+                "task_spawned_ms",
+                start_process_started_at.elapsed().as_secs_f64() * 1_000.0,
+            );
+            let result = result_rx
+                .instrument(tracing::info_span!(
+                    "exec_server.client.await_process_start_result"
+                ))
+                .await
+                .map_err(|_| {
+                    ExecServerError::Protocol("process start task stopped unexpectedly".to_string())
+                })?;
+            Span::current().record(
+                "response_received_ms",
+                start_process_started_at.elapsed().as_secs_f64() * 1_000.0,
+            );
+            return result;
         }
     }
 
@@ -846,6 +937,7 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
+            trace_context: codex_otel::current_span_w3c_trace_context(),
         }
     }
 
@@ -967,6 +1059,19 @@ impl Session {
         self.state.subscribe_events()
     }
 
+    #[tracing::instrument(
+        name = "exec_server.remote.read",
+        level = "info",
+        skip_all,
+        fields(
+            process_id = %self.process_id,
+            after_seq,
+            wait_ms,
+            chunks = tracing::field::Empty,
+            exited = tracing::field::Empty,
+            closed = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn read(
         &self,
         after_seq: Option<u64>,
@@ -988,7 +1093,13 @@ impl Session {
                 })
                 .await
             {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    let span = Span::current();
+                    span.record("chunks", response.chunks.len());
+                    span.record("exited", response.exited);
+                    span.record("closed", response.closed);
+                    return Ok(response);
+                }
                 Err(error)
                     if is_transport_closed_error(&error) && !self.client.inner.is_failed() =>
                 {
@@ -1157,6 +1268,7 @@ async fn handle_server_notification(
                         chunk: params.chunk,
                     }));
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1172,6 +1284,7 @@ async fn handle_server_notification(
                     sandbox_denied: params.sandbox_denied,
                 });
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1180,6 +1293,18 @@ async fn handle_server_notification(
             let params: ExecClosedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
+                let received_span = tracing::info_span!(
+                    "exec_server.client.closed_notification_received",
+                    process_id = %params.process_id,
+                    seq = params.seq,
+                );
+                if let Some(trace_context) = session.trace_context.as_ref() {
+                    let _ = codex_otel::set_parent_from_w3c_trace_context(
+                        &received_span,
+                        trace_context,
+                    );
+                }
+                received_span.in_scope(|| {});
                 session.note_change(params.seq);
                 // Closed is terminal, but it can arrive before tail output or
                 // exited. Keep routing this process until the ordered publisher
@@ -1187,6 +1312,7 @@ async fn handle_server_notification(
                 let published_closed =
                     session.publish_ordered_event(ExecProcessEvent::Closed { seq: params.seq });
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1201,6 +1327,17 @@ async fn handle_server_notification(
         }
     }
     Ok(())
+}
+
+fn record_closed_published(session: &SessionState, process_id: &ProcessId) {
+    let published_span = tracing::info_span!(
+        "exec_server.client.closed_notification_published",
+        process_id = %process_id,
+    );
+    if let Some(trace_context) = session.trace_context.as_ref() {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&published_span, trace_context);
+    }
+    published_span.in_scope(|| {});
 }
 
 #[cfg(test)]
@@ -1394,7 +1531,15 @@ mod tests {
 
         assert_eq!(session.process_id(), &process_id);
         let trace = server.await.expect("server task").expect("trace context");
-        assert_eq!(trace, expected_trace);
+        let traceparent = trace.traceparent.expect("request traceparent");
+        let expected_traceparent = expected_trace.traceparent.expect("parent span traceparent");
+        let trace_id = traceparent.split('-').nth(1).expect("request trace id");
+        let expected_trace_id = expected_traceparent
+            .split('-')
+            .nth(1)
+            .expect("parent span trace id");
+        assert_eq!(trace_id, expected_trace_id);
+        assert_ne!(traceparent, expected_traceparent);
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

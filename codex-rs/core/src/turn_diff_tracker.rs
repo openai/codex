@@ -49,6 +49,7 @@ struct DiffCacheKey {
 /// mutations, without rereading the workspace filesystem.
 pub struct TurnDiffTracker {
     valid: bool,
+    display_roots_initialized: bool,
     display_roots_by_environment: HashMap<String, PathBuf>,
     baseline_by_path: HashMap<TrackedPath, TrackedContent>,
     current_by_path: HashMap<TrackedPath, TrackedContent>,
@@ -64,6 +65,7 @@ impl Default for TurnDiffTracker {
     fn default() -> Self {
         Self {
             valid: true,
+            display_roots_initialized: false,
             display_roots_by_environment: HashMap::new(),
             baseline_by_path: HashMap::new(),
             current_by_path: HashMap::new(),
@@ -82,12 +84,25 @@ impl TurnDiffTracker {
         Self::default()
     }
 
+    #[cfg(test)]
     pub fn with_environment_display_roots(
         display_roots: impl IntoIterator<Item = (String, PathBuf)>,
     ) -> Self {
         let mut tracker = Self::new();
-        tracker.display_roots_by_environment = display_roots.into_iter().collect();
+        tracker.set_environment_display_roots(display_roots);
         tracker
+    }
+
+    pub(crate) fn needs_display_roots(&self) -> bool {
+        self.valid && !self.display_roots_initialized
+    }
+
+    pub(crate) fn set_environment_display_roots(
+        &mut self,
+        display_roots: impl IntoIterator<Item = (String, PathBuf)>,
+    ) {
+        self.display_roots_by_environment = display_roots.into_iter().collect();
+        self.display_roots_initialized = true;
     }
 
     pub fn track_delta(&mut self, environment_id: &str, delta: &AppliedPatchDelta) {

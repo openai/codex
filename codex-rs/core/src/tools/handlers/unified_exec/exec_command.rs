@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument;
 
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
@@ -103,6 +105,12 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
 }
 
 impl ExecCommandHandler {
+    #[instrument(
+        name = "unified_exec.handle_call",
+        level = "info",
+        skip_all,
+        fields(call_id = %invocation.call_id)
+    )]
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
@@ -128,11 +136,16 @@ impl ExecCommandHandler {
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
-        let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
-        let Some(turn_environment) = resolve_tool_environment(
-            &step_context.environments,
-            environment_args.environment_id.as_deref(),
-        )?
+        let environment_args: ExecCommandEnvironmentArgs =
+            tracing::info_span!("unified_exec.handle_call.parse_environment_args")
+                .in_scope(|| parse_arguments(&arguments))?;
+        let Some(turn_environment) =
+            tracing::info_span!("unified_exec.handle_call.resolve_environment").in_scope(|| {
+                resolve_tool_environment(
+                    &step_context.environments,
+                    environment_args.environment_id.as_deref(),
+                )
+            })?
         else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
@@ -177,18 +190,21 @@ impl ExecCommandHandler {
                 )));
             }
         };
-        let mut args: ExecCommandArgs = match native_cwd.as_ref() {
-            Some(native_cwd) => {
-                // The base path only resolves paths nested in the permissions config types.
-                parse_arguments_with_base_path(&arguments, native_cwd)?
-            }
-            None => {
-                // Parsing without a base only skips relative-path resolution inside the
-                // permissions config. That is safe only for a truly unsandboxed attempt;
-                // sandboxed attempts fall through and return the conversion error below.
-                parse_arguments(&arguments)?
-            }
-        };
+        let mut args: ExecCommandArgs =
+            tracing::info_span!("unified_exec.handle_call.parse_exec_args").in_scope(|| {
+                match native_cwd.as_ref() {
+                    Some(native_cwd) => {
+                        // The base path only resolves paths nested in the permissions config types.
+                        parse_arguments_with_base_path(&arguments, native_cwd)
+                    }
+                    None => {
+                        // Parsing without a base only skips relative-path resolution inside the
+                        // permissions config. That is safe only for a truly unsandboxed attempt;
+                        // sandboxed attempts fall through and return the conversion error below.
+                        parse_arguments(&arguments)
+                    }
+                }
+            })?;
         let hook_command = args.cmd.clone();
         // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
         if let Some(native_cwd) = native_cwd.as_ref() {
@@ -198,6 +214,9 @@ impl ExecCommandHandler {
                 &hook_command,
                 native_cwd,
             )
+            .instrument(tracing::info_span!(
+                "unified_exec.handle_call.implicit_skill_detection"
+            ))
             .await;
         }
         let shell_mode =
@@ -228,14 +247,22 @@ impl ExecCommandHandler {
                 )));
             }
         }
-        let process_id = manager.allocate_process_id().await;
-        let resolved_command = get_command(
-            &args,
-            shell,
-            &shell_mode,
-            turn.config.permissions.allow_login_shell,
-        )
-        .map_err(FunctionCallError::RespondToModel)?;
+        let process_id = manager
+            .allocate_process_id()
+            .instrument(tracing::info_span!(
+                "unified_exec.handle_call.allocate_process_id"
+            ))
+            .await;
+        let resolved_command = tracing::info_span!("unified_exec.handle_call.resolve_command")
+            .in_scope(|| {
+                get_command(
+                    &args,
+                    shell,
+                    &shell_mode,
+                    turn.config.permissions.allow_login_shell,
+                )
+            })
+            .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
@@ -263,6 +290,9 @@ impl ExecCommandHandler {
             sandbox_permissions,
             additional_permissions,
         )
+        .instrument(tracing::info_span!(
+            "unified_exec.handle_call.apply_granted_permissions"
+        ))
         .await;
         let additional_permissions_allowed = exec_permission_approvals_enabled
             || (session.features().enabled(Feature::RequestPermissionsTool)
@@ -322,6 +352,9 @@ impl ExecCommandHandler {
             &context.call_id,
             "exec_command",
         )
+        .instrument(tracing::info_span!(
+            "unified_exec.handle_call.intercept_apply_patch"
+        ))
         .await?
         {
             manager.release_process_id(process_id).await;

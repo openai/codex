@@ -10,7 +10,11 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::field;
+use tracing::instrument;
 
 use crate::exec::is_likely_sandbox_denied;
 use codex_exec_server::ExecProcess;
@@ -266,17 +270,33 @@ impl UnifiedExecProcess {
         self.state_rx.borrow().failure_message.clone()
     }
 
+    #[instrument(
+        name = "unified_exec.check_for_sandbox_denial",
+        level = "info",
+        skip_all
+    )]
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        let _ =
-            tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified())
+            .instrument(tracing::info_span!(
+                "unified_exec.check_for_sandbox_denial.wait_for_output"
+            ))
+            .await;
 
-        let collected_chunks = self.snapshot_output().await;
+        let collected_chunks = self
+            .snapshot_output()
+            .instrument(tracing::info_span!(
+                "unified_exec.check_for_sandbox_denial.snapshot_output"
+            ))
+            .await;
         let mut aggregated: Vec<u8> = Vec::new();
         for chunk in collected_chunks {
             aggregated.extend_from_slice(&chunk);
         }
         let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
         self.check_for_sandbox_denial_with_text(&aggregated_text)
+            .instrument(tracing::info_span!(
+                "unified_exec.check_for_sandbox_denial.classify"
+            ))
             .await?;
 
         Ok(())
@@ -374,8 +394,29 @@ impl UnifiedExecProcess {
         Ok(managed)
     }
 
+    #[instrument(
+        name = "unified_exec.attach_exec_server_process",
+        level = "info",
+        skip_all
+    )]
     pub(super) async fn from_exec_server_started(
         started: StartedExecProcess,
+    ) -> Result<Self, UnifiedExecError> {
+        Self::from_exec_server_started_with_output_task(
+            started,
+            Self::spawn_exec_server_output_task,
+        )
+        .await
+    }
+
+    pub(super) async fn from_exec_server_started_with_output_task(
+        started: StartedExecProcess,
+        spawn_output_task: impl FnOnce(
+            StartedExecProcess,
+            OutputHandles,
+            broadcast::Sender<Vec<u8>>,
+            watch::Sender<ProcessState>,
+        ) -> JoinHandle<()>,
     ) -> Result<Self, UnifiedExecError> {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         let mut managed = Self::new(
@@ -384,15 +425,24 @@ impl UnifiedExecProcess {
             /*spawn_lifecycle*/ None,
         );
         let output_handles = managed.output_handles();
-        managed.output_task = Some(Self::spawn_exec_server_output_task(
+        managed.output_task = Some(spawn_output_task(
             started,
             output_handles,
             managed.output_tx.clone(),
             managed.state_tx.clone(),
         ));
 
+        // Keep the initial sandbox-denial handshake inside ToolOrchestrator's attempt. A denial
+        // discovered only by exec_command's later output collection is too late for the
+        // orchestrator to perform its approval/escalation retry. This remains event-driven and
+        // returns as soon as the exec-server reports a terminal launch state.
         let mut state_rx = managed.state_rx.clone();
-        if tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, async {
+        let terminal_handshake_span = tracing::info_span!(
+            "unified_exec.initial_terminal_handshake",
+            timeout_ms = EARLY_EXIT_GRACE_PERIOD.as_millis(),
+            completion_reason = field::Empty,
+        );
+        let terminal_handshake = tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, async {
             loop {
                 let state = state_rx.borrow().clone();
                 if state.has_exited || state.failure_message.is_some() {
@@ -403,9 +453,17 @@ impl UnifiedExecProcess {
                 }
             }
         })
-        .await
-        .is_ok()
-        {
+        .instrument(terminal_handshake_span.clone())
+        .await;
+        terminal_handshake_span.record(
+            "completion_reason",
+            if terminal_handshake.is_ok() {
+                "terminal_state"
+            } else {
+                "timeout"
+            },
+        );
+        if terminal_handshake.is_ok() {
             managed.check_for_sandbox_denial().await?;
         }
 
@@ -426,153 +484,249 @@ impl UnifiedExecProcess {
             cancellation_token,
         } = output_handles;
         let process = started.process;
+        let process_id = process.process_id().to_string();
         let mut events = process.subscribe_events();
-        tokio::spawn(async move {
-            let mut last_seq: u64 = 0;
-            loop {
-                let event = match events.recv().await {
-                    Ok(event) => Some(event),
-                    Err(broadcast::error::RecvError::Lagged(_)) => None,
-                    Err(broadcast::error::RecvError::Closed) => {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(
-                            state.failed("exec-server process event stream closed".to_string()),
-                        );
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
-                    }
-                };
-                let event_seq = event.as_ref().and_then(|event| match event {
-                    ExecProcessEvent::Output(chunk) => Some(chunk.seq),
-                    ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq } => {
-                        Some(*seq)
-                    }
-                    ExecProcessEvent::Failed(_) => None,
-                });
-                let missing_sandbox_denial = matches!(
-                    event.as_ref(),
-                    Some(ExecProcessEvent::Exited {
-                        sandbox_denied: None,
-                        ..
-                    })
-                );
-                if event.is_none()
-                    || event_seq.is_some_and(|seq| seq > last_seq.saturating_add(1))
-                    || missing_sandbox_denial
-                {
-                    let response = match process
-                        .read(
-                            Some(last_seq),
-                            /*max_bytes*/ None,
-                            /*wait_ms*/ Some(0),
-                        )
-                        .await
-                    {
-                        Ok(response) => response,
-                        Err(err) => {
+        let lifecycle_started_at = Instant::now();
+        let lifecycle_span = tracing::info_span!(
+            "exec_server.remote.process_lifecycle",
+            process_id = %process_id,
+            attach_to_first_output_ms = field::Empty,
+            first_output_seq = field::Empty,
+            first_output_bytes = field::Empty,
+            attach_to_exit_ms = field::Empty,
+            exit_code = field::Empty,
+            attach_to_closed_ms = field::Empty,
+            recovery_reads = 0_u64,
+            completion_reason = field::Empty,
+        );
+        tokio::spawn(
+            async move {
+                let mut last_seq: u64 = 0;
+                let mut first_output_observed = false;
+                let mut exit_observed = false;
+                let mut recovery_reads: u64 = 0;
+                loop {
+                    let event = match events.recv().await {
+                        Ok(event) => Some(event),
+                        Err(broadcast::error::RecvError::Lagged(_)) => None,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            tracing::Span::current()
+                                .record("completion_reason", "event_stream_closed");
                             let state = state_tx.borrow().clone();
-                            let _ = state_tx.send_replace(state.failed(err.to_string()));
+                            let _ = state_tx.send_replace(
+                                state.failed("exec-server process event stream closed".to_string()),
+                            );
                             output_closed.store(true, Ordering::Release);
                             output_closed_notify.notify_waiters();
                             cancellation_token.cancel();
                             break;
                         }
                     };
-                    let ExecReadResponse {
-                        chunks,
-                        next_seq,
-                        exited,
-                        exit_code,
-                        closed,
-                        failure,
-                        sandbox_denied,
-                    } = response;
-                    for chunk in chunks.into_iter().filter(|chunk| chunk.seq > last_seq) {
-                        let bytes = chunk.chunk.into_inner();
-                        let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(bytes.clone());
-                        drop(guard);
-                        let _ = output_tx.send(bytes);
-                        output_notify.notify_waiters();
-                    }
-                    last_seq = last_seq.max(next_seq.saturating_sub(1));
-                    if let Some(message) = failure {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.failed(message));
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
-                    }
-                    if sandbox_denied || exited {
-                        let mut state = state_tx.borrow().clone();
-                        state.sandbox_denied |= sandbox_denied;
-                        let _ = state_tx.send_replace(if exited {
-                            state.exited(exit_code)
-                        } else {
-                            state
-                        });
-                    }
-                    if closed {
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
-                    }
-                    continue;
-                }
 
-                let Some(event) = event else {
-                    continue;
-                };
-                match event {
-                    ExecProcessEvent::Output(chunk) => {
-                        if chunk.seq <= last_seq {
-                            continue;
+                    let event_seq = event.as_ref().and_then(|event| match event {
+                        ExecProcessEvent::Output(chunk) => Some(chunk.seq),
+                        ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq } => {
+                            Some(*seq)
                         }
-                        last_seq = chunk.seq;
-                        let bytes = chunk.chunk.into_inner();
-                        let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(bytes.clone());
-                        drop(guard);
-                        let _ = output_tx.send(bytes);
-                        output_notify.notify_waiters();
-                    }
-                    ExecProcessEvent::Exited {
-                        seq,
-                        exit_code,
-                        sandbox_denied,
-                    } => {
-                        if seq <= last_seq {
-                            continue;
+                        ExecProcessEvent::Failed(_) => None,
+                    });
+                    let missing_sandbox_denial = matches!(
+                        event.as_ref(),
+                        Some(ExecProcessEvent::Exited {
+                            sandbox_denied: None,
+                            ..
+                        })
+                    );
+                    if event.is_none()
+                        || event_seq.is_some_and(|seq| seq > last_seq.saturating_add(1))
+                        || missing_sandbox_denial
+                    {
+                        let recovery_reason = if event.is_none() {
+                            "lagged"
+                        } else if missing_sandbox_denial {
+                            "missing_sandbox_denial"
+                        } else {
+                            "sequence_gap"
+                        };
+                        recovery_reads += 1;
+                        tracing::Span::current().record("recovery_reads", recovery_reads);
+                        let response = match process
+                            .read(
+                                Some(last_seq),
+                                /*max_bytes*/ None,
+                                /*wait_ms*/ Some(0),
+                            )
+                            .instrument(tracing::info_span!(
+                                "exec_server.remote.recovery_read",
+                                process_id = %process_id,
+                                reason = recovery_reason,
+                                after_seq = last_seq,
+                                observed_event_seq = ?event_seq,
+                            ))
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(err) => {
+                                tracing::Span::current()
+                                    .record("completion_reason", "recovery_read_failed");
+                                let state = state_tx.borrow().clone();
+                                let _ = state_tx.send_replace(state.failed(err.to_string()));
+                                output_closed.store(true, Ordering::Release);
+                                output_closed_notify.notify_waiters();
+                                cancellation_token.cancel();
+                                break;
+                            }
+                        };
+                        let ExecReadResponse {
+                            chunks,
+                            next_seq,
+                            exited,
+                            exit_code,
+                            closed,
+                            failure,
+                            sandbox_denied,
+                        } = response;
+                        for chunk in chunks.into_iter().filter(|chunk| chunk.seq > last_seq) {
+                            let seq = chunk.seq;
+                            let bytes = chunk.chunk.into_inner();
+                            if !first_output_observed {
+                                first_output_observed = true;
+                                let span = tracing::Span::current();
+                                span.record(
+                                    "attach_to_first_output_ms",
+                                    lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                                );
+                                span.record("first_output_seq", seq);
+                                span.record("first_output_bytes", bytes.len());
+                            }
+                            let mut guard = output_buffer.lock().await;
+                            guard.push_chunk(bytes.clone());
+                            drop(guard);
+                            let _ = output_tx.send(bytes);
+                            output_notify.notify_waiters();
                         }
-                        last_seq = seq;
-                        let mut state = state_tx.borrow().clone();
-                        state.sandbox_denied |= sandbox_denied.unwrap_or(false);
-                        let _ = state_tx.send_replace(state.exited(Some(exit_code)));
-                    }
-                    ExecProcessEvent::Closed { seq } => {
-                        if seq <= last_seq {
-                            continue;
+                        last_seq = last_seq.max(next_seq.saturating_sub(1));
+                        if let Some(message) = failure {
+                            tracing::Span::current().record("completion_reason", "process_failed");
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx.send_replace(state.failed(message));
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                            break;
                         }
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
+                        if sandbox_denied || exited {
+                            if exited && !exit_observed {
+                                exit_observed = true;
+                                let span = tracing::Span::current();
+                                span.record(
+                                    "attach_to_exit_ms",
+                                    lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                                );
+                                if let Some(exit_code) = exit_code {
+                                    span.record("exit_code", exit_code);
+                                }
+                            }
+                            let mut state = state_tx.borrow().clone();
+                            state.sandbox_denied |= sandbox_denied;
+                            let _ = state_tx.send_replace(if exited {
+                                state.exited(exit_code)
+                            } else {
+                                state
+                            });
+                        }
+                        if closed {
+                            let span = tracing::Span::current();
+                            span.record(
+                                "attach_to_closed_ms",
+                                lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                            );
+                            span.record("completion_reason", "closed_after_recovery");
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                            break;
+                        }
+                        continue;
                     }
-                    ExecProcessEvent::Failed(message) => {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.failed(message));
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
+
+                    let Some(event) = event else {
+                        continue;
+                    };
+                    match event {
+                        ExecProcessEvent::Output(chunk) => {
+                            if chunk.seq <= last_seq {
+                                continue;
+                            }
+                            last_seq = chunk.seq;
+                            let bytes = chunk.chunk.into_inner();
+                            if !first_output_observed {
+                                first_output_observed = true;
+                                let span = tracing::Span::current();
+                                span.record(
+                                    "attach_to_first_output_ms",
+                                    lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                                );
+                                span.record("first_output_seq", last_seq);
+                                span.record("first_output_bytes", bytes.len());
+                            }
+                            let mut guard = output_buffer.lock().await;
+                            guard.push_chunk(bytes.clone());
+                            drop(guard);
+                            let _ = output_tx.send(bytes);
+                            output_notify.notify_waiters();
+                        }
+                        ExecProcessEvent::Exited {
+                            seq,
+                            exit_code,
+                            sandbox_denied,
+                        } => {
+                            if seq <= last_seq {
+                                continue;
+                            }
+                            last_seq = seq;
+                            if !exit_observed {
+                                exit_observed = true;
+                                let span = tracing::Span::current();
+                                span.record(
+                                    "attach_to_exit_ms",
+                                    lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                                );
+                                span.record("exit_code", exit_code);
+                            }
+                            let mut state = state_tx.borrow().clone();
+                            state.sandbox_denied |= sandbox_denied.unwrap_or(false);
+                            let _ = state_tx.send_replace(state.exited(Some(exit_code)));
+                        }
+                        ExecProcessEvent::Closed { seq } => {
+                            if seq <= last_seq {
+                                continue;
+                            }
+                            let span = tracing::Span::current();
+                            span.record(
+                                "attach_to_closed_ms",
+                                lifecycle_started_at.elapsed().as_secs_f64() * 1_000.0,
+                            );
+                            span.record("completion_reason", "closed");
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                            break;
+                        }
+                        ExecProcessEvent::Failed(message) => {
+                            tracing::Span::current().record("completion_reason", "process_failed");
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx.send_replace(state.failed(message));
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                            break;
+                        }
                     }
                 }
             }
-        })
+            .instrument(lifecycle_span),
+        )
     }
 
     fn spawn_local_output_task(

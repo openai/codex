@@ -1,5 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
+use crate::session::turn::turn_diff_display_roots;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
@@ -25,6 +26,7 @@ use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::instrument;
 
 use super::format_exec_output_str;
 
@@ -83,7 +85,9 @@ fn tracker_update_for_known_delta<'a>(
     environment_id: Option<&str>,
     delta: &'a AppliedPatchDelta,
 ) -> TurnDiffTrackerUpdate<'a> {
-    if delta.is_exact() && delta.is_empty() {
+    if !delta.is_exact() {
+        TurnDiffTrackerUpdate::Invalidate
+    } else if delta.is_empty() {
         TurnDiffTrackerUpdate::None
     } else {
         TurnDiffTrackerUpdate::Track {
@@ -93,6 +97,7 @@ fn tracker_update_for_known_delta<'a>(
     }
 }
 
+#[instrument(name = "tool_event.exec_begin", level = "info", skip_all)]
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
@@ -537,6 +542,7 @@ async fn emit_exec_stage(
     }
 }
 
+#[instrument(name = "tool_event.exec_end", level = "info", skip_all)]
 async fn emit_exec_end(
     ctx: ToolEventCtx<'_>,
     exec_input: ExecCommandInput<'_>,
@@ -590,6 +596,19 @@ async fn emit_patch_end(
         .await;
 
     if let Some(tracker) = ctx.turn_diff_tracker {
+        if matches!(&tracker_update, TurnDiffTrackerUpdate::Track { .. }) {
+            let should_discover_display_roots = {
+                let guard = tracker.lock().await;
+                guard.needs_display_roots()
+            };
+            if should_discover_display_roots {
+                let display_roots = turn_diff_display_roots(ctx.turn).await;
+                let mut guard = tracker.lock().await;
+                if guard.needs_display_roots() {
+                    guard.set_environment_display_roots(display_roots);
+                }
+            }
+        }
         let (should_emit_turn_diff, unified_diff) = {
             let mut guard = tracker.lock().await;
             let had_unified_diff = guard.has_unified_diff();

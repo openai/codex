@@ -146,6 +146,8 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
+const X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-ordinal";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -292,6 +294,7 @@ struct WebsocketSession {
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
+    next_request_ordinal: u64,
 }
 
 // This is intentionally not a `PartialEq` implementation: request equality includes `input` and
@@ -349,6 +352,12 @@ fn responses_request_properties_match(
 }
 
 impl WebsocketSession {
+    fn take_next_request_ordinal(&mut self) -> u64 {
+        let ordinal = self.next_request_ordinal;
+        self.next_request_ordinal = self.next_request_ordinal.saturating_add(1);
+        ordinal
+    }
+
     fn set_connection_reused(&self, connection_reused: bool) {
         *self
             .connection_reused
@@ -1083,6 +1092,7 @@ impl ModelClientSession {
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
+        self.websocket_session.next_request_ordinal = 0;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
     }
@@ -1284,6 +1294,7 @@ impl ModelClientSession {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
             self.websocket_session.last_response_from_untraced_warmup = false;
+            self.websocket_session.next_request_ordinal = 0;
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1578,7 +1589,8 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
-            stamp_ws_stream_request_start_ms(&mut ws_request);
+            let request_ordinal = self.websocket_session.take_next_request_ordinal();
+            stamp_ws_stream_request_metadata(&mut ws_request, request_ordinal);
             let ResponsesWsRequest::ResponseCreate(ws_payload) = &mut ws_request;
             let store = ws_payload.store;
             self.client
@@ -1797,19 +1809,22 @@ impl ModelClientSession {
     }
 }
 
-/// Stamp a ResponsesWsRequest with the current time.
+/// Stamp a ResponsesWsRequest with request-scoped correlation metadata.
 ///
 /// Meant to be called just before sending the request over the socket, to capture realistic
-/// transport timing.
-fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
+/// transport timing. The ordinal is scoped to the physical WebSocket connection and increments
+/// for every `response.create`, including `generate=false` warmups.
+fn stamp_ws_stream_request_metadata(request: &mut ResponsesWsRequest, request_ordinal: u64) {
     let ResponsesWsRequest::ResponseCreate(payload) = request;
-    payload
-        .client_metadata
-        .get_or_insert_with(HashMap::new)
-        .insert(
-            X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
-            crate::turn_timing::now_unix_timestamp_ms().to_string(),
-        );
+    let client_metadata = payload.client_metadata.get_or_insert_with(HashMap::new);
+    client_metadata.insert(
+        X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
+        crate::turn_timing::now_unix_timestamp_ms().to_string(),
+    );
+    client_metadata.insert(
+        X_CODEX_WS_STREAM_REQUEST_ORDINAL_CLIENT_METADATA_KEY.to_string(),
+        request_ordinal.to_string(),
+    );
 }
 
 /// Builds the extra headers attached to Responses API requests.

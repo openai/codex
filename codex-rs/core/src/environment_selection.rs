@@ -14,6 +14,7 @@ use codex_utils_path_uri::PathUri;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
+use tracing::Instrument;
 
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
@@ -132,7 +133,12 @@ impl ThreadEnvironments {
                 self.shell_snapshot.clone(),
             )
             .remote_handle();
-            drop(tokio::spawn(resolution_task));
+            drop(tokio::spawn(resolution_task.instrument(
+                tracing::info_span!(
+                    "thread_environment.resolve",
+                    environment_id = %selected_environment.environment_id,
+                ),
+            )));
             let resolution = resolution.boxed().shared();
             next.push(SelectedTurnEnvironment {
                 selection: selected_environment.clone(),
