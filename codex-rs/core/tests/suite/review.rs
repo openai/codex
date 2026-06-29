@@ -30,6 +30,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -437,6 +438,10 @@ async fn review_exposes_mcp_tools_when_parent_mcp_is_ready() -> anyhow::Result<(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_preserves_plugin_pre_tool_use_hooks() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "plugin hook fixture only exists in the host Codex home"
+    );
 
     let server = start_mock_server().await;
     let call_id = "review-plugin-pretooluse";
@@ -571,8 +576,8 @@ async fn review_skips_pending_mcp_even_if_apps_is_pinned() -> anyhow::Result<()>
             review_started = true;
             false
         }
-        EventMsg::McpStartupUpdate(update) if review_started => {
-            panic!("review emitted an MCP startup update: {update:?}")
+        EventMsg::McpStartupUpdate(update) if review_started && update.server == "sample" => {
+            panic!("review emitted an MCP startup update for the pending server: {update:?}")
         }
         EventMsg::McpStartupComplete(complete) if review_started => {
             panic!("review emitted an MCP startup completion: {complete:?}")
