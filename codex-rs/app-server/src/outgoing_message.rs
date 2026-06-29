@@ -21,6 +21,8 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
+use tokio::time::timeout_at;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::warn;
@@ -37,6 +39,12 @@ pub(crate) use codex_app_server_transport::QueuedOutgoingMessage;
 use codex_protocol::account::PlanType;
 
 pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum RequestSendError {
+    TimedOut,
+    Closed,
+}
 
 /// Stable identifier for a client request scoped to a transport connection.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -347,6 +355,53 @@ impl OutgoingMessageSender {
             request_id_to_callback.remove(&outgoing_message_id);
         }
         (outgoing_message_id, rx_approve)
+    }
+
+    pub(crate) async fn send_request_to_connection_with_deadline(
+        &self,
+        connection_id: ConnectionId,
+        request: ServerRequestPayload,
+        thread_id: Option<ThreadId>,
+        deadline: Instant,
+    ) -> std::result::Result<(RequestId, oneshot::Receiver<ClientRequestResult>), RequestSendError>
+    {
+        let id = self.next_request_id();
+        let request = request.request_with_id(id.clone());
+        let outgoing_message = OutgoingMessage::Request(request.clone());
+        let permit = match timeout_at(deadline, self.sender.reserve()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err(RequestSendError::Closed),
+            Err(_) => return Err(RequestSendError::TimedOut),
+        };
+
+        let (callback_sender, callback_receiver) = oneshot::channel();
+        let mut request_id_to_callback =
+            match timeout_at(deadline, self.request_id_to_callback.lock()).await {
+                Ok(request_id_to_callback) => request_id_to_callback,
+                Err(_) => return Err(RequestSendError::TimedOut),
+            };
+        if Instant::now() >= deadline {
+            return Err(RequestSendError::TimedOut);
+        }
+        request_id_to_callback.insert(
+            id.clone(),
+            PendingCallbackEntry {
+                callback: callback_sender,
+                thread_id,
+                request: request.clone(),
+            },
+        );
+        drop(request_id_to_callback);
+
+        permit.send(OutgoingEnvelope::ToConnection {
+            connection_id,
+            message: outgoing_message,
+            write_complete_tx: None,
+        });
+        self.analytics_events_client
+            .track_server_request(connection_id.0, request);
+
+        Ok((id, callback_receiver))
     }
 
     pub(crate) async fn replay_requests_to_connection_for_thread(
@@ -756,6 +811,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
+    use tokio::time::Instant;
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -1084,6 +1140,43 @@ mod tests {
             }
             other => panic!("expected targeted response envelope, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn deadline_expires_while_waiting_for_outgoing_queue_capacity() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(1);
+        tx.try_send(OutgoingEnvelope::Broadcast {
+            message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification {
+                    summary: "queued".to_string(),
+                    details: None,
+                    path: None,
+                    range: None,
+                },
+            )),
+        })
+        .expect("the queue should accept the filler message");
+        let outgoing =
+            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
+
+        let error = outgoing
+            .send_request_to_connection_with_deadline(
+                ConnectionId(42),
+                ServerRequestPayload::ApplyPatchApproval(ApplyPatchApprovalParams {
+                    conversation_id: ThreadId::new(),
+                    call_id: "call-id".to_string(),
+                    file_changes: HashMap::new(),
+                    reason: None,
+                    grant_root: None,
+                }),
+                /*thread_id*/ None,
+                Instant::now() + Duration::from_millis(10),
+            )
+            .await
+            .expect_err("the full queue should make the request time out");
+
+        assert_eq!(error, RequestSendError::TimedOut);
+        assert!(outgoing.request_id_to_callback.lock().await.is_empty());
     }
 
     #[tokio::test]
