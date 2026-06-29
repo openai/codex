@@ -532,6 +532,7 @@ client_request_definitions! {
     },
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,
+        inspect_params: true,
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalSetResponse,
     },
@@ -1976,6 +1977,10 @@ mod tests {
                 thread_id: "goal-thread".to_string(),
                 objective: Some("ship it".to_string()),
                 status: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                sandbox_policy: None,
+                permissions: None,
                 token_budget: None,
             },
         };
@@ -3544,6 +3549,10 @@ mod tests {
                 thread_id: "thr_123".to_string(),
                 objective: Some("ship goal mode".to_string()),
                 status: Some(v2::ThreadGoalStatus::Active),
+                approval_policy: None,
+                approvals_reviewer: None,
+                sandbox_policy: None,
+                permissions: None,
                 token_budget: Some(Some(10_000)),
             },
         };

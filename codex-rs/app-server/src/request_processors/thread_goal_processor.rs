@@ -9,17 +9,22 @@ use codex_goal_extension::GoalTokenBudgetUpdate;
 pub(crate) struct ThreadGoalRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
+    config_manager: ConfigManager,
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
 }
 
 impl ThreadGoalRequestProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
+        arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
+        config_manager: ConfigManager,
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
@@ -27,7 +32,9 @@ impl ThreadGoalRequestProcessor {
         Self {
             thread_manager,
             outgoing,
+            arg0_paths,
             config,
+            config_manager,
             thread_state_manager,
             state_db,
             goal_service,
@@ -102,6 +109,11 @@ impl ThreadGoalRequestProcessor {
         if !self.config.features.enabled(Feature::Goals) {
             return Err(invalid_request("goals feature is disabled"));
         }
+        if params.sandbox_policy.is_some() && params.permissions.is_some() {
+            return Err(invalid_request(
+                "`permissions` cannot be combined with `sandboxPolicy`",
+            ));
+        }
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
         let state_db = self.state_db_for_materialized_thread(thread_id).await?;
@@ -115,6 +127,15 @@ impl ThreadGoalRequestProcessor {
         };
         let status = params.status.map(ThreadGoalStatus::to_core);
         let objective = params.objective.as_deref();
+        let token_budget = params.token_budget;
+
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            // Apply before writing the goal. Once an active goal is visible,
+            // an already-queued idle lifecycle hook can wake a continuation
+            // independently of `apply_runtime_effects`.
+            self.apply_goal_permission_context(thread.as_ref(), &params)
+                .await?;
+        }
 
         let outcome = self
             .goal_service
@@ -126,7 +147,7 @@ impl ThreadGoalRequestProcessor {
                         .map(GoalObjectiveUpdate::Set)
                         .unwrap_or(GoalObjectiveUpdate::Keep),
                     status,
-                    token_budget: match params.token_budget {
+                    token_budget: match token_budget {
                         Some(token_budget) => GoalTokenBudgetUpdate::Set(token_budget),
                         None => GoalTokenBudgetUpdate::Keep,
                     },
@@ -160,6 +181,78 @@ impl ThreadGoalRequestProcessor {
             .await;
         outcome.apply_runtime_effects(&self.goal_service).await;
         Ok(())
+    }
+
+    async fn apply_goal_permission_context(
+        &self,
+        thread: &CodexThread,
+        params: &ThreadGoalSetParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        let has_permission_context = params.approval_policy.is_some()
+            || params.approvals_reviewer.is_some()
+            || params.sandbox_policy.is_some()
+            || params.permissions.is_some();
+        if !has_permission_context {
+            return Ok(());
+        }
+
+        let approval_policy = params
+            .approval_policy
+            .map(codex_app_server_protocol::AskForApproval::to_core);
+        let approvals_reviewer = params
+            .approvals_reviewer
+            .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
+        let sandbox_policy = params.sandbox_policy.clone().map(|policy| policy.to_core());
+        let (permission_profile, active_permission_profile, profile_workspace_roots) =
+            if let Some(permissions) = params.permissions.clone() {
+                let snapshot = thread.config_snapshot().await;
+                let overrides = ConfigOverrides {
+                    workspace_roots: Some(snapshot.workspace_roots.clone()),
+                    default_permissions: Some(permissions),
+                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                    ..Default::default()
+                };
+                let config = self
+                    .config_manager
+                    .load_for_cwd(
+                        /*request_overrides*/ None,
+                        overrides,
+                        Some(snapshot.cwd().to_path_buf()),
+                    )
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                // Startup config is allowed to fall back when requirements
+                // disallow a configured profile. An explicit goal update is
+                // different: reject it before a continuation can start.
+                if let Some(warning) = config.startup_warnings.iter().find(|warning| {
+                    warning.contains("Configured value for `permission_profile` is disallowed")
+                }) {
+                    return Err(invalid_request(format!(
+                        "invalid goal continuation settings: {warning}"
+                    )));
+                }
+                (
+                    Some(config.permissions.permission_profile().clone()),
+                    config.permissions.active_permission_profile(),
+                    Some(config.permissions.profile_workspace_roots().to_vec()),
+                )
+            } else {
+                (None, None, None)
+            };
+
+        thread
+            .apply_thread_settings_overrides(CodexThreadSettingsOverrides {
+                approval_policy,
+                approvals_reviewer,
+                sandbox_policy,
+                permission_profile,
+                active_permission_profile,
+                profile_workspace_roots,
+                ..Default::default()
+            })
+            .await
+            .map_err(|err| invalid_request(format!("invalid goal continuation settings: {err}")))
     }
 
     async fn thread_goal_get_inner(

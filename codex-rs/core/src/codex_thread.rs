@@ -355,6 +355,15 @@ impl CodexThread {
         self.codex.session.preview_settings(&updates).await
     }
 
+    /// Apply persistent thread settings overrides immediately.
+    pub async fn apply_thread_settings_overrides(
+        &self,
+        overrides: CodexThreadSettingsOverrides,
+    ) -> ConstraintResult<()> {
+        let updates = self.thread_settings_update(overrides).await;
+        self.codex.session.update_settings(updates).await
+    }
+
     async fn thread_settings_update(
         &self,
         overrides: CodexThreadSettingsOverrides,
