@@ -384,6 +384,197 @@ restrict_to_allowed_sources = true
 }
 
 #[test]
+fn projected_user_config_removes_blocked_marketplaces_and_plugins() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    let config_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))
+        .expect("absolute config path");
+    let stack = config_layer_stack_with_user_config(
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.company]
+source = "git"
+url = "https://github.com/example/allowed.git"
+"#,
+        Some((
+            r#"
+[marketplaces.allowed]
+source_type = "git"
+source = "https://github.com/example/allowed.git"
+
+[marketplaces.blocked]
+source_type = "git"
+source = "https://github.com/example/blocked.git"
+
+[plugins."sample@allowed"]
+enabled = true
+
+[plugins."sample@blocked"]
+enabled = true
+"#,
+            config_file,
+        )),
+    );
+
+    let projected =
+        project_effective_user_config(&stack, codex_home.path()).expect("project user config");
+    assert_eq!(
+        projected["marketplaces"]
+            .as_table()
+            .expect("projected marketplaces")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["allowed".to_string()]
+    );
+    assert_eq!(
+        configured_plugins_from_stack(&stack, codex_home.path())
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec!["sample@allowed".to_string()]
+    );
+
+    let raw = stack.effective_user_config().expect("raw user config");
+    assert!(raw["marketplaces"]["blocked"].is_table());
+    assert!(raw["plugins"]["sample@blocked"].is_table());
+}
+
+#[test]
+fn managed_bundled_config_is_retained_only_at_its_owned_path() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    let bundled_root = codex_home
+        .path()
+        .join(".tmp/bundled-marketplaces")
+        .join(crate::OPENAI_BUNDLED_MARKETPLACE_NAME);
+    let config_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))
+        .expect("absolute config path");
+    let stack = config_layer_stack_with_user_config(
+        r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+"#,
+        Some((
+            &format!(
+                r#"
+[marketplaces.openai-bundled]
+source_type = "local"
+source = {bundled_root:?}
+
+[marketplaces.openai-bundled-alpha]
+source_type = "local"
+source = "/tmp/not-managed"
+
+[marketplaces.evil]
+source_type = "local"
+source = {bundled_root:?}
+
+[plugins."sample@openai-bundled"]
+enabled = true
+
+[plugins."sample@openai-bundled-alpha"]
+enabled = true
+
+[plugins."sample@evil"]
+enabled = true
+"#
+            ),
+            config_file,
+        )),
+    );
+
+    let projected =
+        project_effective_user_config(&stack, codex_home.path()).expect("project user config");
+
+    assert_eq!(
+        projected["marketplaces"]
+            .as_table()
+            .expect("projected marketplaces")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![crate::OPENAI_BUNDLED_MARKETPLACE_NAME.to_string()]
+    );
+    assert_eq!(
+        projected["plugins"]
+            .as_table()
+            .expect("projected plugins")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![format!("sample@{}", crate::OPENAI_BUNDLED_MARKETPLACE_NAME)]
+    );
+}
+
+#[test]
+fn allowlisted_config_names_are_not_globally_reserved() {
+    let codex_home = TempDir::new().expect("create Codex home");
+    let source_root = TempDir::new().expect("create marketplace root");
+    let source_root = source_root
+        .path()
+        .canonicalize()
+        .expect("canonical marketplace root");
+    let config_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))
+        .expect("absolute config path");
+    let stack = config_layer_stack_with_user_config(
+        &format!(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.local]
+source = "local"
+path = {source_root:?}
+"#
+        ),
+        Some((
+            &format!(
+                r#"
+[marketplaces.openai-bundled]
+source_type = "local"
+source = {source_root:?}
+
+[marketplaces.openai-curated]
+source_type = "local"
+source = {source_root:?}
+
+[plugins."sample@openai-bundled"]
+enabled = true
+
+[plugins."sample@openai-curated"]
+enabled = true
+"#
+            ),
+            config_file,
+        )),
+    );
+
+    let projected =
+        project_effective_user_config(&stack, codex_home.path()).expect("project user config");
+    assert_eq!(
+        projected["marketplaces"]
+            .as_table()
+            .expect("projected marketplaces")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["openai-bundled".to_string(), "openai-curated".to_string()]
+    );
+    assert_eq!(
+        projected["plugins"]
+            .as_table()
+            .expect("projected plugins")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            "sample@openai-bundled".to_string(),
+            "sample@openai-curated".to_string()
+        ]
+    );
+}
+
+#[test]
 fn blocked_upgrade_is_rejected_before_marketplace_installation() {
     let codex_home = TempDir::new().expect("create Codex home");
     let config_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))
