@@ -27,6 +27,44 @@ fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     );
 }
 
+fn submit_bare_review(chat: &mut ChatWidget) {
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
+fn submit_review_with_args(
+    chat: &mut ChatWidget,
+    op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+    instructions: &str,
+) {
+    chat.dispatch_command_with_args(SlashCommand::Review, instructions.to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::Review {
+            target: ReviewTarget::Custom {
+                instructions: actual
+            }
+        }) if actual == instructions
+    );
+}
+
+fn assert_bare_review_rejected(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    expected_error: &str,
+) {
+    submit_bare_review(chat);
+    let error = drain_insert_history(rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(error.contains(expected_error), "unexpected error: {error}");
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
 #[tokio::test]
 async fn mcp_startup_ignores_status_for_other_thread() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -74,11 +112,7 @@ async fn review_command_during_mcp_startup_opens_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.bottom_pane
-        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    submit_bare_review(&mut chat);
 
     assert!(chat.bottom_pane.composer_text().is_empty());
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -86,39 +120,25 @@ async fn review_command_during_mcp_startup_opens_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn review_with_args_during_mcp_startup_skips_local_startup_round() {
+async fn review_with_args_keeps_mcp_startup_in_background() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "check regressions".to_string(),
-        Vec::new(),
-    );
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::Review {
-            target: ReviewTarget::Custom { instructions }
-        }) if instructions == "check regressions"
-    );
-    assert!(chat.mcp_startup_status.is_none());
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.status_state.current_status.header, "Working");
 }
 
 #[tokio::test]
-async fn skipped_mcp_startup_updates_do_not_reopen_or_finish_review_task() {
+async fn background_mcp_startup_completion_does_not_finish_review_task() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "check regressions".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
 
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
@@ -136,16 +156,11 @@ async fn skipped_mcp_startup_updates_do_not_reopen_or_finish_review_task() {
 }
 
 #[tokio::test]
-async fn review_before_first_mcp_update_suppresses_startup_round() {
+async fn mcp_startup_can_complete_after_review_submission() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "check regressions".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
 
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
@@ -156,18 +171,15 @@ async fn review_before_first_mcp_update_suppresses_startup_round() {
 }
 
 #[tokio::test]
-async fn failed_review_setup_reenables_mcp_startup_updates() {
+async fn failed_review_setup_restores_background_mcp_status() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "review unrelated branch".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
-    assert!(chat.mcp_startup_status.is_none());
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
 
     handle_error(
         &mut chat,
@@ -178,19 +190,22 @@ async fn failed_review_setup_reenables_mcp_startup_updates() {
 
     assert!(chat.mcp_startup_status.is_some());
     assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+    assert!(
+        chat.status_state
+            .current_status
+            .header
+            .starts_with("Booting MCP server")
+    );
 }
 
 #[tokio::test]
-async fn late_partial_startup_round_after_failed_review_setup_stays_ignored() {
+async fn partial_mcp_startup_continues_after_failed_review_setup() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "review unrelated branch".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
 
     handle_error(
         &mut chat,
@@ -201,8 +216,9 @@ async fn late_partial_startup_round_after_failed_review_setup_stays_ignored() {
 
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
 
-    assert!(chat.mcp_startup_status.is_none());
-    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
 
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
@@ -212,7 +228,7 @@ async fn late_partial_startup_round_after_failed_review_setup_stays_ignored() {
 }
 
 #[tokio::test]
-async fn replayed_active_review_rearms_mcp_startup_suppression() {
+async fn replayed_active_review_keeps_mcp_startup_in_background() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
 
@@ -220,7 +236,9 @@ async fn replayed_active_review_rearms_mcp_startup_suppression() {
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
     assert!(chat.review.is_review_mode);
-    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+    assert!(!chat.bottom_pane.is_foreground_task_running());
 
     handle_exited_review_mode(&mut chat);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
@@ -249,17 +267,12 @@ async fn completed_replayed_review_does_not_hide_fresh_mcp_round() {
 }
 
 #[tokio::test]
-async fn lag_recovery_during_review_does_not_promote_skipped_terminal_round() {
+async fn lag_recovery_after_failed_review_tracks_background_mcp_failure() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Review,
-        "review unrelated branch".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(op_rx.try_recv(), Ok(Op::Review { .. }));
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
 
     chat.finish_mcp_startup_after_lag();
     handle_error(
@@ -272,11 +285,15 @@ async fn lag_recovery_during_review_does_not_promote_skipped_terminal_round() {
     notify_mcp_status_error(
         &mut chat,
         "alpha",
-        "MCP client for `alpha` failed to start: stale failure",
+        "MCP client for `alpha` failed to start: handshake failed",
     );
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
 
-    assert!(drain_insert_history(&mut rx).is_empty());
+    let warning = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(warning.contains("handshake failed"));
     assert!(chat.mcp_startup_status.is_none());
     assert!(!chat.bottom_pane.is_task_running());
 }
@@ -286,18 +303,11 @@ async fn bare_review_submission_during_agent_turn_preserves_draft() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
 
-    chat.bottom_pane
-        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let error = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<String>();
-    assert!(error.contains("'/review' is disabled while a task is in progress."));
-    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
 }
 
 #[tokio::test]
@@ -306,18 +316,11 @@ async fn queued_prompt_blocks_review_during_mcp_startup() {
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     chat.queue_user_message("queued prompt".into());
 
-    chat.bottom_pane
-        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let error = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<String>();
-    assert!(error.contains("'/review' is disabled while a task is in progress."));
-    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
 }
 
 #[tokio::test]
@@ -328,18 +331,11 @@ async fn compact_task_blocks_review_when_mcp_startup_arrives() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Compact)));
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
-    chat.bottom_pane
-        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let error = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<String>();
-    assert!(error.contains("'/review' is disabled while a task is in progress."));
-    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
 }
 
 #[tokio::test]
@@ -348,18 +344,11 @@ async fn side_conversation_rejection_preserves_review_draft_during_mcp_startup()
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     chat.set_side_conversation_active(/*active*/ true);
 
-    chat.bottom_pane
-        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    let error = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<String>();
-    assert!(error.contains("'/review' is unavailable in side conversations."));
-    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is unavailable in side conversations.",
+    );
 }
 
 #[tokio::test]

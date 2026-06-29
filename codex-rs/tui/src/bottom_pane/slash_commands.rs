@@ -51,6 +51,13 @@ impl SlashCommandItem {
             Self::ServiceTier(_) => true,
         }
     }
+
+    pub(crate) fn available_during_mcp_startup(&self) -> bool {
+        match self {
+            Self::Builtin(cmd) => cmd.available_during_mcp_startup(),
+            Self::ServiceTier(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

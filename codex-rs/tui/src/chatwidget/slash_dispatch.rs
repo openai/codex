@@ -45,11 +45,11 @@ impl ChatWidget {
     /// that staged entry after dispatch so slash-command recall follows the same "submitted input"
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
-        let clear_review_draft = cmd == SlashCommand::Review
-            && (!self.active_side_conversation || cmd.available_in_side_conversation())
-            && !self.slash_command_blocked_by_active_task(SlashCommand::Review);
+        let clear_deferred_draft = cmd.available_during_background_task_only()
+            && !self.active_side_conversation
+            && !self.slash_command_blocked_by_active_task(cmd);
         self.dispatch_command(cmd);
-        if clear_review_draft {
+        if clear_deferred_draft {
             self.bottom_pane
                 .set_composer_text(String::new(), Vec::new(), Vec::new());
         }
@@ -139,16 +139,17 @@ impl ChatWidget {
     }
 
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
-        if cmd == SlashCommand::Review {
-            let mcp_startup_is_only_task = self.mcp_startup_started_while_idle
-                && self.mcp_startup_status.is_some()
-                && !self.turn_lifecycle.agent_turn_running
-                && !self.input_queue.user_turn_pending_start
-                && !self.has_queued_follow_up_messages()
-                && !self.review.is_review_mode;
-            return self.bottom_pane.is_task_running() && !mcp_startup_is_only_task;
-        }
-        (!cmd.available_during_task() && self.bottom_pane.is_task_running())
+        let foreground_work_active = self.bottom_pane.is_foreground_task_running()
+            || self.input_queue.user_turn_pending_start
+            || self.has_queued_follow_up_messages();
+        let blocked_by_task = if foreground_work_active {
+            !cmd.available_during_task()
+        } else if self.bottom_pane.is_mcp_startup_running() {
+            !cmd.available_during_mcp_startup()
+        } else {
+            false
+        };
+        blocked_by_task
             || (cmd == SlashCommand::Resume
                 && (self.input_queue.user_turn_pending_start
                     || self.turn_lifecycle.agent_turn_running))
@@ -167,9 +168,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            if cmd != SlashCommand::Review {
-                self.bottom_pane.drain_pending_submission_state();
-            }
+            self.bottom_pane.drain_pending_submission_state();
             self.request_redraw();
             return;
         }

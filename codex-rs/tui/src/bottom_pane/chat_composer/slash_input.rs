@@ -215,7 +215,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
+            let next_mode = esc_hint_mode(self.footer.mode, self.task_activity.is_busy());
             if next_mode != self.footer.mode {
                 self.footer.mode = next_mode;
                 return (InputResult::None, true);
@@ -301,7 +301,7 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-                if self.is_task_running {
+                if self.task_activity.is_busy() {
                     return self.handle_submission(/*should_queue*/ true);
                 }
                 (InputResult::None, true)
@@ -360,9 +360,12 @@ impl ChatComposer {
                     }
 
                     self.stage_selected_slash_command_history(&sel);
-                    let preserve_review_draft = self.is_task_running
-                        && matches!(sel, CommandItem::Builtin(SlashCommand::Review));
-                    if !preserve_review_draft {
+                    let defer_draft_clear = self.task_activity.is_busy()
+                        && matches!(
+                            sel,
+                            CommandItem::Builtin(cmd) if cmd.available_during_background_task_only()
+                        );
+                    if !defer_draft_clear {
                         self.draft.textarea.set_text_clearing_elements("");
                         self.draft.is_bash_mode = false;
                     }

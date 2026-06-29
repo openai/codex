@@ -16,11 +16,9 @@
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
 //!
-//! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
-//! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
-//! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
-//! `update_task_running_state`.
+//! The bottom pane tracks foreground task activity separately from background MCP startup while
+//! rendering both through the same busy indicator. This lets command availability distinguish
+//! work that blocks a new foreground task from startup that can continue behind it.
 //!
 //! For preamble-capable models, assistant output may include commentary before
 //! the final answer. During streaming we hide the status row to avoid duplicate
@@ -596,8 +594,6 @@ pub(crate) struct ChatWidget {
     /// as "running" while this is populated, even if no agent turn is currently
     /// executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    /// Whether the active MCP startup round began while no other task was running.
-    mcp_startup_started_while_idle: bool,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
@@ -608,8 +604,6 @@ pub(crate) struct ChatWidget {
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     /// Tracks whether the buffered next round has seen any `Starting` update yet.
     mcp_startup_pending_next_round_saw_starting: bool,
-    /// Ignore startup notifications while a review that skipped MCP startup is active.
-    mcp_startup_updates_suppressed_for_review: bool,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
@@ -1244,11 +1238,10 @@ impl ChatWidget {
     }
 
     fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
-        self.skip_mcp_startup_for_review();
         if self.review.pre_review_token_info.is_none() {
             self.review.pre_review_token_info = Some(self.token_info.clone());
         }
-        if !from_replay && !self.bottom_pane.is_task_running() {
+        if !from_replay {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
         self.review.is_review_mode = true;
@@ -1257,19 +1250,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn exit_review_mode_after_item(&mut self, render_source: ThreadItemRenderSource) {
+    fn exit_review_mode_after_item(&mut self) {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
         self.review.is_review_mode = false;
-        self.mcp_startup_updates_suppressed_for_review = false;
-        if render_source.is_replay() {
-            self.mcp_startup_ignore_updates_until_next_start = false;
-            self.mcp_startup_allow_terminal_only_next_round = false;
-            self.mcp_startup_pending_next_round.clear();
-            self.mcp_startup_pending_next_round_saw_starting = false;
-            self.mcp_startup_started_while_idle = false;
-        }
         self.restore_pre_review_token_info();
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
@@ -1849,9 +1834,9 @@ impl ChatWidget {
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
         if op.is_review() && !self.turn_lifecycle.agent_turn_running {
-            self.skip_mcp_startup_for_review();
-            if !self.bottom_pane.is_task_running() {
-                self.bottom_pane.set_task_running(/*running*/ true);
+            self.bottom_pane.set_task_running(/*running*/ true);
+            if self.status_header_is_mcp_startup_owned() {
+                self.set_status_header(String::from("Working"));
             }
         }
         if let AppCommand::Interrupt { behavior } = op

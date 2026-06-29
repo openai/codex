@@ -200,6 +200,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Import
+            | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
@@ -207,7 +208,6 @@ impl SlashCommand {
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Resume
-            | SlashCommand::Review
             | SlashCommand::Model
             | SlashCommand::Personality
             | SlashCommand::Permissions
@@ -241,6 +241,15 @@ impl SlashCommand {
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
+    }
+
+    /// Whether this command can run while MCP servers initialize in the background.
+    pub fn available_during_mcp_startup(self) -> bool {
+        self == SlashCommand::Review || self.available_during_task()
+    }
+
+    pub fn available_during_background_task_only(self) -> bool {
+        self.available_during_mcp_startup() && !self.available_during_task()
     }
 
     fn is_visible(self) -> bool {
@@ -295,7 +304,6 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
-        assert!(SlashCommand::Review.available_during_task());
     }
 
     #[test]
