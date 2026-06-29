@@ -98,6 +98,7 @@ pub use tool_executor::ToolExecutorFuture;
 pub use tool_executor::ToolExposure;
 pub use tool_output::JsonToolOutput;
 pub use tool_output::ToolOutput;
+pub use tool_payload::INVALID_TOOL_SEARCH_QUERY;
 pub use tool_payload::ToolPayload;
 pub use tool_search::ToolSearchEntry;
 pub use tool_search::ToolSearchInfo;

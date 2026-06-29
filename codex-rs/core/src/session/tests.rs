@@ -10487,9 +10487,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let call = ToolRouter::build_tool_call(item.clone())
-        .expect("build tool call")
-        .expect("tool call present");
+    let call = ToolRouter::build_tool_call(item.clone()).expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let err = router
         .dispatch_tool_call_with_code_mode_result(
@@ -10826,7 +10824,7 @@ while :; do sleep 1; done"#,
         call_id: "shell-cleanup-call".to_string(),
         internal_chat_message_metadata_passthrough: None,
     };
-    let call = ToolRouter::build_tool_call(item)?
+    let call = ToolRouter::build_tool_call(item)
         .expect("shell command response item should build a tool call");
     let cancellation_token = CancellationToken::new();
     let cancellation_tx = cancellation_token.clone();

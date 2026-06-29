@@ -5,6 +5,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::openai_models::InputModality;
+use codex_tools::INVALID_TOOL_SEARCH_QUERY;
 use serde::Deserialize;
 use std::collections::HashSet;
 use tracing::info;
@@ -15,7 +16,6 @@ use crate::util::error_or_panic;
 
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
-const INVALID_TOOL_SEARCH_QUERY: &str = "[invalid tool_search arguments omitted]";
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 

@@ -12,13 +12,11 @@ use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -110,8 +108,8 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
-    #[instrument(level = "trace", skip_all, err)]
-    pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {
+    #[instrument(level = "trace", skip_all)]
+    pub fn build_tool_call(item: ResponseItem) -> Option<ToolCall> {
         match item {
             ResponseItem::FunctionCall {
                 name,
@@ -121,45 +119,35 @@ impl ToolRouter {
                 ..
             } => {
                 let tool_name = ToolName::new(namespace, name);
-                Ok(Some(ToolCall {
+                Some(ToolCall {
                     tool_name,
                     call_id,
                     payload: ToolPayload::Function { arguments },
-                }))
+                })
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
                 execution,
                 arguments,
                 ..
-            } if execution == "client" && !call_id.is_empty() => {
-                let arguments = SearchToolCallParams::deserialize(&arguments).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse tool_search arguments: {:?} validation at line {}, column {}",
-                        err.classify(),
-                        err.line(),
-                        err.column()
-                    ))
-                })?;
-                Ok(Some(ToolCall {
-                    tool_name: ToolName::plain("tool_search"),
-                    call_id,
-                    payload: ToolPayload::ToolSearch { arguments },
-                }))
-            }
-            ResponseItem::ToolSearchCall { .. } => Ok(None),
+            } if execution == "client" && !call_id.is_empty() => Some(ToolCall {
+                tool_name: ToolName::plain("tool_search"),
+                call_id,
+                payload: ToolPayload::ToolSearch { arguments },
+            }),
+            ResponseItem::ToolSearchCall { .. } => None,
             ResponseItem::CustomToolCall {
                 name,
                 namespace,
                 input,
                 call_id,
                 ..
-            } => Ok(Some(ToolCall {
+            } => Some(ToolCall {
                 tool_name: ToolName::new(namespace, name),
                 call_id,
                 payload: ToolPayload::Custom { input },
-            })),
-            _ => Ok(None),
+            }),
+            _ => None,
         }
     }
 

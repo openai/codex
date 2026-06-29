@@ -9,12 +9,15 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_protocol::models::SearchToolCallParams;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ToolDispatchInvocation;
 use codex_rollout_trace::ToolDispatchPayload;
 use codex_rollout_trace::ToolDispatchRequester;
 use codex_rollout_trace::ToolDispatchResult;
 use codex_rollout_trace::ToolDispatchTraceContext;
+use codex_tools::INVALID_TOOL_SEARCH_QUERY;
+use serde::Deserialize;
 
 /// Keeps registry early-return paths paired with trace end events.
 pub(crate) struct ToolDispatchTrace {
@@ -105,9 +108,15 @@ fn tool_dispatch_payload(payload: &ToolPayload) -> ToolDispatchPayload {
         ToolPayload::Function { arguments } => ToolDispatchPayload::Function {
             arguments: arguments.clone(),
         },
-        ToolPayload::ToolSearch { arguments } => ToolDispatchPayload::ToolSearch {
-            arguments: arguments.clone(),
-        },
+        ToolPayload::ToolSearch { arguments } => {
+            let arguments = SearchToolCallParams::deserialize(arguments).unwrap_or_else(|_| {
+                SearchToolCallParams {
+                    query: INVALID_TOOL_SEARCH_QUERY.to_string(),
+                    limit: None,
+                }
+            });
+            ToolDispatchPayload::ToolSearch { arguments }
+        }
         ToolPayload::Custom { input } => ToolDispatchPayload::Custom {
             input: input.clone(),
         },
