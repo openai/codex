@@ -173,6 +173,10 @@ impl Session {
         .await
     }
 
+    /// Builds a step-local empty MCP runtime without replacing the session's published runtime.
+    ///
+    /// This preserves environment context needed during tool planning while suppressing Apps,
+    /// configured servers, connectors, and MCP-backed skill dependencies for the step.
     pub(crate) fn disabled_mcp_runtime_for_step(
         &self,
         turn_context: &TurnContext,

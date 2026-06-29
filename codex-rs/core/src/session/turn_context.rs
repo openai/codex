@@ -149,6 +149,9 @@ enum TurnMultiAgentRuntime {
     Preview,
 }
 
+/// Controls whether a session may initialize and expose MCP-backed capabilities.
+///
+/// The policy is chosen when the session is spawned and remains fixed for the session lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum McpAccess {
     Enabled,

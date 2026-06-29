@@ -371,6 +371,8 @@ impl McpConnectionManager {
     }
 
     /// Returns immediately with whether every configured client has finished starting.
+    ///
+    /// A manager with no configured clients is considered complete.
     pub fn startup_is_complete(&self) -> bool {
         self.clients
             .values()
