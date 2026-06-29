@@ -101,7 +101,7 @@ async fn malformed_tool_search_is_repaired_before_persistence_and_resume() -> Re
     );
     let missing_id_item = tool_search_item(
         "missing-call-id-item",
-        None,
+        /*call_id*/ None,
         "client",
         json!({"query": "missing"}),
     );
@@ -113,7 +113,7 @@ async fn malformed_tool_search_is_repaired_before_persistence_and_resume() -> Re
     );
     let server_item = tool_search_item(
         "server-item",
-        None,
+        /*call_id*/ None,
         "server",
         json!({"serverGenerated": {"nested": true}}),
     );
