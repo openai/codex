@@ -1,13 +1,16 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+const TRUSTED_WINDOWS_POWERSHELL_EXE: &str =
+    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+
 #[tokio::test]
 async fn evaluates_powershell_inner_commands_against_prompt_rules() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
             policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="prompt")"#.to_string()),
             command: vec![
-                "powershell.exe".to_string(),
+                TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "echo blocked".to_string(),
@@ -30,7 +33,7 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
         ExecApprovalRequirementScenario {
             policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
             command: vec![
-                "powershell.exe".to_string(),
+                TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "echo blocked".to_string(),
@@ -51,7 +54,7 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
 #[test]
 fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
     let command = vec![
-        "powershell.exe".to_string(),
+        TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
         "-NoProfile".to_string(),
         "-Command".to_string(),
         "echo blocked".to_string(),
@@ -63,6 +66,25 @@ fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
             commands: vec![vec!["echo".to_string(), "blocked".to_string()]],
             used_complex_parsing: false,
             command_origin: ExecPolicyCommandOrigin::PowerShell,
+        }
+    );
+}
+
+#[test]
+fn commands_for_exec_policy_keeps_bare_powershell_alias_opaque() {
+    let command = vec![
+        "powershell.exe".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "echo blocked".to_string(),
+    ];
+
+    assert_eq!(
+        commands_for_exec_policy(&command),
+        ExecPolicyCommands {
+            commands: vec![command],
+            used_complex_parsing: false,
+            command_origin: ExecPolicyCommandOrigin::Generic,
         }
     );
 }
@@ -183,7 +205,7 @@ async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
         ExecApprovalRequirementScenario {
             policy_src: None,
             command: vec![
-                "powershell.exe".to_string(),
+                TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "Remove-Item test -Force".to_string(),
