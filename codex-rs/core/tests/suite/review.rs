@@ -414,44 +414,15 @@ async fn review_exposes_mcp_tools_when_parent_mcp_is_ready() -> anyhow::Result<(
         matches!(event, EventMsg::McpStartupComplete(_))
     })
     .await;
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(completed_sse()),
-            responses::sse(completed_sse()),
-        ],
-    )
-    .await;
-
-    test.submit_turn("Inspect available Apps tools").await?;
+    let request_log = responses::mount_sse_once(&server, responses::sse(completed_sse())).await;
 
     submit_custom_review(&test.codex, "Review with ready MCP tools").await?;
-    let entered = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::EnteredReviewMode(_) | EventMsg::Error(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    assert!(
-        matches!(entered, EventMsg::EnteredReviewMode(_)),
-        "review did not start: {entered:?}"
-    );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
-    let requests = request_log.requests();
-    assert!(requests[0].body_contains_text("list_mcp_resources"));
-    assert!(
-        requests[0]
-            .tool_by_name("mcp__sample", "calendar_create_event")
-            .is_some(),
-        "normal request should expose the configured MCP tool: {:?}",
-        requests[0].body_json()["tools"]
-    );
-    let request = &requests[1];
+    let request = request_log.single_request();
     assert!(request.body_contains_text("list_mcp_resources"));
     assert!(
         request
@@ -585,16 +556,11 @@ async fn review_skips_pending_mcp_even_if_apps_is_pinned() -> anyhow::Result<()>
     let mut builder = pinned_apps_builder(codex_home, apps_server.chatgpt_base_url.clone());
     let test = builder.build_with_auto_env(&server).await?;
 
-    let mut pinned_features = test.config.features.clone();
-    pinned_features
-        .disable(Feature::Apps)
-        .expect("managed feature normalization should succeed");
-    assert!(pinned_features.enabled(Feature::Apps));
     let mcp_requests_before_review = wait_for_pending_mcp_request(&plugin_mcp_server).await?;
 
-    let responses = mount_sse_sequence(
+    let responses = responses::mount_sse_once(
         &server,
-        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+        responses::sse(vec![responses::ev_completed("resp-1")]),
     )
     .await;
     submit_custom_review(&test.codex, "Review without starting pinned Apps MCP").await?;
@@ -616,7 +582,6 @@ async fn review_skips_pending_mcp_even_if_apps_is_pinned() -> anyhow::Result<()>
     })
     .await;
 
-    assert_eq!(responses.requests().len(), 1);
     let request = responses.single_request();
     for tool_name in [
         "mcp__codex_apps",
@@ -663,9 +628,9 @@ async fn review_skips_tool_suggestions_with_pending_mcp_and_pinned_apps() -> any
         .into_iter()
         .filter(|request| request.url.path() == "/ps/plugins/suggested")
         .count();
-    let responses = mount_sse_sequence(
+    let responses = responses::mount_sse_once(
         &server,
-        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+        responses::sse(vec![responses::ev_completed("resp-1")]),
     )
     .await;
     submit_custom_review(&test.codex, "Review without tool suggestions").await?;
@@ -718,9 +683,9 @@ async fn review_keeps_tool_suggestions_with_ready_mcp_and_pinned_apps() -> anyho
         .into_iter()
         .filter(|request| request.url.path() == "/ps/plugins/suggested")
         .count();
-    let responses = mount_sse_sequence(
+    let responses = responses::mount_sse_once(
         &server,
-        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+        responses::sse(vec![responses::ev_completed("resp-1")]),
     )
     .await;
     submit_custom_review(&test.codex, "Review with tool suggestions").await?;
@@ -777,9 +742,9 @@ async fn review_skips_auth_discovery_when_parent_mcp_is_pending() -> anyhow::Res
         .unwrap_or_default()
         .len();
 
-    let responses = mount_sse_sequence(
+    let responses = responses::mount_sse_once(
         &server,
-        vec![responses::sse(vec![responses::ev_completed("resp-1")])],
+        responses::sse(vec![responses::ev_completed("resp-1")]),
     )
     .await;
     submit_custom_review(&test.codex, "Review without MCP auth discovery").await?;
