@@ -657,7 +657,7 @@ fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
 
     assert_eq!(
-        commands_for_exec_policy(&command),
+        commands_for_exec_policy(&command, ExecPolicyInputSource::Configured),
         ExecPolicyCommands {
             commands: vec![command],
             used_complex_parsing: false,
@@ -675,7 +675,7 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
     ];
 
     assert_eq!(
-        commands_for_exec_policy(&command),
+        commands_for_exec_policy(&command, ExecPolicyInputSource::Configured),
         ExecPolicyCommands {
             commands: vec![command],
             used_complex_parsing: false,
@@ -902,14 +902,7 @@ EOF"#
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "zsh".to_string(),
-                "-lc".to_string(),
-                r#"cat <<'EOF' > /some/important/folder/test.txt
-hello world
-EOF"#
-                    .to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1139,6 +1132,196 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
 }
 
 #[test]
+fn known_safe_sandbox_override_never_uses_the_safelist_to_skip_policy() {
+    let command = vec!["echo".to_string(), "hello".to_string()];
+    let granular = GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    };
+
+    for (approval_policy, expected) in [
+        (AskForApproval::OnRequest, Decision::Prompt),
+        (AskForApproval::UnlessTrusted, Decision::Prompt),
+        (AskForApproval::Granular(granular), Decision::Prompt),
+        (AskForApproval::Never, Decision::Forbidden),
+    ] {
+        assert_eq!(
+            expected,
+            render_decision_for_unmatched_command(
+                &command,
+                UnmatchedCommandContext {
+                    approval_policy,
+                    permission_profile: &PermissionProfile::workspace_write(),
+                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    sandbox_permissions: SandboxPermissions::RequireEscalated,
+                    used_complex_parsing: false,
+                    command_origin: ExecPolicyCommandOrigin::Generic,
+                },
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn direct_and_fake_outer_shell_escalations_require_approval_without_amendments() {
+    for command in [
+        vec!["./ls".to_string()],
+        vec!["./zsh".to_string(), "-c".to_string(), "ls".to_string()],
+        vec![
+            "/tmp/workspace/zsh".to_string(),
+            "-c".to_string(),
+            "ls".to_string(),
+        ],
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command,
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn model_selected_shell_suppresses_inner_command_amendment() {
+    let manager = ExecPolicyManager::default();
+
+    for (command, input_source) in [
+        (
+            vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "touch marker".to_string(),
+            ],
+            ExecPolicyInputSource::ModelSelectedBare,
+        ),
+        (
+            vec![
+                "/tmp/workspace/bash".to_string(),
+                "-lc".to_string(),
+                "touch marker".to_string(),
+            ],
+            ExecPolicyInputSource::ModelSelectedPath,
+        ),
+    ] {
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: PermissionProfile::read_only(),
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+                input_source,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn path_qualified_outer_shell_is_not_inherited_from_a_safe_inner_command() {
+    for (command, input_source) in [
+        (
+            vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "./zsh -c ls".to_string(),
+            ],
+            ExecPolicyInputSource::Configured,
+        ),
+        (
+            vec![
+                "/tmp/workspace/bash".to_string(),
+                "-lc".to_string(),
+                "ls".to_string(),
+            ],
+            ExecPolicyInputSource::ModelSelectedPath,
+        ),
+    ] {
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+                input_source,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+}
+
+#[test]
+fn path_qualified_shell_detection_handles_unix_and_windows_spellings() {
+    for bare_shell in ["bash", "zsh", "sh", "bash.exe", "powershell.exe"] {
+        assert!(!shell_executable_is_path_qualified(bare_shell));
+    }
+
+    for path_shell in [
+        "./bash",
+        "../zsh",
+        "/bin/sh",
+        r".\bash.exe",
+        r"C:\workspace\bash.exe",
+        r"C:bash.exe",
+        r"\\server\share\powershell.exe",
+    ] {
+        assert!(shell_executable_is_path_qualified(path_shell));
+    }
+}
+
+#[tokio::test]
+async fn non_escalated_known_safe_command_keeps_existing_sandboxed_behavior() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command: vec!["echo".to_string(), "hello".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::workspace_write(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "echo".to_string(),
+                "hello".to_string(),
+            ])),
+        },
+    )
+    .await;
+}
+
+#[test]
 fn managed_cwd_write_profile_has_filesystem_restrictions() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -1229,10 +1412,7 @@ async fn exec_approval_requirement_prompts_for_inline_additional_permissions_und
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "touch".to_string(),
-                "requested-dir/requested-but-unused.txt".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1251,10 +1431,7 @@ async fn exec_approval_requirement_prompts_for_known_safe_escalation_under_on_re
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "echo".to_string(),
-                "hello".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1338,6 +1515,7 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1375,6 +1553,7 @@ async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled(
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1399,6 +1578,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1424,6 +1604,7 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1453,6 +1634,7 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1482,6 +1664,7 @@ async fn request_rule_uses_prefix_rule() {
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1489,10 +1672,7 @@ async fn request_rule_uses_prefix_rule() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "cargo".to_string(),
-                "install".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1514,6 +1694,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
@@ -1521,11 +1702,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "rm".to_string(),
-                "-rf".to_string(),
-                "/tmp/codex".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1553,6 +1730,7 @@ async fn heuristics_apply_when_other_commands_match_policy() {
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                input_source: ExecPolicyInputSource::Configured,
             })
             .await,
         ExecApprovalRequirement::NeedsApproval {
@@ -2034,6 +2212,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                input_source: ExecPolicyInputSource::Configured,
             })
             .await,
         "{pwsh_approval_reason}"
@@ -2058,6 +2237,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                input_source: ExecPolicyInputSource::Configured,
             })
             .await,
         r#"On all platforms, a forbidden command should require approval
@@ -2078,6 +2258,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
+                input_source: ExecPolicyInputSource::Configured,
             })
             .await,
         r#"On all platforms, a forbidden command should require approval
@@ -2173,6 +2354,7 @@ async fn exec_approval_requirement_for_command(
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
             sandbox_permissions,
             prefix_rule,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await
 }

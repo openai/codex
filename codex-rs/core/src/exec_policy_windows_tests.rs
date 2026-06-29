@@ -58,7 +58,7 @@ fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
     ];
 
     assert_eq!(
-        commands_for_exec_policy(&command),
+        commands_for_exec_policy(&command, ExecPolicyInputSource::Configured),
         ExecPolicyCommands {
             commands: vec![vec!["echo".to_string(), "blocked".to_string()]],
             used_complex_parsing: false,
