@@ -138,8 +138,9 @@ async fn review_command_during_mcp_startup_opens_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn review_with_args_keeps_mcp_startup_in_background() {
+async fn background_mcp_startup_completion_does_not_finish_review_task() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
 
     submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
@@ -148,15 +149,6 @@ async fn review_with_args_keeps_mcp_startup_in_background() {
     assert!(chat.bottom_pane.is_mcp_startup_running());
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.status_state.current_status.header, "Working");
-}
-
-#[tokio::test]
-async fn background_mcp_startup_completion_does_not_finish_review_task() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
-    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
-
-    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
 
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
