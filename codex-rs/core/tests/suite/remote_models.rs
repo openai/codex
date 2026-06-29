@@ -329,7 +329,7 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
         /*priority*/ 1_000,
         TruncationPolicyConfig::bytes(/*limit*/ 10_000),
     );
-    let custom_reasoning_effort = ReasoningEffort::Custom("max".to_string());
+    let custom_reasoning_effort = ReasoningEffort::Custom("future".to_string());
     remote_model.default_reasoning_level = Some(custom_reasoning_effort.clone());
     remote_model.supported_reasoning_levels = vec![
         ReasoningEffortPreset {
@@ -391,7 +391,7 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
         .and_then(|reasoning| reasoning.get("summary"))
         .and_then(|value| value.as_str());
     assert_eq!(body["model"].as_str(), Some(requested_model));
-    assert_eq!(reasoning_effort, Some("max"));
+    assert_eq!(reasoning_effort, Some("future"));
     assert_eq!(reasoning_summary, Some("detailed"));
 
     Ok(())

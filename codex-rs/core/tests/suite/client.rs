@@ -2171,7 +2171,7 @@ async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
+async fn includes_configured_max_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -2183,7 +2183,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
-            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            config.model_reasoning_effort = Some(ReasoningEffort::Max);
         })
         .build(&server)
         .await?;
@@ -2212,7 +2212,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("medium")
+        Some("max")
     );
 
     Ok(())

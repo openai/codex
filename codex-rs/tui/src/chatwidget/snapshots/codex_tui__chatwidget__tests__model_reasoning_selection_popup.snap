@@ -6,7 +6,7 @@ expression: popup
 
   1. Low               Fast responses with lighter reasoning
   2. Medium (default)  Balances speed and reasoning depth for everyday tasks
-  3. max               Maximum available reasoning
+  3. Max               Maximum available reasoning
 › 4. High (current)    Greater reasoning depth for complex problems
   5. Extra high        Extra high reasoning depth for complex problems
 

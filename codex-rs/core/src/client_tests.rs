@@ -292,10 +292,7 @@ fn ultra_reasoning_uses_max_for_requests() {
             super::reasoning_effort_for_request(ReasoningEffort::Ultra),
             super::reasoning_effort_for_request(ReasoningEffort::High),
         ),
-        (
-            ReasoningEffort::Custom("max".to_string()),
-            ReasoningEffort::High,
-        )
+        (ReasoningEffort::Max, ReasoningEffort::High,)
     );
 }
 

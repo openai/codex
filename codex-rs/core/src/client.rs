@@ -169,7 +169,7 @@ pub(crate) struct CompactConversationRequestSettings {
 
 fn reasoning_effort_for_request(effort: ReasoningEffortConfig) -> ReasoningEffortConfig {
     match effort {
-        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Custom("max".to_string()),
+        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Max,
         effort => effort,
     }
 }

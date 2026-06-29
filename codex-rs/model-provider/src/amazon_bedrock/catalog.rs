@@ -70,7 +70,7 @@ fn gpt_5_6_bedrock_model(bedrock_slug: &str, display_name: &str, priority: i32) 
     model
         .supported_reasoning_levels
         .push(ReasoningEffortPreset {
-            effort: ReasoningEffort::Custom("max".to_string()),
+            effort: ReasoningEffort::Max,
             description: "Maximum reasoning depth for the hardest problems".to_string(),
         });
     model
@@ -148,7 +148,7 @@ mod tests {
             expected
                 .supported_reasoning_levels
                 .push(ReasoningEffortPreset {
-                    effort: ReasoningEffort::Custom("max".to_string()),
+                    effort: ReasoningEffort::Max,
                     description: "Maximum reasoning depth for the hardest problems".to_string(),
                 });
 
