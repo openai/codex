@@ -485,11 +485,25 @@ pub(crate) async fn handle_output_item_done(
         }
         // The tool request should be answered directly (or was denied); push that response into the transcript.
         Err(FunctionCallError::RespondToModel(message)) => {
-            let response = ResponseInputItem::FunctionCallOutput {
-                call_id: String::new(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(message),
-                    ..Default::default()
+            let response = match &item {
+                ResponseItem::ToolSearchCall {
+                    call_id: Some(call_id),
+                    execution,
+                    ..
+                } if execution == "client" && !call_id.is_empty() => {
+                    ResponseInputItem::ToolSearchOutput {
+                        call_id: call_id.clone(),
+                        status: "completed".to_string(),
+                        execution: "client".to_string(),
+                        tools: Vec::new(),
+                    }
+                }
+                _ => ResponseInputItem::FunctionCallOutput {
+                    call_id: String::new(),
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text(message),
+                        ..Default::default()
+                    },
                 },
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)

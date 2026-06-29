@@ -18,6 +18,7 @@ use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -131,13 +132,15 @@ impl ToolRouter {
                 execution,
                 arguments,
                 ..
-            } if execution == "client" => {
-                let arguments: SearchToolCallParams =
-                    serde_json::from_value(arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse tool_search arguments: {err}"
-                        ))
-                    })?;
+            } if execution == "client" && !call_id.is_empty() => {
+                let arguments = SearchToolCallParams::deserialize(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse tool_search arguments: {:?} validation at line {}, column {}",
+                        err.classify(),
+                        err.line(),
+                        err.column()
+                    ))
+                })?;
                 Ok(Some(ToolCall {
                     tool_name: ToolName::plain("tool_search"),
                     call_id,
