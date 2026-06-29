@@ -2,26 +2,29 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use serde::Deserialize;
-use std::borrow::Cow;
 use tracing::warn;
 
 const INVALID_TOOL_SEARCH_QUERY: &str = "[invalid tool_search arguments omitted]";
 
-/// Applies response-item-specific normalization before model-visible history and persistence.
-pub(super) fn prepare_for_durable_history<'a>(
+/// Returns a canonical durable-history view when an item must differ from its raw event.
+///
+/// Client-executed tool search is the only case handled here because its arguments have a fixed
+/// schema that can be safely deserialized and reserialized. Function-call arguments and custom
+/// tool input are intentionally preserved as schema-specific or freeform strings.
+pub(super) fn canonicalize_for_durable_history(
     thread_id: &ThreadId,
-    items: &'a [ResponseItem],
-) -> Cow<'a, [ResponseItem]> {
+    items: &[ResponseItem],
+) -> Option<Vec<ResponseItem>> {
     if !items.iter().any(|item| {
         matches!(
             item,
             ResponseItem::ToolSearchCall { execution, .. } if execution == "client"
         )
     }) {
-        return Cow::Borrowed(items);
+        return None;
     }
 
-    Cow::Owned(
+    Some(
         items
             .iter()
             .filter_map(|item| {
