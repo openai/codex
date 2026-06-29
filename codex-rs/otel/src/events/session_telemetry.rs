@@ -66,6 +66,13 @@ const RESPONSES_API_ENGINE_IAPI_TTFT_FIELD: &str = "engine_iapi_ttft_total_ms";
 const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total_ms";
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
+const RESPONSES_API_ROUTING_TIMING_SEMANTICS_V1: &str = concat!(
+    "nested_non_additive:engine_iapi_ttft_includes_engine_routing_and_engine_batcher_ttft;",
+    "engine_routing_includes_pipereplica_lb_routing;",
+    "engine_queue_is_iapi_ttft_minus_batcher_ttft_and_overlaps_engine_routing;",
+    "cross_cluster_network_overhead_is_outside_engine_iapi_ttft",
+);
+const ROUTING_TIMING_SEMANTICS_V1_ROLE: &str = "nested_non_additive_v1";
 
 fn trace_field_value<'a>(fields: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
     fields
@@ -1135,53 +1142,154 @@ impl SessionTelemetry {
 
     fn record_responses_websocket_timing_metrics(&self, value: &serde_json::Value) {
         let timing_metrics = value.get(RESPONSES_WEBSOCKET_TIMING_METRICS_FIELD);
+        let timing_value = |key| timing_metrics.and_then(|value| value.get(key));
+        let timing_f64 = |key| non_negative_f64_from_value(timing_value(key));
 
-        let overhead_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_OVERHEAD_FIELD));
-        if let Some(duration) = duration_from_ms_value(overhead_value) {
-            self.record_duration(RESPONSES_API_OVERHEAD_DURATION_METRIC, duration, &[]);
-        }
+        let request_ordinal = non_negative_i64_from_value(value.get("request_ordinal"));
+        let pre_inference_ms = timing_f64("pre_inference_ms");
+        let client_tool_pause_total_ms = timing_f64("client_tool_pause_total_ms");
+        let total_turn_time_s = timing_f64("total_turn_time_s");
+        let xapi_validation_time_s = timing_f64("xapi_validation_time_s");
+        let num_engine_calls = non_negative_i64_from_value(timing_value("num_engine_calls"));
+        let latest_inference_lb_routing_ms = timing_f64("latest_inference_lb_routing_ms");
+        let latest_inference_engine_routing_ms = timing_f64("latest_inference_engine_routing_ms");
+        let latest_cross_cluster_network_overhead_ms =
+            timing_f64("latest_cross_cluster_network_overhead_ms");
+        // This event is intentionally restricted to numeric measurements and a normalized,
+        // bounded semantics role. Opaque response/request/engine/pipereplica identifiers and
+        // free-form route diagnostics are neither useful dimensions nor safe span attributes.
+        let inference_routing_timing_semantics =
+            routing_timing_semantics_role(timing_value("inference_routing_timing_semantics"));
+        let engine_queue_max_ms = timing_f64("engine_queue_max_ms");
+        let first_sampled_message_ttft_ms = timing_f64("first_sampled_message_ttft_ms");
+        let engine_iapi_ttft_total_ms = timing_f64(RESPONSES_API_ENGINE_IAPI_TTFT_FIELD);
+        let engine_service_ttft_total_ms = timing_f64(RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD);
+        let engine_iapi_sampling_total_ms = timing_f64("engine_iapi_sampling_total_ms");
+        let engine_service_sampling_total_ms = timing_f64("engine_service_sampling_total_ms");
+        let engine_iapi_tbt_across_engine_calls_ms =
+            timing_f64(RESPONSES_API_ENGINE_IAPI_TBT_FIELD);
+        let engine_service_tbt_across_engine_calls_ms =
+            timing_f64(RESPONSES_API_ENGINE_SERVICE_TBT_FIELD);
+        let taas_request_to_provider_start_total_ms =
+            timing_f64("taas_request_to_provider_start_total_ms");
+        let taas_provider_start_to_first_token_total_ms =
+            timing_f64("taas_provider_start_to_first_token_total_ms");
+        let responsesapi_duration_excl_client_tools_ms =
+            timing_f64("responsesapi_duration_excl_client_tools_ms");
+        let responses_duration_excl_engine_wait_and_sampling_ms =
+            timing_f64("responses_duration_excl_engine_wait_and_sampling_ms");
+        let responses_duration_excl_engine_wait_and_sampling_iapi_ms =
+            timing_f64("responses_duration_excl_engine_wait_and_sampling_iapi_ms");
+        let responses_duration_excl_engine_and_client_tool_time_ms =
+            timing_f64(RESPONSES_API_OVERHEAD_FIELD);
+        let engine_service_total_ms = timing_f64(RESPONSES_API_INFERENCE_FIELD);
+        let prompt_full_render_total_ms = timing_f64("prompt_full_render_total_ms");
+        let prompt_shadow_render_total_ms = timing_f64("prompt_shadow_render_total_ms");
 
-        let inference_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_INFERENCE_FIELD));
-        if let Some(duration) = duration_from_ms_value(inference_value) {
-            self.record_duration(RESPONSES_API_INFERENCE_TIME_DURATION_METRIC, duration, &[]);
-        }
+        log_event!(
+            self,
+            event.name = "codex.responses_websocket_timing",
+            model.request_ordinal = request_ordinal,
+            responsesapi.pre_inference_ms = pre_inference_ms,
+            responsesapi.client_tool_pause_total_ms = client_tool_pause_total_ms,
+            responsesapi.total_turn_time_s = total_turn_time_s,
+            responsesapi.xapi_validation_time_s = xapi_validation_time_s,
+            responsesapi.duration_excl_client_tools_ms = responsesapi_duration_excl_client_tools_ms,
+            responsesapi.duration_excl_engine_wait_and_sampling_ms =
+                responses_duration_excl_engine_wait_and_sampling_ms,
+            responsesapi.duration_excl_engine_wait_and_sampling_iapi_ms =
+                responses_duration_excl_engine_wait_and_sampling_iapi_ms,
+            responsesapi.duration_excl_engine_and_client_tool_time_ms =
+                responses_duration_excl_engine_and_client_tool_time_ms,
+            responsesapi.engine_service_total_ms = engine_service_total_ms,
+            responsesapi.prompt_full_render_total_ms = prompt_full_render_total_ms,
+            responsesapi.prompt_shadow_render_total_ms = prompt_shadow_render_total_ms,
+            inference.num_engine_calls = num_engine_calls,
+            inference.latest_lb_routing_ms = latest_inference_lb_routing_ms,
+            inference.latest_engine_routing_ms = latest_inference_engine_routing_ms,
+            inference.latest_cross_cluster_network_overhead_ms =
+                latest_cross_cluster_network_overhead_ms,
+            inference.routing_timing_semantics = inference_routing_timing_semantics,
+            inference.engine_queue_max_ms = engine_queue_max_ms,
+            inference.first_sampled_message_ttft_ms = first_sampled_message_ttft_ms,
+            inference.engine_iapi_ttft_total_ms = engine_iapi_ttft_total_ms,
+            inference.engine_service_ttft_total_ms = engine_service_ttft_total_ms,
+            inference.engine_iapi_sampling_total_ms = engine_iapi_sampling_total_ms,
+            inference.engine_service_sampling_total_ms = engine_service_sampling_total_ms,
+            inference.engine_iapi_tbt_across_engine_calls_ms =
+                engine_iapi_tbt_across_engine_calls_ms,
+            inference.engine_service_tbt_across_engine_calls_ms =
+                engine_service_tbt_across_engine_calls_ms,
+            inference.taas_request_to_provider_start_total_ms =
+                taas_request_to_provider_start_total_ms,
+            inference.taas_provider_start_to_first_token_total_ms =
+                taas_provider_start_to_first_token_total_ms,
+        );
 
-        let engine_iapi_ttft_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TTFT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_iapi_ttft_value) {
-            self.record_duration(
+        // CCA exports traces but not general OTEL logs. Use a real child span so this breakdown is
+        // queryable in trace backends that do not retain span events.
+        let timing_span = tracing::info_span!(
+            "codex.responses_websocket_timing",
+            model = %self.metadata.model,
+            model.request_ordinal = request_ordinal,
+            responsesapi.pre_inference_ms = pre_inference_ms,
+            responsesapi.client_tool_pause_total_ms = client_tool_pause_total_ms,
+            responsesapi.total_turn_time_s = total_turn_time_s,
+            responsesapi.xapi_validation_time_s = xapi_validation_time_s,
+            responsesapi.duration_excl_client_tools_ms = responsesapi_duration_excl_client_tools_ms,
+            responsesapi.duration_excl_engine_wait_and_sampling_ms = responses_duration_excl_engine_wait_and_sampling_ms,
+            responsesapi.duration_excl_engine_wait_and_sampling_iapi_ms = responses_duration_excl_engine_wait_and_sampling_iapi_ms,
+            responsesapi.duration_excl_engine_and_client_tool_time_ms = responses_duration_excl_engine_and_client_tool_time_ms,
+            responsesapi.engine_service_total_ms = engine_service_total_ms,
+            responsesapi.prompt_full_render_total_ms = prompt_full_render_total_ms,
+            responsesapi.prompt_shadow_render_total_ms = prompt_shadow_render_total_ms,
+            inference.num_engine_calls = num_engine_calls,
+            inference.latest_lb_routing_ms = latest_inference_lb_routing_ms,
+            inference.latest_engine_routing_ms = latest_inference_engine_routing_ms,
+            inference.latest_cross_cluster_network_overhead_ms = latest_cross_cluster_network_overhead_ms,
+            inference.routing_timing_semantics = inference_routing_timing_semantics,
+            inference.engine_queue_max_ms = engine_queue_max_ms,
+            inference.first_sampled_message_ttft_ms = first_sampled_message_ttft_ms,
+            inference.engine_iapi_ttft_total_ms = engine_iapi_ttft_total_ms,
+            inference.engine_service_ttft_total_ms = engine_service_ttft_total_ms,
+            inference.engine_iapi_sampling_total_ms = engine_iapi_sampling_total_ms,
+            inference.engine_service_sampling_total_ms = engine_service_sampling_total_ms,
+            inference.engine_iapi_tbt_across_engine_calls_ms = engine_iapi_tbt_across_engine_calls_ms,
+            inference.engine_service_tbt_across_engine_calls_ms = engine_service_tbt_across_engine_calls_ms,
+            inference.taas_request_to_provider_start_total_ms = taas_request_to_provider_start_total_ms,
+            inference.taas_provider_start_to_first_token_total_ms = taas_provider_start_to_first_token_total_ms,
+        );
+        timing_span.in_scope(|| {});
+
+        for (value, metric) in [
+            (
+                responses_duration_excl_engine_and_client_tool_time_ms,
+                RESPONSES_API_OVERHEAD_DURATION_METRIC,
+            ),
+            (
+                engine_service_total_ms,
+                RESPONSES_API_INFERENCE_TIME_DURATION_METRIC,
+            ),
+            (
+                engine_iapi_ttft_total_ms,
                 RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC,
-                duration,
-                &[],
-            );
-        }
-
-        let engine_service_ttft_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_service_ttft_value) {
-            self.record_duration(
+            ),
+            (
+                engine_service_ttft_total_ms,
                 RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC,
-                duration,
-                &[],
-            );
-        }
-
-        let engine_iapi_tbt_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_IAPI_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_iapi_tbt_value) {
-            self.record_duration(RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC, duration, &[]);
-        }
-
-        let engine_service_tbt_value =
-            timing_metrics.and_then(|value| value.get(RESPONSES_API_ENGINE_SERVICE_TBT_FIELD));
-        if let Some(duration) = duration_from_ms_value(engine_service_tbt_value) {
-            self.record_duration(
+            ),
+            (
+                engine_iapi_tbt_across_engine_calls_ms,
+                RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC,
+            ),
+            (
+                engine_service_tbt_across_engine_calls_ms,
                 RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC,
-                duration,
-                &[],
-            );
+            ),
+        ] {
+            if let Some(duration) = duration_from_ms(value) {
+                self.record_duration(metric, duration, &[]);
+            }
         }
     }
 
@@ -1233,15 +1341,42 @@ impl SessionTelemetry {
     }
 }
 
-fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration> {
+fn duration_from_ms(ms: Option<f64>) -> Option<Duration> {
+    let ms = ms?;
+    let clamped = ms.min(u64::MAX as f64);
+    Some(Duration::from_millis(clamped.round() as u64))
+}
+
+fn non_negative_f64_from_value(value: Option<&serde_json::Value>) -> Option<f64> {
     let value = value?;
-    let ms = value
+    let value = value
         .as_f64()
         .or_else(|| value.as_i64().map(|v| v as f64))
         .or_else(|| value.as_u64().map(|v| v as f64))?;
-    if !ms.is_finite() || ms < 0.0 {
+    if !value.is_finite() || value < 0.0 {
         return None;
     }
-    let clamped = ms.min(u64::MAX as f64);
-    Some(Duration::from_millis(clamped.round() as u64))
+    Some(value)
+}
+
+fn non_negative_i64_from_value(value: Option<&serde_json::Value>) -> Option<i64> {
+    let value = value?;
+    value
+        .as_i64()
+        .filter(|value| *value >= 0)
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_str()?
+                .parse::<i64>()
+                .ok()
+                .filter(|value| *value >= 0)
+        })
+}
+
+fn routing_timing_semantics_role(value: Option<&serde_json::Value>) -> Option<&'static str> {
+    match value.and_then(serde_json::Value::as_str) {
+        Some(RESPONSES_API_ROUTING_TIMING_SEMANTICS_V1) => Some(ROUTING_TIMING_SEMANTICS_V1_ROLE),
+        _ => None,
+    }
 }
