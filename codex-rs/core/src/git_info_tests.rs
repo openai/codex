@@ -29,6 +29,7 @@ use std::fs;
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -302,53 +303,233 @@ async fn create_test_git_repo_with_remote(temp_dir: &TempDir) -> (PathBuf, Strin
     (repo_path, branch)
 }
 
+async fn run_test_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await
+        .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"))
+}
+
+async fn assert_test_git(cwd: &Path, args: &[&str]) {
+    let output = run_test_git(cwd, args).await;
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test]
+async fn test_default_branch_discovery_uses_verified_remote_head() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "main"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/upstream/release/v1", "HEAD"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/upstream/HEAD",
+            "refs/remotes/upstream/release/v1",
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("release/v1".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_default_branch_discovery_rejects_stale_and_cross_remote_heads() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "main"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "/nonexistent/origin.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/upstream/poisoned",
+        ],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/upstream/HEAD",
+            "refs/remotes/upstream/deleted",
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("main".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_default_branch_discovery_without_remotes_prefers_main_then_master() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "master"]).await;
+
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("master".to_string())
+    );
+
+    assert_test_git(&repo_path, &["branch", "main"]).await;
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("main".to_string())
+    );
+
+    assert_test_git(&repo_path, &["branch", "-D", "main"]).await;
+    assert_test_git(&repo_path, &["branch", "-M", "feature"]).await;
+    assert_eq!(default_branch_name(&repo_path).await, None);
+}
+
+#[tokio::test]
+async fn test_default_branch_discovery_from_linked_worktree() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let worktree_path = temp_dir.path().join("linked-worktree");
+    assert_test_git(&repo_path, &["branch", "-M", "main"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "mirror", "/nonexistent/mirror.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/mirror/trunk", "HEAD"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/mirror/HEAD",
+            "refs/remotes/mirror/trunk",
+        ],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree_path.to_string_lossy().as_ref(),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        default_branch_name(&worktree_path).await,
+        Some("trunk".to_string())
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn test_default_branch_discovery_does_not_invoke_remote_transport() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
-    let helper_path = temp_dir.path().join("ssh-helper.sh");
-    let marker_path = temp_dir.path().join("transport-ran");
-    fs::write(
-        &helper_path,
-        format!(
-            "#!/bin/sh\nprintf ran > \"{}\"\nexit 1\n",
-            marker_path.to_string_lossy()
-        ),
-    )
-    .expect("write transport helper");
-    let mut permissions = fs::metadata(&helper_path)
-        .expect("read helper metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&helper_path, permissions).expect("mark helper executable");
+    let ssh_helper = temp_dir.path().join("ssh-helper.sh");
+    let ssh_marker = temp_dir.path().join("ssh-helper-ran");
+    let ext_helper = temp_dir.path().join("ext-helper.sh");
+    let ext_marker = temp_dir.path().join("ext-helper-ran");
+    let credential_helper = temp_dir.path().join("credential-helper.sh");
+    let credential_marker = temp_dir.path().join("credential-helper-ran");
 
-    let add_remote = Command::new("git")
-        .args(["remote", "add", "origin", "ssh://example.invalid/repo"])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("add remote");
-    assert!(
-        add_remote.status.success(),
-        "add remote: {}",
-        String::from_utf8_lossy(&add_remote.stderr)
-    );
-    let configure_helper = Command::new("git")
-        .args([
+    for (helper, marker, output) in [
+        (&ssh_helper, &ssh_marker, ""),
+        (&ext_helper, &ext_marker, ""),
+        (
+            &credential_helper,
+            &credential_marker,
+            "printf 'username=test\\npassword=test\\n'\n",
+        ),
+    ] {
+        fs::write(
+            helper,
+            format!(
+                "#!/bin/sh\nprintf ran > \"{}\"\n{output}exit 1\n",
+                marker.to_string_lossy()
+            ),
+        )
+        .expect("write transport helper");
+        let mut permissions = fs::metadata(helper)
+            .expect("read helper metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(helper, permissions).expect("mark helper executable");
+    }
+
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "ssh://example.invalid/repo"],
+    )
+    .await;
+    let ext_url = format!("ext::{}", ext_helper.to_string_lossy());
+    assert_test_git(&repo_path, &["remote", "add", "extension", &ext_url]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "remote",
+            "add",
+            "credentialed",
+            "https://example.invalid/repo",
+        ],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
             "config",
             "core.sshCommand",
-            helper_path.to_string_lossy().as_ref(),
-        ])
-        .current_dir(&repo_path)
-        .output()
-        .await
-        .expect("configure transport helper");
-    assert!(
-        configure_helper.status.success(),
-        "configure transport helper: {}",
-        String::from_utf8_lossy(&configure_helper.stderr)
-    );
+            ssh_helper.to_string_lossy().as_ref(),
+        ],
+    )
+    .await;
+    assert_test_git(&repo_path, &["config", "protocol.ext.allow", "always"]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "config",
+            "credential.helper",
+            credential_helper.to_string_lossy().as_ref(),
+        ],
+    )
+    .await;
+
     let branch_output = Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(&repo_path)
@@ -366,10 +547,13 @@ async fn test_default_branch_discovery_does_not_invoke_remote_transport() {
         .to_string();
 
     assert_eq!(default_branch_name(&repo_path).await, Some(branch));
-    assert!(
-        !marker_path.exists(),
-        "default branch discovery must stay on local refs"
-    );
+    for marker in [ssh_marker, ext_marker, credential_marker] {
+        assert!(
+            !marker.exists(),
+            "default branch discovery invoked {}",
+            marker.display()
+        );
+    }
 }
 
 #[tokio::test]

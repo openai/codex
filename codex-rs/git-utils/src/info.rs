@@ -487,28 +487,39 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
     // Prefer the first remote (with origin prioritized)
     let remotes = get_git_remotes(cwd).await.unwrap_or_default();
     for remote in remotes {
-        // Try symbolic-ref, which returns something like: refs/remotes/origin/main
-        if let Some(symref_output) = run_git_command_with_timeout(
-            &[
-                "symbolic-ref",
-                "--quiet",
-                &format!("refs/remotes/{remote}/HEAD"),
-            ],
-            cwd,
-        )
-        .await
-            && symref_output.status.success()
-            && let Ok(sym) = String::from_utf8(symref_output.stdout)
-        {
-            let trimmed = sym.trim();
-            if let Some((_, name)) = trimmed.rsplit_once('/') {
-                return Some(name.to_string());
-            }
+        if let Some(branch) = get_remote_default_branch_from_symbolic_ref(cwd, &remote).await {
+            return Some(branch);
         }
     }
 
     // No remote-derived default; try common local defaults if they exist
     get_default_branch_local(cwd).await
+}
+
+/// Resolves one remote's symbolic HEAD using only local refs.
+///
+/// The symbolic target must remain inside the selected remote's namespace and
+/// resolve to an existing ref. This rejects stale or cross-remote symbolic refs
+/// while preserving branch names that contain `/`.
+async fn get_remote_default_branch_from_symbolic_ref(cwd: &Path, remote: &str) -> Option<String> {
+    let remote_head = format!("refs/remotes/{remote}/HEAD");
+    let symref_output =
+        run_git_command_with_timeout(&["symbolic-ref", "--quiet", &remote_head], cwd).await?;
+    if !symref_output.status.success() {
+        return None;
+    }
+
+    let target = String::from_utf8(symref_output.stdout).ok()?;
+    let target = target.trim();
+    let remote_ref_prefix = format!("refs/remotes/{remote}/");
+    let branch = target.strip_prefix(&remote_ref_prefix)?;
+    if branch.is_empty() {
+        return None;
+    }
+
+    let verify =
+        run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", target], cwd).await?;
+    verify.status.success().then(|| branch.to_string())
 }
 
 /// Determine the repository's default branch name, if available.

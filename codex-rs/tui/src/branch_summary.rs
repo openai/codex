@@ -526,7 +526,7 @@ mod tests {
                 deletions: 0,
             }
         );
-        assert!(runner.saw(&["git", "merge-base", "HEAD", "refs/remotes/origin/main"]));
+        runner.assert_finished();
     }
 
     #[tokio::test]
@@ -566,6 +566,140 @@ mod tests {
 
         assert_eq!(stats.additions, 1);
         assert!(!runner.saw(&["git", "remote", "show", "origin"]));
+        runner.assert_finished();
+    }
+
+    #[tokio::test]
+    async fn branch_diff_stats_skips_malformed_and_stale_remote_heads() {
+        let runner = FakeRunner::new(vec![
+            response(
+                &["git", "rev-parse", "--git-dir"],
+                /*exit_code*/ 0,
+                ".git\n",
+            ),
+            response(
+                &["git", "remote"],
+                /*exit_code*/ 0,
+                "upstream\nbackup\norigin\n",
+            ),
+            response(
+                &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                /*exit_code*/ 0,
+                "refs/remotes/attacker/main\n",
+            ),
+            response(
+                &[
+                    "git",
+                    "symbolic-ref",
+                    "--quiet",
+                    "refs/remotes/upstream/HEAD",
+                ],
+                /*exit_code*/ 0,
+                "refs/remotes/upstream/deleted\n",
+            ),
+            response(
+                &[
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "refs/remotes/upstream/deleted",
+                ],
+                /*exit_code*/ 1,
+                "",
+            ),
+            response(
+                &["git", "symbolic-ref", "--quiet", "refs/remotes/backup/HEAD"],
+                /*exit_code*/ 0,
+                "refs/remotes/backup/release/v1\n",
+            ),
+            response(
+                &[
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "refs/remotes/backup/release/v1",
+                ],
+                /*exit_code*/ 0,
+                "remote-release-sha\n",
+            ),
+            response(
+                &[
+                    "git",
+                    "merge-base",
+                    "HEAD",
+                    "refs/remotes/backup/release/v1",
+                ],
+                /*exit_code*/ 0,
+                "base-sha\n",
+            ),
+            response(
+                &["git", "diff", "--numstat", "base-sha..HEAD"],
+                /*exit_code*/ 0,
+                "3\t2\tfile\n",
+            ),
+        ]);
+
+        let stats = branch_diff_stats_to_default_branch(&runner, Path::new("/repo"))
+            .await
+            .expect("branch diff stats");
+
+        assert_eq!(
+            stats,
+            GitBranchDiffStats {
+                additions: 3,
+                deletions: 2,
+            }
+        );
+        runner.assert_finished();
+    }
+
+    #[tokio::test]
+    async fn branch_diff_stats_without_remotes_uses_master_fallback() {
+        let runner = FakeRunner::new(vec![
+            response(
+                &["git", "rev-parse", "--git-dir"],
+                /*exit_code*/ 0,
+                ".git\n",
+            ),
+            response(&["git", "remote"], /*exit_code*/ 0, ""),
+            response(
+                &["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"],
+                /*exit_code*/ 1,
+                "",
+            ),
+            response(
+                &[
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "refs/heads/master",
+                ],
+                /*exit_code*/ 0,
+                "master-sha\n",
+            ),
+            response(
+                &["git", "merge-base", "HEAD", "refs/heads/master"],
+                /*exit_code*/ 0,
+                "base-sha\n",
+            ),
+            response(
+                &["git", "diff", "--numstat", "base-sha..HEAD"],
+                /*exit_code*/ 0,
+                "0\t0\tfile\n",
+            ),
+        ]);
+
+        assert_eq!(
+            branch_diff_stats_to_default_branch(&runner, Path::new("/repo")).await,
+            Some(GitBranchDiffStats {
+                additions: 0,
+                deletions: 0,
+            })
+        );
+        runner.assert_finished();
     }
 
     #[tokio::test]
@@ -671,9 +805,13 @@ mod tests {
         );
     }
 
+    fn command(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
     fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
         FakeResponse {
-            argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
+            argv: command(argv),
             output: WorkspaceCommandOutput {
                 exit_code,
                 stdout: stdout.to_string(),
@@ -701,12 +839,19 @@ mod tests {
         }
 
         fn saw(&self, argv: &[&str]) -> bool {
-            let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_string()).collect();
+            let argv = command(argv);
             self.seen
                 .lock()
                 .expect("seen lock")
                 .iter()
                 .any(|seen| seen == &argv)
+        }
+
+        fn assert_finished(&self) {
+            assert!(
+                self.responses.lock().expect("responses lock").is_empty(),
+                "not all expected commands ran"
+            );
         }
     }
 
@@ -727,11 +872,10 @@ mod tests {
                 .push(command.argv.clone());
             Box::pin(async move {
                 let mut responses = self.responses.lock().expect("responses lock");
-                let index = responses
-                    .iter()
-                    .position(|response| response.argv == command.argv)
-                    .unwrap_or_else(|| panic!("missing fake response for {:?}", command.argv));
-                let response = responses.remove(index).expect("fake response");
+                let response = responses.pop_front().unwrap_or_else(|| {
+                    panic!("missing fake response for command {:?}", command.argv)
+                });
+                assert_eq!(response.argv, command.argv, "unexpected command sequence");
                 Ok(response.output)
             })
         }
