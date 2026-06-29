@@ -47,16 +47,17 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let mut cfg_parts = configured_git_config_parts();
     let git_root = resolve_git_root(&req.cwd, &cfg_parts)?;
     ensure_no_executable_git_config(&git_root, EXECUTABLE_PATCH_CONFIG_PATTERN, &cfg_parts)?;
-    ensure_paths_do_not_enter_submodules(&git_root, &extract_paths_from_patch(&req.diff))?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
+    let patch_paths = extract_effective_paths_from_patch(&patch_path, req.revert)?;
+    ensure_paths_do_not_enter_submodules(&git_root, &patch_paths)?;
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_paths(&git_root, &req.diff)?;
+        stage_effective_paths(&git_root, &patch_paths)?;
     }
     // Build git args
     let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
@@ -236,83 +237,164 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
     )
 }
 
-/// Collect every path referenced by the diff headers inside `diff --git` sections.
+fn extract_effective_paths_from_patch(patch_path: &Path, revert: bool) -> io::Result<Vec<String>> {
+    let forward_paths = git_apply_numstat_paths(patch_path, revert)?;
+    // `git apply --numstat` reports only the destination of a rename. Parse the
+    // opposite orientation too so the submodule guard covers both endpoints.
+    let reverse_paths = git_apply_numstat_paths(patch_path, !revert)?;
+    if forward_paths.len() != reverse_paths.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "forward and reverse patch parsing returned different path counts",
+        ));
+    }
+    let effective_paths: std::collections::BTreeSet<String> =
+        forward_paths.into_iter().chain(reverse_paths).collect();
+    if effective_paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "patch does not identify any paths",
+        ));
+    }
+    effective_paths
+        .into_iter()
+        .map(validate_patch_path)
+        .collect()
+}
+
+/// Best-effort extraction of the paths Git would apply.
+///
+/// Security-sensitive callers must use the fallible internal extractor so an
+/// invalid or ambiguous patch is rejected instead of becoming an empty list.
 pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
-    let mut set = std::collections::BTreeSet::new();
-    for raw_line in diff_text.lines() {
-        let line = raw_line.trim();
-        let Some(rest) = line.strip_prefix("diff --git ") else {
-            continue;
-        };
-        let Some((a, b)) = parse_diff_git_paths(rest) else {
-            continue;
-        };
-        if let Some(a) = normalize_diff_path(&a, "a/") {
-            set.insert(a);
-        }
-        if let Some(b) = normalize_diff_path(&b, "b/") {
-            set.insert(b);
-        }
-    }
-    set.into_iter().collect()
-}
-
-fn parse_diff_git_paths(line: &str) -> Option<(String, String)> {
-    let mut chars = line.chars().peekable();
-    let first = read_diff_git_token(&mut chars)?;
-    let second = read_diff_git_token(&mut chars)?;
-    Some((first, second))
-}
-
-fn read_diff_git_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
-        chars.next();
-    }
-    let quote = match chars.peek().copied() {
-        Some('"') | Some('\'') => chars.next(),
-        _ => None,
+    let Ok((tmpdir, patch_path)) = write_temp_patch(diff_text) else {
+        return Vec::new();
     };
-    let mut out = String::new();
-    while let Some(c) = chars.next() {
-        if let Some(q) = quote {
-            if c == q {
-                break;
-            }
-            if c == '\\' {
-                out.push('\\');
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-                continue;
-            }
-        } else if c.is_whitespace() {
+    let paths =
+        extract_effective_paths_from_patch(&patch_path, /*revert*/ false).unwrap_or_default();
+    drop(tmpdir);
+    paths
+}
+
+fn git_apply_numstat_paths(patch_path: &Path, revert: bool) -> io::Result<Vec<String>> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["apply", "--numstat", "-z"]);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+    ] {
+        cmd.env_remove(name);
+    }
+    if revert {
+        cmd.arg("-R");
+    }
+    let out = cmd
+        .arg("--")
+        .arg(patch_path)
+        .current_dir(patch_path.parent().unwrap_or_else(|| Path::new(".")))
+        .output()?;
+    if !out.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "failed to parse patch paths: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ));
+    }
+
+    parse_numstat_paths(&out.stdout)
+}
+
+fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
+    if !output.is_empty() && !output.ends_with(&[0]) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "git apply returned an unterminated numstat path record",
+        ));
+    }
+    let mut paths = Vec::new();
+    let mut records = output.split(|byte| *byte == 0).peekable();
+    while let Some(record) = records.next() {
+        if record.is_empty() && records.peek().is_none() {
             break;
         }
-        out.push(c);
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let _added = fields.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "git apply returned an ambiguous numstat path record",
+            )
+        })?;
+        let _deleted = fields.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "git apply returned an ambiguous numstat path record",
+            )
+        })?;
+        let path = fields.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "git apply returned an ambiguous numstat path record",
+            )
+        })?;
+        if path.is_empty() {
+            let old = records
+                .next()
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "git apply returned an incomplete rename path record",
+                    )
+                })?;
+            let new = records
+                .next()
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "git apply returned an incomplete rename path record",
+                    )
+                })?;
+            insert_numstat_path(&mut paths, old)?;
+            insert_numstat_path(&mut paths, new)?;
+        } else {
+            insert_numstat_path(&mut paths, path)?;
+        }
     }
-    if out.is_empty() && quote.is_none() {
-        None
-    } else {
-        Some(match quote {
-            Some(_) => unescape_c_string(&out),
-            None => out,
-        })
-    }
+    Ok(paths)
 }
 
-fn normalize_diff_path(raw: &str, prefix: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
+fn insert_numstat_path(paths: &mut Vec<String>, path: &[u8]) -> io::Result<()> {
+    let path = std::str::from_utf8(path).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "git apply returned a non-UTF-8 patch path",
+        )
+    })?;
+    paths.push(path.to_string());
+    Ok(())
+}
+
+fn validate_patch_path(path: String) -> io::Result<String> {
+    if path.starts_with('/')
+        || path.ends_with('/')
+        || path.contains('\\')
+        || path.as_bytes().get(1) == Some(&b':')
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "patch path is not a normalized repository-relative path",
+        ));
     }
-    if trimmed == "/dev/null" || trimmed == format!("{prefix}dev/null") {
-        return None;
-    }
-    let trimmed = trimmed.strip_prefix(prefix).unwrap_or(trimmed);
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_string())
+    Ok(path)
 }
 
 fn unescape_c_string(input: &str) -> String {
@@ -364,20 +446,30 @@ fn unescape_c_string(input: &str) -> String {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
+    let (tmpdir, patch_path) = write_temp_patch(diff)?;
+    let paths = extract_effective_paths_from_patch(&patch_path, /*revert*/ true)?;
+    let _guard = tmpdir;
+    stage_effective_paths(git_root, &paths)
+}
+
+fn stage_effective_paths(git_root: &Path, paths: &[String]) -> io::Result<()> {
     ensure_no_executable_git_config(git_root, EXECUTABLE_FILTER_CONFIG_PATTERN, &[])?;
-    let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
-        let joined = git_root.join(&p);
+        let joined = git_root.join(p);
         if std::fs::symlink_metadata(&joined).is_ok() {
-            existing.push(p);
+            existing.push(p.clone());
         }
     }
     if existing.is_empty() {
         return Ok(());
     }
     ensure_paths_do_not_enter_submodules(git_root, &existing)?;
-    let mut args = vec!["add".to_string(), "--".to_string()];
+    let mut args = vec![
+        "--literal-pathspecs".to_string(),
+        "add".to_string(),
+        "--".to_string(),
+    ];
     args.extend(existing);
     let config_parts = safe_git_config_parts();
     let (_code, _, _) = run_git(git_root, &config_parts, &args)?;
@@ -386,6 +478,12 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
 }
 
 fn ensure_paths_do_not_enter_submodules(git_root: &Path, paths: &[String]) -> io::Result<()> {
+    if paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to inspect an empty patch path set",
+        ));
+    }
     let mut candidates = std::collections::BTreeSet::new();
     for path in paths {
         let mut components = path.split('/').filter(|component| !component.is_empty());
@@ -401,13 +499,48 @@ fn ensure_paths_do_not_enter_submodules(git_root: &Path, paths: &[String]) -> io
         }
     }
 
+    let canonical_root = std::fs::canonicalize(git_root)?;
+    let mut canonical_candidates = Vec::new();
+    for candidate in &candidates {
+        match std::fs::canonicalize(git_root.join(candidate)) {
+            Ok(resolved) => {
+                let relative = resolved.strip_prefix(&canonical_root).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "patch path alias resolves outside the Git worktree",
+                    )
+                })?;
+                let relative = relative.to_str().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "patch path alias is not valid UTF-8",
+                    )
+                })?;
+                if relative.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "patch path alias resolves to the Git worktree root",
+                    ));
+                }
+                canonical_candidates.push(relative.replace(std::path::MAIN_SEPARATOR, "/"));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    candidates.extend(canonical_candidates);
+
     let mut args = vec![
         "ls-files".to_string(),
         "--stage".to_string(),
         "-z".to_string(),
         "--".to_string(),
     ];
-    args.extend(candidates);
+    args.extend(
+        candidates
+            .into_iter()
+            .map(|candidate| format!(":(icase,literal){candidate}")),
+    );
     let config_parts = safe_git_config_parts();
     let (code, stdout, stderr) = run_git(git_root, &config_parts, &args)?;
     if code != 0 {
@@ -715,6 +848,13 @@ mod tests {
         dir
     }
 
+    fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
+        let (tmpdir, patch_path) = write_temp_patch(diff)?;
+        let paths = extract_effective_paths_from_patch(&patch_path, revert)?;
+        drop(tmpdir);
+        Ok(paths)
+    }
+
     fn read_file_normalized(path: &Path) -> String {
         std::fs::read_to_string(path)
             .expect("read file")
@@ -843,24 +983,99 @@ mod tests {
     }
 
     #[test]
-    fn extract_paths_handles_quoted_headers() {
-        let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["hello world.txt".to_string()]);
+    fn effective_paths_cover_supported_patch_headers() {
+        let cases = [
+            (
+                "quoted new file",
+                "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n",
+                vec!["hello world.txt"],
+            ),
+            (
+                "unquoted spaced path",
+                "diff --git a/space name.txt b/space name.txt\n--- a/space name.txt\n+++ b/space name.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                vec!["space name.txt"],
+            ),
+            (
+                "headerless p0 inference",
+                "--- headerless-p0.txt\n+++ headerless-p0.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                vec!["headerless-p0.txt"],
+            ),
+            (
+                "headerless unified diff",
+                "--- old/headerless.txt\n+++ new/headerless.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                vec!["headerless.txt"],
+            ),
+            (
+                "arbitrary prefixes",
+                "diff --git left/file.txt right/file.txt\n--- before/file.txt\n+++ after/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+                vec!["file.txt"],
+            ),
+            (
+                "deleted file",
+                "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n",
+                vec!["gone.txt"],
+            ),
+            (
+                "literal dev/null path",
+                "diff --git a/dev/null b/dev/null\n--- a/dev/null\n+++ b/dev/null\n@@ -1 +1 @@\n-old\n+new\n",
+                vec!["dev/null"],
+            ),
+            (
+                "rename",
+                "diff --git a/rename-old.txt b/rename-new.txt\nsimilarity index 100%\nrename from rename-old.txt\nrename to rename-new.txt\n",
+                vec!["rename-new.txt", "rename-old.txt"],
+            ),
+            (
+                "copy",
+                "diff --git a/copy-old.txt b/copy-new.txt\nsimilarity index 100%\ncopy from copy-old.txt\ncopy to copy-new.txt\n",
+                vec!["copy-new.txt", "copy-old.txt"],
+            ),
+        ];
+
+        for (name, diff, expected) in cases {
+            for revert in [false, true] {
+                assert_eq!(
+                    effective_paths(diff, revert).unwrap_or_else(|error| panic!("{name}: {error}")),
+                    expected,
+                    "{name}, revert={revert}"
+                );
+            }
+            assert_eq!(extract_paths_from_patch(diff), expected, "{name}");
+        }
+
+        let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
+            .expect("parse NUL-delimited rename paths");
+        assert_eq!(
+            nul_rename_paths,
+            vec!["old name.txt".to_string(), "new name.txt".to_string()]
+        );
     }
 
     #[test]
-    fn extract_paths_ignores_dev_null_header() {
-        let diff = "diff --git a/dev/null b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["ok.txt".to_string()]);
+    fn effective_paths_follow_git_for_mismatched_headers() {
+        let mismatch = "diff --git a/safe.txt b/safe.txt\n--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        let expected = vec!["nested/file.txt".to_string()];
+        assert_eq!(
+            effective_paths(mismatch, /*revert*/ false).unwrap(),
+            expected
+        );
+        assert_eq!(
+            effective_paths(mismatch, /*revert*/ true).unwrap(),
+            expected
+        );
+        assert_eq!(extract_paths_from_patch(mismatch), expected);
     }
 
     #[test]
-    fn extract_paths_unescapes_c_style_in_quoted_headers() {
-        let diff = "diff --git \"a/hello\\tworld.txt\" \"b/hello\\tworld.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello\tworld.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["hello\tworld.txt".to_string()]);
+    fn effective_paths_reject_platform_ambiguous_paths() {
+        let error = effective_paths("", /*revert*/ false).expect_err("reject empty patch paths");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let error = validate_patch_path("..\\nested\\file.txt".to_string())
+            .expect_err("reject Windows path separators");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let error =
+            validate_patch_path("C:/outside.txt".to_string()).expect_err("reject drive prefix");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -1189,23 +1404,110 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
         assert!(!configured_filter_ran(&root.join("nested")));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn gitlink_probe_resolves_filesystem_aliases_and_rejects_escapes() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        init_submodule_with_clean_filter(root);
+
+        std::os::unix::fs::symlink("nested", root.join("alias")).expect("create gitlink alias");
+        let error = ensure_paths_do_not_enter_submodules(root, &["alias/file.txt".to_string()])
+            .expect_err("reject alias to gitlink");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
+        let outside = tempfile::tempdir().expect("outside directory");
+        std::os::unix::fs::symlink(outside.path(), root.join("outside"))
+            .expect("create outside alias");
+        let error = ensure_paths_do_not_enter_submodules(root, &["outside/file.txt".to_string()])
+            .expect_err("reject alias outside worktree");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
     #[test]
     fn patch_variants_reject_paths_inside_submodules() {
         let _g = env_lock().lock().unwrap();
         let repo = init_repo();
         let root = repo.path();
         init_submodule_with_clean_filter(root);
-        let diff = "diff --git a/nested/file.txt b/nested/file.txt\n--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1 +1 @@\n-original\n+modified\n";
+        let cases = [
+            (
+                "git-format",
+                "diff --git a/nested/file.txt b/nested/file.txt\n--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1 +1 @@\n-original\n+modified\n",
+                io::ErrorKind::Unsupported,
+            ),
+            (
+                "headerless",
+                "--- old/nested/file.txt\n+++ new/nested/file.txt\n@@ -1 +1 @@\n-original\n+modified\n",
+                io::ErrorKind::Unsupported,
+            ),
+            (
+                "case-folded gitlink ancestor",
+                "--- old/NESTED/file.txt\n+++ new/NESTED/file.txt\n@@ -1 +1 @@\n-original\n+modified\n",
+                io::ErrorKind::Unsupported,
+            ),
+            (
+                "mismatched headers",
+                "diff --git a/safe.txt b/safe.txt\n--- old/nested/file.txt\n+++ new/nested/file.txt\n@@ -1 +1 @@\n-original\n+modified\n",
+                io::ErrorKind::Unsupported,
+            ),
+            (
+                "mismatched rename metadata",
+                "diff --git a/safe-old.txt b/safe-new.txt\nsimilarity index 100%\nrename from nested/file.txt\nrename to nested/renamed.txt\n",
+                io::ErrorKind::Unsupported,
+            ),
+        ];
 
-        for (revert, preflight) in [(false, true), (false, false), (true, false)] {
-            let request = ApplyGitRequest {
+        for (name, diff, expected_kind) in cases {
+            for (revert, preflight) in [(false, true), (false, false), (true, true), (true, false)]
+            {
+                let request = ApplyGitRequest {
+                    cwd: root.to_path_buf(),
+                    diff: diff.to_string(),
+                    revert,
+                    preflight,
+                };
+                let error = apply_git_patch(&request).unwrap_err();
+                assert_eq!(error.kind(), expected_kind, "{name}");
+                assert!(!configured_filter_ran(&root.join("nested")));
+            }
+        }
+    }
+
+    #[test]
+    fn headerless_patch_ignores_unrelated_submodule_across_variants() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        init_submodule_with_clean_filter(root);
+        ensure_paths_do_not_enter_submodules(root, &[":(glob)nested/**".to_string()])
+            .expect("treat patch paths as literal pathspecs");
+        std::fs::write(root.join("root.txt"), "old\n").expect("write root file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "root.txt"]);
+        assert_eq!(add_code, 0, "add root file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "root file"]);
+        assert_eq!(commit_code, 0, "commit root file: {commit_err}");
+        let diff = "--- old/root.txt\n+++ new/root.txt\n@@ -1 +1 @@\n-old\n+new\n";
+
+        for (revert, preflight, expected) in [
+            (false, true, "old\n"),
+            (false, false, "new\n"),
+            (true, true, "new\n"),
+            (true, false, "old\n"),
+        ] {
+            let result = apply_git_patch(&ApplyGitRequest {
                 cwd: root.to_path_buf(),
                 diff: diff.to_string(),
                 revert,
                 preflight,
-            };
-            let error = apply_git_patch(&request).expect_err("reject path inside submodule");
-            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            })
+            .unwrap_or_else(|error| panic!("revert={revert}, preflight={preflight}: {error}"));
+            assert_eq!(
+                result.exit_code, 0,
+                "revert={revert}, preflight={preflight}"
+            );
+            assert_eq!(read_file_normalized(&root.join("root.txt")), expected);
             assert!(!configured_filter_ran(&root.join("nested")));
         }
     }
