@@ -823,7 +823,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     assert!(
         !first_request_body
             .to_string()
-            .contains("Only use `spawn_agent` if and only if"),
+            .contains("### When to delegate vs. do the subtask yourself"),
         "deferred v1 multi-agent guidance should stay out of initial developer context"
     );
 
@@ -857,7 +857,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
     ));
     assert!(description.contains("### Designing delegated subtasks"));
-    assert!(!description.contains("### When to delegate vs. do the subtask yourself"));
+    assert!(description.contains("### When to delegate vs. do the subtask yourself"));
 
     Ok(())
 }
