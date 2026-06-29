@@ -31,6 +31,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
@@ -123,6 +124,7 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -795,6 +797,8 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
+    // TODO(anp): Remove after generated-image artifacts use target-native paths.
+    skip_if_wine_exec!(Ok(()), "uses host-native generated-image artifact paths");
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -945,6 +949,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,

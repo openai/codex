@@ -8,6 +8,7 @@ mod otlp;
 mod targets;
 
 use crate::metrics::Result as MetricsResult;
+use codex_protocol::auth::AuthMode;
 use serde::Serialize;
 use strum_macros::Display;
 
@@ -28,6 +29,7 @@ pub use crate::provider::OtelProvider;
 pub use crate::trace_context::context_from_w3c_trace_context;
 pub use crate::trace_context::current_span_trace_id;
 pub use crate::trace_context::current_span_w3c_trace_context;
+pub use crate::trace_context::inject_span_w3c_trace_headers;
 pub use crate::trace_context::set_parent_from_context;
 pub use crate::trace_context::set_parent_from_w3c_trace_context;
 pub use crate::trace_context::span_w3c_trace_context;
@@ -44,22 +46,21 @@ pub enum ToolDecisionSource {
     User,
 }
 
-/// Maps to API/auth `AuthMode` to avoid a circular dependency on codex-core.
+/// Coarsens the authentication domain into the dimensions used by telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum TelemetryAuthMode {
     ApiKey,
     Chatgpt,
 }
 
-impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
-    fn from(mode: codex_app_server_protocol::AuthMode) -> Self {
+impl From<AuthMode> for TelemetryAuthMode {
+    fn from(mode: AuthMode) -> Self {
         match mode {
-            codex_app_server_protocol::AuthMode::ApiKey
-            | codex_app_server_protocol::AuthMode::BedrockApiKey => Self::ApiKey,
-            codex_app_server_protocol::AuthMode::Chatgpt
-            | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
-            | codex_app_server_protocol::AuthMode::AgentIdentity
-            | codex_app_server_protocol::AuthMode::PersonalAccessToken => Self::Chatgpt,
+            AuthMode::ApiKey | AuthMode::BedrockApiKey => Self::ApiKey,
+            AuthMode::Chatgpt
+            | AuthMode::ChatgptAuthTokens
+            | AuthMode::AgentIdentity
+            | AuthMode::PersonalAccessToken => Self::Chatgpt,
         }
     }
 }

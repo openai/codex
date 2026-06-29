@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
 codex-file-system = { workspace = true }
@@ -31,6 +30,7 @@ gethostname = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 multimap = { workspace = true }
 prost = "0.14.3"
+regex-lite = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_ignored = { workspace = true }

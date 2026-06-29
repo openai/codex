@@ -62,6 +62,10 @@ use crate::facts::HookRunInput;
 use crate::facts::InputError;
 use crate::facts::InvocationType;
 use crate::facts::PluginInstallFailedInput;
+use crate::facts::PluginInstallRequestSource;
+use crate::facts::PluginInstallRequested;
+use crate::facts::PluginInstallRequestedInput;
+use crate::facts::PluginInstallRequestedPlugin;
 use crate::facts::PluginState;
 use crate::facts::PluginStateChangedInput;
 use crate::facts::PluginUsedInput;
@@ -168,6 +172,17 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 
+const TEST_PRODUCT_CLIENT_ID: &str = "codex_work_desktop";
+
+fn test_tracking_context(thread_id: &str, turn_id: &str) -> TrackEventsContext {
+    TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_string(),
+        product_client_id: TEST_PRODUCT_CLIENT_ID.to_string(),
+    }
+}
+
 fn sample_thread_with_metadata(
     thread_id: &str,
     ephemeral: bool,
@@ -177,11 +192,13 @@ fn sample_thread_with_metadata(
 ) -> Thread {
     Thread {
         id: thread_id.to_string(),
+        extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
         parent_thread_id,
         preview: "first prompt".to_string(),
         ephemeral,
+        history_mode: Default::default(),
         model_provider: "openai".to_string(),
         created_at: 1,
         updated_at: 2,
@@ -219,7 +236,7 @@ fn sample_thread_start_response(
         cwd: test_path_buf("/tmp").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AppServerAskForApproval::OnFailure,
+        approval_policy: AppServerAskForApproval::OnRequest,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
@@ -284,7 +301,7 @@ fn sample_thread_resume_response_with_source(
         cwd: test_path_buf("/tmp").abs(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
-        approval_policy: AppServerAskForApproval::OnFailure,
+        approval_policy: AppServerAskForApproval::OnRequest,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
@@ -542,6 +559,7 @@ async fn ingest_rejected_turn_steer(
                 response: Box::new(sample_thread_resume_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_originator: None,
             },
             out,
         )
@@ -615,6 +633,7 @@ async fn ingest_turn_prerequisites(
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
                     )),
+                    thread_originator: None,
                 },
                 out,
             )
@@ -638,6 +657,7 @@ async fn ingest_turn_prerequisites(
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_originator: None,
             },
             out,
         )
@@ -704,6 +724,7 @@ async fn ingest_review_prerequisites(
                 response: Box::new(sample_thread_start_response(
                     "thread-1", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_originator: None,
             },
             events,
         )
@@ -1023,11 +1044,7 @@ fn normalize_path_for_skill_id_repo_root_not_in_skill_path_uses_absolute_path() 
 
 #[test]
 fn app_mentioned_event_serializes_expected_shape() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
     let event = TrackEventRequest::AppMentioned(CodexAppMentionedEventRequest {
         event_type: "codex_app_mentioned",
         event_params: codex_app_metadata(
@@ -1051,7 +1068,7 @@ fn app_mentioned_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
                 "app_name": "Calendar",
-                "product_client_id": originator().value,
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
@@ -1061,11 +1078,7 @@ fn app_mentioned_event_serializes_expected_shape() {
 
 #[test]
 fn app_used_event_serializes_expected_shape() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-2".to_string(),
-        turn_id: "turn-2".to_string(),
-    };
+    let tracking = test_tracking_context("thread-2", "turn-2");
     let event = TrackEventRequest::AppUsed(CodexAppUsedEventRequest {
         event_type: "codex_app_used",
         event_params: codex_app_metadata(
@@ -1089,7 +1102,7 @@ fn app_used_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "app_name": "Google Drive",
-                "product_client_id": originator().value,
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "invoke_type": "implicit",
                 "model_slug": "gpt-5"
             }
@@ -1380,16 +1393,8 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
         invocation_type: Some(InvocationType::Implicit),
     };
 
-    let turn_1 = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
-    let turn_2 = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-2".to_string(),
-    };
+    let turn_1 = test_tracking_context("thread-1", "turn-1");
+    let turn_2 = test_tracking_context("thread-1", "turn-2");
 
     assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), true);
     assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), false);
@@ -1652,6 +1657,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -1697,6 +1703,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -1742,6 +1749,157 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 }
 
 #[tokio::test]
+async fn thread_originator_overrides_shared_connection_across_thread_events() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(sample_initialize_fact(/*connection_id*/ 7), &mut events)
+        .await;
+    for (request_id, thread_id, thread_originator) in [
+        (1, "thread-work", Some(TEST_PRODUCT_CLIENT_ID.to_string())),
+        (2, "thread-default", None),
+    ] {
+        reducer
+            .ingest(
+                AnalyticsFact::ClientResponse {
+                    connection_id: 7,
+                    request_id: RequestId::Integer(request_id),
+                    response: Box::new(sample_thread_start_response(
+                        thread_id, /*ephemeral*/ false, "gpt-5",
+                    )),
+                    thread_originator,
+                },
+                &mut events,
+            )
+            .await;
+    }
+
+    let initialized = serde_json::to_value(&events).expect("serialize thread events");
+    assert_eq!(
+        initialized
+            .as_array()
+            .expect("thread events")
+            .iter()
+            .map(|event| {
+                json!({
+                    "thread_id": event["event_params"]["thread_id"],
+                    "app_server_client": event["event_params"]["app_server_client"],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({
+                "thread_id": "thread-work",
+                "app_server_client": {
+                    "product_client_id": TEST_PRODUCT_CLIENT_ID,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "websocket",
+                    "experimental_api_enabled": false,
+                },
+            }),
+            json!({
+                "thread_id": "thread-default",
+                "app_server_client": {
+                    "product_client_id": DEFAULT_ORIGINATOR,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "websocket",
+                    "experimental_api_enabled": false,
+                },
+            }),
+        ]
+    );
+
+    events.clear();
+    reducer
+        .ingest(
+            AnalyticsFact::ClientRequest {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(sample_turn_start_request(
+                    "thread-work",
+                    /*request_id*/ 3,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                response: Box::new(sample_turn_start_response("turn-1")),
+                thread_originator: None,
+            },
+            &mut events,
+        )
+        .await;
+    ingest_completed_command_execution_item(&mut reducer, &mut events, "thread-work", "item-work")
+        .await;
+    ingest_complete_child_turn(&mut reducer, &mut events, "thread-work", "turn-1").await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-work".to_string(),
+                    turn_id: "turn-compact".to_string(),
+                    trigger: CompactionTrigger::Manual,
+                    reason: CompactionReason::UserRequested,
+                    implementation: CompactionImplementation::Responses,
+                    phase: CompactionPhase::StandaloneTurn,
+                    strategy: CompactionStrategy::Memento,
+                    status: CompactionStatus::Completed,
+                    codex_error_kind: None,
+                    codex_error_http_status_code: None,
+                    active_context_tokens_before: 131_000,
+                    active_context_tokens_after: 64_000,
+                    retained_image_count: None,
+                    compaction_summary_tokens: None,
+                    cached_input_tokens: None,
+                    started_at: 100,
+                    completed_at: 101,
+                    duration_ms: Some(1200),
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let lifecycle = serde_json::to_value(&events).expect("serialize lifecycle events");
+    assert_eq!(
+        lifecycle
+            .as_array()
+            .expect("lifecycle events")
+            .iter()
+            .map(|event| {
+                json!({
+                    "event_type": event["event_type"],
+                    "product_client_id":
+                        event["event_params"]["app_server_client"]["product_client_id"],
+                })
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            json!({
+                "event_type": "codex_command_execution_event",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
+            }),
+            json!({
+                "event_type": "codex_turn_event",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
+            }),
+            json!({
+                "event_type": "codex_compaction_event",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
+            }),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn unrelated_client_requests_are_ignored_by_reducer() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
@@ -1767,6 +1925,7 @@ async fn unrelated_client_requests_are_ignored_by_reducer() {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -1792,6 +1951,7 @@ async fn unrelated_client_responses_are_ignored_by_reducer() {
                 response: Box::new(ClientResponsePayload::ThreadArchive(
                     ThreadArchiveResponse {},
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -1851,6 +2011,7 @@ async fn compaction_event_ingests_custom_fact() {
                     Some(AppServerThreadSource::Subagent),
                     Some(parent_thread_id.to_string()),
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -1971,6 +2132,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -2499,6 +2661,7 @@ async fn item_review_summaries_do_not_cross_threads_with_reused_item_ids() {
                 response: Box::new(sample_thread_start_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -2749,7 +2912,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
 }
 
 #[tokio::test]
-async fn subagent_events_use_inherited_connection_unless_turn_connection_is_explicit() {
+async fn subagent_events_keep_thread_originator_with_explicit_turn_connection() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let parent_thread_id =
@@ -2786,6 +2949,7 @@ async fn subagent_events_use_inherited_connection_unless_turn_connection_is_expl
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -2908,6 +3072,7 @@ async fn subagent_events_use_inherited_connection_unless_turn_connection_is_expl
                 connection_id: 8,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-explicit")),
+                thread_originator: None,
             },
             &mut events,
         )
@@ -2918,7 +3083,11 @@ async fn subagent_events_use_inherited_connection_unless_turn_connection_is_expl
     };
     assert_eq!(
         event.event_params.app_server_client.product_client_id,
-        DEFAULT_ORIGINATOR
+        "parent-client"
+    );
+    assert_eq!(
+        event.event_params.app_server_client.client_name.as_deref(),
+        Some("codex-tui")
     );
 }
 
@@ -3008,11 +3177,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
 
 #[test]
 fn plugin_used_event_serializes_expected_shape() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-3".to_string(),
-        turn_id: "turn-3".to_string(),
-    };
+    let tracking = test_tracking_context("thread-3", "turn-3");
     let event = TrackEventRequest::PluginUsed(CodexPluginUsedEventRequest {
         event_type: "codex_plugin_used",
         event_params: codex_plugin_used_metadata(&tracking, sample_plugin_metadata()),
@@ -3026,12 +3191,13 @@ fn plugin_used_event_serializes_expected_shape() {
             "event_type": "codex_plugin_used",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": originator().value,
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "mcp_server_names": ["mcp-1", "mcp-2"],
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
@@ -3056,6 +3222,7 @@ fn plugin_management_event_serializes_expected_shape() {
             "event_type": "codex_plugin_installed",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
@@ -3085,6 +3252,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
@@ -3098,7 +3266,7 @@ fn plugin_install_failed_event_serializes_expected_shape() {
 }
 
 #[test]
-fn plugin_management_event_can_use_remote_plugin_id_override() {
+fn plugin_management_event_keeps_plugin_id_local_when_remote_id_exists() {
     let mut plugin = sample_plugin_metadata();
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
@@ -3109,20 +3277,26 @@ fn plugin_management_event_can_use_remote_plugin_id_override() {
     let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
 
     assert_eq!(
-        payload["event_params"]["plugin_id"],
-        "plugins~Plugin_remote"
+        payload,
+        json!({
+            "event_type": "codex_plugin_installed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "remote_plugin_id": "plugins~Plugin_remote",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": originator().value
+            }
+        })
     );
-    assert_eq!(payload["event_params"]["plugin_name"], "sample");
-    assert_eq!(payload["event_params"]["marketplace_name"], "test");
 }
 
 #[test]
 fn hook_run_event_serializes_expected_shape() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-3".to_string(),
-        turn_id: "turn-3".to_string(),
-    };
+    let tracking = test_tracking_context("thread-3", "turn-3");
     let event = TrackEventRequest::HookRun(CodexHookRunEventRequest {
         event_type: "codex_hook_run",
         event_params: codex_hook_run_metadata(
@@ -3144,6 +3318,7 @@ fn hook_run_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "model_slug": "gpt-5",
                 "hook_name": "PreToolUse",
                 "hook_source": "user",
@@ -3155,11 +3330,7 @@ fn hook_run_event_serializes_expected_shape() {
 
 #[test]
 fn hook_run_metadata_maps_sources_and_statuses() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
 
     let system = serde_json::to_value(codex_hook_run_metadata(
         &tracking,
@@ -3210,11 +3381,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
 
 #[test]
 fn hook_run_metadata_maps_stopped_status() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
 
     let stopped = serde_json::to_value(codex_hook_run_metadata(
         &tracking,
@@ -3240,16 +3407,8 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
     };
     let plugin = sample_plugin_metadata();
 
-    let turn_1 = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
-    let turn_2 = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-2".to_string(),
-    };
+    let turn_1 = test_tracking_context("thread-1", "turn-1");
+    let turn_2 = test_tracking_context("thread-1", "turn-2");
 
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), true);
     assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), false);
@@ -3260,11 +3419,7 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
 async fn reducer_ingests_skill_invoked_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
     let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
     let expected_skill_id = skill_id_for_local_skill(
         /*repo_url*/ None,
@@ -3297,7 +3452,7 @@ async fn reducer_ingests_skill_invoked_fact() {
             "skill_id": expected_skill_id,
             "skill_name": "doc",
             "event_params": {
-                "product_client_id": originator().value,
+                "product_client_id": TEST_PRODUCT_CLIENT_ID,
                 "skill_scope": "user",
                 "plugin_id": null,
                 "repo_url": null,
@@ -3314,11 +3469,7 @@ async fn reducer_ingests_skill_invoked_fact() {
 async fn reducer_includes_plugin_id_for_plugin_skill_invocations() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
     let skill_path =
         PathBuf::from("/Users/abc/.codex/plugins/cache/test/sample/skills/doc/SKILL.md");
 
@@ -3353,11 +3504,7 @@ async fn reducer_ingests_hook_run_fact() {
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(HookRunInput {
-                tracking: TrackEventsContext {
-                    model_slug: "gpt-5".to_string(),
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                },
+                tracking: test_tracking_context("thread-1", "turn-1"),
                 hook: HookRunFact {
                     event_name: HookEventName::PostToolUse,
                     hook_source: HookSource::Unknown,
@@ -3380,11 +3527,7 @@ async fn reducer_ingests_hook_run_fact() {
 async fn reducer_ingests_app_and_plugin_facts() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
+    let tracking = test_tracking_context("thread-1", "turn-1");
 
     reducer
         .ingest(
@@ -3427,6 +3570,18 @@ async fn reducer_ingests_app_and_plugin_facts() {
     assert_eq!(payload[0]["event_type"], "codex_app_mentioned");
     assert_eq!(payload[1]["event_type"], "codex_app_used");
     assert_eq!(payload[2]["event_type"], "codex_plugin_used");
+    assert_eq!(
+        payload[0]["event_params"]["product_client_id"],
+        TEST_PRODUCT_CLIENT_ID
+    );
+    assert_eq!(
+        payload[1]["event_params"]["product_client_id"],
+        TEST_PRODUCT_CLIENT_ID
+    );
+    assert_eq!(
+        payload[2]["event_params"]["product_client_id"],
+        TEST_PRODUCT_CLIENT_ID
+    );
 }
 
 #[tokio::test]
@@ -3453,12 +3608,73 @@ async fn reducer_ingests_plugin_state_changed_fact() {
             "event_type": "codex_plugin_disabled",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value
+            }
+        }])
+    );
+}
+
+#[tokio::test]
+async fn reducer_ingests_plugin_install_requested_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    let tracking = test_tracking_context("thread-1", "turn-1");
+    let request = PluginInstallRequested {
+        suggestion_id: "request_plugin_install_call-1".to_string(),
+        plugins: vec![
+            PluginInstallRequestedPlugin {
+                plugin_id: "calendar@openai-curated-remote".to_string(),
+                remote_plugin_id: Some("plugin_calendar".to_string()),
+                plugin_name: "Calendar".to_string(),
+                connector_ids: vec!["connector_calendar".to_string()],
+            },
+            PluginInstallRequestedPlugin {
+                plugin_id: "github@openai-curated-remote".to_string(),
+                remote_plugin_id: None,
+                plugin_name: "GitHub".to_string(),
+                connector_ids: vec!["connector_github".to_string()],
+            },
+        ],
+        source: PluginInstallRequestSource::EndpointRecommendation,
+    };
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginInstallRequested(
+                PluginInstallRequestedInput { tracking, request },
+            )),
+            &mut events,
+        )
+        .await;
+
+    assert_eq!(
+        serde_json::to_value(&events).expect("serialize events"),
+        json!([{
+            "event_type": "codex_plugin_install_requested",
+            "event_params": {
+                "suggestion_id": "request_plugin_install_call-1",
+                "plugins": [{
+                    "plugin_id": "calendar@openai-curated-remote",
+                    "remote_plugin_id": "plugin_calendar",
+                    "plugin_name": "Calendar",
+                    "connector_ids": ["connector_calendar"],
+                }, {
+                    "plugin_id": "github@openai-curated-remote",
+                    "remote_plugin_id": null,
+                    "plugin_name": "GitHub",
+                    "connector_ids": ["connector_github"],
+                }],
+                "source": "endpoint_recommendation",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "model_slug": "gpt-5",
+                "product_client_id": originator().value,
             }
         }])
     );
@@ -3488,6 +3704,7 @@ async fn reducer_ingests_plugin_install_failed_fact() {
             "event_type": "codex_plugin_install_failed",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
@@ -3505,7 +3722,7 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let plugin = PluginTelemetryMetadata {
-        plugin_id: PluginId::parse("unknown@openai-curated-remote").expect("valid plugin id"),
+        plugin_id: None,
         remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string()),
         capability_summary: None,
     };
@@ -3528,9 +3745,10 @@ async fn reducer_ingests_plugin_install_failed_fact_without_detail() {
         json!([{
             "event_type": "codex_plugin_install_failed",
             "event_params": {
-                "plugin_id": "plugins~Plugin_00000000000000000000000000000000",
-                "plugin_name": "unknown",
-                "marketplace_name": "openai-curated-remote",
+                "plugin_id": null,
+                "remote_plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+                "plugin_name": null,
+                "marketplace_name": null,
                 "has_skills": null,
                 "mcp_server_count": null,
                 "connector_ids": null,
@@ -3819,6 +4037,7 @@ async fn accepted_turn_steer_emits_expected_event() {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_originator: None,
             },
             &mut out,
         )
@@ -3990,6 +4209,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_originator: None,
             },
             &mut out,
         )
@@ -4318,6 +4538,7 @@ async fn accepted_steers_increment_turn_steer_count() {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_originator: None,
             },
             &mut out,
         )
@@ -4365,6 +4586,7 @@ async fn accepted_steers_increment_turn_steer_count() {
                 connection_id: 7,
                 request_id: RequestId::Integer(6),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_originator: None,
             },
             &mut out,
         )
@@ -4569,7 +4791,7 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
-        plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
+        plugin_id: Some(PluginId::parse("sample@test").expect("valid plugin id")),
         remote_plugin_id: None,
         capability_summary: Some(PluginCapabilitySummary {
             config_name: "sample@test".to_string(),

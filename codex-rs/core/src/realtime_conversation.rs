@@ -1,4 +1,5 @@
 use crate::client::ModelClient;
+use crate::client::add_originator_header;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
@@ -21,13 +22,13 @@ use codex_api::RealtimeWebsocketClient;
 use codex_api::RealtimeWebsocketEvents;
 use codex_api::RealtimeWebsocketWriter;
 use codex_api::map_api_error;
-use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::MessagePhase;
@@ -775,6 +776,7 @@ async fn prepare_realtime_start(
     let session_config =
         build_realtime_session_config(sess, &params, version, configured_voice).await?;
     let requested_realtime_session_id = session_config.session_id.clone();
+    let originator = sess.originator().await;
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
@@ -782,6 +784,7 @@ async fn prepare_realtime_start(
                 requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
                 version,
+                originator.as_str(),
             )?
         }
         ConversationStartTransport::Webrtc { .. } => {
@@ -789,6 +792,7 @@ async fn prepare_realtime_start(
                 requested_realtime_session_id.as_deref(),
                 /*api_key*/ None,
                 version,
+                originator.as_str(),
             )?
         }
     };
@@ -1171,6 +1175,7 @@ fn realtime_request_headers(
     realtime_session_id: Option<&str>,
     api_key: Option<&str>,
     version: RealtimeWsVersion,
+    originator: &str,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
@@ -1190,6 +1195,8 @@ fn realtime_request_headers(
         })?;
         headers.insert(AUTHORIZATION, auth_value);
     }
+
+    add_originator_header(&mut headers, originator);
 
     Ok(Some(headers))
 }

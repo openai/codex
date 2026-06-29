@@ -124,7 +124,6 @@ async fn thread_settings_update(
         summary,
         service_tier,
         collaboration_mode,
-        multi_agent_mode,
         personality,
     } = thread_settings;
     let collaboration_mode = match collaboration_mode {
@@ -150,7 +149,6 @@ async fn thread_settings_update(
         active_permission_profile,
         windows_sandbox_level,
         collaboration_mode: Some(collaboration_mode),
-        multi_agent_mode,
         reasoning_summary: summary,
         service_tier,
         personality,
@@ -178,7 +176,6 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,
             collaboration_mode: snapshot.collaboration_mode,
-            multi_agent_mode: snapshot.multi_agent_mode,
         },
     })
 }
@@ -218,7 +215,7 @@ pub(super) async fn user_input_or_turn_inner(
         })
         .await;
     }
-    sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
+    sess.maybe_emit_model_warnings_for_turn(current_context.as_ref())
         .await;
     match sess
         .steer_input(
@@ -601,8 +598,8 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
         warn!("failed to shutdown code mode session: {err}");
     }
     sess.services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager_arc()
         .shutdown()
         .await;
     sess.guardian_review_session.shutdown().await;
@@ -673,7 +670,7 @@ pub async fn review(
     review_request: ReviewRequest,
 ) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-    sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+    sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
@@ -853,6 +850,11 @@ pub(super) async fn submission_loop(
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
         emit_thread_stop_lifecycle(sess.as_ref()).await;
+        if let Some(live_thread) = sess.live_thread()
+            && let Err(err) = live_thread.shutdown().await
+        {
+            warn!("failed to shutdown thread persistence after submission channel closed: {err}");
+        }
     }
     debug!("Agent loop exited");
 }

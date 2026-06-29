@@ -124,7 +124,6 @@ pub(super) fn run_cleanup(
     overrides.extend([
         "analytics.enabled=false".to_string(),
         "features.plugins=true".to_string(),
-        "features.remote_plugin=true".to_string(),
     ]);
     let mut client = CodexClient::spawn_stdio(codex_bin, &overrides)?;
     client.initialize()?;
@@ -199,7 +198,6 @@ fn spawn_client(
     overrides.extend([
         "analytics.enabled=true".to_string(),
         "features.plugins=true".to_string(),
-        "features.remote_plugin=true".to_string(),
     ]);
     let environment = vec![(
         OsString::from(ANALYTICS_CAPTURE_ENV_VAR),
@@ -312,13 +310,19 @@ fn run_mutation_sequence(
                 state_err
             }
         })?;
+        wait_for_remote_plugin_event(
+            capture_path,
+            &expected.remote_plugin_id,
+            "codex_plugin_uninstalled",
+        )?;
 
         let captured_events =
             read_events_for_remote_plugin(capture_path, &expected.remote_plugin_id)?;
         let events = validate_mutation_events(
             captured_events,
             PluginEventIdentity {
-                plugin_id: &expected.remote_plugin_id,
+                plugin_id: &expected.plugin_id,
+                remote_plugin_id: &expected.remote_plugin_id,
                 plugin_name: &expected.plugin_name,
                 marketplace_name: &expected.marketplace_name,
             },

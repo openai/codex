@@ -135,6 +135,11 @@ impl SkillProviders {
         Ok(catalog)
     }
 
+    pub(crate) async fn list_executor_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+        self.list_matching(&query, |source| source.kind == SkillSourceKind::Executor)
+            .await
+    }
+
     async fn list_matching(
         &self,
         query: &SkillListQuery,

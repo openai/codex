@@ -16,8 +16,8 @@ filesystem operations and `codex-linux-sandbox`.
 
 ## Transport
 
-The server speaks the shared `codex-app-server-protocol` message envelope on
-the wire.
+The server speaks the exec-specific `codex-exec-server-protocol` message
+envelope on the wire.
 
 The CLI entrypoint supports:
 
@@ -321,9 +321,14 @@ Params:
 {
   "processId": "proc-1",
   "seq": 2,
-  "exitCode": 0
+  "exitCode": 0,
+  "sandboxDenied": false
 }
 ```
+
+`sandboxDenied` lets streaming clients preserve executor-side sandbox denial
+detection without issuing a final `process/read` request. Clients recover it
+with `process/read` when an older server omits the field.
 
 ### `process/closed`
 
@@ -334,15 +339,16 @@ Params:
 
 ```json
 {
-  "processId": "proc-1"
+  "processId": "proc-1",
+  "seq": 3
 }
 ```
 
 ## Filesystem RPCs
 
-Filesystem methods use canonical `file:` URIs and return JSON-RPC errors for
-invalid or unavailable paths. For compatibility, requests also accept native
-absolute path strings and normalize them to `file:` URIs:
+Filesystem methods require valid `file:` URI strings and return JSON-RPC errors
+for invalid or unavailable paths. Native absolute path strings are rejected;
+callers must convert them to `file:` URIs before sending requests:
 
 - `fs/readFile`
 - `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
@@ -431,6 +437,6 @@ Terminate it:
 ```json
 {"id":4,"method":"process/terminate","params":{"processId":"proc-1"}}
 {"id":4,"result":{"running":true}}
-{"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0}}
-{"method":"process/closed","params":{"processId":"proc-1"}}
+{"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0,"sandboxDenied":false}}
+{"method":"process/closed","params":{"processId":"proc-1","seq":4}}
 ```

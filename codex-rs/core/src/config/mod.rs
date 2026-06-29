@@ -14,7 +14,6 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::ConstrainedWithSource;
 use codex_config::FeatureRequirementsToml;
-use codex_config::McpServerIdentity;
 use codex_config::McpServerRequirement;
 use codex_config::PluginRequirementsToml;
 use codex_config::ProfileV2Name;
@@ -40,7 +39,6 @@ use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::History;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
-use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
@@ -59,6 +57,7 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::CodeModeConfigToml;
 use codex_features::CurrentTimeReminderConfigToml;
+use codex_features::CurrentTimeReminderDeliveryMode;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
@@ -72,6 +71,7 @@ use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
 use codex_mcp::McpConfig;
 use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpServerRegistration;
@@ -147,6 +147,7 @@ pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
 mod otel;
+mod permission_profile_catalog;
 mod permissions;
 mod resolved_permission_profile;
 #[cfg(test)]
@@ -163,6 +164,11 @@ pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
+pub use permission_profile_catalog::PermissionProfileCatalogEntry;
+pub use permission_profile_catalog::permission_profile_catalog;
+use permission_profile_catalog::permission_profile_catalog_from_permissions;
+use permission_profile_catalog::permission_profile_is_allowed;
+use permission_profile_catalog::validate_permission_profile_for_deny_read;
 pub(crate) use permissions::is_builtin_permission_profile_name;
 pub(crate) use permissions::reject_unknown_builtin_permission_profile;
 pub(crate) use permissions::resolve_permission_profile;
@@ -239,7 +245,8 @@ Payload:
 ```
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
-const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.spawn_agent` without a configured namespace or `to=functions.agents.spawn_agent` with `tool_namespace = "agents"`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
+const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
 - All agents have access to the same container and filesystem as you.
@@ -644,7 +651,7 @@ pub struct Config {
     pub explicit_permission_profile_mode: bool,
 
     /// User-defined permission profiles available from effective config.
-    pub custom_permission_profiles: Vec<CustomPermissionProfileSummary>,
+    pub custom_permission_profiles: Vec<PermissionProfileCatalogEntry>,
 
     /// Configures who approval requests are routed to for review once they have
     /// been escalated. This does not disable separate safety checks such as
@@ -1029,7 +1036,7 @@ pub struct Config {
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
     pub rollout_budget: Option<RolloutBudgetConfig>,
-    /// Current-time reminder configuration, when enabled.
+    /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
 
     /// Centralized feature flags; source of truth for feature gating.
@@ -1080,12 +1087,14 @@ pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
     "Your context window is nearly exhausted (only {n_remaining} tokens remaining) and will be automatically reset for you soon. ",
     "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
 );
-const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 1000;
+const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 2000;
+const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TokenBudgetConfig {
     pub reminder_threshold_tokens: Option<i64>,
     pub reminder_message_template: String,
+    pub guidance_message: Option<String>,
 }
 
 impl Default for TokenBudgetConfig {
@@ -1093,29 +1102,35 @@ impl Default for TokenBudgetConfig {
         Self {
             reminder_threshold_tokens: None,
             reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
+            guidance_message: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RolloutBudgetConfig {
     pub limit_tokens: i64,
-    pub reminder_interval_tokens: i64,
+    pub reminder_at_remaining_tokens: Vec<i64>,
     pub sampling_token_weight: f64,
     pub prefill_token_weight: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CurrentTimeReminderConfig {
-    pub reminder_interval_model_requests: u64,
+    pub reminder_interval_seconds: u64,
     pub clock_source: CurrentTimeSource,
+    pub delivery_mode: CurrentTimeReminderDeliveryMode,
+    /// Whether to expose the input-interruptible `clock.sleep` tool.
+    pub sleep_tool: bool,
 }
 
 impl Default for CurrentTimeReminderConfig {
     fn default() -> Self {
         Self {
-            reminder_interval_model_requests: 1,
+            reminder_interval_seconds: 1,
             clock_source: CurrentTimeSource::System,
+            delivery_mode: CurrentTimeReminderDeliveryMode::AnyInference,
+            sleep_tool: false,
         }
     }
 }
@@ -1150,7 +1165,7 @@ impl MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
             )),
-            tool_namespace: None,
+            tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
             hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
         }
@@ -1200,6 +1215,10 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        Config::auth_route_config(self)
     }
 }
 
@@ -1454,6 +1473,11 @@ impl Config {
         }
     }
 
+    pub fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        self.respect_system_proxy
+            .then(AuthRouteConfig::respect_system_proxy)
+    }
+
     /// Build the plugin-manager input from the effective config.
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
@@ -1561,7 +1585,10 @@ impl Config {
                 ElicitationCapability::default()
             },
             mcp_server_catalog: catalog.build(),
-            plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
+            connector_snapshot:
+                codex_connectors::ConnectorSnapshot::from_plugin_capability_summaries(
+                    loaded_plugins.capability_summaries(),
+                ),
         }
     }
 
@@ -1861,7 +1888,7 @@ fn filter_mcp_servers_by_requirements(
         let allowed = allowlist
             .value
             .get(name)
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1890,7 +1917,7 @@ fn filter_plugin_mcp_servers_by_requirements(
     for (name, server) in mcp_servers.iter_mut() {
         let allowed = plugin_mcp_requirements
             .and_then(|mcp_requirements| mcp_requirements.get(name))
-            .is_some_and(|requirement| mcp_server_matches_requirement(requirement, server));
+            .is_some_and(|requirement| requirement.matches(server));
         if allowed {
             server.disabled_reason = None;
         } else {
@@ -1951,26 +1978,6 @@ where
     }
 
     Ok(false)
-}
-
-fn mcp_server_matches_requirement(
-    requirement: &McpServerRequirement,
-    server: &McpServerConfig,
-) -> bool {
-    match &requirement.identity {
-        McpServerIdentity::Command {
-            command: want_command,
-        } => matches!(
-            &server.transport,
-            McpServerTransportConfig::Stdio { command: got_command, .. }
-                if got_command == want_command
-        ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
-    }
 }
 
 pub async fn load_global_mcp_servers(
@@ -2138,12 +2145,6 @@ pub struct AgentRoleConfig {
     pub config_file: Option<PathBuf>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CustomPermissionProfileSummary {
-    pub id: String,
-    pub description: Option<String>,
 }
 
 fn resolve_tool_suggest_config(
@@ -2561,9 +2562,25 @@ fn resolve_token_budget_config(
         ));
     }
 
+    let guidance_message = token_budget_config
+        .and_then(|config| config.guidance_message.clone())
+        .filter(|message| !message.trim().is_empty());
+    if guidance_message
+        .as_ref()
+        .is_some_and(|message| message.len() > TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "features.token_budget.guidance_message must not exceed {TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+
     Ok(Some(TokenBudgetConfig {
         reminder_threshold_tokens,
         reminder_message_template,
+        guidance_message,
     }))
 }
 
@@ -2596,13 +2613,23 @@ fn resolve_rollout_budget_config(
             "features.rollout_budget.limit_tokens must be positive",
         ));
     }
-    let reminder_interval_tokens = config
-        .reminder_interval_tokens
-        .unwrap_or_else(|| (limit_tokens / 10).max(1));
-    if reminder_interval_tokens <= 0 {
+    let reminder_at_remaining_tokens =
+        config
+            .reminder_at_remaining_tokens
+            .clone()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "features.rollout_budget.reminder_at_remaining_tokens is required when rollout_budget is enabled",
+                )
+            })?;
+    if reminder_at_remaining_tokens
+        .iter()
+        .any(|&tokens| tokens <= 0 || tokens >= limit_tokens)
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "features.rollout_budget.reminder_interval_tokens must be positive",
+            "features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below limit_tokens",
         ));
     }
     let sampling_token_weight = config.sampling_token_weight.unwrap_or(1.0);
@@ -2620,7 +2647,7 @@ fn resolve_rollout_budget_config(
     }
     Ok(Some(RolloutBudgetConfig {
         limit_tokens,
-        reminder_interval_tokens,
+        reminder_at_remaining_tokens,
         sampling_token_weight,
         prefill_token_weight,
     }))
@@ -2636,21 +2663,21 @@ fn resolve_current_time_reminder_config(
 
     let base = current_time_reminder_toml_config(config_toml.features.as_ref());
     let default = CurrentTimeReminderConfig::default();
-    let reminder_interval_model_requests = base
-        .and_then(|config| config.reminder_interval_model_requests)
-        .unwrap_or(default.reminder_interval_model_requests);
-    if reminder_interval_model_requests == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "features.current_time_reminder.reminder_interval_model_requests must be positive",
-        ));
-    }
+    let reminder_interval_seconds = base
+        .and_then(|config| config.reminder_interval_seconds)
+        .unwrap_or(default.reminder_interval_seconds);
 
     Ok(Some(CurrentTimeReminderConfig {
-        reminder_interval_model_requests,
+        reminder_interval_seconds,
         clock_source: base
             .and_then(|config| config.clock_source)
             .unwrap_or(default.clock_source),
+        delivery_mode: base
+            .and_then(|config| config.delivery_mode)
+            .unwrap_or(default.delivery_mode),
+        sleep_tool: base
+            .and_then(|config| config.sleep_tool)
+            .unwrap_or(default.sleep_tool),
     }))
 }
 
@@ -2735,6 +2762,15 @@ pub fn resolve_bootstrap_respect_system_proxy(
     let features =
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
     Ok(features.get().enabled(Feature::RespectSystemProxy))
+}
+
+/// Resolves auth route settings for the initial cloud-config bootstrap.
+pub fn resolve_bootstrap_auth_route_config(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Option<AuthRouteConfig>> {
+    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements)
+        .map(|enabled| enabled.then(AuthRouteConfig::respect_system_proxy))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
@@ -2910,6 +2946,7 @@ impl Config {
             managed_hooks: _,
             mcp_servers,
             plugins: _,
+            marketplaces: _,
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
@@ -3103,19 +3140,13 @@ impl Config {
                 permission_config_syntax,
                 Some(PermissionConfigSyntax::Profiles)
             );
-        let custom_permission_profiles = cfg
-            .permissions
-            .as_ref()
-            .map_or_else(Vec::new, |permissions| {
-                permissions
-                    .entries
-                    .iter()
-                    .map(|(id, profile)| CustomPermissionProfileSummary {
-                        id: id.clone(),
-                        description: profile.description.clone(),
-                    })
-                    .collect()
-            });
+        let custom_permission_profiles = permission_profile_catalog_from_permissions(
+            &config_layer_stack,
+            effective_permission_selection.profiles.as_ref(),
+        )?
+        .into_iter()
+        .filter(|profile| !is_builtin_permission_profile_name(&profile.id))
+        .collect();
         let using_implicit_builtin_profile = permission_config_syntax.is_none()
             && effective_permission_selection.selected_profile_id.is_none();
         let should_seed_legacy_workspace_roots = effective_permission_selection
@@ -3207,7 +3238,6 @@ impl Config {
                     effective_permission_selection.profiles.as_ref(),
                     default_permissions,
                     builtin_workspace_write_settings,
-                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
@@ -3628,20 +3658,10 @@ impl Config {
             constrained_permission_profile
                 .value
                 .add_validator(move |permission_profile| {
-                    let mode = sandbox_mode_requirement_for_permission_profile(permission_profile);
-                    match mode {
-                        SandboxModeRequirement::ReadOnly
-                        | SandboxModeRequirement::WorkspaceWrite => Ok(()),
-                        SandboxModeRequirement::DangerFullAccess
-                        | SandboxModeRequirement::ExternalSandbox => {
-                            Err(ConstraintError::InvalidValue {
-                                field_name: "sandbox_mode",
-                                candidate: format!("{mode:?}"),
-                                allowed: "[read-only, workspace-write]".to_string(),
-                                requirement_source: requirement_source.clone(),
-                            })
-                        }
-                    }
+                    validate_permission_profile_for_deny_read(
+                        permission_profile,
+                        &requirement_source,
+                    )
                 })
                 .map_err(std::io::Error::from)?;
         }
@@ -4093,6 +4113,15 @@ impl Config {
 
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::skills::service::bundled_skills_enabled_from_stack(&self.config_layer_stack)
+    }
+
+    /// Returns whether effective requirements allow selecting a concrete profile.
+    pub fn is_permission_profile_allowed(
+        &self,
+        profile_id: &str,
+        permission_profile: &PermissionProfile,
+    ) -> bool {
+        permission_profile_is_allowed(&self.config_layer_stack, profile_id, permission_profile)
     }
 }
 

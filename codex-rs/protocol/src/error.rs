@@ -69,6 +69,9 @@ pub enum CodexErr {
     #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
     TurnAborted,
 
+    #[error("shared rollout token budget exhausted")]
+    SessionBudgetExceeded,
+
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
@@ -173,6 +176,7 @@ impl CodexErr {
     pub fn is_retryable(&self) -> bool {
         match self {
             CodexErr::TurnAborted
+            | CodexErr::SessionBudgetExceeded
             | CodexErr::Interrupted
             | CodexErr::EnvVar(_)
             | CodexErr::Fatal(_)
@@ -220,6 +224,7 @@ impl CodexErr {
     pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
         match self {
             CodexErr::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CodexErr::SessionBudgetExceeded => CodexErrorInfo::SessionBudgetExceeded,
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
@@ -305,6 +310,7 @@ impl std::fmt::Display for ResponseStreamFailed {
 pub struct UnexpectedResponseError {
     pub status: StatusCode,
     pub body: String,
+    pub user_message: Option<String>,
     pub url: Option<String>,
     pub cf_ray: Option<String>,
     pub request_id: Option<String>,
@@ -312,8 +318,6 @@ pub struct UnexpectedResponseError {
     pub identity_error_code: Option<String>,
 }
 
-const CLOUDFLARE_BLOCKED_MESSAGE: &str =
-    "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 
 impl UnexpectedResponseError {
@@ -343,18 +347,17 @@ impl UnexpectedResponseError {
             Some(message.to_string())
         }
     }
+}
 
-    fn friendly_message(&self) -> Option<String> {
-        if self.status != StatusCode::FORBIDDEN {
-            return None;
-        }
-
-        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
-            return None;
-        }
-
-        let status = self.status;
-        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status})");
+impl std::fmt::Display for UnexpectedResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut message = if let Some(user_message) = &self.user_message {
+            user_message.clone()
+        } else {
+            let status = self.status;
+            let body = self.display_body();
+            format!("unexpected status {status}: {body}")
+        };
         if let Some(url) = &self.url {
             message.push_str(&format!(", url: {url}"));
         }
@@ -370,36 +373,7 @@ impl UnexpectedResponseError {
         if let Some(error_code) = &self.identity_error_code {
             message.push_str(&format!(", auth error code: {error_code}"));
         }
-
-        Some(message)
-    }
-}
-
-impl std::fmt::Display for UnexpectedResponseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(friendly) = self.friendly_message() {
-            write!(f, "{friendly}")
-        } else {
-            let status = self.status;
-            let body = self.display_body();
-            let mut message = format!("unexpected status {status}: {body}");
-            if let Some(url) = &self.url {
-                message.push_str(&format!(", url: {url}"));
-            }
-            if let Some(cf_ray) = &self.cf_ray {
-                message.push_str(&format!(", cf-ray: {cf_ray}"));
-            }
-            if let Some(id) = &self.request_id {
-                message.push_str(&format!(", request id: {id}"));
-            }
-            if let Some(auth_error) = &self.identity_authorization_error {
-                message.push_str(&format!(", auth error: {auth_error}"));
-            }
-            if let Some(error_code) = &self.identity_error_code {
-                message.push_str(&format!(", auth error code: {error_code}"));
-            }
-            write!(f, "{message}")
-        }
+        write!(f, "{message}")
     }
 }
 

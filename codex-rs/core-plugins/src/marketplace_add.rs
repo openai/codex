@@ -1,5 +1,7 @@
 use crate::installed_marketplaces::marketplace_install_root;
-use crate::is_openai_curated_marketplace_name;
+use crate::marketplace_policy::validate_marketplace_name_for_add;
+use crate::marketplace_policy::validate_marketplace_source_for_add;
+use codex_config::ConfigRequirements;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::Path;
@@ -19,7 +21,7 @@ use metadata::MarketplaceInstallMetadata;
 use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
-use source::MarketplaceSource;
+pub(crate) use source::MarketplaceSource;
 pub(crate) use source::parse_marketplace_source;
 use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
@@ -49,11 +51,14 @@ pub enum MarketplaceAddError {
 
 pub async fn add_marketplace(
     codex_home: PathBuf,
+    requirements: ConfigRequirements,
     request: MarketplaceAddRequest,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError> {
-    tokio::task::spawn_blocking(move || add_marketplace_sync(codex_home.as_path(), request))
-        .await
-        .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
+    tokio::task::spawn_blocking(move || {
+        add_marketplace_sync(codex_home.as_path(), &requirements, request)
+    })
+    .await
+    .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
 }
 
 pub fn is_local_marketplace_source(
@@ -68,13 +73,15 @@ pub fn is_local_marketplace_source(
 
 fn add_marketplace_sync(
     codex_home: &Path,
+    requirements: &ConfigRequirements,
     request: MarketplaceAddRequest,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError> {
-    add_marketplace_sync_with_cloner(codex_home, request, clone_git_source)
+    add_marketplace_sync_with_cloner(codex_home, requirements, request, clone_git_source)
 }
 
 fn add_marketplace_sync_with_cloner<F>(
     codex_home: &Path,
+    requirements: &ConfigRequirements,
     request: MarketplaceAddRequest,
     clone_source: F,
 ) -> Result<MarketplaceAddOutcome, MarketplaceAddError>
@@ -87,6 +94,9 @@ where
         sparse_paths,
     } = request;
     let source = parse_marketplace_source(&source, ref_name)?;
+    let managed_marketplace_name =
+        validate_marketplace_source_for_add(codex_home, requirements, &source)
+            .map_err(MarketplaceAddError::InvalidRequest)?;
     if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
         return Err(MarketplaceAddError::InvalidRequest(
             "--sparse is only supported for git marketplace sources".to_string(),
@@ -106,6 +116,8 @@ where
         installed_marketplace_root_for_source(codex_home, &install_root, &install_metadata)?
     {
         let marketplace_name = validate_marketplace_source_root(&existing_root)?;
+        validate_marketplace_name_for_add(managed_marketplace_name, &marketplace_name)
+            .map_err(MarketplaceAddError::InvalidRequest)?;
         record_added_marketplace_entry(codex_home, &marketplace_name, &install_metadata)?;
         return Ok(MarketplaceAddOutcome {
             marketplace_name,
@@ -121,11 +133,8 @@ where
 
     if let MarketplaceSource::Local { path } = &source {
         let marketplace_name = validate_marketplace_source_root(path)?;
-        if is_openai_curated_marketplace_name(&marketplace_name) {
-            return Err(MarketplaceAddError::InvalidRequest(format!(
-                "marketplace '{marketplace_name}' is reserved and cannot be added from this source"
-            )));
-        }
+        validate_marketplace_name_for_add(managed_marketplace_name, &marketplace_name)
+            .map_err(MarketplaceAddError::InvalidRequest)?;
         if find_marketplace_root_by_name(codex_home, &install_root, &marketplace_name)?.is_some() {
             return Err(MarketplaceAddError::InvalidRequest(format!(
                 "marketplace '{marketplace_name}' is already added from a different source; remove it before adding this source"
@@ -165,11 +174,8 @@ where
     stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)?;
-    if is_openai_curated_marketplace_name(&marketplace_name) {
-        return Err(MarketplaceAddError::InvalidRequest(format!(
-            "marketplace '{marketplace_name}' is reserved and cannot be added from this source"
-        )));
-    }
+    validate_marketplace_name_for_add(managed_marketplace_name, &marketplace_name)
+        .map_err(MarketplaceAddError::InvalidRequest)?;
 
     let destination = install_root.join(safe_marketplace_dir_name(&marketplace_name)?);
     ensure_marketplace_destination_is_inside_install_root(&install_root, &destination)?;
@@ -178,7 +184,6 @@ where
             "marketplace '{marketplace_name}' is already added from a different source; remove it before adding this source"
         )));
     }
-
     replace_marketplace_root(&staged_root, &destination).map_err(|err| {
         MarketplaceAddError::Internal(format!(
             "failed to install marketplace at {}: {err}",
@@ -213,8 +218,22 @@ where
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_config::RequirementSource;
+    use codex_config::RequirementsLayerEntry;
+    use codex_config::compose_requirements;
     use pretty_assertions::assert_eq;
+    use std::cell::Cell;
     use tempfile::TempDir;
+
+    fn requirements(requirements_toml: &str) -> ConfigRequirements {
+        let with_sources = compose_requirements([RequirementsLayerEntry::from_toml(
+            RequirementSource::Unknown,
+            requirements_toml,
+        )])
+        .expect("compose requirements")
+        .expect("requirements should be present");
+        ConfigRequirements::try_from(with_sources).expect("normalize requirements")
+    }
 
     #[test]
     fn add_marketplace_sync_installs_marketplace_and_updates_config() -> Result<()> {
@@ -224,6 +243,7 @@ mod tests {
 
         let result = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            &ConfigRequirements::default(),
             MarketplaceAddRequest {
                 source: "https://github.com/owner/repo.git".to_string(),
                 ref_name: None,
@@ -254,6 +274,47 @@ mod tests {
     }
 
     #[test]
+    fn denied_git_marketplace_does_not_clone_or_create_install_root() {
+        let codex_home = TempDir::new().expect("create Codex home");
+        let requirements = requirements(
+            r#"
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.company]
+source = "git"
+url = "https://github.com/example/allowed.git"
+"#,
+        );
+        let cloner_called = Cell::new(false);
+
+        let err = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            &requirements,
+            MarketplaceAddRequest {
+                source: "https://github.com/example/blocked.git".to_string(),
+                ref_name: None,
+                sparse_paths: Vec::new(),
+            },
+            |_url, _ref_name, _sparse_paths, _destination| {
+                cloner_called.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("blocked marketplace should fail");
+
+        assert!(err.to_string().contains("is not allowed by requirements"));
+        assert!(!cloner_called.get());
+        assert!(!marketplace_install_root(codex_home.path()).exists());
+        assert!(
+            !codex_home
+                .path()
+                .join(codex_config::CONFIG_TOML_FILE)
+                .exists()
+        );
+    }
+
+    #[test]
     fn add_marketplace_sync_installs_local_directory_source_and_updates_config() -> Result<()> {
         let codex_home = TempDir::new()?;
         let source_root = TempDir::new()?;
@@ -261,6 +322,7 @@ mod tests {
 
         let result = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            &ConfigRequirements::default(),
             MarketplaceAddRequest {
                 source: source_root.path().display().to_string(),
                 ref_name: None,
@@ -305,6 +367,7 @@ mod tests {
 
         let err = add_marketplace_sync_with_cloner(
             codex_home.path(),
+            &ConfigRequirements::default(),
             MarketplaceAddRequest {
                 source: source_root.path().display().to_string(),
                 ref_name: None,
@@ -341,16 +404,23 @@ mod tests {
             ref_name: None,
             sparse_paths: Vec::new(),
         };
-        let first_result = add_marketplace_sync_with_cloner(codex_home.path(), request.clone(), {
+        let requirements = ConfigRequirements::default();
+        let first_result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            &requirements,
+            request.clone(),
             |_url, _ref_name, _sparse_paths, _destination| {
                 panic!("git cloner should not be called for local marketplace sources")
-            }
-        })?;
-        let second_result = add_marketplace_sync_with_cloner(codex_home.path(), request, {
+            },
+        )?;
+        let second_result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            &requirements,
+            request,
             |_url, _ref_name, _sparse_paths, _destination| {
                 panic!("git cloner should not be called for local marketplace sources")
-            }
-        })?;
+            },
+        )?;
 
         assert!(!first_result.already_added);
         assert!(second_result.already_added);

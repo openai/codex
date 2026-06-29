@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: popup
+---
+  Additional safety checks
+  This request requires additional safety checks, which can take extra time.
+
+› 1. Keep waiting
+  2. Learn more
+
+  Press enter to confirm or esc to go back

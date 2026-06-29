@@ -736,6 +736,48 @@ fn unsupported_model_item_is_reducer_error() -> anyhow::Result<()> {
 }
 
 #[test]
+fn additional_tools_are_excluded_from_request_conversation() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}}
+                    }]
+                },
+                message("user", "find it")
+            ]
+        }),
+    )?;
+    append_inference_start(&writer, "inference-1", "turn-1", request)?;
+
+    let rollout = replay_bundle(temp.path())?;
+    let request_item_ids = &rollout.inference_calls["inference-1"].request_item_ids;
+
+    assert_eq!(request_item_ids.len(), 1);
+    assert_eq!(rollout.conversation_items.len(), 1);
+    assert_eq!(
+        rollout.conversation_items[&request_item_ids[0]].body,
+        ConversationBody {
+            parts: vec![ConversationPart::Text {
+                text: "find it".to_string(),
+            }],
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
 fn missing_request_input_is_reducer_error() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;

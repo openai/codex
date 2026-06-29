@@ -25,7 +25,11 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { email: String, plan_type: PlanType },
+    Chatgpt {
+        #[schemars(required, schema_with = "nullable_string_schema")]
+        email: Option<String>,
+        plan_type: PlanType,
+    },
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
@@ -33,6 +37,12 @@ pub enum Account {
         #[serde(default = "default_bedrock_credential_source")]
         credential_source: AmazonBedrockCredentialSource,
     },
+}
+
+fn nullable_string_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    generator.subschema_for::<Option<String>>()
 }
 
 fn default_bedrock_credential_source() -> AmazonBedrockCredentialSource {

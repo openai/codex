@@ -60,6 +60,8 @@ mod frame_requester;
 mod job_control;
 mod keyboard_modes;
 mod terminal_stderr;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;

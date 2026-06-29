@@ -241,7 +241,7 @@ use crate::history_cell;
 use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_app_server_protocol::AppInfo;
+use codex_connectors::AppInfo;
 #[cfg(test)]
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
@@ -6135,6 +6135,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6177,6 +6179,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -6314,6 +6318,8 @@ mod tests {
                 description: Some("Look up events and availability".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 distribution_channel: None,
                 branding: None,
                 app_metadata: None,
@@ -6428,6 +6434,8 @@ mod tests {
                         description: Some("Look up events and availability".to_string()),
                         logo_url: None,
                         logo_url_dark: None,
+                        icon_assets: None,
+                        icon_dark_assets: None,
                         distribution_channel: None,
                         branding: None,
                         app_metadata: None,
@@ -6462,6 +6470,8 @@ mod tests {
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,

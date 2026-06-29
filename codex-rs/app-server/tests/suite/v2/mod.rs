@@ -2,6 +2,7 @@ mod account;
 mod analytics;
 mod app_list;
 mod attestation;
+mod auto_env;
 mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
@@ -14,6 +15,8 @@ mod connection_handling_websocket_unix;
 mod current_time;
 mod dynamic_tools;
 mod environment_add;
+mod environment_info;
+mod exec_server_test_support;
 #[cfg(not(target_os = "windows"))]
 mod executor_mcp;
 mod executor_skills;
@@ -52,8 +55,11 @@ mod remote_control;
 mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
+mod request_validation;
 mod review;
 mod safety_check_downgrade;
+#[cfg(not(target_os = "windows"))]
+mod selected_capability_stack;
 mod skills_list;
 mod sleep;
 mod thread_archive;

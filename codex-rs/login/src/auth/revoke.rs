@@ -7,8 +7,8 @@
 use serde::Serialize;
 use std::time::Duration;
 
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_client::CodexHttpClient;
+use codex_protocol::auth::AuthMode;
 
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::manager::REVOKE_TOKEN_URL;
@@ -16,7 +16,8 @@ use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::manager::oauth_client_id;
 use super::storage::AuthDotJson;
 use super::util::try_parse_error_message;
-use crate::default_client::create_client;
+use crate::default_client::create_default_auth_client;
+use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 
 const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,13 +54,14 @@ struct RevokeTokenRequest<'a> {
 
 pub(super) async fn revoke_auth_tokens(
     auth_dot_json: Option<&AuthDotJson>,
+    auth_route_config: Option<&AuthRouteConfig>,
 ) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());
     };
 
-    let client = create_client();
     let endpoint = revoke_token_endpoint();
+    let client = create_default_auth_client(&endpoint, auth_route_config)?;
     revoke_oauth_token(&client, endpoint.as_str(), token, kind, REVOKE_HTTP_TIMEOUT).await
 }
 
@@ -75,21 +77,21 @@ fn revocable_token(auth_dot_json: &AuthDotJson) -> Option<(&str, RevokeTokenKind
 }
 
 fn managed_chatgpt_tokens(auth_dot_json: &AuthDotJson) -> Option<&TokenData> {
-    if resolved_auth_mode(auth_dot_json) == ApiAuthMode::Chatgpt {
+    if resolved_auth_mode(auth_dot_json) == AuthMode::Chatgpt {
         auth_dot_json.tokens.as_ref()
     } else {
         None
     }
 }
 
-fn resolved_auth_mode(auth_dot_json: &AuthDotJson) -> ApiAuthMode {
+fn resolved_auth_mode(auth_dot_json: &AuthDotJson) -> AuthMode {
     if let Some(mode) = auth_dot_json.auth_mode {
         return mode;
     }
     if auth_dot_json.openai_api_key.is_some() {
-        return ApiAuthMode::ApiKey;
+        return AuthMode::ApiKey;
     }
-    ApiAuthMode::Chatgpt
+    AuthMode::Chatgpt
 }
 
 async fn revoke_oauth_token(

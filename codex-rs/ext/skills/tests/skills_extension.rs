@@ -5,7 +5,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_core_skills::HostSkillsSnapshot;
-use codex_core_skills::SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SKILLS_INTRO_WITH_ABSOLUTE_PATHS;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
@@ -15,10 +14,12 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::NoopTurnItemEmitter;
+use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnInputContext;
+use codex_extension_api::WorldStateContributionInput;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::Event;
@@ -28,6 +29,7 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TruncationPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
@@ -48,6 +50,7 @@ use codex_skills_extension::provider::SkillProviderFuture;
 use codex_skills_extension::provider::SkillReadRequest;
 use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -121,7 +124,7 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
         .await;
 
     let expected_catalog = format!(
-        "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n{SKILLS_INTRO_WITH_ABSOLUTE_PATHS}\n### Available skills\n- demo: Demo skill. (file: {skill_prompt_path})\n### How to use skills\n{SKILLS_HOW_TO_USE_WITH_ABSOLUTE_PATHS}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
+        "{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills\n{SKILLS_INTRO_WITH_ABSOLUTE_PATHS}\n### Available skills\n- demo: Demo skill. (file: {skill_prompt_path})\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"
     );
     let expected_skill = format!(
         "<skill>\n<name>demo</name>\n<path>{skill_prompt_path}</path>\n{DEMO_SKILL_CONTENTS}\n</skill>"
@@ -143,9 +146,9 @@ async fn installed_extension_uses_host_service_snapshot() -> TestResult {
 }
 
 #[tokio::test]
-async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_input() -> TestResult
-{
+async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cache() -> TestResult {
     let read_requests = Arc::new(Mutex::new(Vec::new()));
+    let list_calls = Arc::new(AtomicUsize::new(0));
     let executor_provider = Arc::new(StaticSkillProvider {
         catalog: SkillCatalog {
             entries: vec![test_entry(
@@ -157,7 +160,7 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
             warnings: Vec::new(),
         },
         read_requests: Arc::clone(&read_requests),
-        list_calls: None,
+        list_calls: Some(Arc::clone(&list_calls)),
         fail_first_list: false,
     });
     let providers = SkillProviders::new().with_executor_provider(executor_provider);
@@ -167,13 +170,13 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
 
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(vec![SelectedCapabilityRoot {
+    let selected_roots = vec![SelectedCapabilityRoot {
         id: "lint-fix".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
-            path: "/skills/lint-fix".to_string(),
+            path: PathUri::parse("file:///skills/lint-fix").expect("skill root URI"),
         },
-    }]);
+    }];
     let session_source = SessionSource::Cli;
     let config = default_config();
     registry.thread_lifecycle_contributors()[0]
@@ -190,20 +193,36 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
     let prompt_fragments = registry.context_contributors()[0]
         .contribute_thread_context(&session_store, &thread_store)
         .await;
-    assert_eq!(1, prompt_fragments.len());
+    assert!(prompt_fragments.is_empty());
+
+    let turn_store = ExtensionData::new("turn-1");
+    let turn_environment = TurnEnvironmentSelection {
+        environment_id: "turn-env".to_string(),
+        cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+    };
+    let available_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: std::slice::from_ref(&turn_environment),
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    assert_eq!(1, available_sections.len());
+    let available_snapshot = available_sections[0].snapshot().clone();
+    let available_fragment = available_sections[0]
+        .render_diff(PreviousWorldStateSection::Absent)
+        .ok_or("available skills should render")?;
+    assert!(available_fragment.body().contains("lint-fix"));
     assert!(
-        prompt_fragments[0]
-            .text()
-            .starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
-    );
-    assert!(prompt_fragments[0].text().contains("lint-fix"));
-    assert!(
-        prompt_fragments[0]
-            .text()
+        available_fragment
+            .body()
             .contains("(environment resource: skill://executor/lint-fix/SKILL.md)")
     );
 
-    let turn_store = ExtensionData::new("turn-1");
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
@@ -232,30 +251,86 @@ async fn selected_executor_catalog_is_context_and_selected_entrypoint_is_turn_in
         )],
         read_request_keys(&read_requests)
     );
-    let rebuilt_prompt_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
+    let unavailable_turn_store = ExtensionData::new("turn-2");
+    let unavailable_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-2",
+            environments: &[],
+            ready_selected_capability_roots: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &unavailable_turn_store,
+        })
         .await;
-    assert_eq!(1, rebuilt_prompt_fragments.len());
-    assert!(rebuilt_prompt_fragments[0].text().contains("lint-fix"));
+    let unavailable_snapshot = unavailable_sections[0].snapshot().clone();
+    let unavailable_fragment = unavailable_sections[0]
+        .render_diff(PreviousWorldStateSection::Known(&available_snapshot))
+        .ok_or("removed skills should render")?;
+    assert!(
+        unavailable_fragment
+            .body()
+            .contains("No selected-environment skills")
+    );
 
-    let next_turn_store = ExtensionData::new("turn-2");
-    let next_fragments = registry.turn_input_contributors()[0]
-        .contribute(
-            TurnInputContext {
-                turn_id: "turn-2".to_string(),
-                user_input: vec![UserInput::Text {
-                    text: "no skill this time".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                environments: Vec::new(),
-            },
-            &session_store,
-            &thread_store,
-            &next_turn_store,
-        )
+    let restored_turn_store = ExtensionData::new("turn-3");
+    let restored_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-3",
+            environments: &[turn_environment],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &restored_turn_store,
+        })
         .await;
+    let restored_snapshot = restored_sections[0].snapshot().clone();
+    let restored_fragment = restored_sections[0]
+        .render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot))
+        .ok_or("restored skills should render")?;
+    assert!(restored_fragment.body().contains("lint-fix"));
+    assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
-    assert!(next_fragments.is_empty());
+    let mut listing_disabled_config = config.clone();
+    listing_disabled_config.include_instructions = false;
+    registry.config_contributors()[0].on_config_changed(
+        &session_store,
+        &thread_store,
+        &config,
+        &listing_disabled_config,
+    );
+    let listing_disabled_turn_store = ExtensionData::new("turn-4");
+    let listing_disabled_sections = registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-4",
+            environments: &[],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &listing_disabled_turn_store,
+        })
+        .await;
+    let listing_disabled_fragment = listing_disabled_sections[0]
+        .render_diff(PreviousWorldStateSection::Known(&restored_snapshot))
+        .ok_or("disabled skill listing should render")?;
+    assert_eq!(
+        "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n",
+        listing_disabled_fragment.body()
+    );
+    let mut normalized_listing_disabled_snapshot = listing_disabled_sections[0].snapshot().clone();
+    normalized_listing_disabled_snapshot
+        .as_object_mut()
+        .ok_or("skills snapshot should be an object")?
+        .remove("body");
+    assert!(
+        listing_disabled_sections[0]
+            .render_diff(PreviousWorldStateSection::Known(
+                &normalized_listing_disabled_snapshot
+            ))
+            .is_none()
+    );
 
     Ok(())
 }
@@ -487,18 +562,16 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(
-        [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
-            .into_iter()
-            .map(|(id, path)| SelectedCapabilityRoot {
-                id: id.to_string(),
-                location: CapabilityRootLocation::Environment {
-                    environment_id: "env-1".to_string(),
-                    path: path.to_string(),
-                },
-            })
-            .collect::<Vec<_>>(),
-    );
+    let selected_roots = [("root-a", "/skills/root-a"), ("root-b", "/skills/root-b")]
+        .into_iter()
+        .map(|(id, path)| SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: "env-1".to_string(),
+                path: PathUri::parse(&format!("file://{path}")).expect("skill root URI"),
+            },
+        })
+        .collect::<Vec<_>>();
     let session_source = SessionSource::Cli;
     let config = default_config();
     registry.thread_lifecycle_contributors()[0]
@@ -512,6 +585,21 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
         })
         .await;
 
+    let turn_store = ExtensionData::new("turn-1");
+    registry.context_contributors()[0]
+        .contribute_world_state(WorldStateContributionInput {
+            thread_id: codex_protocol::ThreadId::new(),
+            turn_id: "turn-1",
+            environments: &[TurnEnvironmentSelection {
+                environment_id: "env-1".to_string(),
+                cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+            }],
+            ready_selected_capability_roots: &selected_roots,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
@@ -524,7 +612,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             },
             &session_store,
             &thread_store,
-            &ExtensionData::new("turn-1"),
+            &turn_store,
         )
         .await;
 

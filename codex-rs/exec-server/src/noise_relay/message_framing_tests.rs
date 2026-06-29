@@ -1,5 +1,5 @@
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCNotification;
 use pretty_assertions::assert_eq;
 
 use super::JsonRpcMessageDecoder;

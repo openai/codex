@@ -2,8 +2,10 @@ use super::CodexErrorInfo;
 use super::ThreadItem;
 use super::ThreadStatus;
 use super::TurnStatus;
+use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use codex_protocol::protocol::ThreadHistoryMode as CoreThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource as CoreThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
@@ -59,6 +61,33 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::Custom(source) => CoreSessionSource::Custom(source),
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
+        }
+    }
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum ThreadHistoryMode {
+    #[default]
+    Legacy,
+    Paginated,
+}
+
+impl From<CoreThreadHistoryMode> for ThreadHistoryMode {
+    fn from(value: CoreThreadHistoryMode) -> Self {
+        match value {
+            CoreThreadHistoryMode::Legacy => Self::Legacy,
+            CoreThreadHistoryMode::Paginated => Self::Paginated,
+        }
+    }
+}
+
+impl From<ThreadHistoryMode> for CoreThreadHistoryMode {
+    fn from(value: ThreadHistoryMode) -> Self {
+        match value {
+            ThreadHistoryMode::Legacy => Self::Legacy,
+            ThreadHistoryMode::Paginated => Self::Paginated,
         }
     }
 }
@@ -120,6 +149,12 @@ impl From<ThreadSource> for CoreThreadSource {
     }
 }
 
+/// Extra app-server data for a thread.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadExtra {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -129,11 +164,15 @@ pub struct GitInfo {
     pub origin_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
+    /// Identifier for this thread. Codex-generated thread IDs are UUIDv7.
     pub id: String,
+    /// Optional implementation-specific thread data.
+    #[experimental("thread.extra")]
+    pub extra: Option<ThreadExtra>,
     /// Session id shared by threads that belong to the same session tree.
     pub session_id: String,
     /// Source thread id when this thread was created by forking another thread.
@@ -144,6 +183,10 @@ pub struct Thread {
     pub preview: String,
     /// Whether the thread is ephemeral and should not be materialized on disk.
     pub ephemeral: bool,
+    /// Persisted thread history contract selected when this thread was created.
+    #[experimental("thread.historyMode")]
+    #[serde(default)]
+    pub history_mode: ThreadHistoryMode,
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
@@ -186,6 +229,7 @@ pub struct Thread {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Turn {
+    /// Identifier for this turn. Codex-generated turn IDs are UUIDv7.
     pub id: String,
     /// Thread items currently included in this turn payload.
     pub items: Vec<ThreadItem>,

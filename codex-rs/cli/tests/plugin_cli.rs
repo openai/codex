@@ -205,6 +205,7 @@ fn setup_local_marketplace_with_implicit_system_roots() -> Result<(TempDir, Temp
     let cache_home = TempDir::new()?;
     let runtime_root = cache_home
         .path()
+        .join(".cache")
         .join("codex-runtimes")
         .join("codex-primary-runtime")
         .join("plugins")
@@ -844,7 +845,8 @@ async fn plugin_list_ignores_implicit_system_marketplace_roots_without_manifests
     let (codex_home, source, cache_home) = setup_local_marketplace_with_implicit_system_roots()?;
 
     codex_command(codex_home.path())?
-        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("HOME", cache_home.path())
+        .env("USERPROFILE", cache_home.path())
         .args(["plugin", "list"])
         .assert()
         .success()

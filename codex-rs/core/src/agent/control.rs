@@ -19,7 +19,6 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
@@ -36,7 +35,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
-use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -69,7 +67,6 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) initial_multi_agent_mode: Option<MultiAgentMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -639,7 +636,7 @@ impl AgentControl {
 
     async fn persist_thread_spawn_edge_for_source(
         &self,
-        thread: &crate::CodexThread,
+        child_thread: &crate::CodexThread,
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
     ) {
@@ -647,14 +644,20 @@ impl AgentControl {
         else {
             return;
         };
-        let Some(state_db_ctx) = thread.state_db() else {
+        if child_thread.config_snapshot().await.ephemeral {
+            return;
+        }
+        let Ok(state) = self.upgrade() else {
             return;
         };
-        if let Err(err) = state_db_ctx
+        let Some(agent_graph_store) = state.agent_graph_store() else {
+            return;
+        };
+        if let Err(err) = agent_graph_store
             .upsert_thread_spawn_edge(
                 parent_thread_id,
                 child_thread_id,
-                DirectionalThreadSpawnEdgeStatus::Open,
+                codex_agent_graph_store::ThreadSpawnEdgeStatus::Open,
             )
             .await
         {

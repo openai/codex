@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use codex_app_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCNotification;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -20,6 +20,7 @@ use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
 
 use tokio::time::timeout;
+use tracing::Instrument;
 use tracing::debug;
 
 use crate::ProcessId;
@@ -58,6 +59,7 @@ use crate::protocol::FS_READ_BLOCK_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WALK_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -79,6 +81,8 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
+use crate::protocol::FsWalkParams;
+use crate::protocol::FsWalkResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
@@ -106,6 +110,7 @@ mod recovery;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const ENVIRONMENT_INFO_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EVENT_CHANNEL_CAPACITY: usize = 256;
 const PROCESS_EVENT_RETAINED_BYTES: usize = 1024 * 1024;
 
@@ -506,7 +511,12 @@ impl ExecServerClient {
     }
 
     pub async fn environment_info(&self) -> Result<EnvironmentInfo, ExecServerError> {
-        self.call(ENVIRONMENT_INFO_METHOD, &()).await
+        let rpc_client = self.inner.rpc_client().await?;
+        map_rpc_call_result(
+            rpc_client
+                .call_with_timeout(ENVIRONMENT_INFO_METHOD, &(), ENVIRONMENT_INFO_TIMEOUT)
+                .await,
+        )
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
@@ -620,6 +630,10 @@ impl ExecServerClient {
         self.call(FS_READ_DIRECTORY_METHOD, &params).await
     }
 
+    pub async fn fs_walk(&self, params: FsWalkParams) -> Result<FsWalkResponse, ExecServerError> {
+        self.call(FS_WALK_METHOD, &params).await
+    }
+
     pub async fn fs_remove(
         &self,
         params: FsRemoveParams,
@@ -652,7 +666,7 @@ impl ExecServerClient {
             };
             let client = self.clone();
             let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-            tokio::spawn(async move {
+            let process_start_task = async move {
                 let _active_start = active_start;
                 match client
                     .call_rpc::<_, ExecResponse>(&rpc_client, EXEC_METHOD, &params)
@@ -683,7 +697,8 @@ impl ExecServerClient {
                         let _ = result_tx.send(Err(error));
                     }
                 }
-            });
+            };
+            tokio::spawn(process_start_task.in_current_span());
             return result_rx.await.map_err(|_| {
                 ExecServerError::Protocol("process start task stopped unexpectedly".to_string())
             })?;
@@ -771,20 +786,19 @@ impl ExecServerClient {
         P: serde::Serialize,
         T: serde::de::DeserializeOwned,
     {
-        match rpc_client.call(method, params).await {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                let error = ExecServerError::from(error);
-                if is_transport_closed_error(&error) {
-                    Err(ExecServerError::Disconnected(disconnected_message(
-                        /*reason*/ None,
-                    )))
-                } else {
-                    Err(error)
-                }
-            }
-        }
+        map_rpc_call_result(rpc_client.call(method, params).await)
     }
+}
+
+fn map_rpc_call_result<T>(result: Result<T, RpcCallError>) -> Result<T, ExecServerError> {
+    result.map_err(|error| {
+        let error = ExecServerError::from(error);
+        if is_transport_closed_error(&error) {
+            ExecServerError::Disconnected(disconnected_message(/*reason*/ None))
+        } else {
+            error
+        }
+    })
 }
 
 async fn cleanup_process_start(
@@ -813,6 +827,9 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
+            RpcCallError::TimedOut { method, timeout } => Self::Protocol(format!(
+                "timed out waiting for exec-server `{method}` response after {timeout:?}"
+            )),
         }
     }
 }
@@ -1152,6 +1169,7 @@ async fn handle_server_notification(
                 let published_closed = session.publish_ordered_event(ExecProcessEvent::Exited {
                     seq: params.seq,
                     exit_code: params.exit_code,
+                    sandbox_denied: params.sandbox_denied,
                 });
                 if published_closed {
                     inner.remove_session_if(&params.process_id, &session);
@@ -1187,11 +1205,14 @@ async fn handle_server_notification(
 
 #[cfg(test)]
 mod tests {
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_exec_server_protocol::JSONRPCMessage;
+    use codex_exec_server_protocol::JSONRPCNotification;
+    use codex_exec_server_protocol::JSONRPCResponse;
+    use codex_utils_path_uri::PathUri;
     use futures::SinkExt;
     use futures::StreamExt;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -1216,6 +1237,9 @@ mod tests {
     use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::Message;
+    use tracing::Instrument;
+    use tracing_subscriber::filter::filter_fn;
+    use tracing_subscriber::prelude::*;
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
@@ -1231,6 +1255,7 @@ mod tests {
     use crate::process::ExecProcessEvent;
     use crate::protocol::EXEC_CLOSED_METHOD;
     use crate::protocol::EXEC_EXITED_METHOD;
+    use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_READ_METHOD;
     use crate::protocol::EXEC_WRITE_METHOD;
@@ -1238,6 +1263,8 @@ mod tests {
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecOutputDeltaNotification;
     use crate::protocol::ExecOutputStream;
+    use crate::protocol::ExecParams;
+    use crate::protocol::ExecResponse;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeResponse;
@@ -1268,6 +1295,106 @@ mod tests {
             .write_all(format!("{encoded}\n").as_bytes())
             .await
             .expect("json-rpc line should write");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn process_start_propagates_caller_trace_context_across_background_task() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let initialize = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: initialize.id,
+                    result: serde_json::to_value(InitializeResponse {
+                        session_id: "trace-test".to_string(),
+                    })
+                    .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+
+            match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+
+            let request = match read_jsonrpc_line(&mut lines).await {
+                JSONRPCMessage::Request(request) if request.method == EXEC_METHOD => request,
+                other => panic!("expected process start request, got {other:?}"),
+            };
+            let trace = request.trace.clone();
+            let params: ExecParams =
+                serde_json::from_value(request.params.expect("process start params should exist"))
+                    .expect("process start params should deserialize");
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(ExecResponse {
+                        process_id: params.process_id,
+                    })
+                    .expect("process start response should serialize"),
+                }),
+            )
+            .await;
+            trace
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(
+                client_stdout,
+                client_stdin,
+                "trace-test-client".to_string(),
+            ),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+
+        let tracer_provider = SdkTracerProvider::builder().build();
+        let tracer = tracer_provider.tracer("exec-server-test");
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
+        );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+        let parent_span = tracing::info_span!("process-start-parent");
+        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
+            .expect("parent span should have trace context");
+        let process_id = ProcessId::from("trace-process");
+
+        let session = client
+            .start_process(ExecParams {
+                process_id: process_id.clone(),
+                argv: vec!["true".to_string()],
+                cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
+                    .expect("cwd URI"),
+                env_policy: None,
+                env: HashMap::new(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: None,
+                enforce_managed_network: false,
+                managed_network: None,
+            })
+            .instrument(parent_span)
+            .await
+            .expect("process start should succeed");
+
+        assert_eq!(session.process_id(), &process_id);
+        let trace = server.await.expect("server task").expect("trace context");
+        assert_eq!(trace, expected_trace);
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
@@ -1619,6 +1746,7 @@ mod tests {
                         process_id: process_id.clone(),
                         seq: 3,
                         exit_code: 0,
+                        sandbox_denied: Some(true),
                     })
                     .expect("exit notification should serialize"),
                 ),
@@ -1668,6 +1796,7 @@ mod tests {
                 ExecProcessEvent::Exited {
                     seq: 3,
                     exit_code: 0,
+                    sandbox_denied: Some(true),
                 },
                 ExecProcessEvent::Closed { seq: 4 },
             ]
@@ -2273,6 +2402,7 @@ mod tests {
                         process_id: quiet_process_id,
                         seq: 1,
                         exit_code: 17,
+                        sandbox_denied: Some(false),
                     })
                     .expect("exit notification should serialize"),
                 ),

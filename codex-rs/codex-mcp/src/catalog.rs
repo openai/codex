@@ -371,6 +371,35 @@ impl ResolvedMcpCatalog {
             .collect()
     }
 
+    /// Returns whether both catalogs resolve to the same winning servers and sources.
+    pub fn has_same_servers(&self, other: &Self) -> bool {
+        self.servers == other.servers
+    }
+
+    /// Replaces the resolved server set while preserving known server sources.
+    ///
+    /// Names not present in the existing catalog are treated as config-owned.
+    pub fn with_materialized_servers(&self, servers: HashMap<String, McpServerConfig>) -> Self {
+        let mut builder = Self::builder();
+        for (name, config) in servers {
+            let source = self
+                .server(&name)
+                .map(|server| server.source.clone())
+                .unwrap_or(McpServerSource::Config);
+            let precedence = match &source {
+                McpServerSource::Plugin(_) => RegistrationPrecedence::Plugin(Reverse(0)),
+                McpServerSource::SelectedPlugin(_) => {
+                    RegistrationPrecedence::SelectedPlugin(Reverse(0))
+                }
+                McpServerSource::Config => RegistrationPrecedence::Config,
+                McpServerSource::Compatibility { .. } => RegistrationPrecedence::Compatibility,
+                McpServerSource::Extension { .. } => RegistrationPrecedence::Extension(0),
+            };
+            builder.register(McpServerRegistration::new(name, source, config, precedence));
+        }
+        builder.build()
+    }
+
     /// Returns package attribution for each winning plugin-owned server.
     pub fn plugin_attributions_by_server_name(&self) -> HashMap<String, McpPluginAttribution> {
         self.servers

@@ -1,7 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
-use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
@@ -14,6 +13,7 @@ use codex_login::logout_with_revoke;
 use codex_login::save_auth;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
+use codex_protocol::auth::AuthMode;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -61,6 +61,7 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -119,6 +120,7 @@ async fn logout_with_revoke_uses_stored_auth_when_access_token_env_is_set() -> R
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -161,6 +163,7 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
         codex_home.path(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await?;
 
@@ -204,6 +207,7 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
         AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
     )
     .await;
     save_auth(
