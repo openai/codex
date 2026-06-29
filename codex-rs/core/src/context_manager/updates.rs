@@ -96,7 +96,11 @@ fn build_multi_agent_mode_update_item(
             .render(),
         ),
         None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => Some(
-            MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly, None).render(),
+            MultiAgentModeInstructions::new(
+                MultiAgentMode::ExplicitRequestOnly,
+                /*hint_text*/ None,
+            )
+            .render(),
         ),
         None => None,
     }
