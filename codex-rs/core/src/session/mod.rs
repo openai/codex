@@ -208,7 +208,6 @@ mod input_queue;
 mod mcp;
 mod mcp_runtime;
 pub(crate) mod multi_agents;
-mod response_item_history;
 mod review;
 mod rollout_budget;
 mod rollout_reconstruction;
@@ -2727,7 +2726,7 @@ impl Session {
         } else {
             items
         };
-        let history_items = response_item_history::canonicalize_for_durable_history(
+        let history_items = crate::context_manager::canonicalize_for_durable_history(
             &self.thread_id,
             raw_response_items.as_ref(),
         );
