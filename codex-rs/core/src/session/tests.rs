@@ -7790,7 +7790,7 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn review_step_uses_isolated_mcp_runtime_without_publishing_it() {
+async fn review_step_uses_disabled_mcp_runtime_without_publishing_it() {
     let (mut session, mut turn_context) = make_session_and_context().await;
     session.services.selected_capability_roots = vec![SelectedCapabilityRoot {
         id: "review-root".to_string(),

@@ -17,6 +17,7 @@ use tracing::warn;
 
 use crate::SkillMetadata;
 use crate::session::session::Session;
+use crate::session::turn_context::McpAccess;
 use crate::session::turn_context::TurnContext;
 use crate::skills::model::SkillToolDependency;
 use codex_mcp::ElicitationReviewerHandle;
@@ -45,7 +46,8 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     }
 
     let config = turn_context.config.clone();
-    if mentioned_skills.is_empty()
+    if turn_context.mcp_access() == McpAccess::Disabled
+        || mentioned_skills.is_empty()
         || !config
             .features
             .enabled(codex_features::Feature::SkillMcpDependencyInstall)

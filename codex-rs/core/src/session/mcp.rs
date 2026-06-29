@@ -173,7 +173,7 @@ impl Session {
         .await
     }
 
-    pub(crate) async fn isolated_mcp_runtime_for_step(
+    pub(crate) fn disabled_mcp_runtime_for_step(
         &self,
         turn_context: &TurnContext,
         environments: &TurnEnvironmentSnapshot,
@@ -181,16 +181,11 @@ impl Session {
     ) -> Arc<McpRuntimeSnapshot> {
         let available_environment_ids =
             Self::available_selected_environment_ids(selected_capability_roots);
-        let mcp_config = self
-            .services
-            .mcp_manager
-            .runtime_config_for_step(
-                &turn_context.config,
-                &self.services.mcp_thread_init,
-                &self.services.thread_extension_data,
-                &available_environment_ids,
-            )
-            .await;
+        let mut mcp_config = self.services.latest_mcp_runtime().config().clone();
+        mcp_config.apps_enabled = false;
+        mcp_config.skill_mcp_dependency_install_enabled = false;
+        mcp_config.mcp_server_catalog = Default::default();
+        mcp_config.connector_snapshot = Default::default();
         let environment_manager = self.services.turn_environments.environment_manager();
         #[allow(deprecated)]
         let cwd = environments

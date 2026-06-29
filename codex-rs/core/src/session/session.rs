@@ -677,10 +677,7 @@ impl Session {
         let mcp_runtime_context =
             McpRuntimeContext::new(Arc::clone(&environment_manager), mcp_runtime_cwd);
         let mcp_runtime_context_for_auth = mcp_runtime_context.clone();
-        let start_mcp_clients = !matches!(
-            session_configuration.session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        );
+        let mcp_access = McpAccess::for_session_source(&session_configuration.session_source);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
             let mcp_config = mcp_manager_for_mcp
@@ -693,17 +690,18 @@ impl Session {
                 .await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-            let auth_statuses = if start_mcp_clients {
-                compute_auth_statuses(
-                    mcp_servers.iter(),
-                    config_for_mcp.mcp_oauth_credentials_store_mode,
-                    config_for_mcp.auth_keyring_backend_kind(),
-                    auth.as_ref(),
-                    &mcp_runtime_context_for_auth,
-                )
-                .await
-            } else {
-                Default::default()
+            let auth_statuses = match mcp_access {
+                McpAccess::Enabled => {
+                    compute_auth_statuses(
+                        mcp_servers.iter(),
+                        config_for_mcp.mcp_oauth_credentials_store_mode,
+                        config_for_mcp.auth_keyring_backend_kind(),
+                        auth.as_ref(),
+                        &mcp_runtime_context_for_auth,
+                    )
+                    .await
+                }
+                McpAccess::Disabled => Default::default(),
             };
             (
                 auth,
@@ -1201,8 +1199,8 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
-            let mcp_connection_manager = if start_mcp_clients {
-                McpConnectionManager::new(
+            let mcp_connection_manager = match mcp_access {
+                McpAccess::Enabled => McpConnectionManager::new(
                     &mcp_servers,
                     config.mcp_oauth_credentials_store_mode,
                     config.auth_keyring_backend_kind(),
@@ -1230,13 +1228,12 @@ impl Session {
                     "session_init.mcp_manager_init",
                     otel.name = "session_init.mcp_manager_init",
                 ))
-                .await
-            } else {
-                McpConnectionManager::new_uninitialized_with_permission_profile(
+                .await,
+                McpAccess::Disabled => McpConnectionManager::new_uninitialized_with_permission_profile(
                     &session_configuration.approval_policy,
                     &session_configuration.permission_profile(),
                     config.prefix_mcp_tool_names(),
-                )
+                ),
             };
             sess.services
                 .install_mcp_connection_manager(

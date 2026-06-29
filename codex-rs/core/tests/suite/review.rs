@@ -1,14 +1,10 @@
 use codex_config::test_support::CloudConfigBundleFixture;
-use codex_config::types::McpServerConfig;
-use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_plugin::PluginHookSource;
-use codex_plugin::PluginId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -25,26 +21,22 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
-use core_test_support::hooks::trust_hooks;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
-use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -271,72 +263,80 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     server.verify().await;
 }
 
+async fn submit_custom_review(codex: &CodexThread, instructions: &str) -> anyhow::Result<()> {
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: instructions.to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+    Ok(())
+}
+
+fn pinned_apps_builder(codex_home: Arc<TempDir>, apps_base_url: String) -> TestCodexBuilder {
+    test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[features]
+apps = true
+"#,
+            ),
+        )
+        .with_config(move |config| config.chatgpt_base_url = apps_base_url)
+}
+
+fn write_enabled_test_plugin(codex_home: &TempDir) -> anyhow::Result<PathBuf> {
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+    Ok(plugin_root)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    let apps_base_url = apps_server.chatgpt_base_url.clone();
-    let rmcp_test_server_bin = stdio_server_bin()?;
     let codex_home = Arc::new(TempDir::new()?);
-    let codex = test_codex()
-        .with_home(codex_home)
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Apps)
-                .expect("test config should allow apps");
-            config.chatgpt_base_url = apps_base_url;
-            config
-                .mcp_servers
-                .set(HashMap::from([(
-                    "rmcp".to_string(),
-                    McpServerConfig {
-                        auth: Default::default(),
-                        transport: McpServerTransportConfig::Stdio {
-                            command: rmcp_test_server_bin,
-                            args: Vec::new(),
-                            env: None,
-                            env_vars: Vec::new(),
-                            cwd: None,
-                        },
-                        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                        enabled: true,
-                        required: false,
-                        supports_parallel_tool_calls: false,
-                        disabled_reason: None,
-                        startup_timeout_sec: Some(Duration::from_secs(10)),
-                        tool_timeout_sec: None,
-                        default_tools_approval_mode: None,
-                        enabled_tools: None,
-                        disabled_tools: None,
-                        scopes: None,
-                        oauth: None,
-                        oauth_resource: None,
-                        tools: HashMap::new(),
-                    },
-                )]))
-                .expect("test MCP server config should be allowed");
-        })
-        .build_with_auto_env(&server)
-        .await?
-        .codex;
-    wait_for_mcp_server(&codex, "rmcp").await?;
-    let request_log = mount_sse_sequence(&server, vec![responses::sse(completed_sse())]).await;
+    let mut builder =
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_home(codex_home);
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(completed_sse()),
+            responses::sse(completed_sse()),
+        ],
+    )
+    .await;
 
-    codex
-        .submit(Op::Review {
-            review_request: ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: "Review without MCP tools".to_string(),
-                },
-                user_facing_hint: None,
-            },
-        })
-        .await?;
-    let entered = wait_for_event(&codex, |event| {
+    test.submit_turn("Inspect available Apps tools").await?;
+
+    submit_custom_review(&test.codex, "Review without MCP tools").await?;
+    let entered = wait_for_event(&test.codex, |event| {
         matches!(
             event,
             EventMsg::EnteredReviewMode(_) | EventMsg::Error(_) | EventMsg::TurnComplete(_)
@@ -347,20 +347,16 @@ async fn review_does_not_expose_mcp_tools() -> anyhow::Result<()> {
         matches!(entered, EventMsg::EnteredReviewMode(_)),
         "review did not start: {entered:?}"
     );
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
-    let request = request_log.single_request();
-    assert!(
-        !request.body_contains_text("mcp__codex_apps"),
-        "review request unexpectedly exposed MCP tools: {:?}",
-        request.body_json()["tools"]
-    );
-    assert!(
-        !request.body_contains_text("mcp__rmcp"),
-        "review request unexpectedly exposed configured MCP tools: {:?}",
-        request.body_json()["tools"]
-    );
+    let requests = request_log.requests();
+    assert!(requests[0].body_contains_text("list_mcp_resources"));
+    let request = &requests[1];
     for tool_name in [
+        "mcp__codex_apps",
         "list_mcp_resources",
         "list_mcp_resource_templates",
         "read_mcp_resource",
@@ -405,20 +401,9 @@ async fn review_preserves_plugin_pre_tool_use_hooks() -> anyhow::Result<()> {
     .await;
 
     let codex_home = Arc::new(TempDir::new()?);
-    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
     let hooks_dir = plugin_root.join("hooks");
-    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::create_dir_all(&hooks_dir)?;
-    std::fs::write(
-        plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
-    )?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"[plugins."sample@test"]
-enabled = true
-"#,
-    )?;
 
     let hook_script = hooks_dir.join("pre_tool_use_hook.py");
     std::fs::write(
@@ -447,53 +432,25 @@ print(json.dumps({
     }]
   }
 }"#;
-    let plugin_hooks_path = hooks_dir.join("hooks.json");
-    std::fs::write(&plugin_hooks_path, plugin_hooks_json)?;
-    let plugin_hook_sources = vec![PluginHookSource {
-        plugin_id: PluginId::parse("sample@test")?,
-        plugin_root: AbsolutePathBuf::try_from(plugin_root.clone())?,
-        plugin_data_root: AbsolutePathBuf::try_from(plugin_root.join("data"))?,
-        source_path: AbsolutePathBuf::try_from(plugin_hooks_path)?,
-        source_relative_path: "hooks/hooks.json".to_string(),
-        hooks: serde_json::from_str::<codex_config::HooksFile>(plugin_hooks_json)?.hooks,
-    }];
+    std::fs::write(hooks_dir.join("hooks.json"), plugin_hooks_json)?;
 
     let test = test_codex()
         .with_home(Arc::clone(&codex_home))
         .with_config(move |config| {
             config
                 .features
-                .enable(Feature::Plugins)
-                .expect("test config should allow plugins");
-            config
-                .features
                 .enable(Feature::CodexHooks)
                 .expect("test config should allow hooks");
+            config.bypass_hook_trust = true;
             config
                 .permissions
                 .set_permission_profile(PermissionProfile::Disabled)
                 .expect("test config should allow disabling the sandbox");
-            let listed = codex_hooks::list_hooks(codex_hooks::HooksConfig {
-                feature_enabled: true,
-                config_layer_stack: Some(config.config_layer_stack.clone()),
-                plugin_hook_sources,
-                ..codex_hooks::HooksConfig::default()
-            });
-            trust_hooks(config, listed.hooks);
         })
         .build_with_auto_env(&server)
         .await?;
 
-    test.codex
-        .submit(Op::Review {
-            review_request: ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: "Apply the patch while reviewing".to_string(),
-                },
-                user_facing_hint: None,
-            },
-        })
-        .await?;
+    submit_custom_review(&test.codex, "Apply the patch while reviewing").await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -527,23 +484,9 @@ async fn review_does_not_start_mcp_when_apps_feature_is_pinned_on() -> anyhow::R
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    let apps_base_url = apps_server.chatgpt_base_url.clone();
     let codex_home = Arc::new(TempDir::new()?);
-    let test = test_codex()
-        .with_home(codex_home)
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"[features]
-apps = true
-"#,
-            ),
-        )
-        .with_config(move |config| {
-            config.chatgpt_base_url = apps_base_url;
-        })
-        .build_with_auto_env(&server)
-        .await?;
+    let mut builder = pinned_apps_builder(codex_home, apps_server.chatgpt_base_url.clone());
+    let test = builder.build_with_auto_env(&server).await?;
 
     let mut pinned_features = test.config.features.clone();
     pinned_features
@@ -560,16 +503,7 @@ apps = true
         vec![responses::sse(vec![responses::ev_completed("resp-1")])],
     )
     .await;
-    test.codex
-        .submit(Op::Review {
-            review_request: ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: "Review without starting pinned Apps MCP".to_string(),
-                },
-                user_facing_hint: None,
-            },
-        })
-        .await?;
+    submit_custom_review(&test.codex, "Review without starting pinned Apps MCP").await?;
 
     wait_for_event(&test.codex, |event| match event {
         EventMsg::McpStartupUpdate(update) => {
@@ -608,18 +542,8 @@ async fn review_does_not_suggest_tools_when_apps_feature_is_pinned_on() -> anyho
         })))
         .mount(&server)
         .await;
-    let apps_base_url = apps_server.chatgpt_base_url.clone();
     let codex_home = Arc::new(TempDir::new()?);
-    let test = test_codex()
-        .with_home(codex_home)
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"[features]
-apps = true
-"#,
-            ),
-        )
+    let mut builder = pinned_apps_builder(codex_home, apps_server.chatgpt_base_url.clone())
         .with_config(move |config| {
             for feature in [
                 Feature::Plugins,
@@ -631,10 +555,8 @@ apps = true
                     .enable(feature)
                     .expect("test config should allow feature update");
             }
-            config.chatgpt_base_url = apps_base_url;
-        })
-        .build_with_auto_env(&server)
-        .await?;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
 
     let suggested_requests_before_review = server
         .received_requests()
@@ -648,16 +570,7 @@ apps = true
         vec![responses::sse(vec![responses::ev_completed("resp-1")])],
     )
     .await;
-    test.codex
-        .submit(Op::Review {
-            review_request: ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: "Review without tool suggestions".to_string(),
-                },
-                user_facing_hint: None,
-            },
-        })
-        .await?;
+    submit_custom_review(&test.codex, "Review without tool suggestions").await?;
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -691,12 +604,7 @@ async fn review_does_not_discover_auth_for_plugin_mcp_servers() -> anyhow::Resul
     let server = start_mock_server().await;
     let plugin_mcp_server = MockServer::start().await;
     let codex_home = Arc::new(TempDir::new()?);
-    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
-    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
-    std::fs::write(
-        plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
-    )?;
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
     std::fs::write(
         plugin_root.join(".mcp.json"),
         format!(
@@ -710,15 +618,6 @@ async fn review_does_not_discover_auth_for_plugin_mcp_servers() -> anyhow::Resul
 }}"#,
             plugin_mcp_server.uri()
         ),
-    )?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        r#"[features]
-plugins = true
-
-[plugins."sample@test"]
-enabled = true
-"#,
     )?;
 
     let test = test_codex()
@@ -744,16 +643,7 @@ enabled = true
         vec![responses::sse(vec![responses::ev_completed("resp-1")])],
     )
     .await;
-    test.codex
-        .submit(Op::Review {
-            review_request: ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: "Review without MCP auth discovery".to_string(),
-                },
-                user_facing_hint: None,
-            },
-        })
-        .await?;
+    submit_custom_review(&test.codex, "Review without MCP auth discovery").await?;
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

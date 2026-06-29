@@ -149,12 +149,36 @@ enum TurnMultiAgentRuntime {
     Preview,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum McpAccess {
+    Enabled,
+    Disabled,
+}
+
+impl McpAccess {
+    pub(crate) fn for_session_source(session_source: &SessionSource) -> Self {
+        match session_source {
+            SessionSource::SubAgent(SubAgentSource::Review) => Self::Disabled,
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::Internal(_)
+            | SessionSource::Unknown
+            | SessionSource::SubAgent(
+                SubAgentSource::Compact
+                | SubAgentSource::MemoryConsolidation
+                | SubAgentSource::ThreadSpawn { .. }
+                | SubAgentSource::Other(_),
+            ) => Self::Enabled,
+        }
+    }
+}
+
 impl TurnContext {
-    pub(crate) fn is_review_subagent(&self) -> bool {
-        matches!(
-            self.session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        )
+    pub(crate) fn mcp_access(&self) -> McpAccess {
+        McpAccess::for_session_source(&self.session_source)
     }
 
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
@@ -207,9 +231,11 @@ impl TurnContext {
             .auth_manager
             .as_deref()
             .is_some_and(AuthManager::current_auth_uses_codex_backend);
-        self.config
-            .features
-            .apps_enabled_for_auth(uses_codex_backend)
+        self.mcp_access() == McpAccess::Enabled
+            && self
+                .config
+                .features
+                .apps_enabled_for_auth(uses_codex_backend)
             && self.config.orchestrator_mcp_enabled
     }
 

@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -45,7 +44,7 @@ pub(super) async fn spawn_review_thread(
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
-    per_turn_config.features = review_features.clone();
+    per_turn_config.features = review_features;
     per_turn_config.permissions.shell_environment_policy = parent_turn_context
         .config
         .permissions
@@ -54,13 +53,6 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.codex_linux_sandbox_exe =
         parent_turn_context.config.codex_linux_sandbox_exe.clone();
     per_turn_config.compact_prompt = parent_turn_context.config.compact_prompt.clone();
-    per_turn_config.include_apps_instructions = false;
-    per_turn_config.orchestrator_mcp_enabled = false;
-    per_turn_config.mcp_servers = codex_config::Constrained::allow_only(HashMap::new());
-    let _ = per_turn_config.features.disable(Feature::Apps);
-    let _ = per_turn_config
-        .features
-        .disable(Feature::SkillMcpDependencyInstall);
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(

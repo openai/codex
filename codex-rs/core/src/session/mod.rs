@@ -239,6 +239,7 @@ use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
+use self::turn_context::McpAccess;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
@@ -2855,20 +2856,20 @@ impl Session {
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
             .await;
-        let mcp = if turn_context.is_review_subagent() {
-            self.isolated_mcp_runtime_for_step(
+        let mcp = match turn_context.mcp_access() {
+            McpAccess::Disabled => self.disabled_mcp_runtime_for_step(
                 turn_context.as_ref(),
                 &environments,
                 &selected_capability_roots,
-            )
-            .await
-        } else {
-            self.mcp_runtime_for_step(
-                turn_context.as_ref(),
-                &environments,
-                &selected_capability_roots,
-            )
-            .await
+            ),
+            McpAccess::Enabled => {
+                self.mcp_runtime_for_step(
+                    turn_context.as_ref(),
+                    &environments,
+                    &selected_capability_roots,
+                )
+                .await
+            }
         };
         Arc::new(StepContext::new(
             turn_context,

@@ -1,6 +1,7 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::session::step_context::StepContext;
+use crate::session::turn_context::McpAccess;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -334,7 +335,7 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
-    !turn_context.is_review_subagent()
+    turn_context.mcp_access() == McpAccess::Enabled
         && features.enabled(Feature::ToolSuggest)
         && features.enabled(Feature::Apps)
         && features.enabled(Feature::Plugins)
