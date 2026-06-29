@@ -14,17 +14,13 @@ pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
-    /// Raw markdown of the most recently completed agent response that
-    /// survived any local thread rollback.
+    /// Raw markdown of the most recently completed agent response.
     pub(super) last_agent_markdown: Option<String>,
     /// Copyable agent responses keyed by the number of visible user turns at
     /// the time the response completed.
     pub(super) agent_turn_markdowns: Vec<AgentTurnMarkdown>,
     /// Number of user turns currently reflected in the visible transcript.
     pub(super) visible_user_turn_count: usize,
-    /// True when rollback discarded the requested copy source because it was
-    /// older than the retained copy history.
-    pub(super) copy_history_evicted_by_rollback: bool,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
@@ -76,7 +72,6 @@ impl TranscriptState {
             }
         }
         self.last_agent_markdown = Some(markdown);
-        self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = true;
     }
 
@@ -88,21 +83,6 @@ impl TranscriptState {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.visible_user_turn_count = 0;
-        self.copy_history_evicted_by_rollback = false;
-        self.saw_copy_source_this_turn = false;
-    }
-
-    pub(super) fn truncate_copy_history_to_user_turn_count(&mut self, user_turn_count: usize) {
-        self.visible_user_turn_count = user_turn_count;
-        let had_copy_history = !self.agent_turn_markdowns.is_empty();
-        self.agent_turn_markdowns
-            .retain(|entry| entry.user_turn_count <= user_turn_count);
-        self.last_agent_markdown = self
-            .agent_turn_markdowns
-            .last()
-            .map(|entry| entry.markdown.clone());
-        self.copy_history_evicted_by_rollback =
-            had_copy_history && self.last_agent_markdown.is_none();
         self.saw_copy_source_this_turn = false;
     }
 
@@ -133,19 +113,5 @@ mod tests {
         state.bump_active_cell_revision();
 
         assert_eq!(state.active_cell_revision, 0);
-    }
-
-    #[test]
-    fn copy_history_tracks_latest_visible_turn() {
-        let mut state = TranscriptState::default();
-        state.record_visible_user_turn();
-        state.record_agent_markdown("first".to_string());
-        state.record_visible_user_turn();
-        state.record_agent_markdown("second".to_string());
-
-        state.truncate_copy_history_to_user_turn_count(/*user_turn_count*/ 1);
-
-        assert_eq!(state.last_agent_markdown.as_deref(), Some("first"));
-        assert!(!state.copy_history_evicted_by_rollback);
     }
 }

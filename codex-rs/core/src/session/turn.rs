@@ -18,6 +18,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
+use crate::hook_runtime::UserInputEventDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -53,6 +54,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item_with_finalized_facts;
+use crate::tasks::InitialUserInputEvents;
 use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -146,6 +148,7 @@ pub(crate) async fn run_turn(
     input: Vec<TurnInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
+    initial_user_input_events: Option<&InitialUserInputEvents>,
 ) -> CodexResult<Option<String>> {
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
@@ -184,10 +187,25 @@ pub(crate) async fn run_turn(
     };
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
+        if let Some(initial_user_input_events) = initial_user_input_events {
+            initial_user_input_events.set_abort_input(Vec::new());
+        }
         return Ok(None);
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(&sess, &turn_context, &input).await {
+    let initial_input_stopped = if let Some(initial_user_input_events) = initial_user_input_events {
+        run_hooks_and_record_initial_inputs(&sess, &turn_context, &input, initial_user_input_events)
+            .await
+    } else {
+        run_hooks_and_record_inputs(
+            &sess,
+            &turn_context,
+            &input,
+            UserInputEventDisposition::Emit,
+        )
+        .await
+    };
+    if initial_input_stopped {
         return Ok(None);
     }
 
@@ -232,7 +250,14 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(&sess, &turn_context, &pending_input).await {
+        if run_hooks_and_record_inputs(
+            &sess,
+            &turn_context,
+            &pending_input,
+            UserInputEventDisposition::Emit,
+        )
+        .await
+        {
             break;
         }
 
@@ -482,6 +507,7 @@ async fn run_hooks_and_record_inputs(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     input: &[TurnInput],
+    user_input_event_disposition: UserInputEventDisposition,
 ) -> bool {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
@@ -499,9 +525,69 @@ async fn run_hooks_and_record_inputs(
                 turn_context,
                 input_item.clone(),
                 hook_outcome.additional_contexts,
+                user_input_event_disposition,
             )
             .await;
         }
+    }
+    blocked_input && !accepted_user_input
+}
+
+#[instrument(level = "trace", skip_all)]
+async fn run_hooks_and_record_initial_inputs(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+    initial_user_input_events: &InitialUserInputEvents,
+) -> bool {
+    let mut blocked_input = false;
+    let mut accepted_user_input = false;
+    let mut accepted: Vec<(TurnInput, Vec<String>)> = Vec::new();
+    for (index, input_item) in input.iter().enumerate() {
+        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+        if hook_outcome.should_stop {
+            blocked_input = true;
+            let abort_input = accepted
+                .iter()
+                .map(|(input, _additional_contexts)| input.clone())
+                .chain(input.iter().skip(index + 1).cloned())
+                .collect();
+            initial_user_input_events.set_abort_input(abort_input);
+            record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
+        } else {
+            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+                accepted_user_input = true;
+            }
+            accepted.push((input_item.clone(), hook_outcome.additional_contexts));
+            let abort_input = accepted
+                .iter()
+                .map(|(input, _additional_contexts)| input.clone())
+                .chain(input.iter().skip(index + 1).cloned())
+                .collect();
+            initial_user_input_events.set_abort_input(abort_input);
+        }
+    }
+
+    let accepted_input = accepted
+        .iter()
+        .map(|(input, _additional_contexts)| input.clone())
+        .collect();
+    if !initial_user_input_events
+        .record(Arc::clone(sess), Arc::clone(turn_context), accepted_input)
+        .await
+    {
+        return true;
+    }
+
+    for (input, additional_contexts) in accepted {
+        record_pending_input(
+            sess,
+            turn_context,
+            input,
+            additional_contexts,
+            UserInputEventDisposition::AlreadyEmitted,
+        )
+        .await;
     }
     blocked_input && !accepted_user_input
 }

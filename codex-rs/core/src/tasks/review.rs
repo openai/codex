@@ -88,7 +88,12 @@ impl SessionTask for ReviewTask {
         Ok(None)
     }
 
-    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+    async fn abort(
+        &self,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        _input: &[TurnInput],
+    ) {
         exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
     }
 }

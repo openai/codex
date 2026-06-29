@@ -53,6 +53,12 @@ pub(crate) struct HookRuntimeOutcome {
     pub additional_contexts: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum UserInputEventDisposition {
+    Emit,
+    AlreadyEmitted,
+}
+
 pub(crate) enum PreToolUseHookResult {
     Continue { updated_input: Option<Value> },
     Blocked(String),
@@ -541,16 +547,23 @@ pub(crate) async fn record_pending_input(
     turn_context: &Arc<TurnContext>,
     pending_input: TurnInput,
     additional_contexts: Vec<String>,
+    user_input_event_disposition: UserInputEventDisposition,
 ) {
     match pending_input {
-        TurnInput::UserInput { content, client_id } => {
-            sess.record_user_prompt_and_emit_turn_item(
-                turn_context.as_ref(),
-                content.as_slice(),
-                client_id,
-            )
-            .await;
-        }
+        TurnInput::UserInput { content, client_id } => match user_input_event_disposition {
+            UserInputEventDisposition::Emit => {
+                sess.record_user_prompt_and_emit_turn_item(
+                    turn_context.as_ref(),
+                    content.as_slice(),
+                    client_id,
+                )
+                .await;
+            }
+            UserInputEventDisposition::AlreadyEmitted => {
+                sess.record_user_prompt(turn_context.as_ref(), content.as_slice())
+                    .await;
+            }
+        },
         TurnInput::ResponseItem(item) => {
             sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
                 .await;

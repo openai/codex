@@ -73,8 +73,8 @@
 //! # Remote Image Rows (Up/Down/Delete)
 //!
 //! Remote image URLs are rendered as non-editable `[Image #N]` rows above the textarea (inside the
-//! same composer block). These rows represent image attachments rehydrated from app-server/backtrack
-//! history; TUI users can remove them, but cannot type into that row region.
+//! same composer block). These rows represent image attachments rehydrated from app-server history
+//! or a restored submission; TUI users can remove them, but cannot type into that row region.
 //!
 //! Keyboard behavior:
 //!

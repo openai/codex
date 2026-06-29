@@ -25,6 +25,7 @@ use tracing::warn;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
+use crate::hook_runtime::UserInputEventDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -51,6 +52,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 
 use codex_features::Feature;
@@ -58,6 +60,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 pub(crate) use compact::CompactTask;
+pub(crate) use regular::InitialUserInputEvents;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use user_shell::UserShellCommandMode;
@@ -219,6 +222,12 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Returns the tracing name for a spawned task span.
     fn span_name(&self) -> &'static str;
 
+    /// Whether `start_task` must persist the canonical turn boundary before spawning the
+    /// cancellable task future.
+    fn requires_synchronous_turn_start(&self) -> bool {
+        false
+    }
+
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -241,14 +250,17 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     ///
     /// The default implementation is a no-op; override this if additional
     /// teardown or notifications are required once
-    /// [`Session::abort_all_tasks`] cancels the task.
-    fn abort(
-        &self,
+    /// [`Session::abort_all_tasks`] cancels the task. `input` is the same initial input passed to
+    /// [`SessionTask::run`], retained for cleanup that must handle cancellation before the run
+    /// future is first polled.
+    fn abort<'a>(
+        &'a self,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-    ) -> impl std::future::Future<Output = ()> + Send {
+        input: &'a [TurnInput],
+    ) -> impl std::future::Future<Output = ()> + Send + 'a {
         async move {
-            let _ = (session, ctx);
+            let _ = (session, ctx, input);
         }
     }
 }
@@ -270,6 +282,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         &'a self,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        input: &'a [TurnInput],
     ) -> BoxFuture<'a, ()>;
 }
 
@@ -305,8 +318,9 @@ where
         &'a self,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
+        input: &'a [TurnInput],
     ) -> BoxFuture<'a, ()> {
-        Box::pin(SessionTask::abort(self, session, ctx))
+        Box::pin(SessionTask::abort(self, session, ctx, input))
     }
 }
 
@@ -328,6 +342,7 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let requires_synchronous_turn_start = task.requires_synchronous_turn_start();
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -364,6 +379,21 @@ impl Session {
         self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
+        if requires_synchronous_turn_start {
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: turn_context.sub_id.clone(),
+                    trace_id: turn_context.trace_id.clone(),
+                    started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
+                    model_context_window: turn_context.model_context_window(),
+                    collaboration_mode_kind: turn_context.collaboration_mode.mode,
+                }),
+            )
+            .await;
+            self.set_server_reasoning_included(/*included*/ false).await;
+        }
+
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -379,6 +409,7 @@ impl Session {
         ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
+        let abort_input = input.clone();
         let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
@@ -441,6 +472,7 @@ impl Session {
             handle: AbortOnDropHandle::new(handle),
             kind: task_kind,
             task,
+            abort_input,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             turn_extension_data,
@@ -617,6 +649,7 @@ impl Session {
                         &turn_context,
                         pending_input_item,
                         hook_outcome.additional_contexts,
+                        UserInputEventDisposition::Emit,
                     )
                     .await;
                 }
@@ -847,14 +880,31 @@ impl Session {
             }
         }
 
-        task.handle.abort();
+        let mut handle = task.handle;
+        handle.abort();
+        // Wait for cancellation to finish before task-specific abort cleanup reads state that the
+        // run future may update between cancellable awaits. Keep this bounded because Tokio cannot
+        // force a task to stop while it is executing non-yielding code.
+        if tokio::time::timeout(
+            Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS),
+            &mut handle,
+        )
+        .await
+        .is_err()
+        {
+            warn!("task {sub_id} did not stop after forced abort");
+        }
 
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
             Arc::clone(&task.turn_extension_data),
         ));
         session_task
-            .abort(session_ctx, Arc::clone(&task.turn_context))
+            .abort(
+                session_ctx,
+                Arc::clone(&task.turn_context),
+                &task.abort_input,
+            )
             .await;
 
         if reason == TurnAbortReason::Interrupted

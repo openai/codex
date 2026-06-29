@@ -15,6 +15,7 @@ impl ChatWidget {
         for turn in turns {
             let Turn {
                 id: turn_id,
+                is_forkable,
                 items_view: _,
                 items,
                 status,
@@ -29,7 +30,13 @@ impl ChatWidget {
                 self.on_task_started();
             }
             for item in items {
-                self.replay_thread_item(item, turn_id.clone(), replay_kind);
+                let forkable_turn_id = is_forkable.then(|| turn_id.clone());
+                self.handle_thread_item(
+                    item,
+                    turn_id.clone(),
+                    forkable_turn_id,
+                    ThreadItemRenderSource::Replay(replay_kind),
+                );
             }
             if matches!(
                 status,
@@ -40,6 +47,7 @@ impl ChatWidget {
                         thread_id: self.thread_id.map(|id| id.to_string()).unwrap_or_default(),
                         turn: Turn {
                             id: turn_id,
+                            is_forkable,
                             items_view: codex_app_server_protocol::TurnItemsView::NotLoaded,
                             items: Vec::new(),
                             status,
@@ -55,26 +63,33 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn replay_thread_item(
         &mut self,
         item: ThreadItem,
         turn_id: String,
         replay_kind: ReplayKind,
     ) {
-        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+        self.handle_thread_item(
+            item,
+            turn_id.clone(),
+            Some(turn_id),
+            ThreadItemRenderSource::Replay(replay_kind),
+        );
     }
 
     pub(super) fn handle_thread_item(
         &mut self,
         item: ThreadItem,
         turn_id: String,
+        forkable_turn_id: Option<String>,
         render_source: ThreadItemRenderSource,
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
         match item {
             ThreadItem::UserMessage { content, .. } => {
-                self.on_committed_user_message(&content, from_replay);
+                self.on_committed_user_message(&content, from_replay, forkable_turn_id);
             }
             ThreadItem::AgentMessage {
                 id,

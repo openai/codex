@@ -556,6 +556,7 @@ impl TurnRequestProcessor {
             .await;
         let turn = Turn {
             id: turn_id,
+            is_forkable: true,
             items: vec![],
             items_view: TurnItemsView::NotLoaded,
             error: None,
@@ -1143,6 +1144,7 @@ impl TurnRequestProcessor {
 
         Turn {
             id: turn_id,
+            is_forkable: false,
             items,
             items_view: TurnItemsView::NotLoaded,
             error: None,

@@ -662,7 +662,6 @@ pub(crate) struct ChatWidget {
     // order.
     suppress_initial_user_message_submit: bool,
     input_queue: InputQueueState,
-    cancel_edit: CancelEditState,
     /// Main chat-surface bindings resolved from `tui.keymap.chat`.
     chat_keymap: ChatKeymap,
     /// Keybinding to show for popping the most-recently queued message back
@@ -783,13 +782,6 @@ pub(crate) enum InterruptedTurnNoticeMode {
     #[default]
     Default,
     Suppress,
-}
-
-#[derive(Debug, Default)]
-struct CancelEditState {
-    prompt: Option<UserMessage>,
-    eligible: bool,
-    armed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1217,9 +1209,6 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        if self.turn_lifecycle.agent_turn_running && !cell.display_lines(u16::MAX).is_empty() {
-            self.record_visible_turn_activity();
-        }
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -1264,7 +1253,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+    fn on_committed_user_message(
+        &mut self,
+        items: &[UserInput],
+        from_replay: bool,
+        turn_id: Option<String>,
+    ) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1335,7 +1329,7 @@ impl ChatWidget {
                     mention_bindings,
                     pending_pastes: Vec::new(),
                 });
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, turn_id);
             return;
         }
 
@@ -1350,21 +1344,21 @@ impl ChatWidget {
                 self.refresh_pending_input_preview();
                 let pending_display =
                     user_message_display_for_history(pending.user_message, &pending.history_record);
-                self.on_user_message_display(pending_display);
+                self.on_user_message_display(pending_display, turn_id);
             } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
                 tracing::warn!(
                     "pending steer matched compare key but queue was empty when rendering committed user message"
                 );
-                self.on_user_message_display(display);
+                self.on_user_message_display(display, turn_id);
             }
         } else if !self.review.is_review_mode
             && self.last_rendered_user_message_display.as_ref() != Some(&display)
         {
-            self.on_user_message_display(display);
+            self.on_user_message_display(display, turn_id);
         }
     }
 
-    fn on_user_message_display(&mut self, display: UserMessageDisplay) {
+    fn on_user_message_display(&mut self, display: UserMessageDisplay, turn_id: Option<String>) {
         self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
@@ -1373,6 +1367,7 @@ impl ChatWidget {
         {
             self.record_visible_user_turn_for_copy();
             self.add_to_history(history_cell::new_user_prompt(
+                turn_id,
                 display.message,
                 display.text_elements,
                 display.local_images,
@@ -1744,6 +1739,14 @@ impl ChatWidget {
         self.bottom_pane.is_normal_backtrack_mode()
     }
 
+    /// Canonical id of the turn that is still in progress, if any.
+    pub(crate) fn active_turn_id(&self) -> Option<&str> {
+        self.turn_lifecycle
+            .agent_turn_running
+            .then_some(self.turn_lifecycle.last_turn_id.as_deref())
+            .flatten()
+    }
+
     pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .composer_should_handle_vim_insert_escape(key_event)
@@ -1754,6 +1757,7 @@ impl ChatWidget {
     }
 
     /// Replace the composer content with the provided text and reset cursor.
+    #[cfg(test)]
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -1838,12 +1842,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
-        if let AppCommand::Interrupt { behavior } = op
-            && self.turn_lifecycle.agent_turn_running
-        {
-            if *behavior == crate::app_command::InterruptBehavior::RestorePromptIfNoOutput {
-                self.arm_cancel_edit();
-            }
+        if matches!(op, AppCommand::Interrupt) && self.turn_lifecycle.agent_turn_running {
             if let Some(controller) = self.stream_controller.as_mut() {
                 controller.clear_queue();
             }

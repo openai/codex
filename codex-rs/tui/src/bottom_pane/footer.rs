@@ -881,13 +881,13 @@ fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     let esc = key_hint::plain(KeyCode::Esc);
     if esc_backtrack_hint {
-        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
+        Line::from(vec![esc.into(), " again to fork after a turn".into()]).dim()
     } else {
         Line::from(vec![
             esc.into(),
             " ".into(),
             esc.into(),
-            " to edit previous message".into(),
+            " to fork after a turn".into(),
         ])
         .dim()
     }
@@ -1110,13 +1110,9 @@ impl ShortcutDescriptor {
             }
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
-                    line.push_span(" again to edit previous message");
+                    line.push_span(" again to fork after a turn");
                 } else {
-                    line.extend(vec![
-                        " ".into(),
-                        key.into(),
-                        " to edit previous message".into(),
-                    ]);
+                    line.extend(vec![" ".into(), key.into(), " to fork after a turn".into()]);
                 }
             }
             ShortcutId::Quit => {

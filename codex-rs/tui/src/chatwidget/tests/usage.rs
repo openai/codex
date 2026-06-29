@@ -545,7 +545,7 @@ async fn clearing_pending_reset_hint_preserves_in_flight_redemption() {
     assert!(finish_reset_consume_outcome(
         &mut chat,
         consume_request_id,
-        "redeem-after-rollback",
+        "redeem-after-hint-clear",
         ConsumeAccountRateLimitResetCreditOutcome::Reset,
     ));
 }

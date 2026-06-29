@@ -121,7 +121,7 @@ fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagen
 }
 
 #[test]
-fn turn_defaults_legacy_missing_items_view_to_full() {
+fn turn_defaults_legacy_missing_items_view_and_forkability() {
     let turn: Turn = serde_json::from_value(json!({
         "id": "turn_123",
         "items": [],
@@ -134,6 +134,7 @@ fn turn_defaults_legacy_missing_items_view_to_full() {
     .expect("legacy turn should deserialize");
 
     assert_eq!(turn.items_view, TurnItemsView::Full);
+    assert!(!turn.is_forkable);
 }
 
 #[test]

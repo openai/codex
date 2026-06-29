@@ -162,6 +162,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let state = thread_state.lock().await;
                 let mut turn = state.active_turn_snapshot().unwrap_or_else(|| Turn {
                     id: payload.turn_id.clone(),
+                    is_forkable: true,
                     items: Vec::new(),
                     items_view: TurnItemsView::NotLoaded,
                     error: None,
@@ -1338,6 +1339,7 @@ async fn handle_turn_plan_update(
 }
 
 struct TurnCompletionMetadata {
+    is_forkable: bool,
     status: TurnStatus,
     error: Option<TurnError>,
     started_at: Option<i64>,
@@ -1355,6 +1357,7 @@ async fn emit_turn_completed_with_status(
         thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_turn_id,
+            is_forkable: turn_completion_metadata.is_forkable,
             items: vec![],
             items_view: TurnItemsView::NotLoaded,
             error: turn_completion_metadata.error,
@@ -1541,6 +1544,7 @@ async fn handle_turn_complete(
         conversation_id,
         event_turn_id,
         TurnCompletionMetadata {
+            is_forkable: turn_summary.is_forkable,
             status,
             error,
             started_at: turn_summary.started_at,
@@ -1565,6 +1569,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnCompletionMetadata {
+            is_forkable: turn_summary.is_forkable,
             status: TurnStatus::Interrupted,
             error: None,
             started_at: turn_summary.started_at,

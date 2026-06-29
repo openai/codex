@@ -223,6 +223,7 @@ fn raw_lines_from_source_preserves_trailing_blank_but_not_trailing_newline() {
 #[test]
 fn source_backed_cells_render_raw_source_without_prefix_or_style() {
     let user = new_user_prompt(
+        /*turn_id*/ None,
         "hello\n\nworld\n".to_string(),
         Vec::new(),
         Vec::new(),
@@ -432,6 +433,7 @@ fn raw_mode_toggle_transcript_snapshot() {
     );
     let cells: Vec<Box<dyn HistoryCell>> = vec![
             Box::new(new_user_prompt(
+                /*turn_id*/ None,
                 "Please format this\nfor copying".to_string(),
                 Vec::new(),
                 Vec::new(),
@@ -1971,6 +1973,7 @@ fn ran_cell_multiline_with_stderr_snapshot() {
 fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
     let msg = "one two three four five six seven";
     let cell = UserHistoryCell {
+        turn_id: None,
         message: msg.to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -1988,6 +1991,7 @@ fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
 #[test]
 fn user_history_cell_renders_remote_image_urls() {
     let cell = UserHistoryCell {
+        turn_id: None,
         message: "describe these".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2004,6 +2008,7 @@ fn user_history_cell_renders_remote_image_urls() {
 #[test]
 fn user_history_cell_summarizes_inline_data_urls() {
     let cell = UserHistoryCell {
+        turn_id: None,
         message: "describe inline image".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2019,6 +2024,7 @@ fn user_history_cell_summarizes_inline_data_urls() {
 #[test]
 fn user_history_cell_numbers_multiple_remote_images() {
     let cell = UserHistoryCell {
+        turn_id: None,
         message: "describe both".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2038,6 +2044,7 @@ fn user_history_cell_numbers_multiple_remote_images() {
 #[test]
 fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
     let cell = UserHistoryCell {
+        turn_id: None,
         message: "line one\nline two".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2060,6 +2067,7 @@ fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
 #[test]
 fn user_history_cell_trims_trailing_blank_message_lines() {
     let cell = UserHistoryCell {
+        turn_id: None,
         message: "line one\n\n   \n\t \n".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2080,6 +2088,7 @@ fn user_history_cell_trims_trailing_blank_message_lines() {
 fn user_history_cell_trims_trailing_blank_message_lines_with_text_elements() {
     let message = "tokenized\n\n\n".to_string();
     let cell = UserHistoryCell {
+        turn_id: None,
         message,
         text_elements: vec![TextElement::new(
             (0..8).into(),
@@ -2103,6 +2112,7 @@ fn user_history_cell_trims_trailing_blank_message_lines_with_text_elements() {
 fn render_uses_wrapping_for_long_url_like_line() {
     let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going/for/testing/purposes-only-and-does/not/need/to/resolve/index.html?session_id=abc123def456ghi789jkl012mno345pqr678stu901vwx234yz";
     let cell: Box<dyn HistoryCell> = Box::new(UserHistoryCell {
+        turn_id: None,
         message: url.to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2451,6 +2461,7 @@ fn agent_markdown_cell_narrow_width_shows_prefix_only() {
 #[test]
 fn wrapped_and_prefixed_cells_handle_tiny_widths() {
     let user_cell = UserHistoryCell {
+        turn_id: None,
         message: "tiny width coverage for wrapped user history".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),
@@ -2557,6 +2568,7 @@ fn consolidation_walker_replaces_agent_message_cells() {
 
     // Build a transcript with: [UserCell, AgentMsg(head), AgentMsg(cont), AgentMsg(cont)]
     let user = Arc::new(UserHistoryCell {
+        turn_id: None,
         message: "hello".to_string(),
         text_elements: Vec::new(),
         local_image_paths: Vec::new(),

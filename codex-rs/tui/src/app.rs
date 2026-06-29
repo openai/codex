@@ -123,7 +123,6 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
-use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -214,6 +213,7 @@ mod platform_actions;
 mod plugin_mentions;
 mod replay_filter;
 mod resize_reflow;
+mod safety_buffering;
 mod session_lifecycle;
 mod side;
 mod startup_prompts;
@@ -541,11 +541,6 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
-    /// When set, the next draw rebuilds terminal scrollback from the retained transcript cells.
-    ///
-    /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
-    /// transcript cells.
-    pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
@@ -1042,7 +1037,6 @@ See the Codex keymap documentation for supported actions and examples."
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
-            backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
@@ -1288,10 +1282,6 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw | TuiEvent::Resize => {
-                    if self.backtrack_render_pending {
-                        self.rebuild_transcript_after_backtrack(tui)?;
-                        self.backtrack_render_pending = false;
-                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget

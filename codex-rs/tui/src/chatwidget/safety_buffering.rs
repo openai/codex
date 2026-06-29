@@ -16,15 +16,60 @@ struct ActiveSafetyBuffering {
     agent_message_started: bool,
 }
 
+#[derive(Debug)]
+struct SubmittedSafetyBufferingTurn {
+    turn_id: String,
+    turn: AppCommand,
+    prompt: UserMessage,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct SafetyBufferingState {
-    submitted_turn: Option<(String, AppCommand)>,
+    pending_prompt: Option<UserMessage>,
+    submitted_turn: Option<SubmittedSafetyBufferingTurn>,
     active: Option<ActiveSafetyBuffering>,
 }
 
 impl ChatWidget {
+    pub(super) fn record_safety_buffering_prompt(&mut self, prompt: UserMessage) {
+        self.safety_buffering.pending_prompt = Some(prompt);
+    }
+
+    /// Prepare a safety-buffered retry that bypasses the composer submission path.
+    ///
+    /// The retry command is submitted directly after attaching the forked thread, so it must
+    /// establish the pending state that a normal composer submission would create. The local row
+    /// is committed separately, after `turn/start` succeeds, so a rejected submission cannot
+    /// leave a ghost prompt in the transcript.
+    pub(crate) fn prepare_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
+        self.input_queue.user_turn_pending_start = true;
+        self.record_safety_buffering_prompt(prompt);
+    }
+
+    /// Render the local retry row after the app-server has accepted the turn.
+    ///
+    /// Rendering locally ensures an identical prompt is not mistaken for the final replayed
+    /// prompt when the app-server echoes the new user item.
+    pub(crate) fn commit_safety_buffered_retry_submission(&mut self, prompt: UserMessage) {
+        let display =
+            user_message_display_for_history(prompt, &UserMessageHistoryRecord::UserMessageText);
+        self.on_user_message_display(display, /*turn_id*/ None);
+    }
+
+    pub(crate) fn cancel_safety_buffered_retry_submission(&mut self) {
+        self.input_queue.user_turn_pending_start = false;
+        self.clear_safety_buffering();
+    }
+
     pub(crate) fn record_safety_buffering_turn(&mut self, turn_id: String, turn: &AppCommand) {
-        self.safety_buffering.submitted_turn = Some((turn_id, turn.clone()));
+        self.safety_buffering.submitted_turn =
+            self.safety_buffering.pending_prompt.take().map(|prompt| {
+                SubmittedSafetyBufferingTurn {
+                    turn_id,
+                    turn: turn.clone(),
+                    prompt,
+                }
+            });
     }
 
     pub(super) fn reset_safety_buffering_for_turn_start(&mut self) {
@@ -59,24 +104,6 @@ impl ChatWidget {
                 .active
                 .as_ref()
                 .is_some_and(|active| active.turn_id == turn_id && !active.agent_message_started)
-    }
-
-    pub(crate) fn prepare_safety_buffering_retry(&mut self) {
-        let cancel_edit = std::mem::take(&mut self.cancel_edit);
-        self.last_rendered_user_message_display = None;
-        self.finalize_turn();
-        self.cancel_edit = cancel_edit;
-        self.input_queue.user_turn_pending_start = true;
-    }
-
-    pub(crate) fn fail_safety_buffering_retry(&mut self) {
-        self.input_queue.user_turn_pending_start = false;
-        self.clear_safety_buffering();
-        let prompt = self.cancel_edit.prompt.take();
-        self.clear_cancel_edit();
-        if let Some(prompt) = prompt {
-            self.restore_user_message_to_composer(prompt);
-        }
     }
 
     pub(super) fn on_model_safety_buffering_updated(
@@ -115,8 +142,8 @@ impl ChatWidget {
             .safety_buffering
             .submitted_turn
             .as_ref()
-            .filter(|(submitted_turn_id, _)| replay_kind.is_none() && submitted_turn_id == &turn_id)
-            .map(|(_, turn)| turn.clone());
+            .filter(|submitted_turn| replay_kind.is_none() && submitted_turn.turn_id == turn_id)
+            .map(|submitted_turn| (submitted_turn.turn.clone(), submitted_turn.prompt.clone()));
         let thread_id = self.thread_id;
         let can_offer_retry = faster_model.is_some() && retry_turn.is_some() && thread_id.is_some();
         if !can_offer_retry {
@@ -151,7 +178,7 @@ impl ChatWidget {
             /*details_max_lines*/ 6,
         );
 
-        let (Some(faster_model), Some(turn), Some(thread_id)) =
+        let (Some(faster_model), Some((turn, prompt)), Some(thread_id)) =
             (faster_model, retry_turn, thread_id)
         else {
             return;
@@ -179,6 +206,7 @@ impl ChatWidget {
                             turn_id: turn_id.clone(),
                             model: faster_model.clone(),
                             turn: turn.clone(),
+                            prompt: prompt.clone(),
                         });
                     })],
                     dismiss_on_select: true,

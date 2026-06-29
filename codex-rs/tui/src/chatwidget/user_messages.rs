@@ -32,7 +32,7 @@ pub(crate) struct UserMessage {
     /// provided by app-server clients.
     ///
     /// Unlike `local_images`, these are not created by TUI image attach/paste
-    /// flows. The TUI can restore and remove them while editing/backtracking.
+    /// flows. The TUI can restore and remove them when a submission must be retried.
     pub(crate) remote_image_urls: Vec<String>,
     pub(crate) text_elements: Vec<TextElement>,
     pub(crate) mention_bindings: Vec<MentionBinding>,

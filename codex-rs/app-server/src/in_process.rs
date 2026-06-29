@@ -886,6 +886,7 @@ mod tests {
                 thread_id: "thread-1".to_string(),
                 turn: Turn {
                     id: "turn-1".to_string(),
+                    is_forkable: true,
                     items: Vec::new(),
                     items_view: TurnItemsView::NotLoaded,
                     status: TurnStatus::Completed,

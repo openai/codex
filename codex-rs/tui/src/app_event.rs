@@ -161,12 +161,13 @@ pub(crate) enum AppEvent {
         op: AppCommand,
     },
 
-    /// Interrupt, roll back, and retry a safety-buffered turn with the server-selected model.
+    /// Interrupt, branch, and retry a safety-buffered turn with the server-selected model.
     RetrySafetyBufferedTurn {
         thread_id: ThreadId,
         turn_id: String,
         model: String,
         turn: AppCommand,
+        prompt: UserMessage,
     },
 
     /// Deliver a synthetic history lookup response to a specific thread channel.
@@ -237,6 +238,12 @@ pub(crate) enum AppEvent {
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
+    /// Fork the selected source thread through `last_turn_id`, inclusive.
+    ForkSessionAfterTurn {
+        thread_id: ThreadId,
+        last_turn_id: String,
+    },
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
@@ -255,9 +262,6 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
-
-    /// Restore an output-free interrupted turn into the composer and roll it back.
-    RestoreCancelledTurn(UserMessage),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
@@ -665,6 +669,11 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Attach the canonical app-server turn id to the most recent locally rendered user prompt.
+    AnchorLatestUserHistoryCell {
+        turn_id: String,
+    },
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 
@@ -693,15 +702,6 @@ pub(crate) enum AppEvent {
     /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
     /// finalization.
     ConsolidateProposedPlan(String),
-
-    /// Apply rollback semantics to local transcript cells.
-    ///
-    /// This is emitted when rollback was not initiated by the current
-    /// backtrack flow so trimming occurs in AppEvent queue order relative to
-    /// inserted history cells.
-    ApplyThreadRollback {
-        num_turns: u32,
-    },
 
     StartCommitAnimation,
     StopCommitAnimation,

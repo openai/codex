@@ -562,8 +562,8 @@ impl TranscriptOverlay {
     /// Replace committed transcript cells while keeping any cached in-progress output that is
     /// currently shown at the end of the overlay.
     ///
-    /// This is used when existing history is trimmed (for example after rollback) so the
-    /// transcript overlay immediately reflects the same committed cells as the main transcript.
+    /// This is used when committed history changes so the transcript overlay immediately reflects
+    /// the same cells as the main transcript.
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells = cells;
@@ -760,12 +760,15 @@ impl TranscriptOverlay {
                     key_hint::plain(KeyCode::Esc),
                     key_hint::plain(KeyCode::Left),
                 ],
-                "to edit prev",
+                "to select previous turn",
             ));
-            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to edit next"));
-            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to edit message"));
+            pairs.push((vec![key_hint::plain(KeyCode::Right)], "to select next turn"));
+            pairs.push((vec![key_hint::plain(KeyCode::Enter)], "to fork after turn"));
         } else {
-            pairs.push((vec![key_hint::plain(KeyCode::Esc)], "to edit prev"));
+            pairs.push((
+                vec![key_hint::plain(KeyCode::Esc)],
+                "to select a fork point",
+            ));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -802,11 +805,6 @@ impl TranscriptOverlay {
     }
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
-    }
-
-    #[cfg(test)]
-    pub(crate) fn committed_cell_count(&self) -> usize {
-        self.cells.len()
     }
 }
 
@@ -1011,7 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_prev_hint_is_visible() {
+    fn fork_point_hint_is_visible() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
         })]);
@@ -1023,13 +1021,13 @@ mod tests {
 
         let s = buffer_to_text(&buf, area);
         assert!(
-            s.contains("edit prev"),
-            "expected 'edit prev' hint in overlay footer, got: {s:?}"
+            s.contains("select a fork point"),
+            "expected fork point hint in overlay footer, got: {s:?}"
         );
     }
 
     #[test]
-    fn edit_next_hint_is_visible_when_highlighted() {
+    fn fork_next_hint_is_visible_when_highlighted() {
         let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
         })]);
@@ -1042,8 +1040,8 @@ mod tests {
 
         let s = buffer_to_text(&buf, area);
         assert!(
-            s.contains("edit next"),
-            "expected 'edit next' hint in overlay footer, got: {s:?}"
+            s.contains("select next turn"),
+            "expected next turn hint in overlay footer, got: {s:?}"
         );
     }
 
