@@ -80,7 +80,7 @@ async fn guardian_review_request_includes_patch_context() {
 
     assert_eq!(
         guardian_request,
-        GuardianApprovalRequest::ApplyPatch {
+        ApprovalAction::ApplyPatch {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: vec![path],
