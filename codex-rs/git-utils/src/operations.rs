@@ -209,6 +209,10 @@ mod tests {
             (OsString::from("GIT_GLOB_PATHSPECS"), OsString::from("1")),
             (OsString::from("GIT_NOGLOB_PATHSPECS"), OsString::from("1")),
             (OsString::from("GIT_ICASE_PATHSPECS"), OsString::from("1")),
+            (
+                OsString::from("GIT_CONFIG"),
+                alternate_git_dir.join("config").into_os_string(),
+            ),
         ];
         let output = run_git_for_stdout(target.path(), ["ls-files"], Some(&env))
             .expect("query cwd-selected index");

@@ -8,7 +8,7 @@ use crate::apply::run_git;
 use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
 use crate::git_config::path_is_within;
-use crate::safe_git::ensure_no_executable_git_filters;
+use crate::safe_git::ensure_no_selected_executable_git_filters;
 use crate::safe_git::isolate_git_command_environment;
 
 pub(crate) fn extract_effective_paths_from_patch(
@@ -175,7 +175,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
 }
 
 pub(crate) fn stage_effective_paths(git_root: &Path, paths: &[String]) -> io::Result<()> {
-    ensure_no_executable_git_filters(git_root, &[])?;
+    ensure_no_selected_executable_git_filters(git_root, paths, &[])?;
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
         let joined = git_root.join(p);

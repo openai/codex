@@ -20,8 +20,9 @@ use ts_rs::TS;
 use crate::GitSha;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::GIT_COMMAND_TIMEOUT;
-use crate::safe_git::has_configured_executable_filters_from;
+use crate::safe_git::has_selected_executable_filters_from;
 use crate::safe_git::isolate_tokio_git_command_environment;
+use crate::safe_git::safe_untracked_paths_for_diff;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -289,7 +290,7 @@ fn trim_git_suffix(value: &str) -> &str {
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let git = Path::new("git");
-    if has_configured_executable_filters_from(git, cwd).await? {
+    if has_selected_executable_filters_from(git, cwd).await? {
         return None;
     }
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
@@ -749,9 +750,7 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let git = Path::new("git");
-    if has_configured_executable_filters_from(git, cwd).await? {
-        return None;
-    }
+    let untracked = safe_untracked_paths_for_diff(git, cwd).await?;
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
     let output = run_git_command_with_timeout_from(
         git,
@@ -775,52 +774,69 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     }
     let mut diff = String::from_utf8(output.stdout).ok()?;
 
-    if let Some(untracked_output) = run_git_command_with_timeout_from(
-        git,
-        &["ls-files", "--others", "--exclude-standard"],
-        cwd,
-        fsmonitor,
-    )
-    .await
-        && untracked_output.status.success()
-    {
-        let untracked: Vec<String> = String::from_utf8(untracked_output.stdout)
-            .ok()?
-            .lines()
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if !untracked.is_empty() {
-            // Use platform-appropriate null device and guard paths with `--`.
-            let null_device: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-            let futures_iter = untracked.into_iter().map(|file| async move {
-                let file_owned = file;
-                let args_vec: Vec<&str> = vec![
-                    "diff",
-                    "--no-textconv",
-                    "--no-ext-diff",
-                    "--binary",
-                    "--no-index",
-                    // -- ensures that filenames that start with - are not treated as options.
-                    "--",
-                    null_device,
-                    &file_owned,
-                ];
-                run_git_command_with_timeout_from(git, &args_vec, cwd, fsmonitor).await
-            });
-            let results = join_all(futures_iter).await;
-            for extra in results.into_iter().flatten() {
-                if extra.status.code().is_some_and(|c| c == 0 || c == 1)
-                    && let Ok(s) = String::from_utf8(extra.stdout)
-                {
-                    diff.push_str(&s);
-                }
+    if !untracked.is_empty() {
+        let untracked = untracked
+            .into_iter()
+            .map(git_path_bytes_to_os_string)
+            .collect::<Option<Vec<_>>>()?;
+        let futures_iter = untracked.into_iter().map(|file| async move {
+            run_git_no_index_diff_from(git, cwd, fsmonitor, &file).await
+        });
+        let results = join_all(futures_iter).await;
+        for extra in results.into_iter().flatten() {
+            if extra.status.code().is_some_and(|c| c == 0 || c == 1)
+                && let Ok(s) = String::from_utf8(extra.stdout)
+            {
+                diff.push_str(&s);
             }
         }
     }
 
     Some(diff)
+}
+
+fn git_path_bytes_to_os_string(path: Vec<u8>) -> Option<std::ffi::OsString> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(std::ffi::OsString::from_vec(path))
+    }
+    #[cfg(windows)]
+    {
+        String::from_utf8(path).ok().map(std::ffi::OsString::from)
+    }
+}
+
+async fn run_git_no_index_diff_from(
+    git: &Path,
+    cwd: &Path,
+    fsmonitor: crate::FsmonitorOverride,
+    path: &OsStr,
+) -> Option<std::process::Output> {
+    let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
+    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut command = Command::new(git);
+    isolate_tokio_git_command_environment(&mut command);
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["-c", &disabled_hooks])
+        .args(["-c", fsmonitor.git_config_arg()])
+        .args([
+            "diff",
+            "--no-textconv",
+            "--no-ext-diff",
+            "--binary",
+            "--no-index",
+            "--",
+            null_device,
+        ])
+        .arg(path)
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => Some(output),
+        _ => None,
+    }
 }
 
 /// Resolve the path that should be used for trust checks. Similar to

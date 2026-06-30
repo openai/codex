@@ -17,7 +17,7 @@ use crate::patch_paths::ensure_paths_do_not_enter_submodules;
 use crate::patch_paths::extract_effective_paths_from_patch;
 use crate::patch_paths::stage_effective_paths;
 use crate::safe_git::DISABLED_HOOKS_PATH;
-use crate::safe_git::ensure_no_executable_git_filters;
+use crate::safe_git::ensure_no_selected_executable_git_filters;
 use crate::safe_git::isolate_git_command_environment;
 
 /// Parameters for invoking [`apply_git_patch`].
@@ -48,13 +48,13 @@ pub struct ApplyGitResult {
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let mut cfg_parts = configured_git_config_parts();
     let git_root = resolve_git_root(&req.cwd, &cfg_parts)?;
-    ensure_no_executable_git_filters(&git_root, &cfg_parts)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
     let patch_paths = extract_effective_paths_from_patch(&patch_path, req.revert)?;
+    ensure_no_selected_executable_git_filters(&git_root, &patch_paths, &cfg_parts)?;
     ensure_paths_do_not_enter_submodules(&git_root, &patch_paths)?;
 
     if !req.preflight {
@@ -750,8 +750,17 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             "filter.codex-test.clean=git hash-object --stdin".to_string(),
         ];
 
-        let error = ensure_no_executable_git_filters(repo.path(), &config_args)
-            .expect_err("reject command-scoped filter");
+        std::fs::write(
+            repo.path().join(".gitattributes"),
+            "test.txt filter=codex-test\n",
+        )
+        .expect("attributes");
+        let error = ensure_no_selected_executable_git_filters(
+            repo.path(),
+            &["test.txt".to_string()],
+            &config_args,
+        )
+        .expect_err("reject command-scoped filter");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 
