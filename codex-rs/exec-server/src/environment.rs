@@ -27,6 +27,7 @@ use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 pub const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR: &str =
@@ -585,11 +586,17 @@ impl Environment {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if startup_task.is_none() {
             let environment = Arc::clone(environment);
-            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                if let Err(error) = environment.wait_until_ready().await {
-                    tracing::debug!(%error, "exec-server environment startup failed");
+            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(
+                async move {
+                    if let Err(error) = environment.wait_until_ready().await {
+                        tracing::debug!(%error, "exec-server environment startup failed");
+                    }
                 }
-            })));
+                .instrument(tracing::info_span!(
+                    "exec_server.environment.start_connecting",
+                    trigger = "first_use",
+                )),
+            )));
         }
     }
 

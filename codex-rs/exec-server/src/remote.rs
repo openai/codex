@@ -15,6 +15,8 @@ use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -94,6 +96,8 @@ impl EnvironmentRegistryClient {
             otel.kind = "client",
             otel.name = "codex.exec_server.remote.register",
             result = tracing::field::Empty,
+            send_ms = tracing::field::Empty,
+            response_parse_ms = tracing::field::Empty,
         )
     )]
     async fn register_environment(
@@ -117,6 +121,7 @@ impl EnvironmentRegistryClient {
         environment_id: &str,
         executor_public_key: &NoiseChannelPublicKey,
     ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
+        let send_started_at = Instant::now();
         let response = self
             .http
             .post(endpoint_url(
@@ -130,9 +135,22 @@ impl EnvironmentRegistryClient {
                 executor_public_key: executor_public_key.clone(),
             })
             .send()
+            .instrument(tracing::info_span!(
+                "codex.exec_server.remote.register.send"
+            ))
             .await?;
-        let response: EnvironmentRegistryRegistrationResponse =
-            self.parse_json_response(response).await?;
+        Span::current().record("send_ms", duration_ms(send_started_at.elapsed()));
+        let response_parse_started_at = Instant::now();
+        let response: EnvironmentRegistryRegistrationResponse = self
+            .parse_json_response(response)
+            .instrument(tracing::info_span!(
+                "codex.exec_server.remote.register.parse_response"
+            ))
+            .await?;
+        Span::current().record(
+            "response_parse_ms",
+            duration_ms(response_parse_started_at.elapsed()),
+        );
         if response.environment_id != environment_id {
             return Err(ExecServerError::Protocol(
                 "environment registry returned a different environment id".to_string(),
@@ -543,6 +561,9 @@ pub async fn run_remote_environment(
         otel.kind = "client",
         otel.name = "codex.exec_server.remote.rendezvous.connect",
         result = tracing::field::Empty,
+        endpoint_host = tracing::field::Empty,
+        request_build_ms = tracing::field::Empty,
+        websocket_connect_ms = tracing::field::Empty,
     )
 )]
 async fn connect_rendezvous(
@@ -553,26 +574,48 @@ async fn connect_rendezvous(
     tokio_tungstenite::tungstenite::Error,
 > {
     let started_at = Instant::now();
+    if let Ok(parsed) = url.parse::<http::Uri>()
+        && let Some(host) = parsed.host()
+    {
+        Span::current().record("endpoint_host", host);
+    }
     let result = async {
+        let request_build_started_at = Instant::now();
         let mut request = url.into_client_request()?;
         request
             .headers_mut()
             .extend(current_trace_context_headers());
-        connect_async_with_config(
+        Span::current().record(
+            "request_build_ms",
+            duration_ms(request_build_started_at.elapsed()),
+        );
+        let websocket_connect_started_at = Instant::now();
+        let result = connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
             // Rendezvous sends small, latency-sensitive frames, so avoid Nagle's coalescing delay.
             /*disable_nagle*/
             true,
         )
-        .await
-        .map(|(websocket, _)| websocket)
+        .instrument(tracing::info_span!(
+            "codex.exec_server.remote.rendezvous.websocket_connect"
+        ))
+        .await;
+        Span::current().record(
+            "websocket_connect_ms",
+            duration_ms(websocket_connect_started_at.elapsed()),
+        );
+        result.map(|(websocket, _)| websocket)
     }
     .await;
     let result_name = if result.is_ok() { "success" } else { "error" };
     tracing::Span::current().record("result", result_name);
     telemetry.remote_rendezvous_completed(result_name, started_at.elapsed());
     result
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
 }
 
 fn normalize_environment_id(environment_id: String) -> Result<String, ExecServerError> {
