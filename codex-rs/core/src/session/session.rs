@@ -717,48 +717,63 @@ impl Session {
             (auth, mcp_config, mcp_servers, auth_statuses, tool_plugin_provenance),
         ) = tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
-        let mut live_thread_init =
+        let mut live_thread_init = {
+            let _span = info_span!(
+                "session_init.post_parallel_setup",
+                otel.name = "session_init.post_parallel_setup",
+            )
+            .entered();
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
                 error!("failed to initialize thread persistence: {e:#}");
                 e
-            })?);
+            })?)
+        };
         let session_result: anyhow::Result<Arc<Self>> = async {
-            let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
-                live_thread.local_rollout_path().await?
-            } else {
-                None
-            };
-            let trace_agent_path = session_configuration
-                .session_source
-                .get_agent_path()
-                .unwrap_or_else(codex_protocol::AgentPath::root);
-            let trace_task_name =
-                (!trace_agent_path.is_root()).then(|| trace_agent_path.name().to_string());
-            let trace_metadata = ThreadStartedTraceMetadata {
-                thread_id: thread_id.to_string(),
-                agent_path: trace_agent_path.to_string(),
-                task_name: trace_task_name,
-                nickname: session_configuration.session_source.get_nickname(),
-                agent_role: session_configuration.session_source.get_agent_role(),
-                session_source: session_configuration.session_source.clone(),
-                cwd: session_configuration.cwd().to_path_buf(),
-                rollout_path: rollout_path.clone(),
-                model: session_configuration.collaboration_mode.model().to_string(),
-                provider_name: config.model_provider_id.clone(),
-                approval_policy: session_configuration.approval_policy.value().to_string(),
-                sandbox_policy: format!("{:?}", session_configuration.sandbox_policy()),
-            };
-            let rollout_thread_trace = if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-            ) {
-                // Spawned child threads are part of their root rollout tree. If the
-                // parent had no trace bundle, do not create an orphan child bundle
-                // that looks like an independent rollout.
-                parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
-            } else {
-                ThreadTraceContext::start_root_or_disabled(trace_metadata)
-            };
+            let (rollout_path, rollout_thread_trace) = async {
+                let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
+                    live_thread.local_rollout_path().await?
+                } else {
+                    None
+                };
+                let trace_agent_path = session_configuration
+                    .session_source
+                    .get_agent_path()
+                    .unwrap_or_else(codex_protocol::AgentPath::root);
+                let trace_task_name =
+                    (!trace_agent_path.is_root()).then(|| trace_agent_path.name().to_string());
+                let trace_metadata = ThreadStartedTraceMetadata {
+                    thread_id: thread_id.to_string(),
+                    agent_path: trace_agent_path.to_string(),
+                    task_name: trace_task_name,
+                    nickname: session_configuration.session_source.get_nickname(),
+                    agent_role: session_configuration.session_source.get_agent_role(),
+                    session_source: session_configuration.session_source.clone(),
+                    cwd: session_configuration.cwd().to_path_buf(),
+                    rollout_path: rollout_path.clone(),
+                    model: session_configuration.collaboration_mode.model().to_string(),
+                    provider_name: config.model_provider_id.clone(),
+                    approval_policy: session_configuration.approval_policy.value().to_string(),
+                    sandbox_policy: format!("{:?}", session_configuration.sandbox_policy()),
+                };
+                let rollout_thread_trace = if matches!(
+                    session_configuration.session_source,
+                    SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+                ) {
+                    // Spawned child threads are part of their root rollout tree. If the
+                    // parent had no trace bundle, do not create an orphan child bundle
+                    // that looks like an independent rollout.
+                    parent_rollout_thread_trace
+                        .start_child_thread_trace_or_disabled(trace_metadata)
+                } else {
+                    ThreadTraceContext::start_root_or_disabled(trace_metadata)
+                };
+                Ok::<_, anyhow::Error>((rollout_path, rollout_thread_trace))
+            }
+            .instrument(info_span!(
+                "session_init.rollout_trace_setup",
+                otel.name = "session_init.rollout_trace_setup",
+            ))
+            .await?;
 
             let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -792,6 +807,11 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
+            let telemetry_creation_span = info_span!(
+                "session_init.telemetry_creation",
+                otel.name = "session_init.telemetry_creation",
+            )
+            .entered();
             let auth = auth.as_ref();
             let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
             let account_id = auth.and_then(CodexAuth::get_account_id);
@@ -831,35 +851,56 @@ impl Session {
                 slug: Some(session_model),
             };
             config.features.emit_metrics(&session_telemetry);
-            session_telemetry.counter(
-                THREAD_STARTED_METRIC,
-                /*inc*/ 1,
-                &[(
-                    "is_git",
-                    if get_git_repo_root(session_configuration.cwd()).is_some() {
-                        "true"
-                    } else {
-                        "false"
-                    },
-                )],
-            );
+            drop(telemetry_creation_span);
+            let is_git = {
+                let _span = info_span!(
+                    "session_init.git_repo_probe",
+                    otel.name = "session_init.git_repo_probe",
+                )
+                .entered();
+                get_git_repo_root(session_configuration.cwd()).is_some()
+            };
+            {
+                let _span = info_span!(
+                    "session_init.thread_started_telemetry",
+                    otel.name = "session_init.thread_started_telemetry",
+                )
+                .entered();
+                session_telemetry.counter(
+                    THREAD_STARTED_METRIC,
+                    /*inc*/ 1,
+                    &[("is_git", if is_git { "true" } else { "false" })],
+                );
+            }
 
-            session_telemetry.conversation_starts(
-                config.model_provider.name.as_str(),
-                session_configuration.collaboration_mode.reasoning_effort(),
-                config
-                    .model_reasoning_summary
-                    .unwrap_or(ReasoningSummaryConfig::Auto),
-                config.model_context_window,
-                config.model_auto_compact_token_limit,
-                config.permissions.approval_policy.value(),
-                config
-                    .permissions
-                    .legacy_sandbox_policy(session_configuration.cwd().as_path()),
-                mcp_servers.keys().map(String::as_str).collect(),
-            );
+            {
+                let _span = info_span!(
+                    "session_init.conversation_start_telemetry",
+                    otel.name = "session_init.conversation_start_telemetry",
+                )
+                .entered();
+                session_telemetry.conversation_starts(
+                    config.model_provider.name.as_str(),
+                    session_configuration.collaboration_mode.reasoning_effort(),
+                    config
+                        .model_reasoning_summary
+                        .unwrap_or(ReasoningSummaryConfig::Auto),
+                    config.model_context_window,
+                    config.model_auto_compact_token_limit,
+                    config.permissions.approval_policy.value(),
+                    config
+                        .permissions
+                        .legacy_sandbox_policy(session_configuration.cwd().as_path()),
+                    mcp_servers.keys().map(String::as_str).collect(),
+                );
+            }
 
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
+            let default_shell_resolution_span = info_span!(
+                "session_init.default_shell_resolution",
+                otel.name = "session_init.default_shell_resolution",
+            )
+            .entered();
             let default_shell = if let Some(user_shell_override) =
                 session_configuration.user_shell_override.clone()
             {
@@ -880,6 +921,12 @@ impl Session {
             } else {
                 shell::default_user_shell()
             };
+            drop(default_shell_resolution_span);
+            let turn_environment_creation_span = info_span!(
+                "session_init.turn_environment_creation",
+                otel.name = "session_init.turn_environment_creation",
+            )
+            .entered();
             let shell_snapshot = if config.features.enabled(Feature::ShellSnapshot) {
                 ShellSnapshot::new(
                     config.codex_home.clone(),
@@ -897,11 +944,29 @@ impl Session {
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
-            turn_environments.update_selections(session_configuration.environment_selections());
-            let resolved_environments = turn_environments.snapshot().await;
+            drop(turn_environment_creation_span);
+            {
+                let _span = info_span!(
+                    "session_init.turn_environment_update",
+                    otel.name = "session_init.turn_environment_update",
+                )
+                .entered();
+                turn_environments.update_selections(session_configuration.environment_selections());
+            }
+            let resolved_environments = turn_environments
+                .snapshot()
+                .instrument(info_span!(
+                    "session_init.turn_environment_snapshot",
+                    otel.name = "session_init.turn_environment_snapshot",
+                ))
+                .await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             agents_md_manager
                 .refresh(config.as_ref(), &resolved_environments)
+                .instrument(info_span!(
+                    "session_init.agents_md_refresh",
+                    otel.name = "session_init.agents_md_refresh",
+                ))
                 .await;
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
