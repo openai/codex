@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -39,54 +40,57 @@ pub(crate) fn sanitize_repository_environment(command: &mut Command) {
     }
 }
 
-/// Runs transport commands from a clean, minimal repository so Git cannot
-/// discover repository-local configuration from the directory where Codex was
-/// launched. User-level Git configuration remains available.
+/// Runs initial transport commands from a nested non-repository directory so
+/// Git cannot discover repository-local configuration from the directory where
+/// Codex was launched. User-level Git configuration remains available without
+/// manufacturing branch or repository identity for conditional includes.
 pub(crate) struct NeutralGitCwd {
-    directory: TempDir,
+    boundary: TempDir,
+    cwd: PathBuf,
 }
 
 impl NeutralGitCwd {
     pub(crate) fn new() -> std::io::Result<Self> {
-        let directory = tempfile::tempdir()?;
-        initialize_empty_repository(directory.path())?;
-        Ok(Self { directory })
+        Self::from_boundary(tempfile::tempdir()?)
     }
 
-    #[cfg(all(test, unix))]
-    fn from_prebuilt_directory(directory: TempDir) -> Self {
-        Self { directory }
+    fn from_boundary(boundary: TempDir) -> std::io::Result<Self> {
+        // Git accepts only absolute ceiling entries and parses the environment
+        // value as a platform-specific path list. Reject a boundary that would
+        // split into multiple entries and allow discovery to continue past it.
+        {
+            let path = boundary.path();
+            let mut entries = std::env::split_paths(path.as_os_str());
+            if !path.is_absolute()
+                || entries.next().as_deref() != Some(path)
+                || entries.next().is_some()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "neutral Git boundary cannot be represented as one GIT_CEILING_DIRECTORIES entry: {}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        let cwd = boundary.path().join("cwd");
+        std::fs::create_dir(&cwd)?;
+        Ok(Self { boundary, cwd })
     }
 
     pub(crate) fn configure_transport_command(&self, command: &mut Command) {
         sanitize_repository_environment(command);
         command
-            .current_dir(self.directory.path())
-            .env("GIT_CEILING_DIRECTORIES", self.directory.path());
+            .current_dir(&self.cwd)
+            .env("GIT_CEILING_DIRECTORIES", self.boundary.path());
     }
-}
-
-fn initialize_empty_repository(root: &std::path::Path) -> std::io::Result<()> {
-    // Build the discovery boundary without invoking Git. Running `git init`
-    // before this repository exists could rediscover and honor a hostile
-    // parent repository, which is exactly the behavior this type prevents.
-    let git_dir = root.join(".git");
-    std::fs::create_dir(&git_dir)?;
-    std::fs::create_dir(git_dir.join("objects"))?;
-    std::fs::create_dir_all(git_dir.join("refs/heads"))?;
-    std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n")?;
-    std::fs::write(
-        git_dir.join("config"),
-        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::NeutralGitCwd;
     use super::REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES;
-    #[cfg(unix)]
-    use super::initialize_empty_repository;
     use pretty_assertions::assert_eq;
     use std::ffi::OsStr;
     #[cfg(unix)]
@@ -108,17 +112,15 @@ mod tests {
         }
         neutral_cwd.configure_transport_command(&mut command);
 
-        assert_eq!(
-            command.get_current_dir(),
-            Some(neutral_cwd.directory.path())
-        );
+        assert_eq!(command.get_current_dir(), Some(neutral_cwd.cwd.as_path()));
         assert_eq!(
             command
                 .get_envs()
                 .find(|(key, _)| *key == OsStr::new("GIT_CEILING_DIRECTORIES"))
                 .and_then(|(_, value)| value),
-            Some(neutral_cwd.directory.path().as_os_str())
+            Some(neutral_cwd.boundary.path().as_os_str())
         );
+        assert_eq!(neutral_cwd.cwd.parent(), Some(neutral_cwd.boundary.path()));
         for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES
             .iter()
             .filter(|name| **name != "GIT_CEILING_DIRECTORIES")
@@ -132,6 +134,49 @@ mod tests {
                 "{name} should be removed"
             );
         }
+    }
+
+    #[test]
+    fn rejects_boundary_with_path_list_separator() {
+        let root = tempfile::tempdir().expect("create test root");
+        #[cfg(windows)]
+        let prefix = "neutral;";
+        #[cfg(not(windows))]
+        let prefix = "neutral:";
+        let boundary = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(root.path())
+            .expect("create delimiter-bearing boundary");
+        let boundary_path = boundary.path().to_path_buf();
+
+        let err = match NeutralGitCwd::from_boundary(boundary) {
+            Ok(neutral_cwd) => {
+                drop(neutral_cwd);
+                panic!("delimiter-bearing boundary should be rejected");
+            }
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !boundary_path.exists(),
+            "rejected temporary boundary should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn neutral_directory_has_no_repository_identity() {
+        let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+        let mut command = Command::new("git");
+        neutral_cwd.configure_transport_command(&mut command);
+
+        let output = command
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .expect("inspect neutral Git working directory");
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
     }
 
     #[test]
@@ -171,12 +216,12 @@ mod tests {
         let root = tempfile::tempdir().expect("create test root");
         let fixture = create_transport_fixture(root.path());
 
-        let directory = tempfile::Builder::new()
+        let boundary = tempfile::Builder::new()
             .prefix("neutral-")
             .tempdir_in(&fixture.hostile_repo)
-            .expect("create nested neutral directory");
-        initialize_empty_repository(directory.path()).expect("initialize neutral repository");
-        let neutral_cwd = NeutralGitCwd::from_prebuilt_directory(directory);
+            .expect("create nested neutral boundary");
+        let neutral_cwd =
+            NeutralGitCwd::from_boundary(boundary).expect("create nested neutral directory");
         let empty_config = root.path().join("empty.gitconfig");
         fs::write(&empty_config, "").expect("write empty Git config");
 
@@ -219,6 +264,55 @@ mod tests {
         assert!(
             !fixture.marker.exists(),
             "repository-selected transport helper must not run"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_delimited_boundary_before_hostile_parent_transport_can_run() {
+        let root = tempfile::tempdir().expect("create test root");
+        let fixture = create_transport_fixture(root.path());
+        let boundary = tempfile::Builder::new()
+            .prefix("neutral:")
+            .tempdir_in(&fixture.hostile_repo)
+            .expect("create delimiter-bearing nested boundary");
+        let boundary_path = boundary.path().to_path_buf();
+
+        let err = match NeutralGitCwd::from_boundary(boundary) {
+            Ok(neutral_cwd) => {
+                let empty_config = root.path().join("empty.gitconfig");
+                fs::write(&empty_config, "").expect("write empty Git config");
+                let mut command = Command::new("git");
+                command
+                    .env("GIT_CONFIG_GLOBAL", &empty_config)
+                    .env("GIT_CONFIG_SYSTEM", &empty_config);
+                neutral_cwd.configure_transport_command(&mut command);
+                let _ = command
+                    .args([
+                        "ls-remote",
+                        fixture.source.to_string_lossy().as_ref(),
+                        "HEAD",
+                    ])
+                    .output()
+                    .expect("run git ls-remote");
+                assert!(
+                    !fixture.marker.exists(),
+                    "delimiter-bearing ceiling must not expose parent transport config"
+                );
+                drop(neutral_cwd);
+                panic!("delimiter-bearing boundary should be rejected");
+            }
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !boundary_path.exists(),
+            "rejected temporary boundary should be cleaned up"
+        );
+        assert!(
+            !fixture.marker.exists(),
+            "rejected boundary must not execute parent transport config"
         );
     }
 
@@ -289,6 +383,129 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!output.stdout.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn neutral_directory_does_not_activate_repository_conditional_global_config() {
+        let root = tempfile::tempdir().expect("create test root");
+        let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+
+        let onbranch_config = root.path().join("onbranch.gitconfig");
+        fs::write(&onbranch_config, "[test]\n\tonbranch = active\n")
+            .expect("write onbranch conditional config");
+        let gitdir_config = root.path().join("gitdir.gitconfig");
+        fs::write(&gitdir_config, "[test]\n\tgitdir = active\n")
+            .expect("write gitdir conditional config");
+        let global_config = root.path().join("global.gitconfig");
+        fs::write(
+            &global_config,
+            format!(
+                "[includeIf \"onbranch:main\"]\n\tpath = {}\n[includeIf \"gitdir:/**\"]\n\tpath = {}\n",
+                onbranch_config.display(),
+                gitdir_config.display()
+            ),
+        )
+        .expect("write conditional global Git config");
+        let system_config = root.path().join("system.gitconfig");
+        fs::write(&system_config, "").expect("write empty system Git config");
+
+        let mut command = Command::new("git");
+        command
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config);
+        neutral_cwd.configure_transport_command(&mut command);
+        let output = command
+            .args(["config", "--get-regexp", "^test\\."])
+            .output()
+            .expect("inspect repository-conditional Git config");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_destination_repository_conditionals_still_apply() {
+        let root = tempfile::tempdir().expect("create test root");
+        let source = root.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        run_git(&source, &["init"]);
+        run_git(&source, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git(&source, &["config", "user.email", "codex-test@example.com"]);
+        run_git(&source, &["config", "user.name", "Codex Test"]);
+        fs::write(source.join("README.md"), "safe source\n").expect("write source file");
+        run_git(&source, &["add", "README.md"]);
+        run_git(&source, &["commit", "-m", "initial"]);
+
+        let neutral_cwd = NeutralGitCwd::new().expect("create neutral Git working directory");
+        let destination = root.path().join("destination");
+        let mut clone = Command::new("git");
+        neutral_cwd.configure_transport_command(&mut clone);
+        let clone_output = clone
+            .args(["clone"])
+            .arg(&source)
+            .arg(&destination)
+            .output()
+            .expect("clone source repository");
+        assert!(
+            clone_output.status.success(),
+            "clone source repository: {}",
+            String::from_utf8_lossy(&clone_output.stderr)
+        );
+
+        let onbranch_config = root.path().join("real-onbranch.gitconfig");
+        fs::write(&onbranch_config, "[test]\n\tonbranch = active\n")
+            .expect("write real onbranch config");
+        let gitdir_config = root.path().join("real-gitdir.gitconfig");
+        fs::write(&gitdir_config, "[test]\n\tgitdir = active\n").expect("write real gitdir config");
+        let hasconfig_config = root.path().join("real-hasconfig.gitconfig");
+        fs::write(&hasconfig_config, "[test]\n\thasconfig = active\n")
+            .expect("write real hasconfig config");
+        let destination_git_dir =
+            fs::canonicalize(destination.join(".git")).expect("canonicalize destination Git dir");
+        let global_config = root.path().join("real-global.gitconfig");
+        fs::write(
+            &global_config,
+            format!(
+                "[includeIf \"onbranch:main\"]\n\tpath = {}\n[includeIf \"gitdir:{}\"]\n\tpath = {}\n[includeIf \"hasconfig:remote.*.url:{}\"]\n\tpath = {}\n",
+                onbranch_config.display(),
+                destination_git_dir.display(),
+                gitdir_config.display(),
+                source.display(),
+                hasconfig_config.display()
+            ),
+        )
+        .expect("write real destination conditional config");
+        let system_config = root.path().join("real-system.gitconfig");
+        fs::write(&system_config, "").expect("write empty system Git config");
+
+        for use_dash_c in [false, true] {
+            let mut command = Command::new("git");
+            command
+                .env("GIT_CONFIG_GLOBAL", &global_config)
+                .env("GIT_CONFIG_SYSTEM", &system_config);
+            neutral_cwd.configure_transport_command(&mut command);
+            if use_dash_c {
+                command.arg("-C").arg(&destination);
+            } else {
+                command.current_dir(&destination);
+            }
+            let output = command
+                .args(["config", "--get-regexp", "^test\\."])
+                .output()
+                .expect("inspect real destination conditional config");
+
+            assert!(
+                output.status.success(),
+                "read real destination conditionals: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "test.onbranch active\ntest.gitdir active\ntest.hasconfig active\n"
+            );
+        }
     }
 
     #[cfg(unix)]
