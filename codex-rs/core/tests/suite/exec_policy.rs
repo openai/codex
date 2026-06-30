@@ -149,7 +149,7 @@ async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Re
         "run repository-sensitive git status",
         AskForApproval::UnlessTrusted,
         PermissionProfile::Disabled,
-        None,
+        /*collaboration_mode*/ None,
     )
     .await?;
 
