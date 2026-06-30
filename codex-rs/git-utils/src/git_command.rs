@@ -4,6 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
+
 use crate::GitReadError;
 use crate::git_config::path_is_within;
 use crate::safe_git::isolate_git_command_environment;
@@ -54,6 +56,7 @@ impl GitRunner {
         index_file: &Path,
     ) -> io::Result<std::process::Output> {
         isolate_git_command_environment(&mut command);
+        let index_file = index_file_for_git_env(index_file)?;
         command.env("GIT_INDEX_FILE", index_file);
         command.envs(crate::local_only_git_env());
         command.output()
@@ -123,6 +126,10 @@ impl GitRunner {
     pub(crate) fn from_executable_for_test(executable: PathBuf) -> Self {
         Self { executable }
     }
+}
+
+fn index_file_for_git_env(index_file: &Path) -> io::Result<PathBuf> {
+    AbsolutePathBuf::from_absolute_path_checked(index_file).map(AbsolutePathBuf::into_path_buf)
 }
 
 fn untrusted_roots_for_cwd(cwd: &Path) -> Result<Vec<PathBuf>, GitReadError> {

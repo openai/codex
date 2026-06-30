@@ -93,7 +93,9 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
     assert_eq!(result.exit_code, 0, "three-way apply: {}", result.stderr);
     assert!(result.cmd_for_log.contains("--3way"));
     assert_eq!(
-        std::fs::read_to_string(root.join("file.txt")).expect("read merged file"),
+        std::fs::read_to_string(root.join("file.txt"))
+            .expect("read merged file")
+            .replace("\r\n", "\n"),
         "current\nbase\npatched\n"
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);

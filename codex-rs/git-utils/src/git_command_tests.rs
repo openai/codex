@@ -1,6 +1,28 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn index_file_env_path_requires_an_absolute_path() {
+    let error = index_file_for_git_env(Path::new("relative-scratch-index"))
+        .expect_err("relative internal index path must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[cfg(windows)]
+#[test]
+fn index_file_env_path_strips_supported_windows_verbatim_prefixes() {
+    assert_eq!(
+        index_file_for_git_env(Path::new(r"\\?\C:\repo\.git\scratch-index"))
+            .expect("verbatim drive path"),
+        PathBuf::from(r"C:\repo\.git\scratch-index")
+    );
+    assert_eq!(
+        index_file_for_git_env(Path::new(r"\\?\UNC\server\share\repo\.git\scratch-index"))
+            .expect("verbatim UNC path"),
+        PathBuf::from(r"\\server\share\repo\.git\scratch-index")
+    );
+}
+
 #[cfg(unix)]
 fn write_executable(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
