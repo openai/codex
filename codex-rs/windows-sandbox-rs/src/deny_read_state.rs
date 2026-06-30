@@ -69,8 +69,13 @@ pub unsafe fn sync_persistent_deny_read_acls(
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse deny-read ACL state {}", path.display())),
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                quarantine_corrupt_state_file(path);
+                Ok(PersistentDenyReadAclState::default())
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             Ok(PersistentDenyReadAclState::default())
         }
@@ -84,4 +89,56 @@ fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state).context("serialize deny-read ACL state")?;
     std::fs::write(path, bytes)
         .with_context(|| format!("write deny-read ACL state {}", path.display()))
+}
+
+fn quarantine_corrupt_state_file(path: &Path) {
+    let corrupt_path = path.with_extension("json.corrupt");
+    let _ = std::fs::remove_file(&corrupt_path);
+    let _ = std::fs::rename(path, &corrupt_path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistentDenyReadAclState;
+    use super::load_state;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_state_recovers_from_corrupt_json() {
+        let tmp = TempDir::new().expect("tempdir");
+        let state_path = tmp.path().join("deny_read_acl_state.json");
+        fs::write(&state_path, [0_u8, 0, 0, 0]).expect("write corrupt state");
+
+        let state = load_state(&state_path).expect("load state");
+
+        assert!(state.principals.is_empty());
+        assert!(!state_path.exists());
+        assert!(state_path.with_extension("json.corrupt").exists());
+    }
+
+    #[test]
+    fn load_state_reads_valid_json() {
+        let tmp = TempDir::new().expect("tempdir");
+        let state_path = tmp.path().join("deny_read_acl_state.json");
+        fs::write(
+            &state_path,
+            "{\"principals\":{\"S-1-1-0\":[\"C:\\\\repo\"]}}",
+        )
+        .expect("write valid state");
+
+        let state = load_state(&state_path).expect("load state");
+
+        assert_eq!(
+            state.principals,
+            PersistentDenyReadAclState {
+                principals: [("S-1-1-0".to_string(), vec!["C:\\repo".into()])]
+                    .into_iter()
+                    .collect(),
+            }
+            .principals
+        );
+        assert!(state_path.exists());
+        assert!(!state_path.with_extension("json.corrupt").exists());
+    }
 }
