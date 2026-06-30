@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_exec_server_protocol::JSONRPCMessage;
 use futures::Sink;
@@ -15,6 +16,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -32,6 +34,7 @@ use crate::noise_channel::PendingResponderHandshake;
 use crate::noise_channel::noise_channel_prologue;
 use crate::noise_relay::NOISE_RELAY_RESET_REASON;
 use crate::noise_relay::executor_stream::ClosedNoiseVirtualStream;
+use crate::noise_relay::executor_stream::NoisePhysicalFrame;
 use crate::noise_relay::executor_stream::NoiseVirtualStream;
 use crate::noise_relay::executor_stream::spawn_noise_virtual_stream;
 use crate::relay_proto::RelayData;
@@ -483,7 +486,7 @@ where
     );
     let (mut websocket_sink, mut websocket_stream) = stream.split();
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
-        mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
+        mpsc::channel::<NoisePhysicalFrame>(CHANNEL_CAPACITY);
     let (closed_stream_tx, mut closed_stream_rx) =
         mpsc::channel::<ClosedNoiseVirtualStream>(MAX_ACTIVE_NOISE_RELAY_STREAMS);
     let (pong_tx, mut pong_rx) = mpsc::channel(1);
@@ -498,7 +501,7 @@ where
         let pong_deadline = tokio::time::sleep(WEBSOCKET_PONG_TIMEOUT);
         tokio::pin!(pong_deadline);
         loop {
-            let message = tokio::select! {
+            let (message, queued_frame) = tokio::select! {
                 pong = pong_rx.recv() => {
                     let Some(()) = pong else {
                         break RendezvousDisconnectReason::LocalShutdown;
@@ -521,18 +524,35 @@ where
                     }
                 }
                 _ = keepalive.tick(), if pong_watchdog.deadline().is_none() => {
-                    Message::Ping(Vec::new().into())
+                    (Message::Ping(Vec::new().into()), None)
                 }
-                encoded = physical_outgoing_rx.recv() => {
-                    let Some(encoded) = encoded else {
+                frame = physical_outgoing_rx.recv() => {
+                    let Some(frame) = frame else {
                         break RendezvousDisconnectReason::LocalShutdown;
                     };
-                    Message::Binary(encoded.into())
+                    let bytes = frame.encoded.len();
+                    let message = Message::Binary(frame.encoded.into());
+                    (message, Some((frame.queued_at, frame.trace, bytes)))
                 }
             };
             let is_keepalive_ping = matches!(message, Message::Ping(_));
             let write_deadline = pong_watchdog.write_deadline(tokio::time::Instant::now());
-            match tokio::time::timeout_at(write_deadline, websocket_sink.send(message)).await {
+            let send_result = if let Some((queued_at, Some(trace), bytes)) = queued_frame {
+                let span = tracing::info_span!(
+                    "exec_server.noise.executor_physical_send",
+                    bytes,
+                    queue_wait_ms = queued_at.elapsed().as_secs_f64() * 1_000.0,
+                );
+                let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace.as_ref());
+                tokio::time::timeout_at(
+                    write_deadline,
+                    websocket_sink.send(message).instrument(span),
+                )
+                .await
+            } else {
+                tokio::time::timeout_at(write_deadline, websocket_sink.send(message)).await
+            };
+            match send_result {
                 Ok(Ok(())) => {
                     if is_keepalive_ping {
                         pong_watchdog.ping_sent(tokio::time::Instant::now());
@@ -561,7 +581,7 @@ where
 
     loop {
         // Registry calls run separately so a slow check does not block the relay.
-        let frame = tokio::select! {
+        let (frame, physical_received_at) = tokio::select! {
             writer_result = &mut physical_writer_task => {
                 match writer_result {
                     Ok(reason) => disconnect_reason = reason,
@@ -647,7 +667,9 @@ where
                         // Do not leave a half-open stream if the handshake reply
                         // cannot be queued immediately.
                         if physical_outgoing_tx
-                            .try_send(encode_relay_message_frame(&response))
+                            .try_send(NoisePhysicalFrame::control(encode_relay_message_frame(
+                                &response,
+                            )))
                             .is_err()
                         {
                             break;
@@ -687,11 +709,14 @@ where
                 continue;
             }
             incoming_message = websocket_stream.next() => match incoming_message {
-                Some(Ok(Message::Binary(payload))) => match decode_relay_message_frame(payload.as_ref()) {
-                    Ok(frame) => frame,
-                    Err(error) => {
-                        warn!("dropping malformed Noise relay frame from harness: {error}");
-                        continue;
+                Some(Ok(Message::Binary(payload))) => {
+                    let physical_received_at = Instant::now();
+                    match decode_relay_message_frame(payload.as_ref()) {
+                        Ok(frame) => (frame, physical_received_at),
+                        Err(error) => {
+                            warn!("dropping malformed Noise relay frame from harness: {error}");
+                            continue;
+                        }
                     }
                 },
                 Some(Ok(Message::Close(_))) | None => {
@@ -856,7 +881,7 @@ where
                         continue;
                     }
                 };
-                if let Err(error) = stream.receive_data(data) {
+                if let Err(error) = stream.receive_data(data, physical_received_at) {
                     warn!("failed to process Noise relay payload: {error}");
                     streams.remove(&stream_id);
                     send_reset(&physical_outgoing_tx, stream_id);
@@ -910,9 +935,11 @@ struct HarnessKeyValidationResult {
 
 /// Queue a best-effort reset without blocking the shared websocket loop.
 /// Reset reasons are relay control data and are not treated as trusted text.
-fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
+fn send_reset(physical_outgoing_tx: &mpsc::Sender<NoisePhysicalFrame>, stream_id: String) {
     let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
-    let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
+    let _ = physical_outgoing_tx.try_send(NoisePhysicalFrame::control(encode_relay_message_frame(
+        &reset,
+    )));
 }
 
 #[cfg(test)]
