@@ -30,7 +30,16 @@ use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
-const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
+const FS_HELPER_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+];
 #[cfg(debug_assertions)]
 const FS_HELPER_BAZEL_BWRAP_ENV_ALLOWLIST: &[&str] = &[
     "CARGO_BIN_EXE_bwrap",
@@ -280,11 +289,12 @@ fn helper_env_from_vars(
 }
 
 fn helper_env_key_is_allowed(key: &str) -> bool {
-    FS_HELPER_ENV_ALLOWLIST.contains(&key)
+    FS_HELPER_ENV_ALLOWLIST
+        .iter()
+        .any(|allowed| key.eq_ignore_ascii_case(allowed))
         // CoreFoundation consults this before falling back to user lookup during helper startup.
         || (cfg!(target_os = "macos") && key == "__CF_USER_TEXT_ENCODING")
         || bazel_bwrap_env_key_is_allowed(key)
-        || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
 }
 
 #[cfg(debug_assertions)]
@@ -473,9 +483,12 @@ mod tests {
                 ("TMPDIR", "/tmp/codex"),
                 ("TMP", "/tmp"),
                 ("TEMP", "/tmp"),
+                ("HTTP_PROXY", "http://127.0.0.1:7890"),
+                ("HTTPS_PROXY", "http://127.0.0.1:7890"),
+                ("ALL_PROXY", "socks5://127.0.0.1:1080"),
+                ("NO_PROXY", "localhost,127.0.0.1,::1"),
                 ("HOME", "/home/user"),
                 ("OPENAI_API_KEY", "secret"),
-                ("HTTPS_PROXY", "http://proxy.example"),
             ]
             .map(|(key, value)| (OsString::from(key), OsString::from(value))),
         );
@@ -487,6 +500,10 @@ mod tests {
                 ("TMPDIR".to_string(), "/tmp/codex".to_string()),
                 ("TMP".to_string(), "/tmp".to_string()),
                 ("TEMP".to_string(), "/tmp".to_string()),
+                ("HTTP_PROXY".to_string(), "http://127.0.0.1:7890".to_string()),
+                ("HTTPS_PROXY".to_string(), "http://127.0.0.1:7890".to_string()),
+                ("ALL_PROXY".to_string(), "socks5://127.0.0.1:1080".to_string()),
+                ("NO_PROXY".to_string(), "localhost,127.0.0.1,::1".to_string()),
             ])
         );
     }
@@ -517,6 +534,7 @@ mod tests {
         let env = helper_env_from_vars(
             [
                 ("Path", r"C:\Windows\System32"),
+                ("https_proxy", "http://127.0.0.1:7890"),
                 ("PATH_INJECTION", "bad"),
                 ("OPENAI_API_KEY", "secret"),
             ]
@@ -525,7 +543,10 @@ mod tests {
 
         assert_eq!(
             env,
-            HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
+            HashMap::from([
+                ("Path".to_string(), r"C:\Windows\System32".to_string()),
+                ("https_proxy".to_string(), "http://127.0.0.1:7890".to_string()),
+            ])
         );
     }
 
