@@ -2,12 +2,13 @@
 
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::apply::run_git;
 use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
-use crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN;
-use crate::safe_git::ensure_no_executable_git_config;
+use crate::git_config::path_is_within;
+use crate::safe_git::ensure_no_executable_git_filters;
 use crate::safe_git::isolate_git_command_environment;
 
 pub(crate) fn extract_effective_paths_from_patch(
@@ -174,7 +175,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
 }
 
 pub(crate) fn stage_effective_paths(git_root: &Path, paths: &[String]) -> io::Result<()> {
-    ensure_no_executable_git_config(git_root, EXECUTABLE_FILTER_CONFIG_PATTERN, &[])?;
+    ensure_no_executable_git_filters(git_root, &[])?;
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
         let joined = git_root.join(p);
@@ -209,25 +210,27 @@ pub(crate) fn ensure_paths_do_not_enter_submodules(
         ));
     }
     let mut candidates = std::collections::BTreeSet::new();
+    let mut traversed_ancestors = std::collections::BTreeSet::new();
     for path in paths {
-        let mut components = path.split('/').filter(|component| !component.is_empty());
-        let Some(first) = components.next() else {
-            continue;
-        };
-        let mut candidate = first.to_string();
-        candidates.insert(candidate.clone());
-        for component in components {
-            candidate.push('/');
-            candidate.push_str(component);
-            candidates.insert(candidate.clone());
-        }
+        insert_path_prefixes(path, &mut candidates, /*include_leaf*/ true);
+        insert_path_prefixes(path, &mut traversed_ancestors, /*include_leaf*/ false);
     }
 
     let canonical_root = std::fs::canonicalize(git_root)?;
-    let mut canonical_candidates = Vec::new();
-    for candidate in &candidates {
+    let git_metadata_dirs = canonical_git_metadata_dirs(&canonical_root)?;
+    let mut canonical_candidates = std::collections::BTreeSet::new();
+    for candidate in &traversed_ancestors {
         match std::fs::canonicalize(git_root.join(candidate)) {
             Ok(resolved) => {
+                if git_metadata_dirs
+                    .iter()
+                    .any(|metadata_dir| path_is_within(&resolved, metadata_dir))
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "patch path alias resolves into Git repository metadata",
+                    ));
+                }
                 let relative = resolved.strip_prefix(&canonical_root).map_err(|_| {
                     io::Error::new(
                         io::ErrorKind::PermissionDenied,
@@ -246,7 +249,11 @@ pub(crate) fn ensure_paths_do_not_enter_submodules(
                         "patch path alias resolves to the Git worktree root",
                     ));
                 }
-                canonical_candidates.push(relative.replace(std::path::MAIN_SEPARATOR, "/"));
+                insert_path_prefixes(
+                    &relative.replace(std::path::MAIN_SEPARATOR, "/"),
+                    &mut canonical_candidates,
+                    /*include_leaf*/ true,
+                );
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -284,6 +291,60 @@ pub(crate) fn ensure_paths_do_not_enter_submodules(
         ));
     }
     Ok(())
+}
+
+fn canonical_git_metadata_dirs(git_root: &Path) -> io::Result<Vec<PathBuf>> {
+    let config_parts = safe_git_config_parts();
+    let queries = [
+        vec!["rev-parse".to_string(), "--absolute-git-dir".to_string()],
+        vec!["rev-parse".to_string(), "--git-common-dir".to_string()],
+    ];
+    let mut metadata_dirs = std::collections::BTreeSet::new();
+    for args in queries {
+        let (code, stdout, stderr) = run_git(git_root, &config_parts, &args)?;
+        if code != 0 {
+            return Err(io::Error::other(format!(
+                "failed to resolve Git repository metadata (exit {code}): {}",
+                stderr.trim()
+            )));
+        }
+        let path = stdout.trim_end_matches(['\r', '\n']);
+        if path.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Git returned an empty repository metadata path",
+            ));
+        }
+        let path = PathBuf::from(path);
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            git_root.join(path)
+        };
+        metadata_dirs.insert(std::fs::canonicalize(absolute)?);
+    }
+    Ok(metadata_dirs.into_iter().collect())
+}
+
+fn insert_path_prefixes(
+    path: &str,
+    prefixes: &mut std::collections::BTreeSet<String>,
+    include_leaf: bool,
+) {
+    let components = path
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    let mut prefix = String::new();
+    for (index, component) in components.iter().enumerate() {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(component);
+        if include_leaf || index + 1 < components.len() {
+            prefixes.insert(prefix.clone());
+        }
+    }
 }
 
 #[cfg(test)]

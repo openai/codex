@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -5,14 +6,15 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+use crate::git_config::GitConfigEntry;
+use crate::git_config::parse_effective_config;
+
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
-pub(crate) const EXECUTABLE_PATCH_CONFIG_PATTERN: &str =
-    r"^(filter\..*\.(clean|smudge|process)|merge\..*\.driver)$";
 /// Timeout for internal Git commands to prevent freezing on large repositories.
 pub(crate) const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
-const ISOLATED_GIT_ENVIRONMENT: [&str; 9] = [
+const ISOLATED_GIT_ENVIRONMENT: [&str; 10] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -22,6 +24,7 @@ const ISOLATED_GIT_ENVIRONMENT: [&str; 9] = [
     "GIT_GLOB_PATHSPECS",
     "GIT_NOGLOB_PATHSPECS",
     "GIT_ICASE_PATHSPECS",
+    "GIT_EXEC_PATH",
 ];
 
 /// Keep internal worktree operations bound to their explicit cwd and pathspec
@@ -48,6 +51,7 @@ pub(crate) async fn has_configured_executable_filters_from(git: &Path, cwd: &Pat
             "config",
             "--null",
             "--show-scope",
+            "--show-origin",
             "--includes",
             "--get-regexp",
             EXECUTABLE_FILTER_CONFIG_PATTERN,
@@ -66,14 +70,12 @@ pub(crate) async fn has_configured_executable_filters_from(git: &Path, cwd: &Pat
         return None;
     }
 
-    Some(config_output_has_untrusted_executable_helpers(
-        &output.stdout,
-    ))
+    let entries = parse_effective_config(&output.stdout).ok()?;
+    Some(config_entries_have_untrusted_filters(&entries))
 }
 
-pub(crate) fn ensure_no_executable_git_config(
+pub(crate) fn ensure_no_executable_git_filters(
     cwd: &Path,
-    pattern: &str,
     git_config_args: &[String],
 ) -> io::Result<()> {
     let mut command = Command::new("git");
@@ -85,9 +87,10 @@ pub(crate) fn ensure_no_executable_git_config(
             "config",
             "--null",
             "--show-scope",
+            "--show-origin",
             "--includes",
             "--get-regexp",
-            pattern,
+            EXECUTABLE_FILTER_CONFIG_PATTERN,
         ])
         .current_dir(cwd)
         .output()?;
@@ -102,42 +105,18 @@ pub(crate) fn ensure_no_executable_git_config(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    if config_output_has_untrusted_executable_helpers(&output.stdout) {
+    let entries = parse_effective_config(&output.stdout)?;
+    if config_entries_have_untrusted_filters(&entries) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "refusing to run an internal Git worktree operation with executable Git helpers configured",
+            "refusing to run an internal Git worktree operation with an executable Git filter configured",
         ));
     }
     Ok(())
 }
 
-pub(crate) fn config_output_has_untrusted_executable_helpers(stdout: &[u8]) -> bool {
-    let mut fields = stdout.split(|byte| *byte == 0);
-    loop {
-        let Some(scope) = fields.next() else {
-            return false;
-        };
-        if scope.is_empty() {
-            return fields.any(|field| !field.is_empty());
-        }
-        let Some(entry) = fields.next() else {
-            return true;
-        };
-        let Some(value_separator) = entry.iter().position(|byte| *byte == b'\n') else {
-            return true;
-        };
-        let key = &entry[..value_separator];
-        let value = &entry[value_separator + 1..];
-        let trusted_scope = scope == b"system" || scope == b"global";
-        // Repositories choose merge drivers through `.gitattributes`, so even
-        // a globally configured driver is repository-triggerable. Filters at
-        // system/global scope remain trusted to preserve normal Git LFS and
-        // user normalization behavior.
-        let merge_driver = key.starts_with(b"merge.") && key.ends_with(b".driver");
-        if !value.is_empty() && (merge_driver || !trusted_scope) {
-            return true;
-        }
-    }
+fn config_entries_have_untrusted_filters(entries: &BTreeMap<String, GitConfigEntry>) -> bool {
+    entries.values().any(|entry| !entry.value.is_empty())
 }
 
 #[cfg(test)]

@@ -221,6 +221,30 @@ fn effective_paths_reject_platform_ambiguous_paths() {
 }
 
 #[test]
+fn path_prefix_sets_include_leaf_only_for_index_candidates() {
+    let mut index_candidates = std::collections::BTreeSet::new();
+    insert_path_prefixes("a/b/c", &mut index_candidates, /*include_leaf*/ true);
+    assert_eq!(
+        index_candidates,
+        ["a", "a/b", "a/b/c"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    );
+
+    let mut traversed_ancestors = std::collections::BTreeSet::new();
+    insert_path_prefixes(
+        "a/b/c",
+        &mut traversed_ancestors,
+        /*include_leaf*/ false,
+    );
+    assert_eq!(
+        traversed_ancestors,
+        ["a", "a/b"].into_iter().map(str::to_string).collect()
+    );
+}
+
+#[test]
 fn stage_paths_rejects_gitlink_before_entering_submodule() {
     let _g = env_lock().lock().unwrap();
     let repo = init_repo();
@@ -279,69 +303,73 @@ fn gitlink_guard_ignores_inherited_git_selection_environment() {
     }
 }
 
+#[cfg(unix)]
 #[test]
-fn staging_preserves_trusted_config_while_clearing_pathspec_modes() {
+fn staging_rejects_global_lfs_filter_without_running_it() {
     let _g = env_lock().lock().unwrap();
     if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_some() {
         let root = PathBuf::from(
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
-        stage_effective_paths(&root, &["global.txt".to_string(), "system.txt".to_string()])
-            .expect("stage with trusted filters");
+        let error = stage_effective_paths(&root, &["file.txt".to_string()])
+            .expect_err("reject global Git LFS filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         return;
     }
 
     let repo = init_repo();
     let root = repo.path();
-    std::fs::write(
-        root.join(".gitattributes"),
-        "global.txt filter=trusted-global\nsystem.txt filter=trusted-system\n",
-    )
-    .expect("write attributes");
-    std::fs::write(root.join("global.txt"), "old global\n").expect("write global file");
-    std::fs::write(root.join("system.txt"), "old system\n").expect("write system file");
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=lfs\n").expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write file");
     let (add_code, _, add_err) = run(root, &["git", "add", "."]);
     assert_eq!(add_code, 0, "add base files: {add_err}");
     let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "base"]);
     assert_eq!(commit_code, 0, "commit base files: {commit_err}");
-    std::fs::write(root.join("global.txt"), "new global\n").expect("modify global file");
-    std::fs::write(root.join("system.txt"), "new system\n").expect("modify system file");
+    std::fs::write(root.join("file.txt"), "new\n").expect("modify file");
 
     let config_dir = tempfile::tempdir().expect("config tempdir");
     let global_config = config_dir.path().join("global.gitconfig");
     let system_config = config_dir.path().join("system.gitconfig");
+    let filter_marker = config_dir.path().join("repo-lfs-ran");
+    let repo_git_lfs = root.join("git-lfs");
+    std::fs::write(
+        &repo_git_lfs,
+        "#!/bin/sh\n: > \"$CODEX_GIT_UTILS_LFS_MARKER\"\ncat\n",
+    )
+    .expect("write repository git-lfs");
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&repo_git_lfs)
+            .expect("repository git-lfs metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&repo_git_lfs, permissions)
+            .expect("make repository git-lfs executable");
+    }
     std::fs::write(
         &global_config,
-        "[filter \"trusted-global\"]\n\tclean = git config codex.globalfilterran true && git hash-object --stdin\n\trequired = true\n",
+        "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n",
     )
     .expect("write global config");
-    std::fs::write(
-        &system_config,
-        "[filter \"trusted-system\"]\n\tclean = git config codex.systemfilterran true && git hash-object --stdin\n\trequired = true\n",
-    )
-    .expect("write system config");
+    std::fs::write(&system_config, "").expect("write system config");
     run_isolated_test(
-        "patch_paths::tests::staging_preserves_trusted_config_while_clearing_pathspec_modes",
+        "patch_paths::tests::staging_rejects_global_lfs_filter_without_running_it",
         &[
             ("CODEX_GIT_UTILS_TARGET_REPO", root.as_os_str()),
+            ("CODEX_GIT_UTILS_LFS_MARKER", filter_marker.as_os_str()),
             ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
             ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+            ("GIT_EXEC_PATH", root.as_os_str()),
             ("GIT_GLOB_PATHSPECS", OsStr::new("1")),
             ("GIT_ICASE_PATHSPECS", OsStr::new("1")),
         ],
     );
 
-    for marker in ["codex.globalfilterran", "codex.systemfilterran"] {
-        let (code, value, error) = run(root, &["git", "config", "--get", marker]);
-        assert_eq!(code, 0, "read {marker}: {error}");
-        assert_eq!(value.trim(), "true", "{marker}");
-    }
+    assert!(!filter_marker.exists(), "Git LFS filter must not run");
     let (diff_code, staged, diff_err) = run(root, &["git", "diff", "--cached", "--name-only"]);
     assert_eq!(diff_code, 0, "read staged paths: {diff_err}");
-    assert_eq!(
-        staged.lines().collect::<Vec<_>>(),
-        ["global.txt", "system.txt"]
-    );
+    assert!(staged.is_empty(), "staging changed the index: {staged}");
 }
 
 #[cfg(unix)]
@@ -357,11 +385,130 @@ fn gitlink_probe_resolves_filesystem_aliases_and_rejects_escapes() {
         .expect_err("reject alias to gitlink");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 
+    std::fs::create_dir_all(root.join("nested/subdir")).expect("nested subdirectory");
+    std::os::unix::fs::symlink("nested/subdir", root.join("deep-alias"))
+        .expect("create descendant gitlink alias");
+    let error = ensure_paths_do_not_enter_submodules(root, &["deep-alias/file.txt".to_string()])
+        .expect_err("reject alias below gitlink");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
     let outside = tempfile::tempdir().expect("outside directory");
     std::os::unix::fs::symlink(outside.path(), root.join("outside")).expect("create outside alias");
     let error = ensure_paths_do_not_enter_submodules(root, &["outside/file.txt".to_string()])
         .expect_err("reject alias outside worktree");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    let outside_leaf = outside.path().join("leaf-target");
+    std::fs::write(&outside_leaf, "outside\n").expect("outside leaf target");
+    std::os::unix::fs::symlink(&outside_leaf, root.join("leaf"))
+        .expect("create outside leaf alias");
+    ensure_paths_do_not_enter_submodules(root, &["leaf".to_string()])
+        .expect("allow replacing a leaf symlink");
+    assert_eq!(
+        std::fs::read_to_string(outside_leaf).expect("outside target"),
+        "outside\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn patch_rejects_strict_ancestor_alias_into_git_metadata() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    std::os::unix::fs::symlink(".git", root.join("metadata-alias")).expect("create metadata alias");
+    let hook = root.join(".git/hooks/codex-test");
+    let diff = "diff --git a/metadata-alias/hooks/codex-test b/metadata-alias/hooks/codex-test\nnew file mode 100755\n--- /dev/null\n+++ b/metadata-alias/hooks/codex-test\n@@ -0,0 +1,2 @@\n+#!/bin/sh\n+exit 0\n";
+
+    for preflight in [true, false] {
+        let error = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.to_string(),
+            revert: false,
+            preflight,
+        })
+        .expect_err("reject Git metadata alias");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!hook.exists(), "Git metadata was modified");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn patch_replaces_outside_pointing_leaf_symlink_without_touching_targets() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    let outside = tempfile::tempdir().expect("outside directory");
+    let old_target = outside.path().join("old-target");
+    let new_target = outside.path().join("new-target");
+    std::fs::write(&old_target, "old sentinel\n").expect("old target");
+    std::fs::write(&new_target, "new sentinel\n").expect("new target");
+
+    let leaf = root.join("leaf");
+    std::os::unix::fs::symlink(&old_target, &leaf).expect("old leaf symlink");
+    let (add_code, _, add_err) = run(root, &["git", "add", "leaf"]);
+    assert_eq!(add_code, 0, "add leaf: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "leaf"]);
+    assert_eq!(commit_code, 0, "commit leaf: {commit_err}");
+
+    std::fs::remove_file(&leaf).expect("remove old leaf");
+    std::os::unix::fs::symlink(&new_target, &leaf).expect("new leaf symlink");
+    let (diff_code, diff, diff_err) = run(root, &["git", "diff", "--full-index", "--", "leaf"]);
+    assert_eq!(diff_code, 0, "create leaf patch: {diff_err}");
+    let (restore_code, _, restore_err) = run(root, &["git", "checkout", "--", "leaf"]);
+    assert_eq!(restore_code, 0, "restore old leaf: {restore_err}");
+
+    let preflight = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: diff.clone(),
+        revert: false,
+        preflight: true,
+    })
+    .expect("preflight leaf patch");
+    assert_eq!(preflight.exit_code, 0);
+    assert_eq!(std::fs::read_link(&leaf).expect("old leaf"), old_target);
+
+    let applied = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: diff.clone(),
+        revert: false,
+        preflight: false,
+    })
+    .expect("apply leaf patch");
+    assert_eq!(applied.exit_code, 0);
+    assert_eq!(std::fs::read_link(&leaf).expect("new leaf"), new_target);
+
+    let reverse_preflight = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: diff.clone(),
+        revert: true,
+        preflight: true,
+    })
+    .expect("preflight reverse leaf patch");
+    assert_eq!(reverse_preflight.exit_code, 0);
+    assert_eq!(std::fs::read_link(&leaf).expect("new leaf"), new_target);
+
+    let reverted = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: true,
+        preflight: false,
+    })
+    .expect("reverse leaf patch");
+    assert_eq!(reverted.exit_code, 0);
+    assert_eq!(
+        std::fs::read_link(&leaf).expect("restored leaf"),
+        old_target
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("old-target")).expect("old sentinel"),
+        "old sentinel\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("new-target")).expect("new sentinel"),
+        "new sentinel\n"
+    );
 }
 
 #[test]
