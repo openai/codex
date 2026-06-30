@@ -68,6 +68,26 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\ProgramData",
 ];
 
+fn current_real_user() -> String {
+    qualify_real_user(
+        std::env::var("USERDOMAIN").ok().as_deref(),
+        std::env::var("USERNAME").ok().as_deref(),
+    )
+    .unwrap_or_else(|| "Administrators".to_string())
+}
+
+fn qualify_real_user(user_domain: Option<&str>, username: Option<&str>) -> Option<String> {
+    let username = username.map(str::trim).filter(|value| !value.is_empty())?;
+    if username.contains('\\') || username.contains('@') {
+        return Some(username.to_string());
+    }
+
+    let domain = user_domain
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != ".")?;
+    Some(format!(r"{domain}\{username}"))
+}
+
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
 }
@@ -206,7 +226,7 @@ fn run_setup_refresh_inner(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: current_real_user(),
         mode: SetupMode::Full,
         refresh_only: true,
     };
@@ -889,7 +909,7 @@ fn run_elevated_setup_inner(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: current_real_user(),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
@@ -1141,6 +1161,7 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::qualify_real_user;
     use super::verify_setup_completed;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;
@@ -1332,6 +1353,32 @@ mod tests {
             )
             .expect("unsupported profiles do not need setup refresh");
         }
+    }
+
+    #[test]
+    fn qualify_real_user_adds_domain_for_unqualified_username() {
+        assert_eq!(
+            qualify_real_user(Some("DOMAIN"), Some("User.Name")),
+            Some(r"DOMAIN\User.Name".to_string())
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_preserves_already_qualified_username() {
+        assert_eq!(
+            qualify_real_user(Some("DOMAIN"), Some(r"DOMAIN\User.Name")),
+            Some(r"DOMAIN\User.Name".to_string())
+        );
+        assert_eq!(
+            qualify_real_user(Some("DOMAIN"), Some("user@example.com")),
+            Some("user@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_requires_domain_for_bare_username() {
+        assert_eq!(qualify_real_user(None, Some("User.Name")), None);
+        assert_eq!(qualify_real_user(Some("."), Some("User.Name")), None);
     }
 
     #[test]
