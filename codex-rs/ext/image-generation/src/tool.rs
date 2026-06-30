@@ -102,6 +102,10 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
         ToolExposure::Direct
     }
 
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     /// Executes the selected image operation and returns the completed image result.
     fn handle(&self, call: ToolCall) -> codex_extension_api::ToolExecutorFuture<'_> {
         Box::pin(self.handle_call(call))
