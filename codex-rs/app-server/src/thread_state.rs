@@ -253,6 +253,7 @@ struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
     has_connections_watcher: watch::Sender<bool>,
+    connections_changed_watcher: watch::Sender<u64>,
 }
 
 impl Default for ThreadEntry {
@@ -261,17 +262,20 @@ impl Default for ThreadEntry {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
             has_connections_watcher: watch::channel(false).0,
+            connections_changed_watcher: watch::channel(0).0,
         }
     }
 }
 
 impl ThreadEntry {
-    fn update_has_connections(&self) {
+    fn update_connections(&self) {
         let _ = self.has_connections_watcher.send_if_modified(|current| {
             let prev = *current;
             *current = !self.connection_ids.is_empty();
             prev != *current
         });
+        self.connections_changed_watcher
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 }
 
@@ -331,6 +335,39 @@ impl ThreadStateManager {
                     .then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
+    }
+
+    pub(crate) async fn wait_for_attestation_capable_connection_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ConnectionId> {
+        let mut connections_changed = {
+            let mut state = self.state.lock().await;
+            if !state
+                .live_connections
+                .values()
+                .any(|capabilities| capabilities.request_attestation)
+            {
+                return None;
+            }
+            state
+                .threads
+                .entry(thread_id)
+                .or_default()
+                .connections_changed_watcher
+                .subscribe()
+        };
+        loop {
+            if let Some(connection_id) = self
+                .first_attestation_capable_connection_for_thread(thread_id)
+                .await
+            {
+                return Some(connection_id);
+            }
+            if connections_changed.changed().await.is_err() {
+                return None;
+            }
+        }
     }
 
     pub(crate) async fn wait_for_thread_subscriber(&self, thread_id: ThreadId) {
@@ -472,7 +509,7 @@ impl ThreadStateManager {
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
                 thread_entry.connection_ids.remove(&connection_id);
-                thread_entry.update_has_connections();
+                thread_entry.update_connections();
             }
         };
 
@@ -507,7 +544,7 @@ impl ThreadStateManager {
                 .insert(thread_id);
             let thread_entry = state.threads.entry(thread_id).or_default();
             thread_entry.connection_ids.insert(connection_id);
-            thread_entry.update_has_connections();
+            thread_entry.update_connections();
             thread_entry.state.clone()
         };
         {
@@ -535,7 +572,7 @@ impl ThreadStateManager {
             .insert(thread_id);
         let thread_entry = state.threads.entry(thread_id).or_default();
         thread_entry.connection_ids.insert(connection_id);
-        thread_entry.update_has_connections();
+        thread_entry.update_connections();
         true
     }
 
@@ -550,7 +587,7 @@ impl ThreadStateManager {
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
                     thread_entry.connection_ids.remove(&connection_id);
-                    thread_entry.update_has_connections();
+                    thread_entry.update_connections();
                 }
             }
             thread_ids
