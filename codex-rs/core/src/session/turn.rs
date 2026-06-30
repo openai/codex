@@ -578,7 +578,7 @@ async fn build_skills_and_plugins(
     let skills_outcome = turn_context.turn_skills.snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =
-        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
+        build_extension_turn_input_items(sess, step_context, &user_input, cancellation_token)
             .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
@@ -681,7 +681,7 @@ async fn build_skills_and_plugins(
 )]
 async fn build_extension_turn_input_items(
     sess: &Arc<Session>,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     user_input: &[UserInput],
     cancellation_token: &CancellationToken,
 ) -> Option<Vec<ResponseItem>> {
@@ -690,7 +690,7 @@ async fn build_extension_turn_input_items(
         return Some(Vec::new());
     }
 
-    let environments = turn_context
+    let environments = step_context
         .environments
         .turn_environments
         .iter()
@@ -706,6 +706,7 @@ async fn build_extension_turn_input_items(
         })
         .collect::<Vec<_>>();
 
+    let turn_context = step_context.turn.as_ref();
     let input = TurnInputContext {
         turn_id: turn_context.sub_id.to_string(),
         user_input: user_input.to_vec(),
