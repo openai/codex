@@ -257,6 +257,23 @@ async fn replayed_active_review_keeps_mcp_startup_in_background() {
 }
 
 #[tokio::test]
+async fn replayed_active_review_blocks_nested_review_during_mcp_startup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    replay_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.review.is_review_mode);
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn completed_replayed_review_does_not_hide_fresh_mcp_round() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);

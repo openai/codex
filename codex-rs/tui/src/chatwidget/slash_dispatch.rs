@@ -141,7 +141,8 @@ impl ChatWidget {
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
         let foreground_work_active = self.bottom_pane.is_foreground_task_running()
             || (cmd == SlashCommand::Review
-                && (self.input_queue.user_turn_pending_start
+                && (self.review.is_review_mode
+                    || self.input_queue.user_turn_pending_start
                     || self.has_queued_follow_up_messages()));
         let blocked_by_task = if foreground_work_active {
             !cmd.available_during_task()
