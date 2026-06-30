@@ -107,8 +107,10 @@ pub(crate) fn prepare_exec_request(
     let request = sandbox_manager
         .transform_for_direct_spawn(SandboxDirectSpawnTransformRequest {
             workspace_roots,
+            // Preserve the existing Windows sandbox proxy/firewall state instead of
+            // reconciling it from ambient launcher env like HTTP_PROXY.
             windows_sandbox_proxy_settings_mode:
-                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
             transform: SandboxTransformRequest {
                 // TODO(jif): Preserve params.arg0 for the inner command across the sandbox
                 // wrapper, or reject sandboxed requests with a custom arg0.
