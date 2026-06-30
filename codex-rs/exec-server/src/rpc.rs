@@ -345,11 +345,17 @@ impl RpcClient {
                 };
                 match event {
                     JsonRpcConnectionEvent::Message(message) => {
-                        let reader_span = rpc_reader_message_span(&message, None, None);
-                        if let Err(err) =
-                            handle_server_message(&pending_for_reader, &event_tx, message, None)
-                                .instrument(reader_span)
-                                .await
+                        let reader_span = rpc_reader_message_span(
+                            &message, /* trace */ None, /* queue_wait */ None,
+                        );
+                        if let Err(err) = handle_server_message(
+                            &pending_for_reader,
+                            &event_tx,
+                            message,
+                            /* trace */ None,
+                        )
+                        .instrument(reader_span)
+                        .await
                         {
                             let _ = err;
                             break None;
