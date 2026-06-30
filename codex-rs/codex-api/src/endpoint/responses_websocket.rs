@@ -782,7 +782,7 @@ async fn send_websocket_request(
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
-    trace!("websocket request: {request_text}");
+    trace!(request_len = request_text.len(), "websocket request");
 
     let request_start = Instant::now();
     let result = tokio::time::timeout(
