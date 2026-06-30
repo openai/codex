@@ -6,6 +6,9 @@
 //! normal `JsonRpcConnection`. Outbound JSON-RPC is framed and split into Noise
 //! records; inbound records are reordered before decryption and reassembly.
 
+use std::time::Instant;
+
+use codex_exec_server_protocol::JSONRPCMessage;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -14,7 +17,9 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
+use tracing::field;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
@@ -34,6 +39,7 @@ use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
 use crate::noise_relay::take_next_sequence;
+use crate::noise_relay::trace_context::NoiseTraceContext;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
@@ -266,42 +272,28 @@ where
         let mut next_outbound_seq = 0u32;
         let mut inbound_ciphertexts = OrderedCiphertextFrames::default();
         let mut inbound_decoder = JsonRpcMessageDecoder::default();
+        let mut trace_context = NoiseTraceContext::default();
         'relay: loop {
             tokio::select! {
                 maybe_message = outgoing_rx.recv() => {
                     let Some(message) = maybe_message else {
                         break;
                     };
-                    let framed = match frame_jsonrpc_message(&message) {
-                        Ok(framed) => framed,
-                        Err(error) => {
-                            warn!("failed to frame JSON-RPC payload for Noise relay: {error}");
-                            break;
-                        }
-                    };
-                    for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
-                        let seq = match take_next_sequence(&mut next_outbound_seq) {
-                            Ok(seq) => seq,
-                            Err(error) => {
-                                warn!("Noise relay sequence exhausted: {error}");
-                                break 'relay;
-                            }
-                        };
-                        let ciphertext = match transport.encrypt(plaintext_record) {
-                            Ok(ciphertext) => ciphertext,
-                            Err(error) => {
-                                warn!("failed to encrypt JSON-RPC payload for Noise relay: {error}");
-                                break 'relay;
-                            }
-                        };
-                        let frame = RelayMessageFrame::data(stream_id.clone(), seq, ciphertext);
-                        if let Err(error) = websocket
-                            .send(Message::Binary(encode_relay_message_frame(&frame).into()))
-                            .await
-                        {
-                            warn!("failed to write Noise relay websocket: {error}");
-                            break 'relay;
-                        }
+                    trace_context.observe_request(&message);
+                    record_outbound_message_dequeued(&message);
+                    let outbound_span = outbound_message_span(&message);
+                    if let Err(error) = send_outbound_message(
+                        &mut websocket,
+                        &mut transport,
+                        &stream_id,
+                        &mut next_outbound_seq,
+                        &message,
+                    )
+                    .instrument(outbound_span)
+                    .await
+                    {
+                        warn!("failed to send JSON-RPC payload over Noise relay: {error}");
+                        break 'relay;
                     }
                 }
                 incoming_message = websocket.next() => {
@@ -310,6 +302,7 @@ where
                     };
                     match incoming_message {
                         Ok(Message::Binary(payload)) => {
+                            let frame_received_at = Instant::now();
                             let frame = match decode_relay_message_frame(payload.as_ref()) {
                                 Ok(frame) => frame,
                                 Err(error) => {
@@ -335,6 +328,8 @@ where
                                         &mut inbound_decoder,
                                         data,
                                         &incoming_tx,
+                                        &mut trace_context,
+                                        frame_received_at,
                                     )
                                     .await
                                     {
@@ -398,6 +393,107 @@ where
     }
 }
 
+fn record_outbound_message_dequeued(message: &JSONRPCMessage) {
+    let (message_kind, method, trace) = match message {
+        JSONRPCMessage::Request(request) => {
+            ("request", request.method.as_str(), request.trace.as_ref())
+        }
+        JSONRPCMessage::Notification(notification) => {
+            ("notification", notification.method.as_str(), None)
+        }
+        JSONRPCMessage::Response(_) => ("response", "", None),
+        JSONRPCMessage::Error(_) => ("error", "", None),
+    };
+    let span = tracing::info_span!(
+        "exec_server.noise.harness_outbound_dequeued",
+        message_kind,
+        method,
+    );
+    if let Some(trace) = trace {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+    }
+    span.in_scope(|| {});
+}
+
+fn outbound_message_span(message: &JSONRPCMessage) -> Span {
+    let (message_kind, method, trace) = match message {
+        JSONRPCMessage::Request(request) => {
+            ("request", request.method.as_str(), request.trace.as_ref())
+        }
+        JSONRPCMessage::Notification(notification) => {
+            ("notification", notification.method.as_str(), None)
+        }
+        JSONRPCMessage::Response(_) => ("response", "", None),
+        JSONRPCMessage::Error(_) => ("error", "", None),
+    };
+    let span = tracing::info_span!(
+        "exec_server.noise.harness_outbound",
+        message_kind,
+        method,
+        framed_bytes = field::Empty,
+        records = field::Empty,
+        frame_complete_ms = field::Empty,
+        encrypt_complete_ms = field::Empty,
+        send_complete_ms = field::Empty,
+    );
+    if let Some(trace) = trace {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+    }
+    span
+}
+
+async fn send_outbound_message<T, E>(
+    websocket: &mut T,
+    transport: &mut NoiseTransport,
+    stream_id: &str,
+    next_outbound_seq: &mut u32,
+    message: &JSONRPCMessage,
+) -> Result<(), ExecServerError>
+where
+    T: Sink<Message, Error = E> + Unpin,
+    E: std::fmt::Display,
+{
+    let started_at = Instant::now();
+    let framed = tracing::info_span!("exec_server.noise.frame_request")
+        .in_scope(|| frame_jsonrpc_message(message))?;
+    let record_count = framed.len().div_ceil(NOISE_RECORD_PLAINTEXT_LEN);
+    let span = Span::current();
+    span.record("framed_bytes", framed.len());
+    span.record("records", record_count);
+    span.record(
+        "frame_complete_ms",
+        started_at.elapsed().as_secs_f64() * 1_000.0,
+    );
+
+    for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
+        let seq = take_next_sequence(next_outbound_seq)?;
+        let ciphertext = tracing::info_span!("exec_server.noise.encrypt_record")
+            .in_scope(|| transport.encrypt(plaintext_record))
+            .map_err(|error| {
+                ExecServerError::Protocol(format!(
+                    "failed to encrypt JSON-RPC payload for Noise relay: {error}"
+                ))
+            })?;
+        span.record(
+            "encrypt_complete_ms",
+            started_at.elapsed().as_secs_f64() * 1_000.0,
+        );
+        let frame = RelayMessageFrame::data(stream_id.to_string(), seq, ciphertext);
+        websocket
+            .send(Message::Binary(encode_relay_message_frame(&frame).into()))
+            .instrument(tracing::info_span!("exec_server.noise.websocket_send", seq,))
+            .await
+            .map_err(|error| {
+                ExecServerError::Protocol(format!("failed to write Noise relay websocket: {error}"))
+            })?;
+    }
+    span.record(
+        "send_complete_ms",
+        started_at.elapsed().as_secs_f64() * 1_000.0,
+    );
+    Ok(())
+}
+
 /// Order and decrypt one relay frame, then emit any complete JSON-RPC messages.
 /// Relay records and JSON-RPC messages do not share boundaries, so reassembly
 /// happens after decryption.
@@ -407,25 +503,109 @@ async fn receive_data(
     decoder: &mut JsonRpcMessageDecoder,
     data: RelayData,
     incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,
+    trace_context: &mut NoiseTraceContext,
+    frame_received_at: Instant,
 ) -> Result<(), ExecServerError> {
+    let frame_decode_elapsed = frame_received_at.elapsed();
+    let ciphertext_bytes = data.payload.len();
     // Ordering must happen before decryption because Noise transport nonces are
     // implicit. A future or duplicate ciphertext passed directly to Clatter
     // would desynchronize the channel.
-    for ciphertext in inbound_ciphertexts.push(data.seq, data.payload)? {
+    let reorder_started_at = Instant::now();
+    let ciphertexts = inbound_ciphertexts.push(data.seq, data.payload)?;
+    let reorder_elapsed = reorder_started_at.elapsed();
+    for ciphertext in ciphertexts {
+        let decrypt_started_at = Instant::now();
         let plaintext = transport.decrypt(&ciphertext).map_err(|error| {
             ExecServerError::Protocol(format!("Noise relay decryption failed: {error}"))
         })?;
+        let decrypt_elapsed = decrypt_started_at.elapsed();
 
         // The authenticated byte stream can carry partial or multiple JSON-RPC
         // messages; emit only complete, successfully parsed messages.
-        for message in decoder.push(&plaintext)? {
-            incoming_tx
-                .send(JsonRpcConnectionEvent::Message(message))
-                .await
-                .map_err(|_| ExecServerError::Closed)?;
+        let decode_started_at = Instant::now();
+        let messages = decoder.push(&plaintext)?;
+        let decode_elapsed = decode_started_at.elapsed();
+        for message in messages {
+            let trace = trace_context.return_trace(&message);
+            let inbound_span = inbound_message_span(
+                &message,
+                trace.as_ref(),
+                ciphertext_bytes,
+                frame_decode_elapsed,
+                reorder_elapsed,
+                decrypt_elapsed,
+                decode_elapsed,
+            );
+            let delivery_started_at = Instant::now();
+            let send_result = async {
+                match incoming_tx
+                    .reserve()
+                    .instrument(tracing::info_span!(
+                        "exec_server.noise.harness_inbound_delivery"
+                    ))
+                    .await
+                {
+                    Ok(permit) => {
+                        permit.send(JsonRpcConnectionEvent::TracedMessage {
+                            message,
+                            trace,
+                            queued_at: Instant::now(),
+                        });
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            .instrument(inbound_span.clone())
+            .await;
+            inbound_span.record(
+                "delivery_ms",
+                delivery_started_at.elapsed().as_secs_f64() * 1_000.0,
+            );
+            inbound_span.record(
+                "receive_complete_ms",
+                frame_received_at.elapsed().as_secs_f64() * 1_000.0,
+            );
+            send_result.map_err(|_| ExecServerError::Closed)?;
         }
     }
     Ok(())
+}
+
+fn inbound_message_span(
+    message: &JSONRPCMessage,
+    trace: Option<&codex_protocol::protocol::W3cTraceContext>,
+    ciphertext_bytes: usize,
+    frame_decode_elapsed: std::time::Duration,
+    reorder_elapsed: std::time::Duration,
+    decrypt_elapsed: std::time::Duration,
+    decode_elapsed: std::time::Duration,
+) -> Span {
+    let (message_kind, method) = match message {
+        JSONRPCMessage::Request(request) => ("request", request.method.as_str()),
+        JSONRPCMessage::Notification(notification) => {
+            ("notification", notification.method.as_str())
+        }
+        JSONRPCMessage::Response(_) => ("response", ""),
+        JSONRPCMessage::Error(_) => ("error", ""),
+    };
+    let span = tracing::info_span!(
+        "exec_server.noise.harness_inbound",
+        message_kind,
+        method,
+        ciphertext_bytes,
+        frame_decode_ms = frame_decode_elapsed.as_secs_f64() * 1_000.0,
+        reorder_ms = reorder_elapsed.as_secs_f64() * 1_000.0,
+        decrypt_ms = decrypt_elapsed.as_secs_f64() * 1_000.0,
+        decode_ms = decode_elapsed.as_secs_f64() * 1_000.0,
+        delivery_ms = field::Empty,
+        receive_complete_ms = field::Empty,
+    );
+    if let Some(trace) = trace {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+    }
+    span
 }
 
 async fn send_malformed(incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>, reason: String) {

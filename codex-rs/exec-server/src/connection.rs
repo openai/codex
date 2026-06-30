@@ -40,8 +40,6 @@ pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
     Message(JSONRPCMessage),
-    // Constructed by the stacked Noise transport change.
-    #[allow(dead_code)]
     TracedMessage {
         message: JSONRPCMessage,
         trace: Option<W3cTraceContext>,
