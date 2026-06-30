@@ -45,6 +45,10 @@ mod www_authenticate;
 
 use self::www_authenticate::insufficient_scope_challenge;
 
+#[cfg(test)]
+#[path = "http_client_adapter_tests.rs"]
+mod tests;
+
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
@@ -215,7 +219,14 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             }
             Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
                 let body = collect_body(&mut body_stream).await?;
-                if body.is_empty() && matches!(message, JsonRpcMessage::Notification(_)) {
+                if body.is_empty()
+                    && matches!(
+                        message,
+                        JsonRpcMessage::Response(_)
+                            | JsonRpcMessage::Notification(_)
+                            | JsonRpcMessage::Error(_)
+                    )
+                {
                     return Ok(StreamableHttpPostResponse::Accepted);
                 }
                 let message: ServerJsonRpcMessage =
