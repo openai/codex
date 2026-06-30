@@ -166,6 +166,23 @@ async fn background_mcp_startup_completion_does_not_finish_review_task() {
 }
 
 #[tokio::test]
+async fn foreground_review_status_takes_precedence_over_background_mcp_startup() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["run-state".to_string()]);
+    chat.config.tui_terminal_title = Some(vec!["run-state".to_string()]);
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+
+    assert_eq!(
+        (status_line_text(&chat), chat.last_terminal_title.clone(),),
+        (Some("Working".to_string()), Some("Working".to_string()),)
+    );
+}
+
+#[tokio::test]
 async fn mcp_startup_can_complete_after_review_submission() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
