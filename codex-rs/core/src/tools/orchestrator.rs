@@ -42,6 +42,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use std::time::Instant;
+use tracing::Instrument;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -59,6 +60,16 @@ impl ToolOrchestrator {
         }
     }
 
+    #[tracing::instrument(
+        name = "tool_orchestrator.run_attempt",
+        level = "info",
+        skip_all,
+        fields(
+            sandbox = ?attempt.sandbox,
+            sandbox_requested = attempt.sandbox_requested,
+            managed_network_active,
+        )
+    )]
     async fn run_attempt<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
@@ -76,6 +87,9 @@ impl ToolOrchestrator {
             attempt.sandbox,
             tool.network_approval_spec(req, tool_ctx),
         )
+        .instrument(tracing::info_span!(
+            "tool_orchestrator.begin_network_approval"
+        ))
         .await
         {
             Ok(network_approval) => network_approval,
@@ -110,6 +124,7 @@ impl ToolOrchestrator {
         };
         let run_result = tool
             .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
+            .instrument(tracing::info_span!("tool_orchestrator.runtime_run"))
             .await;
 
         let Some(network_approval) = network_approval else {
@@ -119,7 +134,11 @@ impl ToolOrchestrator {
         match network_approval.mode() {
             NetworkApprovalMode::Immediate => {
                 let finalize_result =
-                    finish_immediate_network_approval(&tool_ctx.session, network_approval).await;
+                    finish_immediate_network_approval(&tool_ctx.session, network_approval)
+                        .instrument(tracing::info_span!(
+                            "tool_orchestrator.finish_immediate_network_approval"
+                        ))
+                        .await;
                 if let Err(err) = finalize_result {
                     return (Err(err), None);
                 }
@@ -129,7 +148,11 @@ impl ToolOrchestrator {
                 let deferred = network_approval.into_deferred();
                 if run_result.is_err() {
                     let finalize_result =
-                        finish_deferred_network_approval(&tool_ctx.session, deferred).await;
+                        finish_deferred_network_approval(&tool_ctx.session, deferred)
+                            .instrument(tracing::info_span!(
+                                "tool_orchestrator.finish_deferred_network_approval"
+                            ))
+                            .await;
                     if let Err(err) = finalize_result {
                         return (Err(err), None);
                     }
@@ -154,7 +177,13 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
-        let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
+        let strict_auto_review = tool_ctx
+            .session
+            .strict_auto_review_enabled_for_turn()
+            .instrument(tracing::info_span!(
+                "tool_orchestrator.resolve_auto_review_mode"
+            ))
+            .await;
         let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
 
         // 1) Approval
@@ -521,6 +550,12 @@ impl ToolOrchestrator {
     // PermissionRequest hooks take top precedence for answering approval
     // prompts. If no matching hook returns a decision, fall back to the
     // normal guardian or user approval path.
+    #[tracing::instrument(
+        name = "tool_orchestrator.request_approval",
+        level = "info",
+        skip_all,
+        fields(evaluate_permission_request_hooks)
+    )]
     async fn request_approval<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,

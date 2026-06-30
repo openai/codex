@@ -129,31 +129,47 @@ impl ToolCallRuntime {
         let abort_dispatch_span = dispatch_span.clone();
 
         let mut dispatch_handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
-            AbortOnDropHandle::new(tokio::spawn(async move {
-                let _guard = if supports_parallel {
-                    Either::Left(lock.read().await)
-                } else {
-                    Either::Right(lock.write().await)
-                };
-                // Admission through the parallel-execution gate marks the end
-                // of dispatch waiting and the start of handler execution.
-                if let Some(execution_started_at) = execution_started_at {
-                    let _ = execution_started_at.set(Instant::now());
-                }
+            AbortOnDropHandle::new(tokio::spawn(
+                async move {
+                    let _guard = if supports_parallel {
+                        Either::Left(
+                            lock.read()
+                                .instrument(tracing::info_span!(
+                                    "tool_dispatch.parallel_execution_lock",
+                                    mode = "shared",
+                                ))
+                                .await,
+                        )
+                    } else {
+                        Either::Right(
+                            lock.write()
+                                .instrument(tracing::info_span!(
+                                    "tool_dispatch.parallel_execution_lock",
+                                    mode = "exclusive",
+                                ))
+                                .await,
+                        )
+                    };
+                    // Admission through the parallel-execution gate marks the end
+                    // of dispatch waiting and the start of handler execution.
+                    if let Some(execution_started_at) = execution_started_at {
+                        let _ = execution_started_at.set(Instant::now());
+                    }
 
-                router
-                    .dispatch_tool_call_with_terminal_outcome(
-                        session,
-                        step_context,
-                        invocation_cancellation_token,
-                        tracker,
-                        dispatch_call,
-                        source,
-                        dispatch_terminal_outcome_reached,
-                    )
-                    .instrument(dispatch_span.clone())
-                    .await
-            }));
+                    router
+                        .dispatch_tool_call_with_terminal_outcome(
+                            session,
+                            step_context,
+                            invocation_cancellation_token,
+                            tracker,
+                            dispatch_call,
+                            source,
+                            dispatch_terminal_outcome_reached,
+                        )
+                        .await
+                }
+                .instrument(dispatch_span),
+            ));
 
         async move {
             let _tool_call_timing_guard = tool_call_timing_guard;
