@@ -119,7 +119,7 @@ impl GitRunner {
         &self.executable
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn from_executable_for_test(executable: PathBuf) -> Self {
         Self { executable }
     }

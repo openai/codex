@@ -1140,6 +1140,7 @@ fn patch_variants_reject_paths_inside_submodules() {
     let repo = init_repo();
     let root = repo.path();
     init_submodule_with_clean_filter(root);
+    let has_case_folded_gitlink_alias = filesystem_is_case_sensitive(root) == Some(false);
     let cases = [
         (
             "git-format",
@@ -1169,6 +1170,9 @@ fn patch_variants_reject_paths_inside_submodules() {
     ];
 
     for (name, diff, expected_kind) in cases {
+        if name == "case-folded gitlink ancestor" && !has_case_folded_gitlink_alias {
+            continue;
+        }
         for (revert, preflight) in [(false, true), (false, false), (true, true), (true, false)] {
             let request = ApplyGitRequest {
                 cwd: root.to_path_buf(),
