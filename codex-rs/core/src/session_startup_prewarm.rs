@@ -16,6 +16,7 @@ use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
+use crate::session::turn_context::TurnContext;
 use codex_otel::STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC;
 use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
@@ -181,6 +182,28 @@ impl SessionStartupPrewarmHandle {
 }
 
 impl Session {
+    pub(crate) fn schedule_guardian_review_session_prewarm(
+        self: &Arc<Self>,
+        parent_turn: Arc<TurnContext>,
+    ) {
+        if !self.services.model_client.responses_websocket_enabled()
+            || !routes_approval_to_guardian(&parent_turn)
+        {
+            return;
+        }
+
+        let parent_session = Arc::clone(self);
+        drop(tokio::spawn(async move {
+            if let Err(err) = parent_session
+                .guardian_review_session
+                .initialize(Arc::clone(&parent_session), parent_turn)
+                .await
+            {
+                warn!("failed to initialize guardian review session: {err:#}");
+            }
+        }));
+    }
+
     pub(crate) async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
         if !self.services.model_client.responses_websocket_enabled() {
             // Without websocket prewarm, resolve auth once so Agent Identity bootstrap can
@@ -251,19 +274,7 @@ async fn schedule_startup_prewarm_inner(
         prewarm_started_at.elapsed(),
         /*status*/ None,
     );
-    if routes_approval_to_guardian(&startup_turn_context) {
-        let guardian_session = Arc::clone(&session);
-        let guardian_parent_turn = Arc::clone(&startup_turn_context);
-        drop(tokio::spawn(async move {
-            if let Err(err) = guardian_session
-                .guardian_review_session
-                .initialize(Arc::clone(&guardian_session), guardian_parent_turn)
-                .await
-            {
-                warn!("failed to initialize guardian review session: {err:#}");
-            }
-        }));
-    }
+    session.schedule_guardian_review_session_prewarm(Arc::clone(&startup_turn_context));
     let startup_cancellation_token = CancellationToken::new();
     let built_tools_started_at = Instant::now();
     // Startup prewarm runs before run_turn and needs its own tool-building snapshot.

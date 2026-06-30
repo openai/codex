@@ -906,6 +906,7 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
 #[tokio::test]
 async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow::Result<()> {
     let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let initial_permission_profile = PermissionProfile::workspace_write();
 
     let mut network_config = NetworkProxyConfig::default();
@@ -2623,6 +2624,7 @@ async fn config_change_contributor_observes_effective_config_changes() {
         records: Arc::clone(&records),
     }));
     session.services.extensions = Arc::new(builder.build());
+    let session = Arc::new(session);
     session
         .services
         .session_extension_data
@@ -5002,6 +5004,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 #[tokio::test]
 async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
     let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     #[allow(deprecated)]
     let updated_cwd = turn_context.cwd.join("project");
     let current_environments = {
@@ -5052,6 +5055,7 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 #[tokio::test]
 async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let original_cwd = {
         let mut state = session.state.lock().await;
         state.session_configuration.environments.environments = Vec::new();
@@ -5084,6 +5088,7 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 #[tokio::test]
 async fn environment_settings_preserve_explicit_primary_cwd() {
     let (session, _turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
     let (original_cwd, environment_cwd, environments) = {
         let mut state = session.state.lock().await;
         let original_cwd = state.session_configuration.cwd().clone();

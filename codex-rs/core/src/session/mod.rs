@@ -36,6 +36,7 @@ use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::ExecPolicyManager;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::image_preparation::prepare_response_items;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -1490,11 +1491,16 @@ impl Session {
     }
 
     pub(crate) async fn update_settings(
-        &self,
+        self: &Arc<Self>,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, permission_profile_changed) = {
+        let (
+            previous_config,
+            new_config,
+            permission_profile_changed,
+            guardian_routing_became_enabled,
+        ) = {
             let mut state = self.state.lock().await;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
@@ -1512,18 +1518,39 @@ impl Session {
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
+            let guardian_routing_was_enabled = routes_approval_to_guardian_with_reviewer(
+                state.session_configuration.approval_policy.value(),
+                state.session_configuration.approvals_reviewer,
+            );
+            let guardian_routing_is_enabled = routes_approval_to_guardian_with_reviewer(
+                updated.approval_policy.value(),
+                updated.approvals_reviewer,
+            );
+            let guardian_routing_became_enabled =
+                !guardian_routing_was_enabled && guardian_routing_is_enabled;
             if updates.environments.is_some() {
                 self.services
                     .turn_environments
                     .update_selections(updated.environment_selections());
             }
             state.session_configuration = updated;
-            (previous_config, new_config, permission_profile_changed)
+            (
+                previous_config,
+                new_config,
+                permission_profile_changed,
+                guardian_routing_became_enabled,
+            )
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
+        }
+        if guardian_routing_became_enabled {
+            let parent_turn = self
+                .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+                .await;
+            self.schedule_guardian_review_session_prewarm(parent_turn);
         }
 
         Ok(())
