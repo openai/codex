@@ -111,6 +111,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::legacy_multi_agent_v2_namespace_repair::repair_legacy_multi_agent_v2_function_call_namespaces;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::subagent_header_value;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -820,6 +821,7 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        repair_legacy_multi_agent_v2_function_call_namespaces(&mut input, &prompt.tools);
         if !self.state.provider.info().is_openai() {
             input
                 .iter_mut()
@@ -2387,3 +2389,7 @@ impl WebsocketTelemetry for ApiTelemetry {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "legacy_multi_agent_v2_namespace_repair_request_tests.rs"]
+mod legacy_multi_agent_v2_namespace_repair_request_tests;

@@ -50,6 +50,7 @@ mod hook_runtime;
 mod image_preparation;
 mod installation_id;
 pub(crate) mod landlock;
+mod legacy_multi_agent_v2_namespace_repair;
 pub use landlock::spawn_command_under_linux_sandbox;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
