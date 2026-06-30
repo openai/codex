@@ -122,6 +122,22 @@ fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     Ok(())
 }
 
+fn summarize_refresh_errors(prefix: &str, refresh_errors: &[String]) -> String {
+    const MAX_INCLUDED_ERRORS: usize = 3;
+
+    let included = refresh_errors
+        .iter()
+        .take(MAX_INCLUDED_ERRORS)
+        .cloned()
+        .collect::<Vec<_>>();
+    let remaining = refresh_errors.len().saturating_sub(included.len());
+    let mut message = format!("{prefix}: {}", included.join("; "));
+    if remaining > 0 {
+        message.push_str(&format!("; +{remaining} more"));
+    }
+    message
+}
+
 fn workspace_write_cap_sids_for_path(
     codex_home: &Path,
     command_cwd: &Path,
@@ -554,7 +570,10 @@ fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
             &format!("read ACL run completed with errors: {refresh_errors:?}"),
         )?;
         if payload.refresh_only {
-            anyhow::bail!("read ACL run had errors");
+            anyhow::bail!(summarize_refresh_errors(
+                "read ACL run had errors",
+                &refresh_errors
+            ));
         }
     }
     log_line(log, "read ACL run completed")?;
@@ -1026,7 +1045,10 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             log,
             &format!("setup refresh completed with errors: {refresh_errors:?}"),
         )?;
-        anyhow::bail!("setup refresh had errors");
+        anyhow::bail!(summarize_refresh_errors(
+            "setup refresh had errors",
+            &refresh_errors
+        ));
     }
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
@@ -1034,6 +1056,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 
 #[cfg(test)]
 mod tests {
+    use super::summarize_refresh_errors;
     use super::Payload;
     use super::SETUP_VERSION;
     use super::workspace_write_cap_sids_for_path;
@@ -1043,6 +1066,34 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::fs;
+
+    #[test]
+    fn summarize_refresh_errors_keeps_first_entries() {
+        let errors = vec![
+            "grant read ACE failed on C:\\one".to_string(),
+            "write ACE failed on C:\\two".to_string(),
+        ];
+
+        assert_eq!(
+            summarize_refresh_errors("setup refresh had errors", &errors),
+            "setup refresh had errors: grant read ACE failed on C:\\one; write ACE failed on C:\\two"
+        );
+    }
+
+    #[test]
+    fn summarize_refresh_errors_caps_output() {
+        let errors = vec![
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string(),
+            "fourth".to_string(),
+        ];
+
+        assert_eq!(
+            summarize_refresh_errors("setup refresh had errors", &errors),
+            "setup refresh had errors: first; second; third; +1 more"
+        );
+    }
 
     fn payload_json() -> serde_json::Value {
         json!({
