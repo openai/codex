@@ -88,6 +88,31 @@ pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
     sandbox_secrets_dir(codex_home).join("sandbox_users.json")
 }
 
+fn qualify_real_user(domain: Option<&str>, username: Option<&str>) -> String {
+    let username = username
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let domain = domain
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    match (domain, username) {
+        (_, Some(username)) if username.contains('\\') || username.contains('@') => username,
+        (Some(domain), Some(username)) => format!(r"{domain}\{username}"),
+        (None, Some(username)) => username,
+        _ => "Administrators".to_string(),
+    }
+}
+
+fn current_real_user() -> String {
+    qualify_real_user(
+        std::env::var("USERDOMAIN").ok().as_deref(),
+        std::env::var("USERNAME").ok().as_deref(),
+    )
+}
+
 pub struct SandboxSetupRequest<'a> {
     pub permissions: &'a ResolvedWindowsSandboxPermissions,
     pub command_cwd: &'a Path,
@@ -206,7 +231,7 @@ fn run_setup_refresh_inner(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: current_real_user(),
         mode: SetupMode::Full,
         refresh_only: true,
     };
@@ -889,7 +914,7 @@ fn run_elevated_setup_inner(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
-        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        real_user: current_real_user(),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
@@ -1520,6 +1545,36 @@ mod tests {
         let roots = profile_read_roots(&missing_profile);
 
         assert_eq!(vec![missing_profile], roots);
+    }
+
+    #[test]
+    fn qualify_real_user_prefers_domain_qualified_name() {
+        assert_eq!(
+            super::qualify_real_user(Some("ACME"), Some("alice")),
+            r"ACME\alice"
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_preserves_prequalified_username() {
+        assert_eq!(
+            super::qualify_real_user(Some("ACME"), Some(r"ACME\alice")),
+            r"ACME\alice"
+        );
+        assert_eq!(
+            super::qualify_real_user(Some("ACME"), Some("alice@example.com")),
+            "alice@example.com"
+        );
+    }
+
+    #[test]
+    fn qualify_real_user_falls_back_when_domain_missing() {
+        assert_eq!(super::qualify_real_user(None, Some("alice")), "alice");
+        assert_eq!(super::qualify_real_user(Some(""), Some("alice")), "alice");
+        assert_eq!(
+            super::qualify_real_user(Some("ACME"), Some("   ")),
+            "Administrators"
+        );
     }
 
     #[test]
