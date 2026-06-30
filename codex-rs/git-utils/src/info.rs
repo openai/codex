@@ -478,12 +478,34 @@ async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
     Some(remotes)
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BranchCandidate {
+    name: String,
+    remote_ref: Option<String>,
+}
+
+impl BranchCandidate {
+    fn local(name: String) -> Self {
+        Self {
+            name,
+            remote_ref: None,
+        }
+    }
+
+    fn remote(name: String, remote_ref: String) -> Self {
+        Self {
+            name,
+            remote_ref: Some(remote_ref),
+        }
+    }
+}
+
 /// Attempt to determine the repository's default branch name.
 ///
 /// Preference order:
 /// 1) The symbolic ref at `refs/remotes/<remote>/HEAD` for the first remote (origin prioritized)
 /// 2) Local fallback to existing `main` or `master` if present
-async fn get_default_branch(cwd: &Path) -> Option<String> {
+async fn get_default_branch(cwd: &Path) -> Option<BranchCandidate> {
     // Prefer the first remote (with origin prioritized)
     let remotes = get_git_remotes(cwd).await.unwrap_or_default();
     for remote in remotes {
@@ -493,7 +515,9 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
     }
 
     // No remote-derived default; try common local defaults if they exist
-    get_default_branch_local(cwd).await
+    get_default_branch_local(cwd)
+        .await
+        .map(BranchCandidate::local)
 }
 
 /// Resolves one remote's symbolic HEAD using only local refs.
@@ -501,7 +525,10 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
 /// The symbolic target must remain inside the selected remote's namespace and
 /// resolve to an existing ref. This rejects stale or cross-remote symbolic refs
 /// while preserving branch names that contain `/`.
-async fn get_remote_default_branch_from_symbolic_ref(cwd: &Path, remote: &str) -> Option<String> {
+async fn get_remote_default_branch_from_symbolic_ref(
+    cwd: &Path,
+    remote: &str,
+) -> Option<BranchCandidate> {
     let remote_head = format!("refs/remotes/{remote}/HEAD");
     let symref_output =
         run_git_command_with_timeout(&["symbolic-ref", "--quiet", &remote_head], cwd).await?;
@@ -519,7 +546,10 @@ async fn get_remote_default_branch_from_symbolic_ref(cwd: &Path, remote: &str) -
 
     let verify =
         run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", target], cwd).await?;
-    verify.status.success().then(|| branch.to_string())
+    verify
+        .status
+        .success()
+        .then(|| BranchCandidate::remote(branch.to_string(), target.to_string()))
 }
 
 /// Determine the repository's default branch name, if available.
@@ -529,7 +559,9 @@ async fn get_remote_default_branch_from_symbolic_ref(cwd: &Path, remote: &str) -
 /// `master`. Returns `None` when the information cannot be determined, for
 /// example when the current directory is not inside a Git repository.
 pub async fn default_branch_name(cwd: &Path) -> Option<String> {
-    get_default_branch(cwd).await
+    get_default_branch(cwd)
+        .await
+        .map(|candidate| candidate.name)
 }
 
 /// Attempt to determine the repository's default branch name from local branches.
@@ -556,7 +588,7 @@ async fn get_default_branch_local(cwd: &Path) -> Option<String> {
 
 /// Build an ancestry of branches starting at the current branch and ending at the
 /// repository's default branch (if determinable)..
-async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
+async fn branch_ancestry(cwd: &Path) -> Option<Vec<BranchCandidate>> {
     // Discover current branch (ignore detached HEAD by treating it as None)
     let current_branch = run_git_command_with_timeout(&["rev-parse", "--abbrev-ref", "HEAD"], cwd)
         .await
@@ -568,21 +600,21 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
             }
         })
         .map(|s| s.trim().to_string())
-        .filter(|s| s != "HEAD");
+        .filter(|s| s != "HEAD")
+        .map(BranchCandidate::local);
 
     // Discover default branch
     let default_branch = get_default_branch(cwd).await;
 
-    let mut ancestry: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    if let Some(cb) = current_branch.clone() {
+    let mut ancestry: Vec<BranchCandidate> = Vec::new();
+    let mut seen: HashSet<BranchCandidate> = HashSet::new();
+    if let Some(cb) = current_branch {
         seen.insert(cb.clone());
         ancestry.push(cb);
     }
     if let Some(db) = default_branch
-        && !seen.contains(&db)
+        && seen.insert(db.clone())
     {
-        seen.insert(db.clone());
         ancestry.push(db);
     }
 
@@ -595,7 +627,7 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
         if let Some(output) = run_git_command_with_timeout(
             &[
                 "for-each-ref",
-                "--format=%(refname:short)",
+                "--format=%(refname)",
                 "--contains=HEAD",
                 &format!("refs/remotes/{remote}"),
             ],
@@ -606,14 +638,16 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
             && let Ok(text) = String::from_utf8(output.stdout)
         {
             for line in text.lines() {
-                let short = line.trim();
-                // Expect format like: "origin/feature"; extract the branch path after "remote/"
-                if let Some(stripped) = short.strip_prefix(&format!("{remote}/"))
+                let remote_ref = line.trim();
+                let remote_ref_prefix = format!("refs/remotes/{remote}/");
+                if let Some(stripped) = remote_ref.strip_prefix(&remote_ref_prefix)
                     && !stripped.is_empty()
-                    && !seen.contains(stripped)
                 {
-                    seen.insert(stripped.to_string());
-                    ancestry.push(stripped.to_string());
+                    let candidate =
+                        BranchCandidate::remote(stripped.to_string(), remote_ref.to_string());
+                    if seen.insert(candidate.clone()) {
+                        ancestry.push(candidate);
+                    }
                 }
             }
         }
@@ -623,100 +657,73 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
     Some(ancestry)
 }
 
-// Helper for a single branch: return the remote SHA if present on any remote
-// and the distance (commits ahead of HEAD) for that branch. The first item is
-// None if the branch is not present on any remote. Returns None if distance
-// could not be computed due to git errors/timeouts.
+// Helper for a single branch: return the selected remote SHA and the distance
+// (commits ahead of that SHA) for the current HEAD. Remote-qualified candidates
+// retain their exact ref; local candidates use the first matching remote ref.
+// Returns None if no remote ref exists or a git error/timeout occurs.
 async fn branch_remote_and_distance(
     cwd: &Path,
-    branch: &str,
+    branch: &BranchCandidate,
     remotes: &[String],
-) -> Option<(Option<GitSha>, usize)> {
-    // Try to find the first remote ref that exists for this branch (origin prioritized by caller).
-    let mut found_remote_sha: Option<GitSha> = None;
-    let mut found_remote_ref: Option<String> = None;
-    for remote in remotes {
-        let remote_ref = format!("refs/remotes/{remote}/{branch}");
-        let Some(verify_output) =
-            run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", &remote_ref], cwd)
-                .await
-        else {
-            // Mirror previous behavior: if the verify call times out/fails at the process level,
-            // treat the entire branch as unusable.
-            return None;
-        };
+) -> Option<(GitSha, usize)> {
+    let remote_sha = if let Some(remote_ref) = branch.remote_ref.as_deref() {
+        let verify_output =
+            run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", remote_ref], cwd)
+                .await?;
         if !verify_output.status.success() {
-            continue;
-        }
-        let Ok(sha) = String::from_utf8(verify_output.stdout) else {
-            // Mirror previous behavior and skip the entire branch on parse failure.
             return None;
-        };
-        found_remote_sha = Some(GitSha::new(sha.trim()));
-        found_remote_ref = Some(remote_ref);
-        break;
-    }
-
-    // Compute distance as the number of commits HEAD is ahead of the branch.
-    // Prefer local branch name if it exists; otherwise fall back to the remote ref (if any).
-    let count_output = if let Some(local_count) =
-        run_git_command_with_timeout(&["rev-list", "--count", &format!("{branch}..HEAD")], cwd)
-            .await
-    {
-        if local_count.status.success() {
-            local_count
-        } else if let Some(remote_ref) = &found_remote_ref {
-            match run_git_command_with_timeout(
-                &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+        }
+        let sha = String::from_utf8(verify_output.stdout).ok()?;
+        GitSha::new(sha.trim())
+    } else {
+        let mut found_remote_sha: Option<GitSha> = None;
+        for remote in remotes {
+            let remote_ref = format!("refs/remotes/{remote}/{}", branch.name);
+            let Some(verify_output) = run_git_command_with_timeout(
+                &["rev-parse", "--verify", "--quiet", &remote_ref],
                 cwd,
             )
             .await
-            {
-                Some(remote_count) => remote_count,
-                None => return None,
+            else {
+                return None;
+            };
+            if !verify_output.status.success() {
+                continue;
             }
-        } else {
-            return None;
+            let sha = String::from_utf8(verify_output.stdout).ok()?;
+            found_remote_sha = Some(GitSha::new(sha.trim()));
+            break;
         }
-    } else if let Some(remote_ref) = &found_remote_ref {
-        match run_git_command_with_timeout(
-            &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
-            cwd,
-        )
-        .await
-        {
-            Some(remote_count) => remote_count,
-            None => return None,
-        }
-    } else {
-        return None;
+        found_remote_sha?
     };
 
+    // Resolve distance from the selected SHA, rather than allowing a same-named
+    // local branch to silently replace the verified remote candidate.
+    let count_output = run_git_command_with_timeout(
+        &["rev-list", "--count", &format!("{}..HEAD", remote_sha.0)],
+        cwd,
+    )
+    .await?;
     if !count_output.status.success() {
         return None;
     }
-    let Ok(distance_str) = String::from_utf8(count_output.stdout) else {
-        return None;
-    };
-    let Ok(distance) = distance_str.trim().parse::<usize>() else {
-        return None;
-    };
+    let distance_str = String::from_utf8(count_output.stdout).ok()?;
+    let distance = distance_str.trim().parse::<usize>().ok()?;
 
-    Some((found_remote_sha, distance))
+    Some((remote_sha, distance))
 }
 
 // Finds the closest sha that exist on any of branches and also exists on any of the remotes.
-async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<GitSha> {
+async fn find_closest_sha(
+    cwd: &Path,
+    branches: &[BranchCandidate],
+    remotes: &[String],
+) -> Option<GitSha> {
     // A sha and how many commits away from HEAD it is.
     let mut closest_sha: Option<(GitSha, usize)> = None;
     for branch in branches {
-        let Some((maybe_remote_sha, distance)) =
-            branch_remote_and_distance(cwd, branch, remotes).await
+        let Some((remote_sha, distance)) = branch_remote_and_distance(cwd, branch, remotes).await
         else {
-            continue;
-        };
-        let Some(remote_sha) = maybe_remote_sha else {
-            // Preserve existing behavior: skip branches that are not present on a remote.
             continue;
         };
         match &closest_sha {

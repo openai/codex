@@ -320,6 +320,19 @@ async fn assert_test_git(cwd: &Path, args: &[&str]) {
     );
 }
 
+async fn test_git_stdout(cwd: &Path, args: &[&str]) -> String {
+    let output = run_test_git(cwd, args).await;
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git output should be UTF-8")
+        .trim()
+        .to_string()
+}
+
 #[tokio::test]
 async fn test_default_branch_discovery_uses_verified_remote_head() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -454,6 +467,203 @@ async fn test_default_branch_discovery_from_linked_worktree() {
         default_branch_name(&worktree_path).await,
         Some("trunk".to_string())
     );
+}
+
+#[tokio::test]
+async fn test_git_diff_to_remote_preserves_verified_remote_head_identity() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "main"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "/nonexistent/origin.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "origin-main", "main"]).await;
+    fs::write(repo_path.join("which.txt"), "origin\n").expect("write origin file");
+    assert_test_git(&repo_path, &["add", "which.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "origin main"]).await;
+    let origin_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/origin/main", &origin_sha],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "main"]).await;
+    assert_test_git(&repo_path, &["checkout", "-b", "upstream-main", "main"]).await;
+    fs::write(repo_path.join("which.txt"), "upstream\n").expect("write upstream file");
+    assert_test_git(&repo_path, &["add", "which.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "upstream main"]).await;
+    let upstream_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/upstream/main", &upstream_sha],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/upstream/HEAD",
+            "refs/remotes/upstream/main",
+        ],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "feature", "upstream-main"]).await;
+    fs::write(repo_path.join("feature.txt"), "feature\n").expect("write feature file");
+    assert_test_git(&repo_path, &["add", "feature.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "feature work"]).await;
+
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("main".to_string())
+    );
+    let state = git_diff_to_remote(&repo_path)
+        .await
+        .expect("Should collect working tree state");
+    assert_eq!(state.sha, GitSha::new(&upstream_sha));
+    assert!(state.diff.contains("feature.txt"));
+    assert!(!state.diff.contains("which.txt"));
+    assert!(!state.diff.contains("-origin"));
+    assert!(!state.diff.contains("+upstream"));
+}
+
+#[tokio::test]
+async fn test_git_diff_to_remote_keeps_remote_default_when_current_name_matches() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "base"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "/nonexistent/origin.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "origin-release", "base"]).await;
+    fs::write(repo_path.join("origin-one.txt"), "origin one\n").expect("write origin file");
+    assert_test_git(&repo_path, &["add", "origin-one.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "origin release one"]).await;
+    fs::write(repo_path.join("origin-two.txt"), "origin two\n").expect("write origin file");
+    assert_test_git(&repo_path, &["add", "origin-two.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "origin release two"]).await;
+    let origin_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/origin/release/v1", &origin_sha],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "base"]).await;
+    assert_test_git(&repo_path, &["checkout", "-b", "upstream-release", "base"]).await;
+    fs::write(repo_path.join("upstream.txt"), "upstream\n").expect("write upstream file");
+    assert_test_git(&repo_path, &["add", "upstream.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "upstream release"]).await;
+    let upstream_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "update-ref",
+            "refs/remotes/upstream/release/v1",
+            &upstream_sha,
+        ],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/upstream/HEAD",
+            "refs/remotes/upstream/release/v1",
+        ],
+    )
+    .await;
+
+    assert_test_git(
+        &repo_path,
+        &["checkout", "-b", "release/v1", "upstream-release"],
+    )
+    .await;
+    fs::write(repo_path.join("local.txt"), "local\n").expect("write local file");
+    assert_test_git(&repo_path, &["add", "local.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "local release work"]).await;
+
+    assert_eq!(
+        default_branch_name(&repo_path).await,
+        Some("release/v1".to_string())
+    );
+    let state = git_diff_to_remote(&repo_path)
+        .await
+        .expect("Should collect working tree state");
+    assert_eq!(state.sha, GitSha::new(&upstream_sha));
+    assert!(state.diff.contains("local.txt"));
+    assert!(!state.diff.contains("upstream.txt"));
+    assert!(!state.diff.contains("origin-one.txt"));
+    assert!(!state.diff.contains("origin-two.txt"));
+}
+
+#[tokio::test]
+async fn test_git_diff_to_remote_preserves_expanded_remote_ref_identity() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "base"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "/nonexistent/origin.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "origin-topic", "base"]).await;
+    fs::write(repo_path.join("origin.txt"), "origin\n").expect("write origin file");
+    assert_test_git(&repo_path, &["add", "origin.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "origin topic"]).await;
+    let origin_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/origin/topic", &origin_sha],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "base"]).await;
+    assert_test_git(&repo_path, &["checkout", "-b", "feature", "base"]).await;
+    fs::write(repo_path.join("feature.txt"), "feature\n").expect("write feature file");
+    assert_test_git(&repo_path, &["add", "feature.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "feature work"]).await;
+    assert_test_git(&repo_path, &["checkout", "-b", "upstream-topic", "feature"]).await;
+    fs::write(repo_path.join("upstream-only.txt"), "upstream\n").expect("write upstream-only file");
+    assert_test_git(&repo_path, &["add", "upstream-only.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "upstream topic"]).await;
+    let upstream_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &["update-ref", "refs/remotes/upstream/topic", &upstream_sha],
+    )
+    .await;
+    assert_test_git(&repo_path, &["checkout", "feature"]).await;
+
+    assert_eq!(default_branch_name(&repo_path).await, None);
+    let state = git_diff_to_remote(&repo_path)
+        .await
+        .expect("Should collect working tree state");
+    assert_eq!(state.sha, GitSha::new(&upstream_sha));
+    assert_ne!(state.sha, GitSha::new(&origin_sha));
 }
 
 #[cfg(unix)]
