@@ -1,11 +1,16 @@
 use std::io;
 use std::path::Path;
 use std::process::Command;
+use tokio::process::Command as TokioCommand;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
 pub(crate) const EXECUTABLE_PATCH_CONFIG_PATTERN: &str =
     r"^(filter\..*\.(clean|smudge|process)|merge\..*\.driver)$";
+/// Timeout for internal Git commands to prevent freezing on large repositories.
+pub(crate) const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 const ISOLATED_GIT_ENVIRONMENT: [&str; 9] = [
     "GIT_DIR",
@@ -33,6 +38,37 @@ pub(crate) fn isolate_tokio_git_command_environment(command: &mut tokio::process
     for name in ISOLATED_GIT_ENVIRONMENT {
         command.env_remove(name);
     }
+}
+
+pub(crate) async fn has_configured_executable_filters_from(git: &Path, cwd: &Path) -> Option<bool> {
+    let mut command = TokioCommand::new(git);
+    isolate_tokio_git_command_environment(&mut command);
+    command
+        .args([
+            "config",
+            "--null",
+            "--show-scope",
+            "--includes",
+            "--get-regexp",
+            EXECUTABLE_FILTER_CONFIG_PATTERN,
+        ])
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => output,
+        _ => return None,
+    };
+    if !output
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return None;
+    }
+
+    Some(config_output_has_untrusted_executable_helpers(
+        &output.stdout,
+    ))
 }
 
 pub(crate) fn ensure_no_executable_git_config(
@@ -105,48 +141,5 @@ pub(crate) fn config_output_has_untrusted_executable_helpers(stdout: &[u8]) -> b
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_untrusted_nonempty_helper_values() {
-        assert!(!config_output_has_untrusted_executable_helpers(b""));
-        assert!(!config_output_has_untrusted_executable_helpers(b"\0"));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"local\0filter.example.clean\nhelper\0"
-        ));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"command\0merge.example.driver\nhelper\0"
-        ));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"global\0merge.example.driver\nhelper\0"
-        ));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"system\0merge.example.driver\nhelper\0"
-        ));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"worktree\0filter.example.process\nhelper\0"
-        ));
-    }
-
-    #[test]
-    fn allows_trusted_or_disabled_helper_values() {
-        assert!(!config_output_has_untrusted_executable_helpers(
-            b"global\0filter.lfs.process\ngit-lfs filter-process\0"
-        ));
-        assert!(!config_output_has_untrusted_executable_helpers(
-            b"local\0filter.example.clean\n\0"
-        ));
-        assert!(!config_output_has_untrusted_executable_helpers(
-            b"global\0merge.disabled.driver\n\0"
-        ));
-    }
-
-    #[test]
-    fn rejects_malformed_probe_output() {
-        assert!(config_output_has_untrusted_executable_helpers(b"local\0"));
-        assert!(config_output_has_untrusted_executable_helpers(
-            b"local\0filter.example.clean\0"
-        ));
-    }
-}
+#[path = "safe_git_tests.rs"]
+mod tests;
