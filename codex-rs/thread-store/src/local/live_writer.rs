@@ -6,6 +6,7 @@ use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::persisted_rollout_items;
+use tracing::Instrument;
 use tracing::warn;
 
 use super::LocalThreadStore;
@@ -115,18 +116,35 @@ pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
-    let canonical_items = persisted_rollout_items(params.items.as_slice());
+    let canonical_items = tracing::info_span!(
+        "thread_store.append_items.canonicalize",
+        item_count = params.items.len(),
+    )
+    .in_scope(|| persisted_rollout_items(params.items.as_slice()));
     if canonical_items.is_empty() {
         return Ok(());
     }
-    let recorder = store.live_recorder(params.thread_id).await?;
+    let recorder = store
+        .live_recorder(params.thread_id)
+        .instrument(tracing::info_span!(
+            "thread_store.append_items.get_recorder"
+        ))
+        .await?;
     recorder
         .record_canonical_items(canonical_items.as_slice())
+        .instrument(tracing::info_span!(
+            "thread_store.append_items.record_canonical_items",
+            item_count = canonical_items.len(),
+        ))
         .await
         .map_err(thread_store_io_error)?;
     // LiveThread applies metadata immediately after append_items returns. Wait for the local
     // writer so SQLite never gets ahead of JSONL for accepted live appends.
-    recorder.flush().await.map_err(thread_store_io_error)
+    recorder
+        .flush()
+        .instrument(tracing::info_span!("thread_store.append_items.flush"))
+        .await
+        .map_err(thread_store_io_error)
 }
 
 pub(super) async fn persist_thread(

@@ -508,6 +508,27 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn clean_writer_flush_skips_redundant_file_io() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("missing/rollout.jsonl");
+    let mut state = RolloutWriterState::new(
+        /*file*/ None,
+        /*deferred_log_file_info*/ None,
+        /*meta*/ None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+    );
+
+    state.flush().await?;
+
+    assert!(
+        !rollout_path.exists(),
+        "a clean writer should acknowledge the ordered flush barrier without reopening the file"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
