@@ -31,7 +31,6 @@ pub struct ApplyGitRequest {
     pub revert: bool,
     pub preflight: bool,
 }
-
 /// Result of running [`apply_git_patch`], including paths gleaned from stdout/stderr.
 #[derive(Debug, Clone)]
 pub struct ApplyGitResult {
@@ -301,6 +300,10 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
         parts.join(" ")
     )
 }
+
+#[cfg(all(test, unix))]
+#[path = "apply_transport_tests.rs"]
+mod transport_tests;
 
 #[cfg(test)]
 mod tests {

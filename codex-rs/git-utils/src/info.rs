@@ -44,7 +44,6 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     };
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
-
 /// Return the repository root for `cwd` using the provided filesystem.
 ///
 /// This mirrors [`get_git_repo_root`] for local paths, but works when `cwd`

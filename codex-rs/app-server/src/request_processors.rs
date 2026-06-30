@@ -493,6 +493,7 @@ mod apps_processor;
 mod catalog_processor;
 mod command_exec_processor;
 mod config_processor;
+mod environment_overrides;
 mod environment_processor;
 mod external_agent_config_processor;
 mod external_agent_session_import;

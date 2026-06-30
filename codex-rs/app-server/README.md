@@ -1090,7 +1090,7 @@ Notes:
 
 - Empty `command` arrays are rejected.
 - Prefer `permissionProfile` for command permission overrides. It selects an active profile by id (for example `:read-only`, `:workspace`, or a user-defined `[permissions.<id>]` profile) rather than accepting low-level filesystem/network permissions. The legacy `sandboxPolicy` field accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`), but cannot be combined with `permissionProfile`.
-- `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.
+- `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact. On Windows, ASCII names are matched case-insensitively, and requests containing multiple ASCII-case-equivalent names are rejected.
 - When omitted, `timeoutMs` falls back to the server default.
 - When omitted, `outputBytesCap` falls back to the server default of 1 MiB per stream.
 - `disableOutputCap: true` disables stdout/stderr capture truncation for that `command/exec` request. It cannot be combined with `outputBytesCap`.
@@ -1225,6 +1225,7 @@ For interactive or streaming processes, set `tty: true` or `streamStdoutStderr: 
 - Empty `command` arrays and empty `processHandle` strings are rejected.
 - `cwd` is required and must be absolute.
 - `process/spawn` is intentionally unsandboxed and does not define sandbox-selection fields such as `sandboxPolicy` or `permissionProfile`.
+- `env` overrides and unsets inherited variables by exact name on Unix. On Windows, ASCII names are matched case-insensitively, and requests containing multiple ASCII-case-equivalent names are rejected.
 - Duplicate active `processHandle` values are rejected on the same connection; the same handle can be reused after the prior process exits.
 - `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
 - `process/writeStdin` accepts either `deltaBase64`, `closeStdin`, or both.

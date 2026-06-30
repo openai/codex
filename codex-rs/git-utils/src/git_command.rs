@@ -42,6 +42,7 @@ impl GitRunner {
     /// boundary so caller configuration cannot restore transport authority.
     pub(crate) fn output(&self, mut command: Command) -> io::Result<std::process::Output> {
         isolate_git_command_environment(&mut command);
+        command.envs(crate::local_only_git_env());
         command.output()
     }
 
@@ -54,6 +55,7 @@ impl GitRunner {
     ) -> io::Result<std::process::Output> {
         isolate_git_command_environment(&mut command);
         command.env("GIT_INDEX_FILE", index_file);
+        command.envs(crate::local_only_git_env());
         command.output()
     }
 
@@ -64,6 +66,7 @@ impl GitRunner {
         mut command: tokio::process::Command,
     ) -> io::Result<std::process::Output> {
         isolate_tokio_git_command_environment(&mut command);
+        command.envs(crate::local_only_git_env());
         command.output().await
     }
 
