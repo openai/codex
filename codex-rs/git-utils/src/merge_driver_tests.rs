@@ -51,6 +51,113 @@ fn apply_allows_unused_global_merge_driver() {
 }
 
 #[test]
+fn apply_allows_clean_patch_with_selected_merge_driver() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt merge=codex-test\n")
+        .expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write file");
+    let (add_code, _, add_err) = run(root, &["git", "add", "."]);
+    assert_eq!(add_code, 0, "add fixture: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "fixture"]);
+    assert_eq!(commit_code, 0, "commit fixture: {commit_err}");
+    let (config_code, _, config_err) = run(
+        root,
+        &[
+            "git",
+            "config",
+            "merge.codex-test.driver",
+            "git config codex.mergeran true && false",
+        ],
+    );
+    assert_eq!(config_code, 0, "configure merge driver: {config_err}");
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
+        revert: false,
+        preflight: false,
+    })
+    .expect("allow clean patch with selected merge driver");
+
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.cmd_for_log.contains("--3way"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read file"),
+        "new\n"
+    );
+    let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
+    assert_ne!(marker_code, 0, "merge driver must not run");
+    let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+    assert_eq!(status_code, 0, "status: {status_err}");
+    assert_eq!(
+        status.trim(),
+        "M  file.txt",
+        "patch should update the index"
+    );
+}
+
+#[test]
+fn reverse_apply_allows_clean_patch_with_selected_merge_driver() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt merge=codex-test\n")
+        .expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write file");
+    let (add_code, _, add_err) = run(root, &["git", "add", "."]);
+    assert_eq!(add_code, 0, "add fixture: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "fixture"]);
+    assert_eq!(commit_code, 0, "commit fixture: {commit_err}");
+    let (config_code, _, config_err) = run(
+        root,
+        &[
+            "git",
+            "config",
+            "merge.codex-test.driver",
+            "git config codex.mergeran true && false",
+        ],
+    );
+    assert_eq!(config_code, 0, "configure merge driver: {config_err}");
+    let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n";
+    let patch_dir = tempfile::tempdir().expect("patch tempdir");
+    let patch = patch_dir.path().join("change.diff");
+    std::fs::write(&patch, diff).expect("write patch");
+    let (apply_code, _, apply_err) = run(
+        root,
+        &[
+            "git",
+            "apply",
+            "--index",
+            patch.to_str().expect("patch path"),
+        ],
+    );
+    assert_eq!(apply_code, 0, "prepare forward apply: {apply_err}");
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: diff.to_string(),
+        revert: true,
+        preflight: false,
+    })
+    .expect("allow clean reverse patch with selected merge driver");
+
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.cmd_for_log.contains("--3way"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read file"),
+        "old\n"
+    );
+    let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
+    assert_ne!(marker_code, 0, "merge driver must not run");
+    let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+    assert_eq!(status_code, 0, "status: {status_err}");
+    assert!(
+        status.is_empty(),
+        "reverse apply should restore HEAD: {status}"
+    );
+}
+
+#[test]
 fn preflight_does_not_probe_or_run_selected_merge_driver() {
     let repo = init_repo();
     let root = repo.path();

@@ -57,23 +57,8 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     ensure_no_selected_executable_git_filters(&git_root, &patch_paths, &cfg_parts)?;
     ensure_paths_do_not_enter_submodules(&git_root, &patch_paths)?;
 
-    if !req.preflight {
-        ensure_no_selected_merge_drivers(&git_root, &patch_paths, &cfg_parts)?;
-    }
-
-    if req.revert && !req.preflight {
-        // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git_root, &patch_paths)?;
-    }
-    // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
-    if req.revert {
-        args.push("-R".into());
-    }
-
     cfg_parts.extend(safe_git_config_parts());
-
-    args.push(patch_path.to_string_lossy().to_string());
+    let patch_arg = patch_path.to_string_lossy().to_string();
 
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
@@ -81,7 +66,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         if req.revert {
             check_args.push("-R".to_string());
         }
-        check_args.push(patch_path.to_string_lossy().to_string());
+        check_args.push(patch_arg);
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
         let (c_code, c_out, c_err) = run_git(&git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
@@ -102,6 +87,35 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
             cmd_for_log: rendered,
         });
     }
+
+    // Avoid three-way machinery entirely when the patch applies cleanly.
+    // A selected merge driver is relevant only to the three-way fallback.
+    let mut plain_check_args = vec![
+        "apply".to_string(),
+        "--check".to_string(),
+        "--index".to_string(),
+    ];
+    if req.revert {
+        plain_check_args.push("-R".to_string());
+    }
+    plain_check_args.push(patch_arg.clone());
+    let (plain_check_code, _, _) = run_git(&git_root, &cfg_parts, &plain_check_args)?;
+
+    let mut args = vec!["apply".to_string()];
+    if plain_check_code != 0 {
+        ensure_no_selected_merge_drivers(&git_root, &patch_paths, &cfg_parts)?;
+        if req.revert {
+            // Stage WT paths first to avoid index mismatch on three-way revert.
+            stage_effective_paths(&git_root, &patch_paths)?;
+        }
+        args.push("--3way".to_string());
+    } else {
+        args.push("--index".to_string());
+    }
+    if req.revert {
+        args.push("-R".to_string());
+    }
+    args.push(patch_arg);
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
     let (code, stdout, stderr) = run_git(&git_root, &cfg_parts, &args)?;
