@@ -553,6 +553,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 let mut server = codex_mcp::codex_apps_mcp_server_config(
                     "https://selected.invalid",
                     /*apps_mcp_product_sku*/ None,
+                    /*plugin_service_preview*/ false,
                 );
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;

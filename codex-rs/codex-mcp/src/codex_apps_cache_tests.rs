@@ -55,6 +55,7 @@ fn create_codex_apps_tools_cache_context(
             account_id: account_id.map(ToOwned::to_owned),
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     )
 }
@@ -132,6 +133,22 @@ fn codex_apps_tools_cache_is_scoped_per_user() {
         cache_context_user_2.tools_cache_path(),
         "each user should get an isolated cache file"
     );
+}
+
+#[test]
+fn codex_apps_tools_cache_is_scoped_by_plugin_service_preview() {
+    let codex_home = tempdir().expect("tempdir");
+    let cache = CodexAppsToolsCache::default();
+    let regular = cache.context(
+        codex_home.path().to_path_buf(),
+        codex_apps_tools_cache_key(/*auth*/ None, /*plugin_service_preview*/ false),
+    );
+    let preview = cache.context(
+        codex_home.path().to_path_buf(),
+        codex_apps_tools_cache_key(/*auth*/ None, /*plugin_service_preview*/ true),
+    );
+
+    assert_ne!(regular.tools_cache_path(), preview.tools_cache_path());
 }
 
 #[test]
@@ -361,6 +378,7 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     );
     let cache_context_2 = cache.context(
@@ -369,6 +387,7 @@ fn codex_apps_tools_cache_publishes_newest_shared_snapshot() {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     );
     let older_ticket = cache_context_1.begin_fetch(CodexAppsToolsFetchSource::Startup);
@@ -413,6 +432,7 @@ fn codex_apps_tools_cache_keeps_live_publish_when_disk_persistence_fails() {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     );
     let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "live")];
@@ -442,6 +462,7 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
             account_id: Some("account-one".to_string()),
             chatgpt_user_id: Some("user-one".to_string()),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     );
     let user_two_context = cache.context(
@@ -450,6 +471,7 @@ fn codex_apps_tools_cache_scopes_non_utf8_home_disk_paths() {
             account_id: Some("account-two".to_string()),
             chatgpt_user_id: Some("user-two".to_string()),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     );
     let cache_paths = [

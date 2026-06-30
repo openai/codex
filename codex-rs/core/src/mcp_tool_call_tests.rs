@@ -1411,6 +1411,7 @@ async fn host_owned_codex_apps_manager(
         codex_mcp::EffectiveMcpServer::configured(codex_mcp::codex_apps_mcp_server_config(
             "https://chatgpt.com",
             /*apps_mcp_product_sku*/ None,
+            /*plugin_service_preview*/ false,
         )),
     )]);
     let manager = codex_mcp::McpConnectionManager::new(
@@ -1432,7 +1433,13 @@ async fn host_owned_codex_apps_manager(
         ),
         turn_context.config.codex_home.to_path_buf(),
         session.services.mcp_manager.codex_apps_tools_cache(),
-        codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
+        codex_mcp::codex_apps_tools_cache_key(
+            auth.as_ref(),
+            turn_context
+                .config
+                .features
+                .enabled(codex_features::Feature::PluginServicePreview),
+        ),
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,

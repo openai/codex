@@ -55,6 +55,18 @@ pub fn with_chatgpt_cloudflare_cookie_store(
     builder.cookie_provider(Arc::clone(&SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE))
 }
 
+/// Returns the Cloudflare infrastructure cookies that the shared Codex cookie store would attach
+/// to `url`.
+///
+/// Use this only when a caller must construct an explicit `Cookie` header. Reqwest does not add
+/// cookie-provider values when that header is already present.
+pub fn chatgpt_cloudflare_cookie_header(url: &str) -> Option<Vec<u8>> {
+    let url = reqwest::Url::parse(url).ok()?;
+    SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE
+        .cookies(&url)
+        .map(|value| value.as_bytes().to_vec())
+}
+
 fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
     match url.scheme() {
         "https" => {}

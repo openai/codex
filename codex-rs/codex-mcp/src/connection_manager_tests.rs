@@ -79,6 +79,7 @@ fn create_codex_apps_tools_cache_context(
             account_id: account_id.map(ToOwned::to_owned),
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
     )
 }
@@ -1395,6 +1396,7 @@ fn server_metadata_preserves_tool_approval_policy() {
     let mut config = crate::codex_apps_mcp_server_config(
         "https://docs.example",
         /*apps_mcp_product_sku*/ None,
+        /*plugin_service_preview*/ false,
     );
     config.environment_id = "remote".to_string();
     config.default_tools_approval_mode = Some(AppToolApproval::Prompt);
@@ -1439,6 +1441,7 @@ fn host_owned_codex_apps_matches_reserved_name_with_server_metadata() {
     let server = EffectiveMcpServer::configured(crate::codex_apps_mcp_server_config(
         "https://chatgpt.com",
         /*apps_mcp_product_sku*/ None,
+        /*plugin_service_preview*/ false,
     ));
     manager.server_metadata.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -1532,6 +1535,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             account_id: None,
             chatgpt_user_id: None,
             is_workspace_account: false,
+            plugin_service_preview: false,
         },
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
