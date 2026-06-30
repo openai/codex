@@ -9,8 +9,10 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
 const DENY_READ_ACL_STATE_FILE: &str = "deny_read_acl_state.json";
 
@@ -69,19 +71,139 @@ pub unsafe fn sync_persistent_deny_read_acls(
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse deny-read ACL state {}", path.display())),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Ok(PersistentDenyReadAclState::default())
-        }
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                quarantine_corrupt_state_file(path)?;
+                Ok(PersistentDenyReadAclState::default())
+            }
+        },
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(PersistentDenyReadAclState::default()),
         Err(err) => {
             Err(err).with_context(|| format!("read deny-read ACL state {}", path.display()))
         }
     }
 }
 
+fn quarantine_corrupt_state_file(path: &Path) -> Result<()> {
+    let quarantine_path = corrupt_state_backup_path(path);
+    match std::fs::remove_file(&quarantine_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "remove previous corrupt deny-read ACL backup {}",
+                    quarantine_path.display()
+                )
+            });
+        }
+    }
+    std::fs::rename(path, &quarantine_path).with_context(|| {
+        format!(
+            "quarantine corrupt deny-read ACL state {} to {}",
+            path.display(),
+            quarantine_path.display()
+        )
+    })
+}
+
+fn corrupt_state_backup_path(path: &Path) -> PathBuf {
+    let backup_name = match path.file_name() {
+        Some(name) => {
+            let mut name = name.to_os_string();
+            name.push(".corrupt");
+            name
+        }
+        None => "deny_read_acl_state.json.corrupt".into(),
+    };
+    path.with_file_name(backup_name)
+}
+
 fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state).context("serialize deny-read ACL state")?;
-    std::fs::write(path, bytes)
-        .with_context(|| format!("write deny-read ACL state {}", path.display()))
+    let parent = path.parent().with_context(|| {
+        format!(
+            "locate parent dir for deny-read ACL state {}",
+            path.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create deny-read ACL state dir {}", parent.display()))?;
+
+    let temp_file = NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "create temp deny-read ACL state file in {}",
+            parent.display()
+        )
+    })?;
+    std::fs::write(temp_file.path(), bytes).with_context(|| {
+        format!(
+            "write temp deny-read ACL state file {}",
+            temp_file.path().display()
+        )
+    })?;
+    temp_file
+        .persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("persist deny-read ACL state {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::corrupt_state_backup_path;
+    use super::load_state;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_state_recovers_from_corrupt_json() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("deny_read_acl_state.json");
+        fs::write(&path, b"{not json").expect("write corrupt state");
+
+        let state = load_state(&path).expect("load state");
+
+        assert!(state.principals.is_empty());
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read(corrupt_state_backup_path(&path)).expect("read backup"),
+            b"{not json"
+        );
+    }
+
+    #[test]
+    fn load_state_recovers_from_nul_filled_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("deny_read_acl_state.json");
+        fs::write(&path, vec![0_u8; 32]).expect("write corrupt state");
+
+        let state = load_state(&path).expect("load state");
+
+        assert!(state.principals.is_empty());
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read(corrupt_state_backup_path(&path)).expect("read backup"),
+            vec![0_u8; 32]
+        );
+    }
+
+    #[test]
+    fn load_state_reads_valid_json() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("deny_read_acl_state.json");
+        fs::write(
+            &path,
+            r#"{"principals":{"S-1-1-0":["C:\\Users\\alice\\.ssh"]}}"#,
+        )
+        .expect("write state");
+
+        let state = load_state(&path).expect("load state");
+
+        let saved_paths = state
+            .principals
+            .get("S-1-1-0")
+            .expect("principal should exist");
+        assert_eq!(saved_paths.len(), 1);
+    }
 }
