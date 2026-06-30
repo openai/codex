@@ -443,14 +443,21 @@ async fn warm_plugins_and_skills_for_session_init(
     plugins_manager: Arc<PluginsManager>,
     skills_service: Arc<SkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
+    project_root: Option<(AbsolutePathBuf, AbsolutePathBuf)>,
 ) -> Vec<SkillError> {
     let fs = turn_environments.primary_filesystem();
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
     let plugin_skill_snapshots = plugins_manager.plugin_skill_snapshots_for_config(&plugins_input);
-    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots)
-        .with_plugin_skill_snapshots(plugin_skill_snapshots);
+    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
+    let skills_input = match project_root {
+        Some((discovery_cwd, project_root)) => {
+            skills_input.with_project_root(discovery_cwd, project_root)
+        }
+        None => skills_input,
+    }
+    .with_plugin_skill_snapshots(plugin_skill_snapshots);
     skills_service
         .snapshot_for_config(&skills_input, fs)
         .await
@@ -900,14 +907,20 @@ impl Session {
             turn_environments.update_selections(session_configuration.environment_selections());
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
-            agents_md_manager
+            let project_root = agents_md_manager
                 .refresh(config.as_ref(), &resolved_environments)
-                .await;
+                .await
+                .and_then(|root| root.to_abs_path().ok());
+            let project_root = resolved_environments
+                .primary()
+                .and_then(|environment| environment.cwd().to_abs_path().ok())
+                .zip(project_root);
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
                 Arc::clone(&plugins_manager),
                 Arc::clone(&skills_service),
                 &resolved_environments,
+                project_root,
             )
             .instrument(info_span!(
                 "session_init.plugin_skill_warmup",
