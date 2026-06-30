@@ -69,8 +69,13 @@ pub unsafe fn sync_persistent_deny_read_acls(
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse deny-read ACL state {}", path.display())),
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                backup_corrupt_state(path, &bytes)?;
+                Ok(PersistentDenyReadAclState::default())
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             Ok(PersistentDenyReadAclState::default())
         }
@@ -80,8 +85,43 @@ fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     }
 }
 
+fn backup_corrupt_state(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut backup_name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| DENY_READ_ACL_STATE_FILE.into());
+    backup_name.push(".corrupt");
+    let backup_path = path.with_file_name(backup_name);
+    std::fs::write(&backup_path, bytes)
+        .with_context(|| format!("write corrupt deny-read ACL backup {}", backup_path.display()))
+}
+
 fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state).context("serialize deny-read ACL state")?;
     std::fs::write(path, bytes)
         .with_context(|| format!("write deny-read ACL state {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_state;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_state_recovers_from_corrupt_json_and_writes_backup() {
+        let temp = tempdir().expect("tempdir");
+        let state_path = temp.path().join("deny_read_acl_state.json");
+        let corrupt_bytes = vec![0, 0, 0, 0];
+        fs::write(&state_path, &corrupt_bytes).expect("write corrupt state");
+
+        let state = load_state(&state_path).expect("load state");
+
+        assert!(state.principals.is_empty());
+        assert_eq!(
+            fs::read(temp.path().join("deny_read_acl_state.json.corrupt"))
+                .expect("read corrupt backup"),
+            corrupt_bytes
+        );
+    }
 }
