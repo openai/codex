@@ -25,6 +25,8 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -104,16 +106,26 @@ pub enum RolloutRecorderParams {
 }
 
 enum RolloutCmd {
-    AddItems(Vec<RolloutItem>),
+    AddItems {
+        items: Vec<RolloutItem>,
+        span: Span,
+        queue_wait_span: Span,
+    },
     Persist {
         ack: oneshot::Sender<std::io::Result<()>>,
+        span: Span,
+        queue_wait_span: Span,
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
         ack: oneshot::Sender<std::io::Result<()>>,
+        span: Span,
+        queue_wait_span: Span,
     },
     Shutdown {
         ack: oneshot::Sender<std::io::Result<()>>,
+        span: Span,
+        queue_wait_span: Span,
     },
 }
 
@@ -878,14 +890,34 @@ impl RolloutRecorder {
         if items.is_empty() {
             return Ok(());
         }
-        self.tx
-            .send(RolloutCmd::AddItems(items.to_vec()))
+        let command_span = tracing::info_span!(
+            "rollout_recorder.command.add_items",
+            item_count = items.len(),
+        );
+        let enqueue_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.enqueue_wait"
+        );
+        let permit = self
+            .tx
+            .reserve()
+            .instrument(enqueue_span)
             .await
             .map_err(|e| {
                 self.writer_task.terminal_failure().unwrap_or_else(|| {
                     IoError::other(format!("failed to queue rollout items: {e}"))
                 })
-            })
+            })?;
+        let queue_wait_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.queue_wait"
+        );
+        permit.send(RolloutCmd::AddItems {
+            items: items.to_vec(),
+            span: command_span,
+            queue_wait_span,
+        });
+        Ok(())
     }
 
     /// Materialize the rollout file and persist all buffered items.
@@ -894,15 +926,36 @@ impl RolloutRecorder {
     /// and a later `persist()` or `flush()` can retry opening and writing the rollout file.
     pub async fn persist(&self) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(RolloutCmd::Persist { ack: tx })
+        let command_span = tracing::info_span!("rollout_recorder.command.persist");
+        let enqueue_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.enqueue_wait"
+        );
+        let permit = self
+            .tx
+            .reserve()
+            .instrument(enqueue_span)
             .await
             .map_err(|e| {
                 self.writer_task.terminal_failure().unwrap_or_else(|| {
                     IoError::other(format!("failed to queue rollout persist: {e}"))
                 })
             })?;
-        rx.await.map_err(|e| {
+        let queue_wait_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.queue_wait"
+        );
+        permit.send(RolloutCmd::Persist {
+            ack: tx,
+            span: command_span.clone(),
+            queue_wait_span,
+        });
+        rx.instrument(tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.response_wait"
+        ))
+        .await
+        .map_err(|e| {
             self.writer_task.terminal_failure().unwrap_or_else(|| {
                 IoError::other(format!("failed waiting for rollout persist: {e}"))
             })
@@ -915,15 +968,36 @@ impl RolloutRecorder {
     /// retrying. This returns an error only when that retry also fails or the writer task is gone.
     pub async fn flush(&self) -> std::io::Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(RolloutCmd::Flush { ack: tx })
+        let command_span = tracing::info_span!("rollout_recorder.command.flush");
+        let enqueue_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.enqueue_wait"
+        );
+        let permit = self
+            .tx
+            .reserve()
+            .instrument(enqueue_span)
             .await
             .map_err(|e| {
                 self.writer_task.terminal_failure().unwrap_or_else(|| {
                     IoError::other(format!("failed to queue rollout flush: {e}"))
                 })
             })?;
-        rx.await.map_err(|e| {
+        let queue_wait_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.queue_wait"
+        );
+        permit.send(RolloutCmd::Flush {
+            ack: tx,
+            span: command_span.clone(),
+            queue_wait_span,
+        });
+        rx.instrument(tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.response_wait"
+        ))
+        .await
+        .map_err(|e| {
             self.writer_task
                 .terminal_failure()
                 .unwrap_or_else(|| IoError::other(format!("failed waiting for rollout flush: {e}")))
@@ -1017,12 +1091,13 @@ impl RolloutRecorder {
     /// If draining fails, the writer stays alive so callers can continue retrying flush/shutdown.
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
-        match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            Ok(_) => rx_done.await.map_err(|e| {
-                self.writer_task.terminal_failure().unwrap_or_else(|| {
-                    IoError::other(format!("failed waiting for rollout shutdown: {e}"))
-                })
-            })??,
+        let command_span = tracing::info_span!("rollout_recorder.command.shutdown");
+        let enqueue_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.enqueue_wait"
+        );
+        let permit = match self.tx.reserve().instrument(enqueue_span).await {
+            Ok(permit) => permit,
             Err(e) => {
                 if let Some(err) = self.writer_task.terminal_failure() {
                     warn!(
@@ -1036,6 +1111,26 @@ impl RolloutRecorder {
                 )));
             }
         };
+        let queue_wait_span = tracing::info_span!(
+            parent: &command_span,
+            "rollout_recorder.command.queue_wait"
+        );
+        permit.send(RolloutCmd::Shutdown {
+            ack: tx_done,
+            span: command_span.clone(),
+            queue_wait_span,
+        });
+        rx_done
+            .instrument(tracing::info_span!(
+                parent: &command_span,
+                "rollout_recorder.command.response_wait"
+            ))
+            .await
+            .map_err(|e| {
+                self.writer_task.terminal_failure().unwrap_or_else(|| {
+                    IoError::other(format!("failed waiting for rollout shutdown: {e}"))
+                })
+            })??;
         Ok(())
     }
 }
@@ -1580,19 +1675,37 @@ impl RolloutWriterState {
         self.pending_items.extend(items);
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.add_items.auto_flush",
+        skip_all,
+        fields(pending_item_count = self.pending_items.len())
+    )]
     async fn flush_if_materialized(&mut self) {
         if self.is_deferred() {
             return;
         }
-        if let Err(err) = self.flush().await {
+        if let Err(err) = self.write_pending_with_recovery("auto_flush").await {
             self.enter_recovery_mode(&err);
         }
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.persist_command",
+        skip_all,
+        fields(pending_item_count = self.pending_items.len())
+    )]
     async fn persist(&mut self) -> std::io::Result<()> {
         self.write_pending_with_recovery("persist").await
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.flush_command",
+        skip_all,
+        fields(pending_item_count = self.pending_items.len())
+    )]
     async fn flush(&mut self) -> std::io::Result<()> {
         if self.is_deferred() && self.pending_items.is_empty() {
             return Ok(());
@@ -1607,6 +1720,12 @@ impl RolloutWriterState {
         self.write_pending_with_recovery("shutdown").await
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.write_pending_with_recovery",
+        skip_all,
+        fields(operation, pending_item_count = self.pending_items.len())
+    )]
     async fn write_pending_with_recovery(&mut self, operation: &str) -> std::io::Result<()> {
         match self.write_pending_once().await {
             Ok(()) => {
@@ -1653,6 +1772,7 @@ impl RolloutWriterState {
         self.writer = None;
     }
 
+    #[tracing::instrument(level = "info", name = "rollout_recorder.writer.ensure_open", skip_all)]
     async fn ensure_writer_open(&mut self) -> std::io::Result<()> {
         if self.writer.is_some() {
             return Ok(());
@@ -1671,6 +1791,12 @@ impl RolloutWriterState {
         Ok(())
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.write_session_meta",
+        skip_all,
+        fields(has_session_meta = self.meta.is_some())
+    )]
     async fn write_session_meta_if_needed(&mut self) -> std::io::Result<()> {
         let Some(session_meta) = self.meta.as_ref().cloned() else {
             return Ok(());
@@ -1680,18 +1806,36 @@ impl RolloutWriterState {
         Ok(())
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.write_pending",
+        skip_all,
+        fields(
+            pending_item_count = self.pending_items.len(),
+            has_session_meta = self.meta.is_some(),
+        )
+    )]
     async fn write_pending_once(&mut self) -> std::io::Result<()> {
+        // The command queue is ordered, so a clean writer has already flushed every prior write.
+        // In particular, an explicit Flush immediately following AddItems does not need to issue a
+        // second identical file flush after AddItems' auto-flush completed successfully.
+        if self.meta.is_none() && self.pending_items.is_empty() {
+            return Ok(());
+        }
         self.ensure_writer_open().await?;
         self.write_session_meta_if_needed().await?;
 
         self.write_pending_items_once().await?;
 
-        if let Some(writer) = self.writer.as_mut() {
-            writer.file.flush().await?;
-        }
         Ok(())
     }
 
+    #[tracing::instrument(
+        level = "info",
+        name = "rollout_recorder.writer.serialize_and_write_items",
+        skip_all,
+        fields(item_count = self.pending_items.len())
+    )]
     async fn write_pending_items_once(&mut self) -> std::io::Result<()> {
         let Some(writer) = self.writer.as_mut() else {
             return Err(IoError::other("rollout writer is not open"));
@@ -1728,25 +1872,67 @@ async fn rollout_writer(
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
-            RolloutCmd::AddItems(items) => {
-                state.add_items(items);
-                state.flush_if_materialized().await;
+            RolloutCmd::AddItems {
+                items,
+                span,
+                queue_wait_span,
+            } => {
+                drop(queue_wait_span);
+                async {
+                    state.add_items(items);
+                    state.flush_if_materialized().await;
+                }
+                .instrument(span)
+                .await;
             }
-            RolloutCmd::Persist { ack } => {
-                let _ = ack.send(state.persist().await);
+            RolloutCmd::Persist {
+                ack,
+                span,
+                queue_wait_span,
+            } => {
+                drop(queue_wait_span);
+                async {
+                    let _ = ack.send(state.persist().await);
+                }
+                .instrument(span)
+                .await;
             }
-            RolloutCmd::Flush { ack } => {
-                let _ = ack.send(state.flush().await);
+            RolloutCmd::Flush {
+                ack,
+                span,
+                queue_wait_span,
+            } => {
+                drop(queue_wait_span);
+                async {
+                    let _ = ack.send(state.flush().await);
+                }
+                .instrument(span)
+                .await;
             }
-            RolloutCmd::Shutdown { ack } => match state.shutdown().await {
-                Ok(()) => {
-                    let _ = ack.send(Ok(()));
+            RolloutCmd::Shutdown {
+                ack,
+                span,
+                queue_wait_span,
+            } => {
+                drop(queue_wait_span);
+                let should_break = async {
+                    match state.shutdown().await {
+                        Ok(()) => {
+                            let _ = ack.send(Ok(()));
+                            true
+                        }
+                        Err(err) => {
+                            let _ = ack.send(Err(err));
+                            false
+                        }
+                    }
+                }
+                .instrument(span)
+                .await;
+                if should_break {
                     break;
                 }
-                Err(err) => {
-                    let _ = ack.send(Err(err));
-                }
-            },
+            }
         }
     }
 
@@ -1758,12 +1944,19 @@ async fn write_session_meta(
     session_meta: SessionMeta,
     cwd: &Path,
 ) -> std::io::Result<()> {
-    let git_info = if get_git_repo_root(cwd).is_some() {
-        collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
-            commit_hash: info.commit_hash,
-            branch: info.branch,
-            repository_url: info.repository_url,
-        })
+    let is_git_repo = tracing::info_span!("rollout_recorder.writer.git_root_discovery")
+        .in_scope(|| get_git_repo_root(cwd).is_some());
+    let git_info = if is_git_repo {
+        collect_git_info(cwd)
+            .instrument(tracing::info_span!(
+                "rollout_recorder.writer.collect_git_info"
+            ))
+            .await
+            .map(|info| ProtocolGitInfo {
+                commit_hash: info.commit_hash,
+                branch: info.branch,
+                repository_url: info.repository_url,
+            })
     } else {
         None
     };
@@ -1824,10 +2017,20 @@ impl JsonlWriter {
         self.write_line(&line).await
     }
     async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
-        let mut json = serde_json::to_string(item)?;
+        let mut json = tracing::info_span!("rollout_recorder.writer.serialize")
+            .in_scope(|| serde_json::to_string(item))?;
         json.push('\n');
-        self.file.write_all(json.as_bytes()).await?;
-        self.file.flush().await?;
+        self.file
+            .write_all(json.as_bytes())
+            .instrument(tracing::info_span!(
+                "rollout_recorder.writer.write",
+                byte_count = json.len(),
+            ))
+            .await?;
+        self.file
+            .flush()
+            .instrument(tracing::info_span!("rollout_recorder.writer.file_flush"))
+            .await?;
         Ok(())
     }
 }
