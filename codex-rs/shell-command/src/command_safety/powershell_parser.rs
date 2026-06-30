@@ -460,11 +460,12 @@ mod tests {
 
     #[test]
     fn production_resolver_handles_multiple_windows_powershell_requests() {
-        let powershell = trusted_windows_powershell_invocation_path()
-            .expect("Windows PowerShell must exist at the authoritative System known folder");
-        let powershell = powershell
-            .to_str()
-            .expect("the Windows System known folder must be valid UTF-8");
+        let Some(powershell) = trusted_windows_powershell_invocation_path() else {
+            panic!("Windows PowerShell must exist at the authoritative System known folder");
+        };
+        let Some(powershell) = powershell.to_str() else {
+            panic!("the Windows System known folder must be valid UTF-8");
+        };
 
         let first = try_parse_powershell_ast_commands(powershell, "Get-Content 'foo bar'")
             .map(PowershellParseOutcome::Commands)
@@ -498,9 +499,9 @@ mod tests {
             );
             return;
         };
-        let pwsh = pwsh
-            .to_str()
-            .expect("the Program Files known folder must be valid UTF-8");
+        let Some(pwsh) = pwsh.to_str() else {
+            panic!("the Program Files known folder must be valid UTF-8");
+        };
 
         assert_eq!(
             try_parse_powershell_ast_commands(pwsh, "pwd && ls"),
@@ -509,14 +510,16 @@ mod tests {
     }
 
     fn trusted_windows_powershell_parser() -> PathBuf {
-        let invocation_path = trusted_windows_powershell_invocation_path()
-            .expect("Windows PowerShell must exist at the authoritative System known folder");
-        trusted_powershell_parser_executable(
-            invocation_path
-                .to_str()
-                .expect("the Windows System known folder must be valid UTF-8"),
-        )
-        .expect("the production trust resolver must accept Windows PowerShell")
+        let Some(invocation_path) = trusted_windows_powershell_invocation_path() else {
+            panic!("Windows PowerShell must exist at the authoritative System known folder");
+        };
+        let Some(invocation_path_str) = invocation_path.to_str() else {
+            panic!("the Windows System known folder must be valid UTF-8");
+        };
+        let Some(parser) = trusted_powershell_parser_executable(invocation_path_str) else {
+            panic!("the production trust resolver must accept Windows PowerShell");
+        };
+        parser
     }
 
     #[test]

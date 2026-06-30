@@ -617,11 +617,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_powershell_full_path_is_safe() {
-        let powershell = crate::command_safety::trusted_windows_powershell_invocation_path()
-            .expect("Windows PowerShell must exist at the authoritative System known folder");
-        let powershell = powershell
-            .to_str()
-            .expect("the Windows System known folder must be valid UTF-8");
+        let Some(powershell) = crate::command_safety::trusted_windows_powershell_invocation_path()
+        else {
+            panic!("Windows PowerShell must exist at the authoritative System known folder");
+        };
+        let Some(powershell) = powershell.to_str() else {
+            panic!("the Windows System known folder must be valid UTF-8");
+        };
 
         assert!(is_known_safe_command(&vec_str(&[
             powershell,

@@ -222,19 +222,22 @@ mod tests {
     use std::sync::LazyLock;
 
     static WINDOWS_POWERSHELL_EXE: LazyLock<String> = LazyLock::new(|| {
-        crate::command_safety::trusted_windows_powershell_invocation_path()
-            .expect("Windows PowerShell must exist at the authoritative System known folder")
-            .to_str()
-            .expect("the Windows System known folder must be valid UTF-8")
-            .to_string()
+        let Some(path) = crate::command_safety::trusted_windows_powershell_invocation_path() else {
+            panic!("Windows PowerShell must exist at the authoritative System known folder");
+        };
+        let Some(path) = path.to_str() else {
+            panic!("the Windows System known folder must be valid UTF-8");
+        };
+        path.to_string()
     });
 
     fn installed_pwsh() -> Option<&'static str> {
         static STANDARD_PWSH_EXE: LazyLock<Option<String>> = LazyLock::new(|| {
             crate::command_safety::trusted_standard_pwsh_invocation_path().map(|path| {
-                path.to_str()
-                    .expect("the Program Files known folder must be valid UTF-8")
-                    .to_string()
+                let Some(path) = path.to_str() else {
+                    panic!("the Program Files known folder must be valid UTF-8");
+                };
+                path.to_string()
             })
         });
         STANDARD_PWSH_EXE.as_deref()
