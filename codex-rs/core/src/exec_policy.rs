@@ -866,11 +866,15 @@ fn suppress_repo_sensitive_git_amendment(
 fn starts_with_git_executable(command: &[String]) -> bool {
     let Some(executable_name) = command
         .first()
-        .and_then(|executable| Path::new(executable).file_name())
-        .and_then(|name| name.to_str())
+        .and_then(|executable| executable.rsplit(['/', '\\']).next())
     else {
         return false;
     };
+    let executable_name = executable_name
+        .as_bytes()
+        .get(..2)
+        .filter(|prefix| prefix[0].is_ascii_alphabetic() && prefix[1] == b':')
+        .map_or(executable_name, |_| &executable_name[2..]);
     let executable_name = executable_name.to_ascii_lowercase();
     let executable_name = [".exe", ".cmd", ".bat", ".com"]
         .into_iter()

@@ -68,7 +68,10 @@ use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -245,6 +248,11 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
+        trusted_executable_dirs: trusted_executable_dirs(
+            &command_executor.env,
+            &command_executor.file_system_sandbox_policy,
+            &command_executor.cwd,
+        ),
         stopwatch: stopwatch.clone(),
     };
 
@@ -332,6 +340,11 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             req.additional_permissions_preapproved,
         ),
         prompt_permissions: req.additional_permissions.clone(),
+        trusted_executable_dirs: trusted_executable_dirs(
+            &command_executor.env,
+            &command_executor.file_system_sandbox_policy,
+            &command_executor.cwd,
+        ),
         stopwatch: Stopwatch::unlimited(),
     };
 
@@ -364,6 +377,7 @@ struct CoreShellActionProvider {
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
+    trusted_executable_dirs: Vec<TrustedExecutableDir>,
     stopwatch: Stopwatch,
 }
 
@@ -655,6 +669,8 @@ impl CoreShellActionProvider {
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                    trusted_executable_dirs: self.trusted_executable_dirs.clone(),
+                    cwd: workdir.clone(),
                 },
             )
         };
@@ -723,27 +739,51 @@ fn evaluate_intercepted_exec_policy(
         windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
+        trusted_executable_dirs,
+        cwd,
     } = context;
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     let CandidateCommands {
         commands,
         used_complex_parsing,
+        trusted_executable_name,
     } = if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
-        commands_for_intercepted_exec_policy(program, argv)
+        commands_for_intercepted_exec_policy(
+            program,
+            argv,
+            &trusted_executable_dirs,
+            &file_system_sandbox_policy,
+            &cwd,
+        )
     } else {
         // In this codepath, `commands` has a single entry where the program
         // is always an absolute path.
         CandidateCommands {
             commands: vec![join_program_and_argv(program, argv)],
             used_complex_parsing: false,
+            trusted_executable_name: trusted_intercepted_executable_name(
+                program,
+                argv,
+                &trusted_executable_dirs,
+                &file_system_sandbox_policy,
+                &cwd,
+            ),
         }
     };
 
     let fallback = |cmd: &[String]| {
+        let normalized_fallback_command = trusted_executable_name.as_ref().map(|name| {
+            let mut normalized = cmd.to_vec();
+            if let Some(executable) = normalized.first_mut() {
+                *executable = name.clone();
+            }
+            normalized
+        });
         crate::exec_policy::render_decision_for_unmatched_command(
-            cmd,
+            normalized_fallback_command.as_deref().unwrap_or(cmd),
             crate::exec_policy::UnmatchedCommandContext {
                 approval_policy,
                 permission_profile: &permission_profile,
@@ -771,16 +811,28 @@ struct InterceptedExecPolicyContext {
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
+    trusted_executable_dirs: Vec<TrustedExecutableDir>,
+    cwd: AbsolutePathBuf,
 }
 
 struct CandidateCommands {
     commands: Vec<Vec<String>>,
     used_complex_parsing: bool,
+    trusted_executable_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TrustedExecutableDir {
+    path: PathBuf,
+    canonical_path: PathBuf,
 }
 
 fn commands_for_intercepted_exec_policy(
     program: &AbsolutePathBuf,
     argv: &[String],
+    trusted_executable_dirs: &[TrustedExecutableDir],
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
 ) -> CandidateCommands {
     if let [_, flag, script] = argv {
         let shell_command = [
@@ -792,12 +844,14 @@ fn commands_for_intercepted_exec_policy(
             return CandidateCommands {
                 commands,
                 used_complex_parsing: false,
+                trusted_executable_name: None,
             };
         }
         if let Some(single_command) = parse_shell_lc_single_command_prefix(&shell_command) {
             return CandidateCommands {
                 commands: vec![single_command],
                 used_complex_parsing: true,
+                trusted_executable_name: None,
             };
         }
     }
@@ -805,7 +859,96 @@ fn commands_for_intercepted_exec_policy(
     CandidateCommands {
         commands: vec![join_program_and_argv(program, argv)],
         used_complex_parsing: false,
+        trusted_executable_name: trusted_intercepted_executable_name(
+            program,
+            argv,
+            trusted_executable_dirs,
+            file_system_sandbox_policy,
+            cwd,
+        ),
     }
+}
+
+fn trusted_executable_dirs(
+    env: &HashMap<String, String>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> Vec<TrustedExecutableDir> {
+    env.get("PATH")
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|path| path.is_absolute())
+        .filter_map(|path| {
+            if agent_can_write_path(file_system_sandbox_policy, cwd, &path) {
+                return None;
+            }
+            let canonical_path = std::fs::canonicalize(&path).ok()?;
+            if agent_can_write_path(file_system_sandbox_policy, cwd, &canonical_path) {
+                return None;
+            }
+            Some(TrustedExecutableDir {
+                path,
+                canonical_path,
+            })
+        })
+        .collect()
+}
+
+fn trusted_intercepted_executable_name(
+    program: &AbsolutePathBuf,
+    argv: &[String],
+    trusted_executable_dirs: &[TrustedExecutableDir],
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> Option<String> {
+    let argv_zero = argv.first()?;
+    let argv_zero_path = Path::new(argv_zero);
+    let is_bare_name = argv_zero_path.components().count() == 1;
+    let resolved_name_matches = program.as_path().file_name() == Some(argv_zero_path.as_os_str());
+    let resolved_from_trusted_path = program.as_path().parent().is_some_and(|parent| {
+        trusted_executable_dirs.iter().any(|directory| {
+            directory.path == parent
+                && std::fs::canonicalize(&directory.path)
+                    .is_ok_and(|canonical_path| canonical_path == directory.canonical_path)
+        })
+    });
+    let resolved_target_is_read_only =
+        std::fs::canonicalize(program.as_path())
+            .ok()
+            .is_some_and(|canonical_program| {
+                !agent_can_write_path(file_system_sandbox_policy, cwd, &canonical_program)
+            });
+
+    if is_bare_name
+        && resolved_name_matches
+        && resolved_from_trusted_path
+        && resolved_target_is_read_only
+    {
+        Some(argv_zero.clone())
+    } else {
+        None
+    }
+}
+
+fn agent_can_write_path(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+    path: &Path,
+) -> bool {
+    if !file_system_sandbox_policy.has_full_disk_write_access() {
+        return path.ancestors().any(|ancestor| {
+            file_system_sandbox_policy.can_write_path_with_cwd(ancestor, cwd.as_path())
+        });
+    }
+
+    path.ancestors().any(|ancestor| {
+        let Ok(ancestor) = CString::new(ancestor.as_os_str().as_bytes()) else {
+            return true;
+        };
+        // SAFETY: `ancestor` is a NUL-terminated C string that remains alive
+        // for the duration of this read-only access check.
+        unsafe { libc::access(ancestor.as_ptr(), libc::W_OK) == 0 }
+    })
 }
 
 struct CoreShellCommandExecutor {

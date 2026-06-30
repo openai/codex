@@ -1196,6 +1196,41 @@ fn path_qualified_safe_basename_requires_approval_for_untrusted_projects() {
     );
 }
 
+#[test]
+fn git_executable_detection_is_platform_independent() {
+    for executable in [
+        "git",
+        "GIT",
+        "/usr/bin/git",
+        "/opt/tools/GiT.ExE",
+        r"C:\Program Files\Git\cmd\git.exe",
+        r"C:/Program Files/Git/cmd/GIT.CMD",
+        r"C:git.exe",
+        r"d:GIT.CmD",
+        r"..\bin\git.BaT",
+        r".\git.CoM",
+    ] {
+        assert!(
+            starts_with_git_executable(&[executable.to_string()]),
+            "expected {executable:?} to be recognized as Git"
+        );
+    }
+
+    for executable in [
+        "git-lfs",
+        "legit",
+        "git.exe.old",
+        "/usr/bin/git/",
+        r"C:\tools\git.exe\helper",
+        r"C:notgit.exe",
+    ] {
+        assert!(
+            !starts_with_git_executable(&[executable.to_string()]),
+            "expected {executable:?} not to be recognized as Git"
+        );
+    }
+}
+
 #[tokio::test]
 async fn generic_git_policy_matrix_preserves_sandbox_and_escalation_semantics() {
     let command = vec!["git".to_string(), "status".to_string()];
@@ -1306,13 +1341,10 @@ async fn generic_git_never_offers_requested_or_shell_lowered_durable_amendments(
             ],
             None,
         ),
+        (vec!["/usr/bin/git".to_string(), "status".to_string()], None),
         (
             vec![
-                if cfg!(windows) {
-                    r"C:\Program Files\Git\cmd\git.exe".to_string()
-                } else {
-                    "/usr/bin/git".to_string()
-                },
+                r"C:\Program Files\Git\cmd\GIT.EXE".to_string(),
                 "status".to_string(),
             ],
             None,

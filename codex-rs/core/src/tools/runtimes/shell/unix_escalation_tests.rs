@@ -7,6 +7,7 @@ use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
+use super::trusted_executable_dirs;
 use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
@@ -42,6 +43,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -250,6 +253,9 @@ fn commands_for_intercepted_exec_policy_parses_plain_shell_wrappers() {
     let candidate_commands = commands_for_intercepted_exec_policy(
         &program,
         &["not-bash".into(), "-lc".into(), "git status && pwd".into()],
+        &[],
+        &read_only_file_system_sandbox_policy(),
+        &test_sandbox_cwd(),
     );
 
     assert_eq!(
@@ -260,6 +266,172 @@ fn commands_for_intercepted_exec_policy_parses_plain_shell_wrappers() {
         ]
     );
     assert!(!candidate_commands.used_complex_parsing);
+    assert_eq!(candidate_commands.trusted_executable_name, None);
+}
+
+fn intercepted_unless_trusted_decision(
+    program: &Path,
+    argv: &[&str],
+    permission_profile: PermissionProfile,
+    cwd: &Path,
+    path_dirs: &[&Path],
+) -> Decision {
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd).unwrap();
+    let mut env = HashMap::new();
+    env.insert(
+        "PATH".to_string(),
+        std::env::join_paths(path_dirs)
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    );
+    let trusted_executable_dirs =
+        trusted_executable_dirs(&env, &permission_profile.file_system_sandbox_policy(), &cwd);
+    evaluate_intercepted_exec_policy(
+        &PolicyParser::new().build(),
+        &AbsolutePathBuf::from_absolute_path(program).unwrap(),
+        &argv
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect::<Vec<_>>(),
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::UnlessTrusted,
+            permission_profile,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: false,
+            trusted_executable_dirs,
+            cwd,
+        },
+    )
+    .decision
+}
+
+#[test]
+fn trusted_executable_dirs_exclude_sandbox_writable_ancestor() {
+    let workspace = tempfile::tempdir().unwrap();
+    let locked = workspace.path().join("locked");
+    let bin = locked.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let cwd = AbsolutePathBuf::from_absolute_path(workspace.path()).unwrap();
+    let permission_profile = PermissionProfile::workspace_write();
+    let mut env = HashMap::new();
+    env.insert("PATH".to_string(), bin.display().to_string());
+
+    assert!(
+        trusted_executable_dirs(&env, &permission_profile.file_system_sandbox_policy(), &cwd)
+            .is_empty()
+    );
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn intercepted_exec_policy_normalizes_only_trusted_bare_path_resolution() {
+    let trusted_program_path = ["/bin/ls", "/usr/bin/ls"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .expect("test host should provide ls");
+    let trusted_program = Path::new(trusted_program_path);
+    let trusted_dir = trusted_program.parent().expect("ls should have a parent");
+
+    for profile in [
+        PermissionProfile::workspace_write(),
+        PermissionProfile::Disabled,
+    ] {
+        assert_eq!(
+            intercepted_unless_trusted_decision(
+                trusted_program,
+                &["ls", "."],
+                profile,
+                Path::new("/workspace"),
+                &[trusted_dir],
+            ),
+            Decision::Allow
+        );
+    }
+
+    for argv in [
+        ["./ls"].as_slice(),
+        [trusted_program_path].as_slice(),
+        ["not-ls"].as_slice(),
+    ] {
+        assert_eq!(
+            intercepted_unless_trusted_decision(
+                trusted_program,
+                argv,
+                PermissionProfile::workspace_write(),
+                Path::new("/workspace"),
+                &[trusted_dir],
+            ),
+            Decision::Prompt
+        );
+    }
+
+    let writable_path = tempfile::tempdir().unwrap();
+    let shadow_program_path = writable_path.path().join("ls");
+    std::fs::write(&shadow_program_path, "not a trusted host executable").unwrap();
+    for profile in [
+        PermissionProfile::workspace_write(),
+        PermissionProfile::Disabled,
+    ] {
+        assert_eq!(
+            intercepted_unless_trusted_decision(
+                &shadow_program_path,
+                &["ls"],
+                profile,
+                writable_path.path(),
+                &[writable_path.path()],
+            ),
+            Decision::Prompt
+        );
+    }
+}
+
+#[test]
+fn intercepted_exec_policy_rejects_symlink_into_writable_target() {
+    let root = tempfile::tempdir().unwrap();
+    let trusted_bin = root.path().join("trusted-bin");
+    let writable_dir = root.path().join("writable");
+    std::fs::create_dir_all(&trusted_bin).unwrap();
+    std::fs::create_dir_all(&writable_dir).unwrap();
+    let trusted_bin = std::fs::canonicalize(trusted_bin).unwrap();
+    let writable_dir = std::fs::canonicalize(writable_dir).unwrap();
+    let writable_target = writable_dir.join("ls");
+    std::fs::write(&writable_target, "attacker controlled").unwrap();
+    let linked_program = trusted_bin.join("ls");
+    std::os::unix::fs::symlink(&writable_target, &linked_program).unwrap();
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&writable_dir).unwrap();
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: cwd.clone() },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    assert_eq!(
+        intercepted_unless_trusted_decision(
+            &linked_program,
+            &["ls"],
+            permission_profile,
+            cwd.as_path(),
+            &[&trusted_bin],
+        ),
+        Decision::Prompt
+    );
 }
 
 #[test]
@@ -434,6 +606,7 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: Some(requested_permissions),
+        trusted_executable_dirs: Vec::new(),
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -570,6 +743,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        trusted_executable_dirs: Vec::new(),
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -634,6 +808,8 @@ fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_pars
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
 
@@ -685,6 +861,8 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
 
@@ -727,6 +905,8 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
 
@@ -781,6 +961,7 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         sandbox_permissions: SandboxPermissions::UseDefault,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: None,
+        trusted_executable_dirs: Vec::new(),
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -824,6 +1005,7 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        trusted_executable_dirs: Vec::new(),
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -865,6 +1047,8 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
                 /*additional_permissions_preapproved*/ true,
             ),
             enable_shell_wrapper_parsing: false,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
     let fresh_request = evaluate_intercepted_exec_policy(
@@ -877,6 +1061,8 @@ fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default(
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
             enable_shell_wrapper_parsing: false,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
 
@@ -910,6 +1096,8 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             enable_shell_wrapper_parsing: false,
+            trusted_executable_dirs: Vec::new(),
+            cwd: test_sandbox_cwd(),
         },
     );
 
