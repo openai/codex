@@ -274,7 +274,9 @@ impl ExecServerClient {
             connect_async_with_config(
                 request,
                 Some(noise_relay_websocket_config()),
-                /*disable_nagle*/ false,
+                // Rendezvous sends small, latency-sensitive frames, so avoid Nagle's coalescing delay.
+                /*disable_nagle*/
+                true,
             ),
         )
         .await
