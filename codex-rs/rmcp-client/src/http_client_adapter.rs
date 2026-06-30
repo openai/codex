@@ -215,6 +215,9 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             }
             Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
                 let body = collect_body(&mut body_stream).await?;
+                if body.is_empty() && matches!(message, JsonRpcMessage::Notification(_)) {
+                    return Ok(StreamableHttpPostResponse::Accepted);
+                }
                 let message: ServerJsonRpcMessage =
                     serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
                 Ok(StreamableHttpPostResponse::Json(message, session_id))
