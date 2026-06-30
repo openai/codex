@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::watch;
+use tracing::Instrument;
 use tracing::trace;
 
 use crate::ExecBackend;
@@ -31,11 +32,21 @@ impl RemoteProcess {
         Self { client }
     }
 
+    #[tracing::instrument(
+        name = "exec_server.remote.start",
+        level = "info",
+        skip_all,
+        fields(process_id = %params.process_id, tty = params.tty)
+    )]
     async fn start(
         &self,
         params: ExecParams,
     ) -> Result<StartedExecProcess, crate::ExecServerError> {
-        let client = self.client.get().await?;
+        let client = self
+            .client
+            .get()
+            .instrument(tracing::info_span!("exec_server.remote.client_ready"))
+            .await?;
         let session = client.start_process(params).await?;
 
         Ok(StartedExecProcess {
