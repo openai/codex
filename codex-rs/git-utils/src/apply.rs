@@ -1481,7 +1481,7 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
         let repo = init_repo();
         let root = repo.path();
         init_submodule_with_clean_filter(root);
-        ensure_paths_do_not_enter_submodules(root, &[":(glob)nested/**".to_string()])
+        ensure_paths_do_not_enter_submodules(root, &["[n]ested/file.txt".to_string()])
             .expect("treat patch paths as literal pathspecs");
         std::fs::write(root.join("root.txt"), "old\n").expect("write root file");
         let (add_code, _, add_err) = run(root, &["git", "add", "root.txt"]);
