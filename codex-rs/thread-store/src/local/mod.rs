@@ -713,6 +713,10 @@ mod tests {
             .append_items(&[user_message_item("new live append")])
             .await
             .expect("append after resume");
+        live_thread
+            .flush()
+            .await
+            .expect("flush append-derived metadata");
 
         let metadata = runtime
             .get_thread(thread_id)
@@ -767,6 +771,10 @@ mod tests {
             .append_items(&[user_message_item("new external append")])
             .await
             .expect("append after external resume");
+        live_thread
+            .flush()
+            .await
+            .expect("flush append-derived metadata");
 
         let metadata = runtime
             .get_thread(thread_id)
