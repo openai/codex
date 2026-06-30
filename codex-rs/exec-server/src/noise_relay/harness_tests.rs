@@ -226,7 +226,7 @@ async fn application_event_delivery_is_bounded() -> Result<()> {
 
     let result = send_incoming_event(
         &incoming_tx,
-        JsonRpcConnectionEvent::MalformedMessage {
+        || JsonRpcConnectionEvent::MalformedMessage {
             reason: "blocked event".to_string(),
         },
         Instant::now() + Duration::from_millis(10),
