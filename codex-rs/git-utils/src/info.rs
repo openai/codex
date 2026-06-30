@@ -13,16 +13,16 @@ use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::process::Command;
 use tokio::time::timeout;
 use ts_rs::TS;
 
+use crate::GitReadError;
 use crate::GitSha;
+use crate::git_command::GitRunner;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::GIT_COMMAND_TIMEOUT;
-use crate::safe_git::has_selected_executable_filters_from;
-use crate::safe_git::isolate_tokio_git_command_environment;
-use crate::safe_git::safe_untracked_paths_for_diff;
+use crate::safe_git::safe_untracked_paths_for_diff_checked;
+use crate::safe_git::selected_executable_filter_from;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -82,7 +82,7 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct GitDiffToRemote {
     pub sha: GitSha,
     pub diff: String,
@@ -289,23 +289,34 @@ fn trim_git_suffix(value: &str) -> &str {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let git = Path::new("git");
-    if has_selected_executable_filters_from(git, cwd).await? {
-        return None;
+    try_get_has_changes(cwd).await.ok()
+}
+
+pub async fn try_get_has_changes(cwd: &Path) -> Result<bool, GitReadError> {
+    let git = GitRunner::for_cwd(cwd)?;
+    if let Some((driver, path)) = selected_executable_filter_from(&git, cwd).await? {
+        return Err(GitReadError::SelectedExecutableFilter {
+            driver,
+            path: String::from_utf8_lossy(&path).into_owned(),
+        });
     }
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output = run_git_command_with_timeout_from(
-        git,
+    let fsmonitor = detect_local_fsmonitor_override(&git, cwd).await;
+    let output = try_run_git_command_with_timeout_from(
+        &git,
         &["status", "--porcelain", "--ignore-submodules=dirty"],
         cwd,
         fsmonitor,
+        "status",
     )
     .await?;
     if !output.status.success() {
-        return None;
+        return Err(GitReadError::CommandFailed {
+            operation: "status".to_string(),
+            exit_code: output.status.code(),
+        });
     }
 
-    Some(!output.stdout.is_empty())
+    Ok(!output.stdout.is_empty())
 }
 
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
@@ -396,14 +407,31 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
 
 /// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
 pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
-    get_git_repo_root(cwd)?;
+    try_git_diff_to_remote(cwd).await.ok()
+}
 
-    let remotes = get_git_remotes(cwd).await?;
-    let branches = branch_ancestry(cwd).await?;
-    let base_sha = find_closest_sha(cwd, &branches, &remotes).await?;
-    let diff = diff_against_sha(cwd, &base_sha).await?;
+pub async fn try_git_diff_to_remote(cwd: &Path) -> Result<GitDiffToRemote, GitReadError> {
+    let canonical_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
+        path: cwd.to_path_buf(),
+    })?;
+    get_git_repo_root(&canonical_cwd).ok_or_else(|| GitReadError::NotRepository {
+        path: canonical_cwd.clone(),
+    })?;
+    let git = GitRunner::for_cwd(&canonical_cwd)?;
+    let untracked = safe_untracked_paths_for_diff_checked(&git, &canonical_cwd).await?;
 
-    Some(GitDiffToRemote {
+    let remotes = get_git_remotes(&canonical_cwd)
+        .await
+        .ok_or(GitReadError::NoRemoteBase)?;
+    let branches = branch_ancestry(&canonical_cwd)
+        .await
+        .ok_or(GitReadError::NoRemoteBase)?;
+    let base_sha = find_closest_sha(&canonical_cwd, &branches, &remotes)
+        .await
+        .ok_or(GitReadError::NoRemoteBase)?;
+    let diff = try_diff_against_sha(&git, &canonical_cwd, &base_sha, untracked).await?;
+
+    Ok(GitDiffToRemote {
         sha: base_sha,
         diff,
     })
@@ -413,17 +441,12 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     // These callers only inspect repository metadata. Worktree workflows probe
     // once and pass their override directly to the lower-level runner.
-    run_git_command_with_timeout_from(
-        Path::new("git"),
-        args,
-        cwd,
-        crate::FsmonitorOverride::Disabled,
-    )
-    .await
+    let git = GitRunner::for_cwd(cwd).ok()?;
+    run_git_command_with_timeout_from(&git, args, cwd, crate::FsmonitorOverride::Disabled).await
 }
 
 struct LocalFsmonitorProbeRunner<'a> {
-    git: &'a Path,
+    git: &'a GitRunner,
     cwd: &'a Path,
 }
 
@@ -431,30 +454,40 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
         // Both probes are fast, bounded metadata queries that do not inspect the
         // worktree or index, so do not reduce the requested command's timeout.
-        let mut command = Command::new(self.git);
-        isolate_tokio_git_command_environment(&mut command);
+        let mut command = self.git.tokio_command();
         command.args(args).current_dir(self.cwd).kill_on_drop(true);
-        match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        match timeout(GIT_COMMAND_TIMEOUT, self.git.output_tokio(command)).await {
             Ok(Ok(output)) if output.status.success() => Some(output.stdout),
             _ => None,
         }
     }
 }
 
-async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::FsmonitorOverride {
+async fn detect_local_fsmonitor_override(git: &GitRunner, cwd: &Path) -> crate::FsmonitorOverride {
     let mut runner = LocalFsmonitorProbeRunner { git, cwd };
     crate::detect_fsmonitor_override(&mut runner).await
 }
 
 async fn run_git_command_with_timeout_from(
-    git: &Path,
+    git: &GitRunner,
     args: &[&str],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
+    try_run_git_command_with_timeout_from(git, args, cwd, fsmonitor, "gitMetadata")
+        .await
+        .ok()
+}
+
+async fn try_run_git_command_with_timeout_from(
+    git: &GitRunner,
+    args: &[&str],
+    cwd: &Path,
+    fsmonitor: crate::FsmonitorOverride,
+    operation: &str,
+) -> Result<std::process::Output, GitReadError> {
     let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
-    let mut command = Command::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+    let mut command = git.tokio_command();
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
@@ -464,11 +497,18 @@ async fn run_git_command_with_timeout_from(
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
-
-    match result {
-        Ok(Ok(output)) => Some(output),
-        _ => None, // Timeout or error
+    match timeout(GIT_COMMAND_TIMEOUT, git.output_tokio(command)).await {
+        Err(_) => Err(GitReadError::CommandTimedOut {
+            operation: operation.to_string(),
+        }),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(GitReadError::NoTrustedGit)
+        }
+        Ok(Err(_)) => Err(GitReadError::CommandFailed {
+            operation: operation.to_string(),
+            exit_code: None,
+        }),
+        Ok(Ok(output)) => Ok(output),
     }
 }
 
@@ -748,11 +788,14 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
     closest_sha.map(|(sha, _)| sha)
 }
 
-async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
-    let git = Path::new("git");
-    let untracked = safe_untracked_paths_for_diff(git, cwd).await?;
+async fn try_diff_against_sha(
+    git: &GitRunner,
+    cwd: &Path,
+    sha: &GitSha,
+    untracked: Vec<Vec<u8>>,
+) -> Result<String, GitReadError> {
     let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output = run_git_command_with_timeout_from(
+    let output = try_run_git_command_with_timeout_from(
         git,
         &[
             "diff",
@@ -764,35 +807,51 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
         ],
         cwd,
         fsmonitor,
+        "diffToRemote",
     )
     .await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
     if !exit_ok {
-        return None;
+        return Err(GitReadError::CommandFailed {
+            operation: "diffToRemote".to_string(),
+            exit_code: output.status.code(),
+        });
     }
-    let mut diff = String::from_utf8(output.stdout).ok()?;
+    let mut diff = String::from_utf8(output.stdout).map_err(|_| GitReadError::InvalidOutput {
+        operation: "diffToRemote".to_string(),
+    })?;
 
     if !untracked.is_empty() {
         let untracked = untracked
             .into_iter()
             .map(git_path_bytes_to_os_string)
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| GitReadError::InvalidOutput {
+                operation: "untrackedPaths".to_string(),
+            })?;
         let futures_iter = untracked.into_iter().map(|file| async move {
-            run_git_no_index_diff_from(git, cwd, fsmonitor, &file).await
+            try_run_git_no_index_diff_from(git, cwd, fsmonitor, &file).await
         });
         let results = join_all(futures_iter).await;
-        for extra in results.into_iter().flatten() {
-            if extra.status.code().is_some_and(|c| c == 0 || c == 1)
-                && let Ok(s) = String::from_utf8(extra.stdout)
-            {
-                diff.push_str(&s);
+        for result in results {
+            let extra = result?;
+            if !extra.status.code().is_some_and(|c| c == 0 || c == 1) {
+                return Err(GitReadError::CommandFailed {
+                    operation: "untrackedDiff".to_string(),
+                    exit_code: extra.status.code(),
+                });
             }
+            let extra =
+                String::from_utf8(extra.stdout).map_err(|_| GitReadError::InvalidOutput {
+                    operation: "untrackedDiff".to_string(),
+                })?;
+            diff.push_str(&extra);
         }
     }
 
-    Some(diff)
+    Ok(diff)
 }
 
 fn git_path_bytes_to_os_string(path: Vec<u8>) -> Option<std::ffi::OsString> {
@@ -807,16 +866,15 @@ fn git_path_bytes_to_os_string(path: Vec<u8>) -> Option<std::ffi::OsString> {
     }
 }
 
-async fn run_git_no_index_diff_from(
-    git: &Path,
+async fn try_run_git_no_index_diff_from(
+    git: &GitRunner,
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
     path: &OsStr,
-) -> Option<std::process::Output> {
+) -> Result<std::process::Output, GitReadError> {
     let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
     let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
-    let mut command = Command::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+    let mut command = git.tokio_command();
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["-c", &disabled_hooks])
@@ -833,9 +891,18 @@ async fn run_git_no_index_diff_from(
         .arg(path)
         .current_dir(cwd)
         .kill_on_drop(true);
-    match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => Some(output),
-        _ => None,
+    match timeout(GIT_COMMAND_TIMEOUT, git.output_tokio(command)).await {
+        Err(_) => Err(GitReadError::CommandTimedOut {
+            operation: "untrackedDiff".to_string(),
+        }),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(GitReadError::NoTrustedGit)
+        }
+        Ok(Err(_)) => Err(GitReadError::CommandFailed {
+            operation: "untrackedDiff".to_string(),
+            exit_code: None,
+        }),
+        Ok(Ok(output)) => Ok(output),
     }
 }
 
@@ -1006,6 +1073,7 @@ mod tests {
         // The config response mirrors:
         // git -c core.fsmonitor=/tmp/fsmonitor-helper \
         //   config --null --get core.fsmonitor
+        let git = GitRunner::from_executable_for_test(git);
         let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
         let output = run_git_command_with_timeout_from(
             &git,
@@ -1097,6 +1165,7 @@ mod tests {
             "write local built-in fsmonitor config"
         );
 
+        let git = GitRunner::from_executable_for_test(git);
         let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path()).await;
         let output = run_git_command_with_timeout_from(
             &git,

@@ -51,6 +51,56 @@ fn apply_allows_unused_global_merge_driver() {
 }
 
 #[test]
+fn three_way_apply_allows_unrelated_local_merge_driver() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), "base\n").expect("write base");
+    let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+    assert_eq!(add_code, 0, "add base: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "base"]);
+    assert_eq!(commit_code, 0, "commit base: {commit_err}");
+
+    std::fs::write(root.join("file.txt"), "base\npatched\n").expect("write patch side");
+    let (diff_code, diff, diff_err) = run(root, &["git", "diff", "--full-index", "--", "file.txt"]);
+    assert_eq!(diff_code, 0, "create patch: {diff_err}");
+    let (restore_code, _, restore_err) = run(root, &["git", "checkout", "--", "file.txt"]);
+    assert_eq!(restore_code, 0, "restore base: {restore_err}");
+
+    std::fs::write(root.join("file.txt"), "current\nbase\n").expect("write current side");
+    let (stage_code, _, stage_err) = run(root, &["git", "add", "file.txt"]);
+    assert_eq!(stage_code, 0, "stage current side: {stage_err}");
+    let (config_code, _, config_err) = run(
+        root,
+        &[
+            "git",
+            "config",
+            "merge.unused.driver",
+            "git config codex.mergeran true && false",
+        ],
+    );
+    assert_eq!(
+        config_code, 0,
+        "configure unused local driver: {config_err}"
+    );
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("allow unrelated local merge driver during three-way fallback");
+    assert_eq!(result.exit_code, 0, "three-way apply: {}", result.stderr);
+    assert!(result.cmd_for_log.contains("--3way"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read merged file"),
+        "current\nbase\npatched\n"
+    );
+    let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
+    assert_ne!(marker_code, 0, "unused merge driver must not run");
+}
+
+#[test]
 fn apply_allows_clean_patch_with_selected_merge_driver() {
     let repo = init_repo();
     let root = repo.path();
@@ -248,17 +298,32 @@ fn selected_driver_policy_handles_default_and_sentinel_ambiguity() {
 }
 
 #[test]
-fn selected_driver_policy_rejects_untrusted_scope_even_when_unused() {
-    let mut entries = config_entries([("merge.local.driver", "helper")]);
-    entries
-        .get_mut("merge.local.driver")
-        .expect("local driver")
-        .scope = GitConfigScope::Local;
-    let attributes = BTreeMap::from([("file.txt".to_string(), "other".to_string())]);
-    assert_eq!(
-        untrusted_driver_selection(&entries, &attributes).expect("local driver"),
-        Some(("local".to_string(), "<Git config>".to_string()))
-    );
+fn selected_driver_policy_ignores_scope_until_driver_is_selected() {
+    for scope in [
+        GitConfigScope::System,
+        GitConfigScope::Global,
+        GitConfigScope::Local,
+        GitConfigScope::Worktree,
+        GitConfigScope::Command,
+    ] {
+        let mut entries = config_entries([("merge.scoped.driver", "helper")]);
+        entries
+            .get_mut("merge.scoped.driver")
+            .expect("scoped driver")
+            .scope = scope;
+        let attributes = BTreeMap::from([("file.txt".to_string(), "other".to_string())]);
+        assert_eq!(
+            untrusted_driver_selection(&entries, &attributes).expect("unused scoped driver"),
+            None,
+            "{scope:?}"
+        );
+        let attributes = BTreeMap::from([("file.txt".to_string(), "scoped".to_string())]);
+        assert_eq!(
+            untrusted_driver_selection(&entries, &attributes).expect("selected scoped driver"),
+            Some(("scoped".to_string(), "file.txt".to_string())),
+            "{scope:?}"
+        );
+    }
 }
 
 #[test]

@@ -12,12 +12,15 @@ use std::path::PathBuf;
 
 use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
+use crate::git_command::GitRunner;
 use crate::merge_driver::ensure_no_selected_merge_drivers;
-use crate::patch_paths::ensure_paths_do_not_enter_submodules;
+use crate::patch_paths::classify_patch_paths;
 use crate::patch_paths::extract_effective_paths_from_patch;
 use crate::patch_paths::stage_effective_paths;
+use crate::patch_paths::validate_gitlink_updates;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ensure_no_selected_executable_git_filters;
+#[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
 
 /// Parameters for invoking [`apply_git_patch`].
@@ -46,16 +49,27 @@ pub struct ApplyGitResult {
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
+    let git = GitRunner::for_cwd_io(&req.cwd)?;
     let mut cfg_parts = configured_git_config_parts();
-    let git_root = resolve_git_root(&req.cwd, &cfg_parts)?;
+    let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch(&patch_path, req.revert)?;
-    ensure_no_selected_executable_git_filters(&git_root, &patch_paths, &cfg_parts)?;
-    ensure_paths_do_not_enter_submodules(&git_root, &patch_paths)?;
+    let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
+    ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    let guarded_paths = classify_patch_paths(&git, &git_root, &patch_paths)?;
+    validate_gitlink_updates(
+        &git,
+        &git_root,
+        &patch_paths,
+        &patch_path,
+        &req.diff,
+        req.revert,
+        &guarded_paths,
+    )?;
+    let index_only_gitlink_patch = guarded_paths.exact_gitlinks.len() == patch_paths.len();
 
     cfg_parts.extend(safe_git_config_parts());
     let patch_arg = patch_path.to_string_lossy().to_string();
@@ -63,12 +77,15 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
         let mut check_args = vec!["apply".to_string(), "--check".to_string()];
+        if index_only_gitlink_patch {
+            check_args.push("--cached".to_string());
+        }
         if req.revert {
             check_args.push("-R".to_string());
         }
         check_args.push(patch_arg);
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
-        let (c_code, c_out, c_err) = run_git(&git_root, &cfg_parts, &check_args)?;
+        let (c_code, c_out, c_err) = run_git(&git, &git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -90,27 +107,44 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     // Avoid three-way machinery entirely when the patch applies cleanly.
     // A selected merge driver is relevant only to the three-way fallback.
-    let mut plain_check_args = vec![
-        "apply".to_string(),
-        "--check".to_string(),
-        "--index".to_string(),
-    ];
+    let mut plain_check_args = vec!["apply".to_string(), "--check".to_string()];
+    plain_check_args.push(
+        if index_only_gitlink_patch {
+            "--cached"
+        } else {
+            "--index"
+        }
+        .to_string(),
+    );
     if req.revert {
         plain_check_args.push("-R".to_string());
     }
     plain_check_args.push(patch_arg.clone());
-    let (plain_check_code, _, _) = run_git(&git_root, &cfg_parts, &plain_check_args)?;
+    let (plain_check_code, _, _) = run_git(&git, &git_root, &cfg_parts, &plain_check_args)?;
 
     let mut args = vec!["apply".to_string()];
     if plain_check_code != 0 {
-        ensure_no_selected_merge_drivers(&git_root, &patch_paths, &cfg_parts)?;
+        ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
         if req.revert {
+            if !guarded_paths.exact_gitlinks.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "refusing to stage an exact gitlink for a reverse three-way apply",
+                ));
+            }
             // Stage WT paths first to avoid index mismatch on three-way revert.
-            stage_effective_paths(&git_root, &patch_paths)?;
+            stage_effective_paths(&git, &git_root, &patch_paths)?;
         }
         args.push("--3way".to_string());
     } else {
-        args.push("--index".to_string());
+        args.push(
+            if index_only_gitlink_patch {
+                "--cached"
+            } else {
+                "--index"
+            }
+            .to_string(),
+        );
     }
     if req.revert {
         args.push("-R".to_string());
@@ -118,7 +152,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     args.push(patch_arg);
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
-    let (code, stdout, stderr) = run_git(&git_root, &cfg_parts, &args)?;
+    let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);
@@ -140,16 +174,19 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     })
 }
 
-fn resolve_git_root(cwd: &Path, git_config_args: &[String]) -> io::Result<PathBuf> {
+fn resolve_git_root(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+) -> io::Result<PathBuf> {
     let requested_cwd = std::fs::canonicalize(cwd)?;
-    let mut command = std::process::Command::new("git");
-    isolate_git_command_environment(&mut command);
-    let out = command
+    let mut command = git.command();
+    command
         .args(git_config_args)
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .current_dir(&requested_cwd)
-        .output()?;
+        .current_dir(&requested_cwd);
+    let out = git.output(command)?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         return Err(io::Error::other(format!(
@@ -209,19 +246,20 @@ pub(crate) fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, Pat
 }
 
 pub(crate) fn run_git(
+    git: &GitRunner,
     cwd: &Path,
     git_cfg: &[String],
     args: &[String],
 ) -> io::Result<(i32, String, String)> {
-    let mut cmd = std::process::Command::new("git");
-    isolate_git_command_environment(&mut cmd);
+    let mut cmd = git.command();
     for p in git_cfg {
         cmd.arg(p);
     }
     for a in args {
         cmd.arg(a);
     }
-    let out = cmd.current_dir(cwd).output()?;
+    cmd.current_dir(cwd);
+    let out = git.output(cmd)?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -769,7 +807,9 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             "test.txt filter=codex-test\n",
         )
         .expect("attributes");
+        let git = GitRunner::for_cwd_io(repo.path()).expect("trusted Git");
         let error = ensure_no_selected_executable_git_filters(
+            &git,
             repo.path(),
             &["test.txt".to_string()],
             &config_args,
@@ -796,7 +836,9 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             );
             assert_eq!(config_code, 0, "configure core.worktree: {config_err}");
 
-            let error = resolve_git_root(&attacker, &[]).expect_err("reject redirected worktree");
+            let git = GitRunner::for_cwd_io(&attacker).expect("trusted Git");
+            let error =
+                resolve_git_root(&git, &attacker, &[]).expect_err("reject redirected worktree");
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
             assert!(error.to_string().contains("instead of expected worktree"));
         }

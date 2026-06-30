@@ -12,12 +12,6 @@ pub(crate) enum GitConfigScope {
     Command,
 }
 
-impl GitConfigScope {
-    pub(crate) fn is_system_or_global(self) -> bool {
-        matches!(self, Self::System | Self::Global)
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GitConfigEntry {
     pub(crate) scope: GitConfigScope,
@@ -63,6 +57,59 @@ pub(crate) fn parse_effective_config(
             value: value.to_string(),
         };
         effective.insert(key.to_string(), entry);
+    }
+    Ok(effective)
+}
+
+/// Parse the `--show-origin` form used by Git versions that predate
+/// `config --show-scope`. The record order still reflects effective config
+/// precedence, which is what helper selection relies on. Scope is retained as
+/// best-effort metadata only; command-line entries remain distinguishable.
+pub(crate) fn parse_effective_config_with_origins(
+    output: &[u8],
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    if output.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let Some(body) = output.strip_suffix(&[0]) else {
+        return Err(invalid_config_output("unterminated Git config output"));
+    };
+    let fields = body.split(|byte| *byte == 0).collect::<Vec<_>>();
+    if fields.len() % 2 != 0 {
+        return Err(invalid_config_output("incomplete Git config record"));
+    }
+
+    let mut effective = BTreeMap::new();
+    for record in fields.chunks_exact(2) {
+        let origin = parse_utf8_field(record[0], "config origin")?;
+        if origin.is_empty() {
+            return Err(invalid_config_output("empty Git config origin"));
+        }
+        let entry = parse_utf8_field(record[1], "config key/value")?;
+        let Some((key, value)) = entry.split_once('\n') else {
+            return Err(invalid_config_output(
+                "Git config record has no key/value separator",
+            ));
+        };
+        if key.is_empty() {
+            return Err(invalid_config_output("empty Git config key"));
+        }
+        let scope = if origin == "command line:" {
+            GitConfigScope::Command
+        } else {
+            // Older Git does not expose the scope. Selection depends on the
+            // emitted precedence order, not on this informational label.
+            GitConfigScope::Local
+        };
+        effective.insert(
+            key.to_string(),
+            GitConfigEntry {
+                scope,
+                origin: origin.to_string(),
+                key: key.to_string(),
+                value: value.to_string(),
+            },
+        );
     }
     Ok(effective)
 }

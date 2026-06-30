@@ -4,22 +4,24 @@ use std::io;
 use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 use std::process::Stdio;
 
+use crate::git_command::GitRunner;
 use crate::git_config::GitConfigEntry;
-use crate::git_config::parse_effective_config;
+#[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
+use crate::safe_git::read_effective_config_with_fallback;
 
 const MERGE_CONFIG_PATTERN: &str = r"^(merge\.default|merge\..*\.driver)$";
 
 pub(crate) fn ensure_no_selected_merge_drivers(
+    git: &GitRunner,
     cwd: &Path,
     paths: &[String],
     git_config_args: &[String],
 ) -> io::Result<()> {
-    let entries = read_merge_config(cwd, git_config_args)?;
-    let attributes = read_merge_attributes(cwd, paths, git_config_args)?;
+    let entries = read_merge_config(git, cwd, git_config_args)?;
+    let attributes = read_merge_attributes(git, cwd, paths, git_config_args)?;
     if let Some((driver, path)) = untrusted_driver_selection(&entries, &attributes)? {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -32,40 +34,15 @@ pub(crate) fn ensure_no_selected_merge_drivers(
 }
 
 fn read_merge_config(
+    git: &GitRunner,
     cwd: &Path,
     git_config_args: &[String],
 ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    let mut command = Command::new("git");
-    isolate_git_command_environment(&mut command);
-    let output = command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args([
-            "config",
-            "--null",
-            "--show-scope",
-            "--show-origin",
-            "--includes",
-            "--get-regexp",
-            MERGE_CONFIG_PATTERN,
-        ])
-        .current_dir(cwd)
-        .output()?;
-    if !output
-        .status
-        .code()
-        .is_some_and(|code| code == 0 || code == 1)
-    {
-        return Err(io::Error::other(format!(
-            "git merge config probe failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    parse_effective_config(&output.stdout)
+    read_effective_config_with_fallback(git, cwd, git_config_args, MERGE_CONFIG_PATTERN, "merge")
 }
 
 fn read_merge_attributes(
+    git: &GitRunner,
     cwd: &Path,
     paths: &[String],
     git_config_args: &[String],
@@ -83,15 +60,14 @@ fn read_merge_attributes(
     }
     input.rewind()?;
 
-    let mut command = Command::new("git");
-    isolate_git_command_environment(&mut command);
-    let output = command
+    let mut command = git.command();
+    command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         .args(["check-attr", "--stdin", "-z", "merge"])
         .current_dir(cwd)
-        .stdin(Stdio::from(input))
-        .output()?;
+        .stdin(Stdio::from(input));
+    let output = git.output(command)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
             "git merge attribute probe failed with status {}: {}",
@@ -164,9 +140,6 @@ fn untrusted_driver_selection(
             .and_then(|key| key.strip_suffix(".driver"))
             .filter(|name| !name.is_empty())
             .ok_or_else(|| invalid_config_entry("malformed merge driver key"))?;
-        if !entry.value.is_empty() && !entry.scope.is_system_or_global() {
-            return Ok(Some((name.to_string(), "<Git config>".to_string())));
-        }
         drivers.insert(name.to_string(), entry.value.as_str());
     }
 

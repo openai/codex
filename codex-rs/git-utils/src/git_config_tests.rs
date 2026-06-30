@@ -42,6 +42,32 @@ fn rejects_malformed_config_records() {
 }
 
 #[test]
+fn parses_legacy_origin_records_in_effective_order() {
+    let output = b"file:/tmp/global\0filter.demo.clean\nfirst\0\
+file:/repo/.git/config\0filter.demo.clean\n\0\
+command line:\0merge.Name.driver\nhelper %A %B\0";
+    let entries = parse_effective_config_with_origins(output).expect("parse legacy config");
+    assert_eq!(
+        entries.get("filter.demo.clean"),
+        Some(&GitConfigEntry {
+            scope: GitConfigScope::Local,
+            origin: "file:/repo/.git/config".to_string(),
+            key: "filter.demo.clean".to_string(),
+            value: String::new(),
+        })
+    );
+    assert_eq!(
+        entries.get("merge.Name.driver"),
+        Some(&GitConfigEntry {
+            scope: GitConfigScope::Command,
+            origin: "command line:".to_string(),
+            key: "merge.Name.driver".to_string(),
+            value: "helper %A %B".to_string(),
+        })
+    );
+}
+
+#[test]
 fn path_containment_uses_component_boundaries() {
     let root = Path::new("/repo/root");
     assert!(path_is_within(Path::new("/repo/root"), root));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::GitReadError;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
 use crate::get_has_changes;
@@ -6,6 +7,8 @@ use crate::git_config::GitConfigScope;
 use crate::git_diff_to_remote;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
+use crate::try_get_has_changes;
+use crate::try_git_diff_to_remote;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 #[cfg(unix)]
@@ -313,7 +316,73 @@ async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
     configure_clean_filter(&repo_path, "test.txt").await;
 
     assert_eq!(get_has_changes(&repo_path).await, None);
+    assert_eq!(
+        try_get_has_changes(&repo_path).await,
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "x=y".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
     assert!(!configured_filter_ran(&repo_path).await);
+}
+
+#[tokio::test]
+async fn checked_has_changes_distinguishes_non_repository() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    assert_eq!(
+        try_get_has_changes(temp_dir.path()).await,
+        Err(GitReadError::NotRepository {
+            path: std::fs::canonicalize(temp_dir.path()).expect("canonical temp dir"),
+        })
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn legacy_git_without_show_scope_uses_origin_fallback() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    std::fs::write(repo_path.join(".gitattributes"), "test.txt filter=legacy\n")
+        .expect("attributes");
+    run_git(&repo_path, &["add", ".gitattributes"]).await;
+    run_git(&repo_path, &["commit", "-m", "attributes"]).await;
+    run_git(
+        &repo_path,
+        &["config", "filter.legacy.clean", "git hash-object --stdin"],
+    )
+    .await;
+
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve fixture Git");
+    assert!(output.status.success(), "resolve fixture Git");
+    let real_git = String::from_utf8(output.stdout)
+        .expect("Git path UTF-8")
+        .trim()
+        .to_string();
+    let wrapper = temp_dir.path().join("legacy-git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = --show-scope ]; then\n    exit 129\n  fi\ndone\nexec '{}' \"$@\"\n",
+            real_git.replace('\'', "'\\''")
+        ),
+    )
+    .expect("legacy Git wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("legacy Git metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("legacy Git executable");
+
+    let git = GitRunner::from_executable_for_test(wrapper);
+    assert_eq!(
+        selected_executable_filter_from(&git, &repo_path).await,
+        Ok(Some(("legacy".to_string(), b"test.txt".to_vec())))
+    );
 }
 
 #[tokio::test]
@@ -512,6 +581,12 @@ async fn untracked_diff_rejects_embedded_repo_before_derived_filter_path() {
     std::fs::write(nested.join("null"), "embedded contents\n").expect("write embedded file");
 
     assert!(git_diff_to_remote(&repo_path).await.is_none());
+    assert_eq!(
+        try_git_diff_to_remote(&repo_path).await,
+        Err(GitReadError::EmbeddedRepository {
+            path: "nested/".to_string(),
+        })
+    );
     assert!(!configured_filter_ran(&repo_path).await);
 }
 
@@ -549,7 +624,24 @@ async fn git_diff_to_remote_rejects_configured_clean_filter_without_running_it()
     run_git(&repo_path, &["push", "origin", &branch]).await;
 
     assert!(git_diff_to_remote(&repo_path).await.is_none());
+    assert_eq!(
+        try_git_diff_to_remote(&repo_path).await,
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "x=y".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
     assert!(!configured_filter_ran(&repo_path).await);
+}
+
+#[tokio::test]
+async fn checked_diff_distinguishes_missing_remote_base() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_eq!(
+        try_git_diff_to_remote(&repo_path).await,
+        Err(GitReadError::NoRemoteBase)
+    );
 }
 
 #[cfg(unix)]
@@ -655,6 +747,7 @@ async fn nested_cwd_rejects_global_lfs_filter_without_running_it() {
         .expect("write global config");
         std::fs::write(&system_config, "").expect("write system config");
         let marker = config_dir.path().join("repo-lfs-ran");
+        let primary_git_marker = config_dir.path().join("repo-primary-git-ran");
         let repo_git_lfs = repo_bin.join("git-lfs");
         std::fs::write(
             &repo_git_lfs,
@@ -678,6 +771,17 @@ async fn nested_cwd_rejects_global_lfs_filter_without_running_it() {
                 .expect("Git path UTF-8")
                 .trim(),
         );
+        let repo_git = repo_bin.join("git");
+        std::fs::write(
+            &repo_git,
+            "#!/bin/sh\nprintf ran > \"$CODEX_GIT_UTILS_PRIMARY_GIT_MARKER\"\nexec \"$CODEX_GIT_UTILS_REAL_GIT\" \"$@\"\n",
+        )
+        .expect("repository Git");
+        let mut permissions = std::fs::metadata(&repo_git)
+            .expect("repository Git metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&repo_git, permissions).expect("make repository Git executable");
         let search_path = std::env::join_paths([
             repo_bin.as_path(),
             git_path.parent().expect("Git executable directory"),
@@ -688,12 +792,21 @@ async fn nested_cwd_rejects_global_lfs_filter_without_running_it() {
             &[
                 ("CODEX_GIT_UTILS_TARGET_REPO", repo_path.as_os_str()),
                 ("CODEX_GIT_UTILS_UNSAFE_LFS_MARKER", marker.as_os_str()),
+                (
+                    "CODEX_GIT_UTILS_PRIMARY_GIT_MARKER",
+                    primary_git_marker.as_os_str(),
+                ),
+                ("CODEX_GIT_UTILS_REAL_GIT", git_path.as_os_str()),
                 ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
                 ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
                 ("PATH", search_path.as_os_str()),
             ],
         );
         assert!(!marker.exists(), "repository git-lfs must not run");
+        assert!(
+            !primary_git_marker.exists(),
+            "repository-controlled primary Git must not run"
+        );
         return;
     }
 

@@ -11,8 +11,11 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+use crate::GitReadError;
+use crate::git_command::GitRunner;
 use crate::git_config::GitConfigEntry;
 use crate::git_config::parse_effective_config;
+use crate::git_config::parse_effective_config_with_origins;
 
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
@@ -52,24 +55,30 @@ pub(crate) fn isolate_tokio_git_command_environment(command: &mut tokio::process
     }
 }
 
-pub(crate) async fn has_selected_executable_filters_from(git: &Path, cwd: &Path) -> Option<bool> {
+pub(crate) async fn selected_executable_filter_from(
+    git: &GitRunner,
+    cwd: &Path,
+) -> Result<Option<(String, Vec<u8>)>, GitReadError> {
     let git_root = resolve_git_root_async(git, cwd).await?;
     let entries = read_filter_config_async(git, &git_root).await?;
     if !entries.values().any(|entry| !entry.value.is_empty()) {
-        return Some(false);
+        return Ok(None);
     }
     let paths = read_paths_async(git, &git_root, PathSelection::Tracked).await?;
     let attributes = read_filter_attributes_async(git, &git_root, &paths).await?;
-    selected_executable_filter(&entries, &attributes)
-        .ok()
-        .map(|selected| selected.is_some())
+    selected_executable_filter(&entries, &attributes).map_err(|_| invalid_output("filterSelection"))
 }
 
 /// Validate every tracked path plus the exact untracked paths that the caller
 /// will later feed to `git diff --no-index`. The returned raw paths must be
 /// reused rather than reconstructed from Git's quoted line-oriented output.
-pub(crate) async fn safe_untracked_paths_for_diff(git: &Path, cwd: &Path) -> Option<Vec<Vec<u8>>> {
-    let requested_cwd = std::fs::canonicalize(cwd).ok()?;
+pub(crate) async fn safe_untracked_paths_for_diff_checked(
+    git: &GitRunner,
+    cwd: &Path,
+) -> Result<Vec<Vec<u8>>, GitReadError> {
+    let requested_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
+        path: cwd.to_path_buf(),
+    })?;
     let git_root = resolve_git_root_async(git, &requested_cwd).await?;
     let untracked = read_paths_async(git, &requested_cwd, PathSelection::Untracked).await?;
     // An embedded untracked repository is reported by `ls-files` as a single
@@ -78,37 +87,37 @@ pub(crate) async fn safe_untracked_paths_for_diff(git: &Path, cwd: &Path) -> Opt
     // child path that was never returned by the path probe. Fail closed rather
     // than let the sink operate on a different path vector than we validated.
     for path in &untracked {
-        let path = git_path_bytes_to_path_buf(path)?;
+        let display_path = String::from_utf8_lossy(path).into_owned();
+        let path =
+            git_path_bytes_to_path_buf(path).ok_or_else(|| invalid_output("untrackedPaths"))?;
         if std::fs::symlink_metadata(requested_cwd.join(path))
-            .ok()?
+            .map_err(|_| command_failed("pathMetadata", None))?
             .file_type()
             .is_dir()
         {
-            return None;
+            return Err(GitReadError::EmbeddedRepository { path: display_path });
         }
     }
     let entries = read_filter_config_async(git, &git_root).await?;
     if !entries.values().any(|entry| !entry.value.is_empty()) {
-        return Some(untracked);
+        return Ok(untracked);
     }
 
     let tracked = read_paths_async(git, &git_root, PathSelection::Tracked).await?;
     let tracked_attributes = read_filter_attributes_async(git, &git_root, &tracked).await?;
-    if selected_executable_filter(&entries, &tracked_attributes)
-        .ok()?
-        .is_some()
+    if let Some((driver, path)) = selected_executable_filter(&entries, &tracked_attributes)
+        .map_err(|_| invalid_output("trackedFilterSelection"))?
     {
-        return None;
+        return Err(selected_filter_error(driver, path));
     }
     let untracked_attributes =
         read_filter_attributes_async(git, &requested_cwd, &untracked).await?;
-    if selected_executable_filter(&entries, &untracked_attributes)
-        .ok()?
-        .is_some()
+    if let Some((driver, path)) = selected_executable_filter(&entries, &untracked_attributes)
+        .map_err(|_| invalid_output("untrackedFilterSelection"))?
     {
-        return None;
+        return Err(selected_filter_error(driver, path));
     }
-    Some(untracked)
+    Ok(untracked)
 }
 
 fn git_path_bytes_to_path_buf(path: &[u8]) -> Option<PathBuf> {
@@ -125,10 +134,11 @@ fn git_path_bytes_to_path_buf(path: &[u8]) -> Option<PathBuf> {
     }
 }
 
-async fn resolve_git_root_async(git: &Path, cwd: &Path) -> Option<PathBuf> {
-    let requested_cwd = std::fs::canonicalize(cwd).ok()?;
-    let mut command = TokioCommand::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+async fn resolve_git_root_async(git: &GitRunner, cwd: &Path) -> Result<PathBuf, GitReadError> {
+    let requested_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
+        path: cwd.to_path_buf(),
+    })?;
+    let mut command = git.tokio_command();
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args([
@@ -141,33 +151,40 @@ async fn resolve_git_root_async(git: &Path, cwd: &Path) -> Option<PathBuf> {
         ])
         .current_dir(&requested_cwd)
         .kill_on_drop(true);
-    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return None,
-    };
+    let output = command_output(git, command, "resolveGitRoot").await?;
     if !output.status.success() {
-        return None;
+        return Err(GitReadError::NotRepository {
+            path: requested_cwd,
+        });
     }
-    let path = String::from_utf8(output.stdout).ok()?;
+    let path = String::from_utf8(output.stdout).map_err(|_| invalid_output("resolveGitRoot"))?;
     let path = path.trim_end_matches(['\r', '\n']);
     if path.is_empty() {
-        return None;
+        return Err(invalid_output("resolveGitRoot"));
     }
-    let reported_root = std::fs::canonicalize(PathBuf::from(path)).ok()?;
+    let reported_root =
+        std::fs::canonicalize(PathBuf::from(path)).map_err(|_| invalid_output("resolveGitRoot"))?;
     let expected_root = crate::get_git_repo_root(&requested_cwd)
-        .and_then(|root| std::fs::canonicalize(root).ok())?;
+        .and_then(|root| std::fs::canonicalize(root).ok())
+        .ok_or_else(|| GitReadError::NotRepository {
+            path: requested_cwd.clone(),
+        })?;
     if reported_root != expected_root {
-        return None;
+        return Err(GitReadError::RepositoryRootMismatch {
+            expected_root,
+            reported_root,
+        });
     }
-    Some(reported_root)
+    Ok(reported_root)
 }
 
 pub(crate) fn ensure_no_selected_executable_git_filters(
+    git: &GitRunner,
     cwd: &Path,
     paths: &[String],
     git_config_args: &[String],
 ) -> io::Result<()> {
-    let entries = read_filter_config(cwd, git_config_args)?;
+    let entries = read_filter_config(git, cwd, git_config_args)?;
     if !entries.values().any(|entry| !entry.value.is_empty()) {
         return Ok(());
     }
@@ -175,7 +192,7 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
         .iter()
         .map(|path| path.as_bytes().to_vec())
         .collect::<Vec<_>>();
-    let attributes = read_filter_attributes(cwd, &paths, git_config_args)?;
+    let attributes = read_filter_attributes(git, cwd, &paths, git_config_args)?;
     if let Some((driver, path)) = selected_executable_filter(&entries, &attributes)? {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -189,50 +206,107 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
 }
 
 fn read_filter_config(
+    git: &GitRunner,
     cwd: &Path,
     git_config_args: &[String],
 ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    let mut command = Command::new("git");
-    isolate_git_command_environment(&mut command);
-    let output = command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args([
-            "config",
-            "--null",
-            "--show-scope",
-            "--show-origin",
-            "--includes",
-            "--get-regexp",
-            EXECUTABLE_FILTER_CONFIG_PATTERN,
-        ])
-        .current_dir(cwd)
-        .output()?;
-    if !output
+    read_effective_config_with_fallback(
+        git,
+        cwd,
+        git_config_args,
+        EXECUTABLE_FILTER_CONFIG_PATTERN,
+        "filter",
+    )
+}
+
+pub(crate) fn read_effective_config_with_fallback(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    let scoped = run_effective_config_query(git, cwd, git_config_args, pattern, true)?;
+    if scoped
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return parse_effective_config(&scoped.stdout);
+    }
+
+    let legacy = run_effective_config_query(git, cwd, git_config_args, pattern, false)?;
+    if !legacy
         .status
         .code()
         .is_some_and(|code| code == 0 || code == 1)
     {
         return Err(io::Error::other(format!(
-            "git config probe failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            "git {probe} config probe failed with status {}: {}",
+            legacy.status,
+            String::from_utf8_lossy(&legacy.stderr).trim()
         )));
     }
-    parse_effective_config(&output.stdout)
+    parse_effective_config_with_origins(&legacy.stdout)
+}
+
+fn run_effective_config_query(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    show_scope: bool,
+) -> io::Result<std::process::Output> {
+    let mut command = git.command();
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(git_config_args)
+        .args(["config", "--null"]);
+    if show_scope {
+        command.arg("--show-scope");
+    }
+    command
+        .args(["--show-origin", "--includes", "--get-regexp", pattern])
+        .current_dir(cwd);
+    git.output(command)
 }
 
 async fn read_filter_config_async(
-    git: &Path,
+    git: &GitRunner,
     cwd: &Path,
-) -> Option<BTreeMap<String, GitConfigEntry>> {
-    let mut command = TokioCommand::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+) -> Result<BTreeMap<String, GitConfigEntry>, GitReadError> {
+    let scoped = run_filter_config_query_async(git, cwd, true).await?;
+    if scoped
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return parse_effective_config(&scoped.stdout).map_err(|_| invalid_output("filterConfig"));
+    }
+
+    let legacy = run_filter_config_query_async(git, cwd, false).await?;
+    if !legacy
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return Err(command_failed("filterConfig", legacy.status.code()));
+    }
+    parse_effective_config_with_origins(&legacy.stdout).map_err(|_| invalid_output("filterConfig"))
+}
+
+async fn run_filter_config_query_async(
+    git: &GitRunner,
+    cwd: &Path,
+    show_scope: bool,
+) -> Result<std::process::Output, GitReadError> {
+    let mut command = git.tokio_command();
+    command.args(["config", "--null"]);
+    if show_scope {
+        command.arg("--show-scope");
+    }
     command
         .args([
-            "config",
-            "--null",
-            "--show-scope",
             "--show-origin",
             "--includes",
             "--get-regexp",
@@ -240,18 +314,7 @@ async fn read_filter_config_async(
         ])
         .current_dir(cwd)
         .kill_on_drop(true);
-    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return None,
-    };
-    if !output
-        .status
-        .code()
-        .is_some_and(|code| code == 0 || code == 1)
-    {
-        return None;
-    }
-    parse_effective_config(&output.stdout).ok()
+    command_output(git, command, "filterConfig").await
 }
 
 #[derive(Clone, Copy)]
@@ -261,12 +324,11 @@ enum PathSelection {
 }
 
 async fn read_paths_async(
-    git: &Path,
+    git: &GitRunner,
     cwd: &Path,
     selection: PathSelection,
-) -> Option<Vec<Vec<u8>>> {
-    let mut command = TokioCommand::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+) -> Result<Vec<Vec<u8>>, GitReadError> {
+    let mut command = git.tokio_command();
     let hooks_config = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
     let mut args = vec![
         "-c",
@@ -285,30 +347,32 @@ async fn read_paths_async(
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return None,
+    let operation = match selection {
+        PathSelection::Tracked => "trackedPaths",
+        PathSelection::Untracked => "untrackedPaths",
     };
+    let output = command_output(git, command, operation).await?;
     if !output.status.success() {
-        return None;
+        return Err(command_failed(operation, output.status.code()));
     }
-    parse_nul_paths(&output.stdout).ok()
+    parse_nul_paths(&output.stdout).map_err(|_| invalid_output(operation))
 }
 
 async fn read_filter_attributes_async(
-    git: &Path,
+    git: &GitRunner,
     cwd: &Path,
     paths: &[Vec<u8>],
-) -> Option<BTreeMap<Vec<u8>, String>> {
+) -> Result<BTreeMap<Vec<u8>, String>, GitReadError> {
     if paths.is_empty() {
-        return Some(BTreeMap::new());
+        return Ok(BTreeMap::new());
     }
-    let mut input = tempfile::tempfile().ok()?;
-    write_nul_paths(&mut input, paths).ok()?;
-    input.rewind().ok()?;
+    let mut input = tempfile::tempfile().map_err(|_| command_failed("filterAttributes", None))?;
+    write_nul_paths(&mut input, paths).map_err(|_| invalid_output("filterAttributes"))?;
+    input
+        .rewind()
+        .map_err(|_| command_failed("filterAttributes", None))?;
 
-    let mut command = TokioCommand::new(git);
-    isolate_tokio_git_command_environment(&mut command);
+    let mut command = git.tokio_command();
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args([
@@ -324,17 +388,52 @@ async fn read_filter_attributes_async(
         .current_dir(cwd)
         .stdin(Stdio::from(input))
         .kill_on_drop(true);
-    let output = match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return None,
-    };
+    let output = command_output(git, command, "filterAttributes").await?;
     if !output.status.success() {
-        return None;
+        return Err(command_failed("filterAttributes", output.status.code()));
     }
-    parse_filter_attributes(&output.stdout, paths).ok()
+    parse_filter_attributes(&output.stdout, paths).map_err(|_| invalid_output("filterAttributes"))
+}
+
+async fn command_output(
+    git: &GitRunner,
+    command: TokioCommand,
+    operation: &str,
+) -> Result<std::process::Output, GitReadError> {
+    match timeout(GIT_COMMAND_TIMEOUT, git.output_tokio(command)).await {
+        Err(_) => Err(GitReadError::CommandTimedOut {
+            operation: operation.to_string(),
+        }),
+        Ok(Err(error)) if error.kind() == io::ErrorKind::NotFound => {
+            Err(GitReadError::NoTrustedGit)
+        }
+        Ok(Err(_)) => Err(command_failed(operation, None)),
+        Ok(Ok(output)) => Ok(output),
+    }
+}
+
+fn command_failed(operation: &str, exit_code: Option<i32>) -> GitReadError {
+    GitReadError::CommandFailed {
+        operation: operation.to_string(),
+        exit_code,
+    }
+}
+
+fn invalid_output(operation: &str) -> GitReadError {
+    GitReadError::InvalidOutput {
+        operation: operation.to_string(),
+    }
+}
+
+fn selected_filter_error(driver: String, path: Vec<u8>) -> GitReadError {
+    GitReadError::SelectedExecutableFilter {
+        driver,
+        path: String::from_utf8_lossy(&path).into_owned(),
+    }
 }
 
 fn read_filter_attributes(
+    git: &GitRunner,
     cwd: &Path,
     paths: &[Vec<u8>],
     git_config_args: &[String],
@@ -346,9 +445,8 @@ fn read_filter_attributes(
     write_nul_paths(&mut input, paths)?;
     input.rewind()?;
 
-    let mut command = Command::new("git");
-    isolate_git_command_environment(&mut command);
-    let output = command
+    let mut command = git.command();
+    command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         .args([
@@ -362,8 +460,8 @@ fn read_filter_attributes(
             "filter",
         ])
         .current_dir(cwd)
-        .stdin(Stdio::from(input))
-        .output()?;
+        .stdin(Stdio::from(input));
+    let output = git.output(command)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
             "git filter attribute probe failed with status {}: {}",

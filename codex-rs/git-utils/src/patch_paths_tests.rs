@@ -67,7 +67,9 @@ fn read_file_normalized(path: &Path) -> String {
 
 fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
-    let paths = extract_effective_paths_from_patch(&patch_path, revert)?;
+    let cwd = std::env::current_dir()?;
+    let git = GitRunner::for_cwd_io(&cwd)?;
+    let paths = extract_effective_paths_from_patch(&git, &patch_path, revert)?;
     drop(tmpdir);
     Ok(paths)
 }
@@ -213,11 +215,122 @@ fn effective_paths_follow_git_for_mismatched_headers() {
 fn effective_paths_reject_platform_ambiguous_paths() {
     let error = effective_paths("", /*revert*/ false).expect_err("reject empty patch paths");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    let error = validate_patch_path("..\\nested\\file.txt".to_string())
-        .expect_err("reject Windows path separators");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    let error = validate_patch_path("C:/outside.txt".to_string()).expect_err("reject drive prefix");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    #[cfg(windows)]
+    {
+        let error = validate_patch_path("..\\nested\\file.txt".to_string())
+            .expect_err("reject Windows path separators");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let error =
+            validate_patch_path("C:/outside.txt".to_string()).expect_err("reject drive prefix");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            validate_patch_path("back\\slash.txt".to_string()).expect("valid Unix filename"),
+            "back\\slash.txt"
+        );
+        assert_eq!(
+            validate_patch_path("a:file.txt".to_string()).expect("valid Unix filename"),
+            "a:file.txt"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn patch_applies_valid_unix_colon_and_backslash_paths() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    for (path, contents) in [
+        ("a:file.txt", "old colon\n"),
+        ("back\\slash.txt", "old slash\n"),
+    ] {
+        std::fs::write(root.join(path), contents).expect("write fixture");
+    }
+    let (add_code, _, add_err) = run(
+        root,
+        &[
+            "git",
+            "--literal-pathspecs",
+            "add",
+            "--",
+            "a:file.txt",
+            "back\\slash.txt",
+        ],
+    );
+    assert_eq!(add_code, 0, "add fixture: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "fixture"]);
+    assert_eq!(commit_code, 0, "commit fixture: {commit_err}");
+
+    std::fs::write(root.join("a:file.txt"), "new colon\n").expect("modify colon path");
+    std::fs::write(root.join("back\\slash.txt"), "new slash\n").expect("modify backslash path");
+    let (diff_code, diff, diff_err) = run(
+        root,
+        &[
+            "git",
+            "--literal-pathspecs",
+            "diff",
+            "--full-index",
+            "--binary",
+            "--",
+            "a:file.txt",
+            "back\\slash.txt",
+        ],
+    );
+    assert_eq!(diff_code, 0, "create patch: {diff_err}");
+    assert!(!diff.is_empty(), "fixture patch must not be empty");
+    let (restore_code, _, restore_err) = run(
+        root,
+        &[
+            "git",
+            "--literal-pathspecs",
+            "checkout",
+            "--",
+            "a:file.txt",
+            "back\\slash.txt",
+        ],
+    );
+    assert_eq!(restore_code, 0, "restore fixture: {restore_err}");
+
+    for preflight in [true, false] {
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert: false,
+            preflight,
+        })
+        .unwrap_or_else(|error| panic!("forward preflight={preflight}: {error}"));
+        assert_eq!(result.exit_code, 0, "forward preflight={preflight}");
+    }
+    assert_eq!(
+        read_file_normalized(&root.join("a:file.txt")),
+        "new colon\n"
+    );
+    assert_eq!(
+        read_file_normalized(&root.join("back\\slash.txt")),
+        "new slash\n"
+    );
+
+    for preflight in [true, false] {
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert: true,
+            preflight,
+        })
+        .unwrap_or_else(|error| panic!("reverse preflight={preflight}: {error}"));
+        assert_eq!(result.exit_code, 0, "reverse preflight={preflight}");
+    }
+    assert_eq!(
+        read_file_normalized(&root.join("a:file.txt")),
+        "old colon\n"
+    );
+    assert_eq!(
+        read_file_normalized(&root.join("back\\slash.txt")),
+        "old slash\n"
+    );
 }
 
 #[test]
@@ -254,6 +367,437 @@ fn stage_paths_rejects_gitlink_before_entering_submodule() {
     let diff = "diff --git a/nested b/nested\nindex 1111111..2222222 160000\n--- a/nested\n+++ b/nested\n@@ -1 +1 @@\n-Subproject commit 1111111111111111111111111111111111111111\n+Subproject commit 2222222222222222222222222222222222222222\n";
     let error = stage_paths(root, diff).expect_err("reject gitlink staging");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert!(!configured_filter_ran(&root.join("nested")));
+}
+
+#[test]
+fn patch_allows_exact_gitlink_updates_without_entering_submodule() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    init_submodule_with_clean_filter(root);
+    let nested = root.join("nested");
+
+    let (old_code, old_sha, old_err) = run(root, &["git", "rev-parse", "HEAD:nested"]);
+    assert_eq!(old_code, 0, "read old gitlink: {old_err}");
+    let old_sha = old_sha.trim().to_string();
+    let _ = run(
+        &nested,
+        &["git", "config", "user.email", "codex@example.com"],
+    );
+    let _ = run(&nested, &["git", "config", "user.name", "Codex"]);
+    std::fs::write(nested.join("second.txt"), "second\n").expect("write child commit");
+    let (add_code, _, add_err) = run(&nested, &["git", "add", "second.txt"]);
+    assert_eq!(add_code, 0, "add child commit: {add_err}");
+    let (commit_code, _, commit_err) = run(&nested, &["git", "commit", "-m", "second"]);
+    assert_eq!(commit_code, 0, "commit child: {commit_err}");
+    let (new_code, new_sha, new_err) = run(&nested, &["git", "rev-parse", "HEAD"]);
+    assert_eq!(new_code, 0, "read new child commit: {new_err}");
+    let new_sha = new_sha.trim().to_string();
+
+    let (update_code, _, update_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            &new_sha,
+            "nested",
+        ],
+    );
+    assert_eq!(update_code, 0, "update parent gitlink: {update_err}");
+    let (diff_code, diff, diff_err) = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--cached",
+            "--full-index",
+            "--binary",
+            "--",
+            "nested",
+        ],
+    );
+    assert_eq!(diff_code, 0, "create gitlink patch: {diff_err}");
+    assert!(!diff.is_empty(), "gitlink patch must not be empty");
+    let (restore_code, _, restore_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            &old_sha,
+            "nested",
+        ],
+    );
+    assert_eq!(restore_code, 0, "restore parent gitlink: {restore_err}");
+    let (reset_code, _, reset_err) = run(&nested, &["git", "reset", "--soft", &old_sha]);
+    assert_eq!(reset_code, 0, "restore child HEAD: {reset_err}");
+    let _ = run(&nested, &["git", "config", "--unset", "codex.filterran"]);
+    assert!(!configured_filter_ran(&nested));
+
+    for preflight in [true, false] {
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert: false,
+            preflight,
+        })
+        .unwrap_or_else(|error| panic!("forward gitlink preflight={preflight}: {error}"));
+        assert_eq!(result.exit_code, 0, "forward preflight={preflight}");
+        assert!(!configured_filter_ran(&nested));
+    }
+    let (staged_code, staged, staged_err) = run(root, &["git", "ls-files", "--stage", "nested"]);
+    assert_eq!(staged_code, 0, "read updated gitlink: {staged_err}");
+    assert!(
+        staged.contains(&new_sha),
+        "expected new gitlink, got {staged:?}"
+    );
+
+    let (reset_code, _, reset_err) = run(&nested, &["git", "reset", "--soft", &new_sha]);
+    assert_eq!(reset_code, 0, "advance child HEAD: {reset_err}");
+    for preflight in [true, false] {
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert: true,
+            preflight,
+        })
+        .unwrap_or_else(|error| panic!("reverse gitlink preflight={preflight}: {error}"));
+        assert_eq!(result.exit_code, 0, "reverse preflight={preflight}");
+        assert!(!configured_filter_ran(&nested));
+    }
+    let (staged_code, staged, staged_err) = run(root, &["git", "ls-files", "--stage", "nested"]);
+    assert_eq!(staged_code, 0, "read restored gitlink: {staged_err}");
+    assert!(
+        staged.contains(&old_sha),
+        "expected old gitlink, got {staged:?}"
+    );
+
+    std::fs::remove_dir_all(&nested).expect("remove initialized child checkout");
+    for (revert, expected_sha) in [(false, &new_sha), (true, &old_sha)] {
+        let preflight = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert,
+            preflight: true,
+        })
+        .unwrap_or_else(|error| panic!("uninitialized preflight revert={revert}: {error}"));
+        assert_eq!(
+            preflight.exit_code, 0,
+            "uninitialized preflight revert={revert}"
+        );
+        let applied = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.clone(),
+            revert,
+            preflight: false,
+        })
+        .unwrap_or_else(|error| panic!("uninitialized apply revert={revert}: {error}"));
+        assert_eq!(applied.exit_code, 0, "uninitialized apply revert={revert}");
+        let (stage_code, stage, stage_err) = run(root, &["git", "ls-files", "--stage", "nested"]);
+        assert_eq!(stage_code, 0, "read uninitialized gitlink: {stage_err}");
+        assert!(
+            stage.contains(expected_sha.as_str()),
+            "unexpected gitlink: {stage:?}"
+        );
+        assert!(
+            !nested.exists(),
+            "Codex must not initialize the child worktree"
+        );
+    }
+}
+
+#[test]
+fn patch_rejects_gitlink_add_delete_rename_and_mode_shapes_without_mutation() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    init_submodule_with_clean_filter(root);
+    let nested = root.join("nested");
+    std::fs::write(root.join("ordinary.txt"), "ordinary\n").expect("ordinary file");
+    let (ordinary_add_code, _, ordinary_add_err) = run(root, &["git", "add", "ordinary.txt"]);
+    assert_eq!(
+        ordinary_add_code, 0,
+        "add ordinary file: {ordinary_add_err}"
+    );
+    let (ordinary_commit_code, _, ordinary_commit_err) =
+        run(root, &["git", "commit", "-m", "ordinary file"]);
+    assert_eq!(
+        ordinary_commit_code, 0,
+        "commit ordinary file: {ordinary_commit_err}"
+    );
+    let (sha_code, gitlink_sha, sha_err) = run(root, &["git", "rev-parse", "HEAD:nested"]);
+    assert_eq!(sha_code, 0, "read gitlink: {sha_err}");
+    let gitlink_sha = gitlink_sha.trim().to_string();
+    let (blob_code, ordinary_blob, blob_err) =
+        run(root, &["git", "rev-parse", "HEAD:ordinary.txt"]);
+    assert_eq!(blob_code, 0, "read ordinary blob: {blob_err}");
+    let ordinary_blob = ordinary_blob.trim().to_string();
+    let (before_code, before_index, before_err) = run(root, &["git", "ls-files", "--stage"]);
+    assert_eq!(before_code, 0, "snapshot index: {before_err}");
+
+    let (remove_code, _, remove_err) =
+        run(root, &["git", "update-index", "--force-remove", "nested"]);
+    assert_eq!(remove_code, 0, "prepare deletion: {remove_err}");
+    let (delete_code, delete_patch, delete_err) = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--cached",
+            "--full-index",
+            "--binary",
+            "--",
+            "nested",
+        ],
+    );
+    assert_eq!(delete_code, 0, "create deletion patch: {delete_err}");
+    let (restore_code, _, restore_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &gitlink_sha,
+            "nested",
+        ],
+    );
+    assert_eq!(restore_code, 0, "restore after deletion: {restore_err}");
+
+    let _ = run(root, &["git", "update-index", "--force-remove", "nested"]);
+    let (rename_add_code, _, rename_add_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &gitlink_sha,
+            "renamed-module",
+        ],
+    );
+    assert_eq!(rename_add_code, 0, "prepare rename: {rename_add_err}");
+    let (rename_code, rename_patch, rename_err) = run(
+        root,
+        &["git", "diff", "--cached", "-M", "--full-index", "--binary"],
+    );
+    assert_eq!(rename_code, 0, "create rename patch: {rename_err}");
+    let _ = run(
+        root,
+        &["git", "update-index", "--force-remove", "renamed-module"],
+    );
+    let _ = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &gitlink_sha,
+            "nested",
+        ],
+    );
+
+    let (add_code, _, add_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            &gitlink_sha,
+            "second-module",
+        ],
+    );
+    assert_eq!(add_code, 0, "prepare addition: {add_err}");
+    let (new_code, new_patch, new_err) = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--cached",
+            "--full-index",
+            "--binary",
+            "--",
+            "second-module",
+        ],
+    );
+    assert_eq!(new_code, 0, "create addition patch: {new_err}");
+    let _ = run(
+        root,
+        &["git", "update-index", "--force-remove", "second-module"],
+    );
+
+    let (mode_code, _, mode_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            &gitlink_sha,
+            "ordinary.txt",
+        ],
+    );
+    assert_eq!(mode_code, 0, "prepare mode transition: {mode_err}");
+    let (mode_diff_code, mode_patch, mode_diff_err) = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--cached",
+            "--full-index",
+            "--binary",
+            "--",
+            "ordinary.txt",
+        ],
+    );
+    assert_eq!(mode_diff_code, 0, "create mode patch: {mode_diff_err}");
+    let (mode_restore_code, _, mode_restore_err) = run(
+        root,
+        &[
+            "git",
+            "update-index",
+            "--cacheinfo",
+            "100644",
+            &ordinary_blob,
+            "ordinary.txt",
+        ],
+    );
+    assert_eq!(
+        mode_restore_code, 0,
+        "restore ordinary mode: {mode_restore_err}"
+    );
+    let _ = run(&nested, &["git", "config", "--unset", "codex.filterran"]);
+
+    for (name, diff) in [
+        ("delete", delete_patch),
+        ("rename", rename_patch),
+        ("add", new_patch),
+        ("mode transition", mode_patch),
+    ] {
+        assert!(!diff.is_empty(), "{name} patch must not be empty");
+        let error = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff,
+            revert: false,
+            preflight: false,
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{name}");
+        let (after_code, after_index, after_err) = run(root, &["git", "ls-files", "--stage"]);
+        assert_eq!(after_code, 0, "read index after {name}: {after_err}");
+        assert_eq!(after_index, before_index, "{name} changed parent index");
+        assert!(!configured_filter_ran(&nested), "{name} entered child");
+    }
+}
+
+#[test]
+fn index_stage_parser_preserves_paths_and_rejects_ambiguous_records() {
+    let parsed = parse_index_stage_records(
+        b"160000 0123456789abcdef0123456789abcdef01234567 0\tnested module\0\
+100644 abcdefabcdefabcdefabcdefabcdefabcdefabcd 2\tname\twith-tab\0",
+    )
+    .expect("parse records");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].mode, "160000");
+    assert_eq!(parsed[0].oid, "0123456789abcdef0123456789abcdef01234567");
+    assert_eq!(parsed[0].stage, 0);
+    assert_eq!(parsed[0].path, "nested module");
+    assert_eq!(parsed[1].path, "name\twith-tab");
+
+    for malformed in [
+        b"160000 abc 0\tnested".as_slice(),
+        b"160000 not-an-oid 0\tnested\0".as_slice(),
+        b"160000 abc 4\tnested\0".as_slice(),
+        b"160000 abc 0 nested\0".as_slice(),
+    ] {
+        assert!(
+            parse_index_stage_records(malformed).is_err(),
+            "{malformed:?}"
+        );
+    }
+}
+
+#[test]
+fn case_sensitive_sibling_of_gitlink_is_not_treated_as_descendant() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    init_submodule_with_clean_filter(root);
+    let sibling = root.join("NESTED");
+    std::fs::create_dir_all(&sibling).expect("create case-distinct sibling");
+    if std::fs::canonicalize(&sibling).expect("canonical sibling")
+        == std::fs::canonicalize(root.join("nested")).expect("canonical gitlink")
+    {
+        return;
+    }
+    std::fs::write(sibling.join("file.txt"), "old\n").expect("write sibling file");
+    let (add_code, _, add_err) = run(root, &["git", "add", "NESTED/file.txt"]);
+    assert_eq!(add_code, 0, "add sibling: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "case sibling"]);
+    assert_eq!(commit_code, 0, "commit sibling: {commit_err}");
+    std::fs::write(sibling.join("file.txt"), "new\n").expect("modify sibling");
+    let (diff_code, diff, diff_err) = run(
+        root,
+        &["git", "diff", "--full-index", "--", "NESTED/file.txt"],
+    );
+    assert_eq!(diff_code, 0, "create sibling patch: {diff_err}");
+    let (restore_code, _, restore_err) = run(root, &["git", "checkout", "--", "NESTED/file.txt"]);
+    assert_eq!(restore_code, 0, "restore sibling: {restore_err}");
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("allow case-distinct sibling");
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(read_file_normalized(&sibling.join("file.txt")), "new\n");
+    assert!(!configured_filter_ran(&root.join("nested")));
+}
+
+#[test]
+fn absent_case_distinct_sibling_is_allowed_on_case_sensitive_filesystem() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    init_submodule_with_clean_filter(root);
+    let probe = root.join("NESTED");
+    match std::fs::create_dir(&probe) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return,
+        Err(error) => panic!("probe case-distinct name: {error}"),
+    }
+    if std::fs::canonicalize(&probe).expect("canonical probe")
+        == std::fs::canonicalize(root.join("nested")).expect("canonical gitlink")
+    {
+        return;
+    }
+    std::fs::remove_dir(&probe).expect("remove probe");
+
+    let diff = "diff --git a/NESTED/new.txt b/NESTED/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/NESTED/new.txt\n@@ -0,0 +1 @@\n+case-sensitive sibling\n";
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: diff.to_string(),
+        revert: false,
+        preflight: false,
+    })
+    .expect("allow absent case-distinct sibling");
+    assert_eq!(result.exit_code, 0, "apply sibling: {}", result.stderr);
+    assert_eq!(
+        read_file_normalized(&root.join("NESTED/new.txt")),
+        "case-sensitive sibling\n"
+    );
     assert!(!configured_filter_ran(&root.join("nested")));
 }
 
@@ -305,13 +849,89 @@ fn gitlink_guard_ignores_inherited_git_selection_environment() {
 
 #[cfg(unix)]
 #[test]
+fn public_apply_skips_repository_controlled_primary_git() {
+    let _g = env_lock().lock().unwrap();
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_some() {
+        let root = PathBuf::from(
+            std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
+        );
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.clone(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n"
+                .to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply with trusted external Git");
+        assert_eq!(result.exit_code, 0, "apply patch: {}", result.stderr);
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "new\n");
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), "old\n").expect("fixture file");
+    let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+    assert_eq!(add_code, 0, "add fixture: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "fixture"]);
+    assert_eq!(commit_code, 0, "commit fixture: {commit_err}");
+    let (config_code, _, config_err) = run(root, &["git", "config", "filter.unused.clean", "cat"]);
+    assert_eq!(config_code, 0, "configure unused filter: {config_err}");
+
+    let repo_bin = root.join("bin");
+    std::fs::create_dir(&repo_bin).expect("repository bin");
+    let marker = root.join("repository-primary-git-ran");
+    let fake_git = repo_bin.join("git");
+    std::fs::write(
+        &fake_git,
+        "#!/bin/sh\nprintf ran > \"$CODEX_GIT_UTILS_PRIMARY_GIT_MARKER\"\nexec \"$CODEX_GIT_UTILS_REAL_GIT\" \"$@\"\n",
+    )
+    .expect("repository Git");
+    let mut permissions = std::fs::metadata(&fake_git)
+        .expect("repository Git metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_git, permissions).expect("repository Git executable");
+
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve fixture Git");
+    assert!(output.status.success(), "resolve fixture Git");
+    let real_git = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .expect("Git path UTF-8")
+            .trim(),
+    );
+    let search_path = std::env::join_paths([
+        repo_bin.as_path(),
+        real_git.parent().expect("Git executable directory"),
+    ])
+    .expect("controlled PATH");
+    run_isolated_test(
+        "patch_paths::tests::public_apply_skips_repository_controlled_primary_git",
+        &[
+            ("CODEX_GIT_UTILS_TARGET_REPO", root.as_os_str()),
+            ("CODEX_GIT_UTILS_PRIMARY_GIT_MARKER", marker.as_os_str()),
+            ("CODEX_GIT_UTILS_REAL_GIT", real_git.as_os_str()),
+            ("PATH", search_path.as_os_str()),
+        ],
+    );
+    assert!(!marker.exists(), "repository-controlled primary Git ran");
+}
+
+#[cfg(unix)]
+#[test]
 fn staging_rejects_global_lfs_filter_without_running_it() {
     let _g = env_lock().lock().unwrap();
     if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_some() {
         let root = PathBuf::from(
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
-        let error = stage_effective_paths(&root, &["file.txt".to_string()])
+        let git = GitRunner::for_cwd_io(&root).expect("trusted Git");
+        let error = stage_effective_paths(&git, &root, &["file.txt".to_string()])
             .expect_err("reject global Git LFS filter");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         return;
