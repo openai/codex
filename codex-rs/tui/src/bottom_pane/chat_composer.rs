@@ -195,6 +195,7 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
+use super::task_activity::TaskActivity;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
@@ -359,7 +360,7 @@ pub(crate) struct ChatComposer {
     frame_requester: Option<FrameRequester>,
     attachments: AttachmentState,
     placeholder_text: String,
-    is_task_running: bool,
+    task_activity: TaskActivity,
     queue_submissions: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
@@ -527,7 +528,7 @@ impl ChatComposer {
             frame_requester: None,
             attachments: AttachmentState::default(),
             placeholder_text,
-            is_task_running: false,
+            task_activity: TaskActivity::default(),
             queue_submissions: false,
             pending_slash_command_history: None,
             skills: None,
@@ -1763,7 +1764,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
+            let next_mode = esc_hint_mode(self.footer.mode, self.task_activity.is_busy());
             if next_mode != self.footer.mode {
                 self.footer.mode = next_mode;
                 return (InputResult::None, true);
@@ -2904,9 +2905,16 @@ impl ChatComposer {
             self.record_pending_slash_command_history();
             return Some(InputResult::None);
         }
+        let defer_draft_clear = self.task_activity.is_busy()
+            && matches!(
+                command,
+                SlashCommandItem::Builtin(cmd) if cmd.available_during_background_task_only()
+            );
         self.stage_slash_command_history(&command);
-        self.draft.textarea.set_text_clearing_elements("");
-        self.draft.is_bash_mode = false;
+        if !defer_draft_clear {
+            self.draft.textarea.set_text_clearing_elements("");
+            self.draft.is_bash_mode = false;
+        }
         Some(match command {
             SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
             SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
@@ -2968,7 +2976,14 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
-        if !self.is_task_running || command.available_during_task() {
+        let command_available = if self.task_activity.foreground_task_running() {
+            command.available_during_task()
+        } else if self.task_activity.mcp_startup_running() {
+            command.available_during_mcp_startup()
+        } else {
+            true
+        };
+        if command_available {
             return false;
         }
         let message = format!(
@@ -3094,7 +3109,7 @@ impl ChatComposer {
         }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
-                let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
+                let next_mode = esc_hint_mode(self.footer.mode, self.task_activity.is_busy());
                 if next_mode != self.footer.mode {
                     self.footer.mode = next_mode;
                     return (InputResult::None, true);
@@ -3104,9 +3119,11 @@ impl ChatComposer {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
         }
         if self.queue_keys.is_pressed(key_event)
-            && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
+            && (self.task_activity.is_busy()
+                || self.queue_submissions
+                || !self.is_bang_shell_command())
         {
-            return self.handle_submission(self.is_task_running || self.queue_submissions);
+            return self.handle_submission(self.task_activity.is_busy() || self.queue_submissions);
         }
 
         if self.submit_keys.is_pressed(key_event) {
@@ -3430,7 +3447,7 @@ impl ChatComposer {
             mode,
             esc_backtrack_hint: self.footer.esc_backtrack_hint,
             use_shift_enter_hint: self.footer.use_shift_enter_hint,
-            is_task_running: self.is_task_running,
+            is_task_running: self.task_activity.is_busy(),
             queue_submissions: self.queue_submissions,
             quit_shortcut_key: self.footer.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
@@ -3883,8 +3900,13 @@ impl ChatComposer {
         self.footer.flash = None;
     }
 
+    #[cfg(test)]
     pub fn set_task_running(&mut self, running: bool) {
-        self.is_task_running = running;
+        self.task_activity.set_foreground_task_running(running);
+    }
+
+    pub(super) fn set_task_activity(&mut self, task_activity: TaskActivity) {
+        self.task_activity = task_activity;
     }
 
     pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
@@ -3904,7 +3926,7 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.footer.esc_backtrack_hint = show;
         if show {
-            self.footer.mode = esc_hint_mode(self.footer.mode, self.is_task_running);
+            self.footer.mode = esc_hint_mode(self.footer.mode, self.task_activity.is_busy());
         } else {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
         }
@@ -8323,16 +8345,13 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         composer.set_task_running(/*running*/ true);
-        composer
-            .draft
-            .textarea
-            .set_text_clearing_elements("/review these changes");
+        composer.draft.textarea.set_text_clearing_elements("/clear");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::None, result);
-        assert_eq!("/review these changes", composer.draft.textarea.text());
+        assert_eq!("/clear", composer.draft.textarea.text());
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
@@ -8343,9 +8362,10 @@ mod tests {
                     .map(|line| line.to_string())
                     .collect::<Vec<_>>()
                     .join("\n");
-                assert!(message.contains("disabled while a task is in progress"));
-                found_error = true;
-                break;
+                if message.contains("disabled while a task is in progress") {
+                    found_error = true;
+                    break;
+                }
             }
         }
         assert!(found_error, "expected error history cell to be sent");

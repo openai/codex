@@ -243,6 +243,19 @@ impl SlashCommand {
         }
     }
 
+    /// Whether this command can run while MCP servers initialize in the background.
+    pub fn available_during_mcp_startup(self) -> bool {
+        self == SlashCommand::Review || self.available_during_task()
+    }
+
+    /// Whether this command is allowed during MCP startup but not during foreground work.
+    ///
+    /// Callers use this distinction to preserve the draft until dispatch confirms that no
+    /// foreground task blocks the command.
+    pub fn available_during_background_task_only(self) -> bool {
+        self.available_during_mcp_startup() && !self.available_during_task()
+    }
+
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),

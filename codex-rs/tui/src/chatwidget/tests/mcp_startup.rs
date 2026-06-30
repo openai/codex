@@ -27,6 +27,44 @@ fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     );
 }
 
+fn submit_bare_review(chat: &mut ChatWidget) {
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
+fn submit_review_with_args(
+    chat: &mut ChatWidget,
+    op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+    instructions: &str,
+) {
+    chat.dispatch_command_with_args(SlashCommand::Review, instructions.to_string(), Vec::new());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::Review {
+            target: ReviewTarget::Custom {
+                instructions: actual
+            }
+        }) if actual == instructions
+    );
+}
+
+fn assert_bare_review_rejected(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    expected_error: &str,
+) {
+    submit_bare_review(chat);
+    let error = drain_insert_history(rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(error.contains(expected_error), "unexpected error: {error}");
+    assert_eq!(chat.bottom_pane.composer_text(), "/review");
+}
+
 #[tokio::test]
 async fn mcp_startup_ignores_status_for_other_thread() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -67,6 +105,317 @@ async fn mcp_startup_ignores_status_for_other_thread() {
         chat.status_state.retry_status_header,
         retry_status_header_before
     );
+}
+
+#[tokio::test]
+async fn restored_mcp_only_thread_clears_busy_state_when_startup_finishes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    let input_state = chat.capture_thread_input_state();
+
+    chat.restore_thread_input_state(/*input_state*/ None);
+    chat.restore_thread_input_state(input_state);
+
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn review_command_during_mcp_startup_opens_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    submit_bare_review(&mut chat);
+
+    assert!(chat.bottom_pane.composer_text().is_empty());
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("review_command_during_mcp_startup_opens_popup", popup);
+}
+
+#[tokio::test]
+async fn background_mcp_startup_completion_does_not_finish_review_task() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+
+    handle_entered_review_mode(&mut chat, "current changes");
+    handle_exited_review_mode(&mut chat);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+    assert!(chat.mcp_startup_status.is_some());
+}
+
+#[tokio::test]
+async fn foreground_review_status_takes_precedence_over_background_mcp_startup() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["run-state".to_string()]);
+    chat.config.tui_terminal_title = Some(vec!["run-state".to_string()]);
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+
+    assert_eq!(
+        (status_line_text(&chat), chat.last_terminal_title.clone(),),
+        (Some("Working".to_string()), Some("Working".to_string()),)
+    );
+}
+
+#[tokio::test]
+async fn mcp_startup_can_complete_after_review_submission() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "check regressions");
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.status_state.current_status.header, "Working");
+}
+
+#[tokio::test]
+async fn failed_review_setup_restores_background_mcp_status() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+
+    handle_error(
+        &mut chat,
+        "failed to resolve merge base",
+        Some(CodexErrorInfo::Other),
+    );
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+    assert!(
+        chat.status_state
+            .current_status
+            .header
+            .starts_with("Booting MCP server")
+    );
+}
+
+#[tokio::test]
+async fn partial_mcp_startup_continues_after_failed_review_setup() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
+
+    handle_error(
+        &mut chat,
+        "failed to resolve merge base",
+        Some(CodexErrorInfo::Other),
+    );
+    assert!(!chat.bottom_pane.is_task_running());
+
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn replayed_active_review_keeps_mcp_startup_in_background() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+
+    replay_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.review.is_review_mode);
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_mcp_startup_running());
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+
+    handle_exited_review_mode(&mut chat);
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+}
+
+#[tokio::test]
+async fn replayed_active_review_blocks_nested_review_during_mcp_startup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
+    replay_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert!(chat.review.is_review_mode);
+    assert!(!chat.bottom_pane.is_foreground_task_running());
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn completed_replayed_review_does_not_hide_fresh_mcp_round() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    replay_entered_review_mode(&mut chat, "current changes");
+    chat.replay_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: String::new(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn lag_recovery_after_failed_review_tracks_background_mcp_failure() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    submit_review_with_args(&mut chat, &mut op_rx, "review unrelated branch");
+
+    chat.finish_mcp_startup_after_lag();
+    handle_error(
+        &mut chat,
+        "failed to resolve merge base",
+        Some(CodexErrorInfo::Other),
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
+    notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
+
+    let warning = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(warning.contains("handshake failed"));
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn bare_review_submission_during_agent_turn_preserves_draft() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
+}
+
+#[tokio::test]
+async fn queued_prompt_blocks_review_during_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.queue_user_message("queued prompt".into());
+    let attachment = "https://example.com/review-context.png".to_string();
+    chat.set_remote_image_urls(vec![attachment.clone()]);
+
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
+    assert_eq!(chat.remote_image_urls(), vec![attachment]);
+}
+
+#[tokio::test]
+async fn compact_task_blocks_review_when_mcp_startup_arrives() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.dispatch_command(SlashCommand::Compact);
+    assert!(chat.bottom_pane.is_task_running());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Compact)));
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is disabled while a task is in progress.",
+    );
+}
+
+#[tokio::test]
+async fn side_conversation_rejection_preserves_review_draft_during_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
+    chat.set_side_conversation_active(/*active*/ true);
+
+    assert_bare_review_rejected(
+        &mut chat,
+        &mut rx,
+        "'/review' is unavailable in side conversations.",
+    );
+}
+
+#[tokio::test]
+async fn side_conversation_rejection_without_mcp_clears_review_attachments() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.set_remote_image_urls(vec!["https://example.com/review-context.png".to_string()]);
+
+    submit_bare_review(&mut chat);
+
+    let error = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(
+        error.contains("'/review' is unavailable in side conversations."),
+        "unexpected error: {error}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert_eq!(chat.remote_image_urls(), Vec::<String>::new());
 }
 
 #[tokio::test]

@@ -59,6 +59,7 @@ mod request_user_input;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
+mod task_activity;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
@@ -73,6 +74,7 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
+use task_activity::TaskActivity;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,7 +224,7 @@ pub(crate) struct BottomPane {
     has_input_focus: bool,
     enhanced_keys_supported: bool,
     disable_paste_burst: bool,
-    is_task_running: bool,
+    task_activity: TaskActivity,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
 
@@ -287,7 +289,7 @@ impl BottomPane {
             has_input_focus,
             enhanced_keys_supported,
             disable_paste_burst,
-            is_task_running: false,
+            task_activity: TaskActivity::default(),
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             pending_input_preview: PendingInputPreview::new(),
@@ -990,9 +992,22 @@ impl BottomPane {
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
-        let was_running = self.is_task_running;
-        self.is_task_running = running;
-        self.composer.set_task_running(running);
+        let mut task_activity = self.task_activity;
+        task_activity.set_foreground_task_running(running);
+        self.set_task_activity(task_activity);
+    }
+
+    pub(crate) fn set_mcp_startup_running(&mut self, running: bool) {
+        let mut task_activity = self.task_activity;
+        task_activity.set_mcp_startup_running(running);
+        self.set_task_activity(task_activity);
+    }
+
+    fn set_task_activity(&mut self, task_activity: TaskActivity) {
+        let was_running = self.task_activity.is_busy();
+        let running = task_activity.is_busy();
+        self.task_activity = task_activity;
+        self.composer.set_task_activity(task_activity);
 
         if running {
             if !was_running {
@@ -1294,7 +1309,15 @@ impl BottomPane {
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
-        self.is_task_running
+        self.task_activity.is_busy()
+    }
+
+    pub(crate) fn is_foreground_task_running(&self) -> bool {
+        self.task_activity.foreground_task_running()
+    }
+
+    pub(crate) fn is_mcp_startup_running(&self) -> bool {
+        self.task_activity.mcp_startup_running()
     }
 
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
@@ -1306,7 +1329,7 @@ impl BottomPane {
             .is_some_and(|(name, _, _)| name == "agent");
 
         self.keymap.chat.interrupt_turn.is_pressed(key_event)
-            && self.is_task_running
+            && self.task_activity.is_busy()
             && !(is_agent_command && key_event.code == KeyCode::Esc)
             && self.no_modal_or_popup_active()
             && !self.composer_should_handle_vim_insert_escape(key_event)
@@ -1323,7 +1346,7 @@ impl BottomPane {
     }
 
     pub(crate) fn active_view_will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
-        self.is_task_running
+        self.task_activity.is_busy()
             && self
                 .active_view()
                 .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
@@ -1338,7 +1361,7 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.task_activity.is_busy() && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.

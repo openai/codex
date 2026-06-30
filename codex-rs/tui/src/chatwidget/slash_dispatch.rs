@@ -45,7 +45,14 @@ impl ChatWidget {
     /// that staged entry after dispatch so slash-command recall follows the same "submitted input"
     /// rule as normal text.
     pub(super) fn handle_slash_command_dispatch(&mut self, cmd: SlashCommand) {
+        let clear_deferred_draft = cmd.available_during_background_task_only()
+            && !self.active_side_conversation
+            && !self.slash_command_blocked_by_active_task(cmd);
         self.dispatch_command(cmd);
+        if clear_deferred_draft {
+            self.bottom_pane
+                .set_composer_text(String::new(), Vec::new(), Vec::new());
+        }
         if cmd == SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
@@ -132,7 +139,19 @@ impl ChatWidget {
     }
 
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
-        (!cmd.available_during_task() && self.bottom_pane.is_task_running())
+        let foreground_work_active = self.bottom_pane.is_foreground_task_running()
+            || (cmd == SlashCommand::Review
+                && (self.review.is_review_mode
+                    || self.input_queue.user_turn_pending_start
+                    || self.has_queued_follow_up_messages()));
+        let blocked_by_task = if foreground_work_active {
+            !cmd.available_during_task()
+        } else if self.bottom_pane.is_mcp_startup_running() {
+            !cmd.available_during_mcp_startup()
+        } else {
+            false
+        };
+        blocked_by_task
             || (cmd == SlashCommand::Resume
                 && (self.input_queue.user_turn_pending_start
                     || self.turn_lifecycle.agent_turn_running))
@@ -151,7 +170,7 @@ impl ChatWidget {
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
+            self.handle_rejected_slash_command_state(cmd);
             self.request_redraw();
             return;
         }
@@ -1131,7 +1150,7 @@ impl ChatWidget {
             "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
             cmd.command()
         ));
-        self.bottom_pane.drain_pending_submission_state();
+        self.handle_rejected_slash_command_state(cmd);
         false
     }
 
@@ -1144,7 +1163,15 @@ impl ChatWidget {
         self.add_error_message(format!(
             "'/{command}' is unavailable while code review is running."
         ));
-        self.bottom_pane.drain_pending_submission_state();
+        self.handle_rejected_slash_command_state(cmd);
         false
+    }
+
+    fn handle_rejected_slash_command_state(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_background_task_only()
+            || !self.bottom_pane.is_mcp_startup_running()
+        {
+            self.bottom_pane.drain_pending_submission_state();
+        }
     }
 }

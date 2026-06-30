@@ -9,16 +9,15 @@ const SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
 
 impl ChatWidget {
-    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
-    ///
-    /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
-    pub(super) fn update_task_running_state(&mut self) {
-        self.bottom_pane.set_task_running(
-            self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),
-        );
+    /// Synchronize foreground task activity without disturbing background MCP startup state.
+    pub(super) fn update_foreground_task_running_state(&mut self) {
+        self.bottom_pane
+            .set_task_running(self.turn_lifecycle.agent_turn_running || self.review.is_review_mode);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+        if !self.bottom_pane.is_foreground_task_running() {
+            self.refresh_mcp_startup_status_header();
+        }
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
@@ -63,7 +62,7 @@ impl ChatWidget {
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
-        self.update_task_running_state();
+        self.update_foreground_task_running_state();
         self.status_state.retry_status_header = None;
         self.clear_active_hook_cell();
         self.status_state.pending_status_indicator_restore = false;
@@ -171,7 +170,7 @@ impl ChatWidget {
         self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
         self.clear_safety_buffering();
-        self.update_task_running_state();
+        self.update_foreground_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -315,7 +314,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.input_queue.user_turn_pending_start = false;
         self.turn_lifecycle.finish();
-        self.update_task_running_state();
+        self.update_foreground_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;

@@ -1063,7 +1063,8 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
-        task_running: true,
+        foreground_task_running: true,
+        mcp_startup_running: false,
         agent_turn_running: true,
     }));
 
