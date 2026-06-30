@@ -226,14 +226,17 @@ fn run_setup_refresh_inner(
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let spawn_cwd = helper_spawn_dir(request.codex_home);
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&spawn_cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
             exe.display(),
-            cwd.display(),
+            spawn_cwd.display(),
             b64.len()
         ),
         Some(&sbx_dir),
@@ -242,7 +245,7 @@ fn run_setup_refresh_inner(
         let message = format!(
             "setup refresh failed to launch helper: helper={}, cwd={}, log={}, error={err}",
             exe.display(),
-            cwd.display(),
+            spawn_cwd.display(),
             log_path.display()
         );
         log_note(&format!("setup refresh: {message}"), Some(&sbx_dir));
@@ -403,6 +406,20 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
     vec![helper_dir]
+}
+
+pub(crate) fn helper_spawn_dir(codex_home: &Path) -> PathBuf {
+    // Launch helper processes from a Codex-local directory instead of inheriting
+    // the workspace cwd, which may be a UNC-backed mount that Windows helper
+    // process creation handles poorly.
+    let helper_dir = helper_bin_dir(codex_home);
+    if std::fs::create_dir_all(&helper_dir).is_ok() {
+        return helper_dir;
+    }
+
+    let sandbox_dir = sandbox_dir(codex_home);
+    let _ = std::fs::create_dir_all(&sandbox_dir);
+    sandbox_dir
 }
 
 fn gather_full_read_roots_for_permissions(
@@ -758,9 +775,11 @@ fn run_setup_exe(
         }
     };
 
+    let spawn_cwd = helper_spawn_dir(codex_home);
     if !needs_elevation {
         let status = Command::new(&exe)
             .arg(&payload_b64)
+            .current_dir(&spawn_cwd)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -795,12 +814,14 @@ fn run_setup_exe(
     let params = quote_arg(&payload_b64);
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
+    let directory_w = crate::winutil::to_wide(&spawn_cwd);
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.lpVerb = verb_w.as_ptr();
     sei.lpFile = exe_w.as_ptr();
     sei.lpParameters = params_w.as_ptr();
+    sei.lpDirectory = directory_w.as_ptr();
     // Hide the window for the elevated helper.
     sei.nShow = 0; // SW_HIDE
     let ok = unsafe { ShellExecuteExW(&mut sei) };
@@ -1660,6 +1681,17 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_spawn_dir_uses_local_helper_directory() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+
+        let spawn_dir = super::helper_spawn_dir(&codex_home);
+
+        assert_eq!(spawn_dir, helper_bin_dir(&codex_home));
+        assert!(spawn_dir.is_dir(), "helper spawn dir should be created");
     }
 
     #[test]
