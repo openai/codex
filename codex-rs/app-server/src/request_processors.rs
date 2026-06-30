@@ -271,6 +271,9 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ToolSearchSearchParams;
+use codex_app_server_protocol::ToolSearchSearchResponse;
+use codex_app_server_protocol::ToolSearchSearchResult;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnError;
@@ -509,6 +512,7 @@ mod remote_control_processor;
 mod search;
 mod thread_processor;
 mod token_usage_replay;
+mod tool_search_processor;
 mod turn_processor;
 mod windows_sandbox_processor;
 
@@ -532,6 +536,7 @@ pub(crate) use remote_control_processor::RemoteControlRequestProcessor;
 pub(crate) use search::SearchRequestProcessor;
 pub(crate) use thread_goal_processor::ThreadGoalRequestProcessor;
 pub(crate) use thread_processor::ThreadRequestProcessor;
+pub(crate) use tool_search_processor::ToolSearchRequestProcessor;
 pub(crate) use turn_processor::TurnRequestProcessor;
 pub(crate) use windows_sandbox_processor::WindowsSandboxRequestProcessor;
 

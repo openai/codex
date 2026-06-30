@@ -13,6 +13,7 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
+use crate::tool_search_debug::ToolSearchDebugResult;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -141,6 +142,14 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// Creates an optional consumer for streamed tool argument diffs.
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         None
+    }
+
+    fn search_tool_search(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Option<ToolSearchDebugResult>, FunctionCallError> {
+        Ok(None)
     }
 }
 
@@ -387,6 +396,18 @@ impl ToolRegistry {
     pub(crate) fn waits_for_runtime_cancellation(&self, name: &ToolName) -> Option<bool> {
         let tool = self.tool(name)?;
         Some(tool.waits_for_runtime_cancellation())
+    }
+
+    pub(crate) fn search_tool_search(
+        &self,
+        name: &ToolName,
+        query: &str,
+        limit: usize,
+    ) -> Result<Option<ToolSearchDebugResult>, FunctionCallError> {
+        self.tool(name)
+            .map(|tool| tool.search_tool_search(query, limit))
+            .transpose()
+            .map(Option::flatten)
     }
 
     #[allow(dead_code)]

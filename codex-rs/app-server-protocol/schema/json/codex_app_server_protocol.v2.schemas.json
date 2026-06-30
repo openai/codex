@@ -17628,6 +17628,53 @@
       ],
       "type": "object"
     },
+    "ToolSearchSearchResult": {
+      "properties": {
+        "index": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rank": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "score": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "searchableText": {
+          "type": "string"
+        },
+        "sourceDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "index",
+        "rank",
+        "searchableText",
+        "tools"
+      ],
+      "type": "object"
+    },
     "ToolsV2": {
       "properties": {
         "web_search": {

@@ -969,6 +969,13 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
+    #[experimental("debug/toolSearch/search")]
+    ToolSearchSearch => "debug/toolSearch/search" {
+        params: v2::ToolSearchSearchParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ToolSearchSearchResponse,
+    },
+
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         serialization: optional_thread_id(params.thread_id),
@@ -2998,6 +3005,31 @@ mod tests {
                     "cursor": null,
                     "limit": null,
                     "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_tool_search_debug_search() -> Result<()> {
+        let request = ClientRequest::ToolSearchSearch {
+            request_id: RequestId::Integer(9),
+            params: v2::ToolSearchSearchParams {
+                thread_id: "thread-123".to_string(),
+                query: "openai_topics.list_topics".to_string(),
+                limit: Some(8),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "debug/toolSearch/search",
+                "id": 9,
+                "params": {
+                    "threadId": "thread-123",
+                    "query": "openai_topics.list_topics",
+                    "limit": 8
                 }
             }),
             serde_json::to_value(&request)?,
