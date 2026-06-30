@@ -614,17 +614,14 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_powershell_full_path_is_safe() {
-        if !cfg!(windows) {
-            // Windows only because on Linux path splitting doesn't handle `/` separators properly
-            return;
-        }
-
-        let powershell = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
-        if !std::path::Path::new(powershell).is_file() {
-            return;
-        }
+        let powershell = crate::command_safety::trusted_windows_powershell_invocation_path()
+            .expect("Windows PowerShell must exist at the authoritative System known folder");
+        let powershell = powershell
+            .to_str()
+            .expect("the Windows System known folder must be valid UTF-8");
 
         assert!(is_known_safe_command(&vec_str(&[
             powershell,

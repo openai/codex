@@ -1,8 +1,15 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::sync::LazyLock;
 
-const TRUSTED_WINDOWS_POWERSHELL_EXE: &str =
-    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+static TRUSTED_WINDOWS_POWERSHELL_EXE: LazyLock<String> = LazyLock::new(|| {
+    codex_shell_command::powershell::try_find_powershell_executable_blocking()
+        .expect("Windows PowerShell must be installed")
+        .as_path()
+        .to_str()
+        .expect("the Windows PowerShell path must be valid UTF-8")
+        .to_string()
+});
 
 #[tokio::test]
 async fn evaluates_powershell_inner_commands_against_prompt_rules() {

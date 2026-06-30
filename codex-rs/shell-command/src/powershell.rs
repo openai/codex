@@ -159,8 +159,13 @@ mod tests {
     use super::prefix_powershell_script_with_utf8;
 
     #[cfg(windows)]
-    const WINDOWS_POWERSHELL_EXE: &str =
-        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+    fn trusted_windows_powershell_executable() -> String {
+        crate::command_safety::trusted_windows_powershell_invocation_path()
+            .expect("Windows PowerShell must exist at the authoritative System known folder")
+            .to_str()
+            .expect("the Windows System known folder must be valid UTF-8")
+            .to_string()
+    }
 
     #[test]
     fn extracts_basic_powershell_command() {
@@ -187,11 +192,10 @@ mod tests {
 
     #[test]
     fn extracts_full_path_powershell_command() {
-        let command = if cfg!(windows) {
-            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string()
-        } else {
-            "/usr/local/bin/powershell.exe".to_string()
-        };
+        #[cfg(windows)]
+        let command = trusted_windows_powershell_executable();
+        #[cfg(not(windows))]
+        let command = "/usr/local/bin/powershell.exe".to_string();
         let cmd = vec![command, "-Command".to_string(), "Write-Host hi".to_string()];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Write-Host hi");
@@ -244,7 +248,7 @@ mod tests {
     #[test]
     fn parses_plain_powershell_commands() {
         let commands = parse_powershell_command_into_plain_commands(&[
-            WINDOWS_POWERSHELL_EXE.to_string(),
+            trusted_windows_powershell_executable(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             "echo hi".to_string(),
@@ -258,7 +262,7 @@ mod tests {
     #[test]
     fn parses_multiple_plain_powershell_commands() {
         let commands = parse_powershell_command_into_plain_commands(&[
-            WINDOWS_POWERSHELL_EXE.to_string(),
+            trusted_windows_powershell_executable(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             "Write-Output foo | Measure-Object".to_string(),

@@ -219,12 +219,29 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::string::ToString;
+    use std::sync::LazyLock;
 
-    const POWERSHELL_EXE: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
-    const PWSH_EXE: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
+    static WINDOWS_POWERSHELL_EXE: LazyLock<String> = LazyLock::new(|| {
+        crate::command_safety::trusted_windows_powershell_invocation_path()
+            .expect("Windows PowerShell must exist at the authoritative System known folder")
+            .to_str()
+            .expect("the Windows System known folder must be valid UTF-8")
+            .to_string()
+    });
 
     fn installed_pwsh() -> Option<&'static str> {
-        Path::new(PWSH_EXE).is_file().then_some(PWSH_EXE)
+        static STANDARD_PWSH_EXE: LazyLock<Option<String>> = LazyLock::new(|| {
+            crate::command_safety::trusted_standard_pwsh_invocation_path().map(|path| {
+                path.to_str()
+                    .expect("the Program Files known folder must be valid UTF-8")
+                    .to_string()
+            })
+        });
+        STANDARD_PWSH_EXE.as_deref()
+    }
+
+    fn windows_powershell_exe() -> &'static str {
+        WINDOWS_POWERSHELL_EXE.as_str()
     }
 
     /// Converts a slice of string literals into owned `String`s for the tests.
@@ -235,21 +252,21 @@ mod tests {
     #[test]
     fn recognizes_safe_powershell_wrappers() {
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoLogo",
             "-Command",
             "Get-ChildItem -Path .",
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "git status",
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "Get-Content",
             "Cargo.toml",
         ])));
@@ -282,7 +299,7 @@ mod tests {
         }
 
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content Cargo.toml",
         ])));
@@ -290,10 +307,6 @@ mod tests {
 
     #[test]
     fn rejects_workspace_controlled_powershell_binaries_before_parser_spawn() {
-        if !Path::new(POWERSHELL_EXE).is_file() {
-            return;
-        }
-
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -306,8 +319,8 @@ mod tests {
 
         let fake_powershell = test_dir.join("powershell.exe");
         let fake_pwsh = test_dir.join("pwsh.exe");
-        std::fs::copy(POWERSHELL_EXE, &fake_powershell).unwrap();
-        std::fs::copy(POWERSHELL_EXE, &fake_pwsh).unwrap();
+        std::fs::copy(windows_powershell_exe(), &fake_powershell).unwrap();
+        std::fs::copy(windows_powershell_exe(), &fake_pwsh).unwrap();
 
         let results = [&fake_powershell, &fake_pwsh].map(|executable| {
             is_safe_command_windows(&vec_str(&[
@@ -413,7 +426,7 @@ mod tests {
             (
                 script,
                 is_safe_command_windows(&[
-                    POWERSHELL_EXE.to_string(),
+                    windows_powershell_exe().to_string(),
                     "-NoProfile".to_string(),
                     "-Command".to_string(),
                     script.to_string(),
@@ -437,7 +450,7 @@ mod tests {
     #[test]
     fn rejects_stop_parsing_git_forms() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "git log --% HEAD --output=codex_poc.txt",
@@ -447,7 +460,7 @@ mod tests {
     #[test]
     fn rejects_powershell_param_blocks() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "param([string]$path = (Get-Location)) Write-Output test",
@@ -457,7 +470,7 @@ mod tests {
     #[test]
     fn rejects_powershell_named_blocks() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "begin { Set-Content codex_poc.txt pwned } end { Get-Content Cargo.toml }",
@@ -467,7 +480,7 @@ mod tests {
     #[test]
     fn rejects_powershell_using_statements() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "using module ./codex_poc.psm1\nGet-Content Cargo.toml",
@@ -477,7 +490,7 @@ mod tests {
     #[test]
     fn rejects_powershell_trap_blocks() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "trap { Set-Content codex_poc.txt pwned; continue } Get-Content missing -ErrorAction Stop",
@@ -487,97 +500,97 @@ mod tests {
     #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoLogo",
             "-Command",
             "Remove-Item foo.txt",
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-NoProfile",
             "-Command",
             "rg --pre cat",
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Set-Content foo.txt 'hello'",
         ])));
 
         // Redirections are blocked
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "echo hi > out.txt",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content x | Out-File y",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Write-Output foo 2> err.txt",
         ])));
 
         // Call operator is blocked
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "& Remove-Item foo",
         ])));
 
         // Chained safe + unsafe must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-ChildItem; Remove-Item foo",
         ])));
         // Nested unsafe cmdlet inside safe command must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Write-Output (Set-Content foo6.txt 'abc')",
         ])));
         // Additional nested unsafe cmdlet examples must fail
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Write-Host (Remove-Item foo.txt)",
         ])));
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content (New-Item bar.txt)",
         ])));
 
         // Unsafe @ expansion.
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "ls @(calc.exe)"
         ])));
 
         // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "ls && pwd"
         ])));
 
         // Sub-expressions are rejected even if they contain otherwise safe commands.
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Write-Output $(Get-Content foo)"
         ])));
 
         // Empty words from the parser (e.g. '') are rejected.
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "''"
         ])));
@@ -586,13 +599,13 @@ mod tests {
     #[test]
     fn accepts_constant_expression_arguments() {
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content 'foo bar'"
         ])));
 
         assert!(is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content \"foo bar\""
         ])));
@@ -601,13 +614,13 @@ mod tests {
     #[test]
     fn rejects_dynamic_arguments() {
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Get-Content $foo"
         ])));
 
         assert!(!is_safe_command_windows(&vec_str(&[
-            POWERSHELL_EXE,
+            windows_powershell_exe(),
             "-Command",
             "Write-Output \"foo $bar\""
         ])));
@@ -621,9 +634,12 @@ mod tests {
 
         let chain = "pwd && ls";
         assert!(
-            !is_safe_command_windows(&vec_str(
-                &[POWERSHELL_EXE, "-NoProfile", "-Command", chain,]
-            )),
+            !is_safe_command_windows(&vec_str(&[
+                windows_powershell_exe(),
+                "-NoProfile",
+                "-Command",
+                chain,
+            ])),
             "`{chain}` is not recognized by powershell.exe"
         );
 
