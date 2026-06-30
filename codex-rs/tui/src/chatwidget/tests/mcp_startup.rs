@@ -365,6 +365,26 @@ async fn side_conversation_rejection_preserves_review_draft_during_mcp_startup()
 }
 
 #[tokio::test]
+async fn side_conversation_rejection_without_mcp_clears_review_attachments() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.set_remote_image_urls(vec!["https://example.com/review-context.png".to_string()]);
+
+    submit_bare_review(&mut chat);
+
+    let error = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(
+        error.contains("'/review' is unavailable in side conversations."),
+        "unexpected error: {error}"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert_eq!(chat.remote_image_urls(), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn mcp_startup_dedupes_same_round_duplicate_failure_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
