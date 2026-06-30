@@ -43,7 +43,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::instrument;
-use tracing::trace;
 use tungstenite::extensions::ExtensionsConfig;
 use tungstenite::extensions::compression::deflate::DeflateConfig;
 use tungstenite::protocol::WebSocketConfig;
