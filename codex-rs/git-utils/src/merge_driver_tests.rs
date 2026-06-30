@@ -82,9 +82,10 @@ fn apply_allows_clean_patch_with_selected_merge_driver() {
 
     assert_eq!(result.exit_code, 0);
     assert!(!result.cmd_for_log.contains("--3way"));
-    assert_eq!(
-        std::fs::read_to_string(root.join("file.txt")).expect("read file"),
-        "new\n"
+    let contents = std::fs::read_to_string(root.join("file.txt")).expect("read file");
+    assert!(
+        matches!(contents.as_str(), "new\n" | "new\r\n"),
+        "expected the patched contents with a platform line ending, got {contents:?}"
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "merge driver must not run");
@@ -143,9 +144,10 @@ fn reverse_apply_allows_clean_patch_with_selected_merge_driver() {
 
     assert_eq!(result.exit_code, 0);
     assert!(!result.cmd_for_log.contains("--3way"));
-    assert_eq!(
-        std::fs::read_to_string(root.join("file.txt")).expect("read file"),
-        "old\n"
+    let contents = std::fs::read_to_string(root.join("file.txt")).expect("read file");
+    assert!(
+        matches!(contents.as_str(), "old\n" | "old\r\n"),
+        "expected the reverted contents with a platform line ending, got {contents:?}"
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "merge driver must not run");
