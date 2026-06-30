@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -69,9 +70,14 @@ pub unsafe fn sync_persistent_deny_read_acls(
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse deny-read ACL state {}", path.display())),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                recover_invalid_state_file(path)?;
+                Ok(PersistentDenyReadAclState::default())
+            }
+        },
+        Err(err) if err.kind() == ErrorKind::NotFound => {
             Ok(PersistentDenyReadAclState::default())
         }
         Err(err) => {
@@ -80,8 +86,70 @@ fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     }
 }
 
+fn recover_invalid_state_file(path: &Path) -> Result<()> {
+    let quarantine_path = path.with_extension("json.corrupt");
+    match std::fs::rename(path, &quarantine_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&quarantine_path).with_context(|| {
+                format!("remove stale deny-read ACL quarantine {}", quarantine_path.display())
+            })?;
+            std::fs::rename(path, &quarantine_path).with_context(|| {
+                format!(
+                    "quarantine invalid deny-read ACL state {} -> {}",
+                    path.display(),
+                    quarantine_path.display()
+                )
+            })
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "quarantine invalid deny-read ACL state {} -> {}",
+                path.display(),
+                quarantine_path.display()
+            )
+        }),
+    }
+}
+
 fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state).context("serialize deny-read ACL state")?;
     std::fs::write(path, bytes)
         .with_context(|| format!("write deny-read ACL state {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistentDenyReadAclState;
+    use super::load_state;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_state_recovers_from_invalid_json() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("deny_read_acl_state.json");
+        fs::write(&path, b"\0\0\0").expect("write corrupt state");
+
+        let state = load_state(&path).expect("recover state");
+
+        assert!(state.principals.is_empty());
+        assert!(!path.exists());
+        assert!(path.with_extension("json.corrupt").exists());
+    }
+
+    #[test]
+    fn load_state_replaces_stale_quarantine_file() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("deny_read_acl_state.json");
+        let quarantine_path = path.with_extension("json.corrupt");
+        fs::write(&path, b"{").expect("write corrupt state");
+        fs::write(&quarantine_path, b"stale").expect("write stale quarantine");
+
+        let state = load_state(&path).expect("recover state");
+
+        assert_eq!(state.principals, PersistentDenyReadAclState::default().principals);
+        assert_eq!(fs::read(&quarantine_path).expect("read quarantine"), b"{");
+    }
 }
