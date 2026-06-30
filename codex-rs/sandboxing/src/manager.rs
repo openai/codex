@@ -29,7 +29,21 @@ use std::io;
 use std::path::Path;
 
 #[cfg(target_os = "windows")]
-const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &["USERNAME", "USERPROFILE"];
+const WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST: &[&str] = &[
+    "USERNAME",
+    "USERPROFILE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "ws_proxy",
+    "wss_proxy",
+    "CODEX_NETWORK_ALLOW_LOCAL_BINDING",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxType {
@@ -566,6 +580,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     let deny_write_paths_override = overrides.as_ref().map_or(empty_paths, |overrides| {
         overrides.additional_deny_write_paths.as_slice()
     });
+    add_windows_sandbox_wrapper_setup_env(&mut request.env);
     let mut wrapper_args =
         codex_windows_sandbox::create_windows_sandbox_command_args_for_permission_profile(
             inner_command,
@@ -590,7 +605,6 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     request.command.append(&mut wrapper_args);
     request.sandbox = SandboxType::None;
     request.arg0 = None;
-    add_windows_sandbox_wrapper_setup_env(&mut request.env);
     Ok(())
 }
 

@@ -426,11 +426,15 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
 
 #[cfg(target_os = "windows")]
 #[test]
-fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
+fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_state() {
     let mut env = HashMap::from([
         ("Path".to_string(), r"C:\Windows\System32".to_string()),
         ("username".to_string(), "wrong-user".to_string()),
         ("UserProfile".to_string(), r"C:\wrong".to_string()),
+        (
+            "HTTPS_PROXY".to_string(),
+            "http://old-proxy:8080".to_string(),
+        ),
     ]);
 
     super::add_windows_sandbox_wrapper_setup_env_from_vars(
@@ -438,6 +442,8 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
         [
             ("USERNAME", "alice"),
             ("USERPROFILE", r"C:\Users\alice"),
+            ("HTTP_PROXY", "http://127.0.0.1:7892"),
+            ("CODEX_NETWORK_ALLOW_LOCAL_BINDING", "1"),
             ("OPENAI_API_KEY", "secret"),
         ]
         .map(|(key, value)| {
@@ -454,6 +460,14 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_identity() {
             ("Path".to_string(), r"C:\Windows\System32".to_string()),
             ("USERNAME".to_string(), "alice".to_string()),
             ("USERPROFILE".to_string(), r"C:\Users\alice".to_string()),
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:7892".to_string()
+            ),
+            (
+                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "1".to_string()
+            ),
         ])
     );
 }
@@ -582,4 +596,83 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         Some(std::ffi::OsStr::new(".sandbox-bin"))
     );
     assert!(materialized_helper.exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn transform_for_direct_spawn_windows_serializes_proxy_env_for_wrapper() {
+    let codex_home = tempfile::TempDir::new().expect("codex home");
+    let helper_dir = tempfile::TempDir::new().expect("helper dir");
+    let configured_helper = helper_dir.path().join("configured-codex-helper.exe");
+    std::fs::write(&configured_helper, b"helper").expect("write configured helper");
+    let cwd = AbsolutePathBuf::from_absolute_path(helper_dir.path()).expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let manager = SandboxManager::new();
+    let exec_request = manager
+        .transform_for_direct_spawn_with_codex_home(
+            SandboxDirectSpawnTransformRequest {
+                workspace_roots: std::slice::from_ref(&cwd),
+                windows_sandbox_proxy_settings_mode:
+                    codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
+                transform: SandboxTransformRequest {
+                    command: SandboxCommand {
+                        program: configured_helper.as_os_str().to_owned(),
+                        args: vec!["--codex-run-as-fs-helper".to_string()],
+                        cwd: cwd_uri.clone(),
+                        env: HashMap::from([(
+                            "Path".to_string(),
+                            r"C:\Windows\System32".to_string(),
+                        )]),
+                        managed_network: None,
+                        additional_permissions: None,
+                    },
+                    permissions: &permissions,
+                    sandbox: SandboxType::WindowsRestrictedToken,
+                    enforce_managed_network: false,
+                    environment_id: None,
+                    network: None,
+                    sandbox_policy_cwd: &cwd_uri,
+                    codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
+                    windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                    windows_sandbox_private_desktop: false,
+                },
+            },
+            codex_home.path(),
+        )
+        .expect("transform for direct spawn");
+
+    let env_json = exec_request
+        .command
+        .windows(2)
+        .find_map(|args| (args[0] == "--env-json").then_some(args[1].clone()))
+        .expect("wrapper env json");
+    let env_map: HashMap<String, String> =
+        serde_json::from_str(&env_json).expect("deserialize env json");
+
+    assert!(env_map.contains_key("USERNAME"));
+    assert!(env_map.contains_key("USERPROFILE"));
+    assert_eq!(
+        env_map.get("HTTP_PROXY"),
+        std::env::var("HTTP_PROXY").ok().as_ref()
+    );
+    assert_eq!(
+        env_map.get("HTTPS_PROXY"),
+        std::env::var("HTTPS_PROXY").ok().as_ref()
+    );
+    assert_eq!(
+        env_map.get("CODEX_NETWORK_ALLOW_LOCAL_BINDING"),
+        std::env::var("CODEX_NETWORK_ALLOW_LOCAL_BINDING")
+            .ok()
+            .as_ref()
+    );
 }
