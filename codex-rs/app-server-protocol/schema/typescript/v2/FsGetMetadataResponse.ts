@@ -19,6 +19,10 @@ isFile: boolean,
  */
 isSymlink: boolean,
 /**
+ * File size in bytes.
+ */
+sizeBytes: number,
+/**
  * File creation time in Unix milliseconds when available, otherwise `0`.
  */
 createdAtMs: number,
