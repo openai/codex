@@ -272,10 +272,15 @@ where
         let mut pong_watchdog = WebSocketPongWatchdog::new(WEBSOCKET_PONG_TIMEOUT);
         let pong_deadline = tokio::time::sleep(WEBSOCKET_PONG_TIMEOUT);
         tokio::pin!(pong_deadline);
+        // Keep one framed message as a cursor. Sending one Noise record per loop
+        // creates a scheduling point for keepalive and inbound control frames
+        // without splitting the WebSocket reader and writer.
         let mut pending_outbound: Option<(Vec<u8>, usize)> = None;
         let mut force_incoming = false;
         let mut frames_drained_after_pong_deadline = 0usize;
         'relay: loop {
+            // Consume a due tick before the always-ready record arm below can win
+            // another select iteration and postpone the keepalive.
             if pong_watchdog.deadline().is_none()
                 && keepalive.tick().now_or_never().is_some()
             {
@@ -296,6 +301,8 @@ where
             let pong_deadline_expired = pong_watchdog
                 .deadline()
                 .is_some_and(|deadline| tokio::time::Instant::now() >= deadline);
+            // After expiry, inspect only frames already queued. Forcing the peeked
+            // item through next() makes the 32-frame grace deterministic.
             if pong_deadline_expired && !force_incoming {
                 if frames_drained_after_pong_deadline
                     < MAX_FRAMES_DRAINED_AFTER_PONG_DEADLINE
@@ -319,7 +326,8 @@ where
                 }
             }
 
-            // A queued Pong must be observed before another fragment is written.
+            // While a Pong is outstanding, drain already-queued inbound traffic
+            // before the next fragment so a queued Pong cannot sit behind writes.
             if !force_incoming
                 && pong_watchdog.deadline().is_some()
                 && pending_outbound.is_some()
@@ -408,6 +416,9 @@ where
                     let Some(incoming_message) = incoming_message else {
                         break;
                     };
+                    // Count each completed read after expiry. If only the deadline arm
+                    // advanced this counter, reads won by a simultaneously ready incoming
+                    // arm would not count toward the 32-frame cap.
                     if pong_watchdog
                         .deadline()
                         .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
@@ -541,6 +552,8 @@ where
         pong_watchdog.write_deadline(tokio::time::Instant::now()),
     )
     .await?;
+    // Start the response clock after the Ping flushes; waiting for sink capacity
+    // is governed by the write deadline above.
     pong_watchdog.ping_sent(tokio::time::Instant::now());
     if let Some(deadline) = pong_watchdog.deadline() {
         pong_deadline.reset(deadline);
