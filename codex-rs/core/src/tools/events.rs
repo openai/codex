@@ -25,6 +25,7 @@ use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use tracing::instrument;
 
 use super::format_exec_output_str;
 
@@ -93,6 +94,7 @@ fn tracker_update_for_known_delta<'a>(
     }
 }
 
+#[instrument(name = "tool_event.exec_begin", level = "info", skip_all)]
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
@@ -537,6 +539,7 @@ async fn emit_exec_stage(
     }
 }
 
+#[instrument(name = "tool_event.exec_end", level = "info", skip_all)]
 async fn emit_exec_end(
     ctx: ToolEventCtx<'_>,
     exec_input: ExecCommandInput<'_>,

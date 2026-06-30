@@ -612,13 +612,13 @@ impl Session {
                 Ok(update) => update,
                 Err(err) => {
                     let message = err.to_string();
-                    self.send_event_raw(Event {
+                    Box::pin(self.send_event_raw(Event {
                         id: sub_id.clone(),
                         msg: EventMsg::Error(ErrorEvent {
                             message: message.clone(),
                             codex_error_info: Some(CodexErrorInfo::BadRequest),
                         }),
-                    })
+                    }))
                     .await;
                     return Err(CodexErr::InvalidRequest(message));
                 }
