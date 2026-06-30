@@ -22,6 +22,50 @@ cargo run -p codex-app-server-test-client -- model-list
 When Codex asks a question, choose a numbered option (or `o` for a free-form answer when offered)
 and the client will send the response and continue streaming the same turn.
 
+## Testing goal continuation permissions
+
+`goal-permissions-smoke` is a manually invoked live Responses API smoke test for
+`thread/goal/set`. It is not run by `cargo test`, `just test`, or CI. The
+POSIX-only command requires a non-empty `CODEX_API_KEY`, starts an app-server
+with temporary `HOME`, `CODEX_HOME`, and workspace directories, and runs two
+cases:
+
+- a stale read-only/untrusted thread resumed with `approvalPolicy: "never"`
+  and `sandboxPolicy: { "type": "dangerFullAccess" }`;
+- the same stale thread resumed with `approvalPolicy: "never"` and a named
+  workspace-write permissions profile.
+
+Each continuation must run one shell command, create an exact marker file, and
+finish without any command or file-change approval callback. The smoke also
+checks the stale start settings and then resumes the thread to assert that the
+current approval policy, reviewer, sandbox, and named profile were retained.
+The key is written only to an API-key auth record in the private temporary
+`CODEX_HOME`; the child receives empty `CODEX_API_KEY` and
+`OPENAI_API_KEY` values, and the temporary directories are removed afterward.
+The explicit sandbox case intentionally grants danger-full-access and the child
+still inherits other caller environment, so the temporary workspace is not a
+security boundary; it can read the temporary `auth.json`. Run this only
+with a live model and environment you trust.
+Because this is a live model stream, wrap unattended runs with your platform's
+timeout utility.
+
+```bash
+# Build a debug Codex binary first.
+cargo build -p codex-cli --bin codex
+
+# Set an API key for the isolated app-server.
+export CODEX_API_KEY=...
+
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  goal-permissions-smoke
+
+# Optional: select a specific live model.
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  goal-permissions-smoke --model gpt-5.4
+```
+
 ## Testing Plugin Analytics
 
 The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin

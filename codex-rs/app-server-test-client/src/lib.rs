@@ -26,6 +26,7 @@ use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
@@ -49,11 +50,17 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -211,6 +218,15 @@ enum CliCommand {
     /// Start a V2 turn that should not elicit an ExecCommand approval.
     #[command(name = "no-trigger-cmd-approval")]
     NoTriggerCmdApproval,
+    /// Run live goal-continuation permission smokes against the configured Responses API.
+    ///
+    /// This is manually invoked and requires API-key auth in the environment.
+    #[command(name = "goal-permissions-smoke")]
+    GoalPermissionsSmoke {
+        /// Optional model override; omitted uses the configured default.
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Send two sequential V2 turns in the same thread to test follow-up behavior.
     SendFollowUpV2 {
         /// Initial user message for the first turn.
@@ -384,6 +400,14 @@ pub async fn run() -> Result<()> {
         CliCommand::NoTriggerCmdApproval => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
             no_trigger_cmd_approval(&endpoint, &config_overrides, &dynamic_tools).await
+        }
+        CliCommand::GoalPermissionsSmoke { model } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "goal-permissions-smoke")?;
+            if url.is_some() {
+                bail!("goal-permissions-smoke requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("goal-permissions-smoke requires --codex-bin")?;
+            goal_permissions_smoke(&codex_bin, &config_overrides, model)
         }
         CliCommand::SendFollowUpV2 {
             first_message,
@@ -1032,6 +1056,369 @@ async fn no_trigger_cmd_approval(
     .await
 }
 
+#[derive(Clone, Copy)]
+enum GoalPermissionsSmokeCase {
+    ExplicitSandbox,
+    NamedProfile,
+}
+
+impl GoalPermissionsSmokeCase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ExplicitSandbox => "explicit-sandbox",
+            Self::NamedProfile => "named-profile",
+        }
+    }
+
+    fn marker(self) -> &'static str {
+        match self {
+            Self::ExplicitSandbox => "GOAL_PERMISSION_SMOKE_EXPLICIT",
+            Self::NamedProfile => "GOAL_PERMISSION_SMOKE_PROFILE",
+        }
+    }
+
+    fn goal_context(self) -> (Option<SandboxPolicy>, Option<String>) {
+        match self {
+            Self::ExplicitSandbox => (Some(SandboxPolicy::DangerFullAccess), None),
+            Self::NamedProfile => (None, Some("goal_smoke".to_string())),
+        }
+    }
+}
+
+fn goal_permissions_smoke(
+    codex_bin: &Path,
+    config_overrides: &[String],
+    model: Option<String>,
+) -> Result<()> {
+    if cfg!(windows) {
+        bail!("goal-permissions-smoke currently requires a POSIX shell");
+    }
+    ensure_goal_permissions_smoke_auth()?;
+    for case in [
+        GoalPermissionsSmokeCase::ExplicitSandbox,
+        GoalPermissionsSmokeCase::NamedProfile,
+    ] {
+        run_goal_permissions_smoke_case(codex_bin, config_overrides, model.clone(), case)?;
+    }
+
+    println!(
+        "[goal permissions smoke] PASS: explicit sandbox and named profile continuations used current permissions without approval callbacks"
+    );
+    Ok(())
+}
+
+fn run_goal_permissions_smoke_case(
+    codex_bin: &Path,
+    config_overrides: &[String],
+    model: Option<String>,
+    case: GoalPermissionsSmokeCase,
+) -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "codex-goal-permissions-smoke-{}-{}",
+        case.label(),
+        Uuid::new_v4()
+    ));
+    let result = run_goal_permissions_smoke_case_inner(
+        codex_bin,
+        config_overrides,
+        model,
+        case,
+        root.as_path(),
+    );
+    match fs::remove_dir_all(&root) {
+        Ok(()) => result,
+        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => result,
+        Err(cleanup_err) => match result {
+            Ok(()) => Err(cleanup_err).with_context(|| {
+                format!(
+                    "goal permissions smoke failed to remove temp directory {}",
+                    root.display()
+                )
+            }),
+            Err(err) => Err(err.context(format!(
+                "also failed to remove temp directory {}: {cleanup_err}",
+                root.display()
+            ))),
+        },
+    }
+}
+
+fn run_goal_permissions_smoke_case_inner(
+    codex_bin: &Path,
+    config_overrides: &[String],
+    model: Option<String>,
+    case: GoalPermissionsSmokeCase,
+    root: &Path,
+) -> Result<()> {
+    let codex_home = root.join("codex-home");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(root)?;
+    fs::create_dir_all(&codex_home)?;
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&workspace)?;
+    set_goal_permissions_smoke_private_dir(root)?;
+    set_goal_permissions_smoke_private_dir(&codex_home)?;
+    set_goal_permissions_smoke_private_dir(&home)?;
+    set_goal_permissions_smoke_private_dir(&workspace)?;
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"[features]
+goals = true
+
+[permissions.goal_smoke.filesystem]
+":root" = "read"
+
+[permissions.goal_smoke.filesystem.":workspace_roots"]
+"." = "write"
+"#,
+    )?;
+    seed_goal_permissions_smoke_api_key(&codex_home)?;
+
+    let marker_path = workspace.join(format!("{}.txt", case.label()));
+    let mut smoke_config_overrides = config_overrides.to_vec();
+    smoke_config_overrides.push("features.goals=true".to_string());
+    let environment = [
+        (
+            OsString::from("CODEX_HOME"),
+            codex_home.as_os_str().to_os_string(),
+        ),
+        (OsString::from("HOME"), home.as_os_str().to_os_string()),
+        // The app-server reads the API key from the isolated auth file. Do not
+        // expose either auth env var to model-invoked shell commands.
+        (OsString::from("CODEX_API_KEY"), OsString::new()),
+        (OsString::from("OPENAI_API_KEY"), OsString::new()),
+    ];
+    let mut client =
+        CodexClient::spawn_stdio_with_env(codex_bin, &smoke_config_overrides, &environment)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let thread_response = client.thread_start(ThreadStartParams {
+        model,
+        cwd: Some(workspace.to_string_lossy().into_owned()),
+        approval_policy: Some(AskForApproval::UnlessTrusted),
+        approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+        sandbox: Some(SandboxMode::ReadOnly),
+        ..Default::default()
+    })?;
+    println!("< thread/start response: {thread_response:?}");
+    if thread_response.approval_policy != AskForApproval::UnlessTrusted
+        || thread_response.approvals_reviewer != ApprovalsReviewer::AutoReview
+        || !matches!(&thread_response.sandbox, SandboxPolicy::ReadOnly { .. })
+    {
+        bail!(
+            "{} stale precondition was not applied: approval={:?}, reviewer={:?}, sandbox={:?}",
+            case.label(),
+            thread_response.approval_policy,
+            thread_response.approvals_reviewer,
+            thread_response.sandbox
+        );
+    }
+    let thread_id = thread_response.thread.id;
+
+    let materialize_response = client.turn_start(TurnStartParams {
+        thread_id: thread_id.clone(),
+        client_user_message_id: None,
+        input: vec![V2UserInput::Text {
+            text: "Reply with exactly MATERIALIZED. Do not call any tools.".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })?;
+    println!("< turn/start response (materialize): {materialize_response:?}");
+    client.stream_turn(&thread_id, &materialize_response.turn.id)?;
+    if client.last_turn_status != Some(TurnStatus::Completed) {
+        bail!(
+            "materialization turn did not complete for {}: status={:?}, error={:?}",
+            case.label(),
+            client.last_turn_status,
+            client.last_turn_error_message
+        );
+    }
+
+    client.reset_turn_observations();
+    let command = format!(
+        "printf '%s\\n' {} > {}",
+        shell_quote(case.marker()),
+        shell_quote(&marker_path.display().to_string())
+    );
+    let objective = format!(
+        "Use the shell command tool exactly once. Run this exact command without rewriting it:\n\n{command}\n\nDo not use apply_patch or any other tool. After the command succeeds, mark the goal complete, then reply exactly GOAL_PERMISSION_SMOKE_DONE."
+    );
+    let (sandbox_policy, permissions) = case.goal_context();
+    let goal_response = client.thread_goal_set(ThreadGoalSetParams {
+        thread_id: thread_id.clone(),
+        objective: Some(objective),
+        status: Some(ThreadGoalStatus::Active),
+        approval_policy: Some(AskForApproval::Never),
+        approvals_reviewer: Some(ApprovalsReviewer::User),
+        sandbox_policy,
+        permissions,
+        token_budget: Some(Some(20_000)),
+    })?;
+    println!("< thread/goal/set response: {goal_response:?}");
+
+    let continuation_turn_id = client.wait_for_next_turn_start(&thread_id)?;
+    client.stream_turn(&thread_id, &continuation_turn_id)?;
+
+    if client.command_approval_count != 0 || client.file_change_approval_count != 0 {
+        bail!(
+            "{} continuation requested approvals: command={}, file_change={}",
+            case.label(),
+            client.command_approval_count,
+            client.file_change_approval_count
+        );
+    }
+    if client.last_turn_status != Some(TurnStatus::Completed) {
+        bail!(
+            "{} continuation did not complete: status={:?}, error={:?}",
+            case.label(),
+            client.last_turn_status,
+            client.last_turn_error_message
+        );
+    }
+    if !client
+        .command_execution_statuses
+        .contains(&CommandExecutionStatus::Completed)
+    {
+        bail!(
+            "{} continuation did not complete a shell command: {:?}",
+            case.label(),
+            client.command_execution_statuses
+        );
+    }
+    let marker_contents = fs::read_to_string(&marker_path).with_context(|| {
+        format!(
+            "{} continuation did not create {}",
+            case.label(),
+            marker_path.display()
+        )
+    })?;
+    let expected_marker = format!("{}\n", case.marker());
+    if marker_contents != expected_marker {
+        bail!(
+            "{} marker mismatch: expected {:?}, got {:?}",
+            case.label(),
+            expected_marker,
+            marker_contents
+        );
+    }
+
+    let goal = client.thread_goal_get(ThreadGoalGetParams {
+        thread_id: thread_id.clone(),
+    })?;
+    if !matches!(
+        goal.goal.as_ref().map(|goal| goal.status),
+        Some(ThreadGoalStatus::Complete)
+    ) {
+        bail!(
+            "{} continuation did not mark the goal complete: {:?}",
+            case.label(),
+            goal.goal
+        );
+    }
+
+    let resumed = client.thread_resume(ThreadResumeParams {
+        thread_id: thread_id.clone(),
+        ..Default::default()
+    })?;
+    if resumed.approval_policy != AskForApproval::Never
+        || resumed.approvals_reviewer != ApprovalsReviewer::User
+    {
+        bail!(
+            "{} continuation did not retain current approval context: approval={:?}, reviewer={:?}",
+            case.label(),
+            resumed.approval_policy,
+            resumed.approvals_reviewer
+        );
+    }
+    match case {
+        GoalPermissionsSmokeCase::ExplicitSandbox => {
+            if resumed.sandbox != SandboxPolicy::DangerFullAccess {
+                bail!(
+                    "{} continuation did not retain danger-full-access: {:?}",
+                    case.label(),
+                    resumed.sandbox
+                );
+            }
+        }
+        GoalPermissionsSmokeCase::NamedProfile => {
+            let active_profile_id = resumed
+                .active_permission_profile
+                .as_ref()
+                .map(|profile| profile.id.as_str());
+            if active_profile_id != Some("goal_smoke")
+                || !matches!(&resumed.sandbox, SandboxPolicy::WorkspaceWrite { .. })
+            {
+                bail!(
+                    "{} continuation did not retain named workspace-write profile: active_profile={:?}, sandbox={:?}",
+                    case.label(),
+                    active_profile_id,
+                    resumed.sandbox
+                );
+            }
+        }
+    }
+
+    println!(
+        "[goal permissions smoke] PASS {}: thread_id={thread_id}, turn_id={continuation_turn_id}, marker={}",
+        case.label(),
+        marker_path.display()
+    );
+    Ok(())
+}
+
+fn ensure_goal_permissions_smoke_auth() -> Result<()> {
+    if std::env::var("CODEX_API_KEY").is_ok_and(|api_key| !api_key.trim().is_empty()) {
+        return Ok(());
+    }
+
+    bail!("goal-permissions-smoke requires a non-empty CODEX_API_KEY")
+}
+
+fn seed_goal_permissions_smoke_api_key(codex_home: &Path) -> Result<()> {
+    let api_key = std::env::var("CODEX_API_KEY")
+        .ok()
+        .map(|api_key| api_key.trim().to_string())
+        .filter(|api_key| !api_key.is_empty())
+        .context("goal-permissions-smoke requires a non-empty CODEX_API_KEY")?;
+    let auth_payload = serde_json::json!({
+        "OPENAI_API_KEY": api_key,
+        "tokens": null,
+        "last_refresh": null,
+    });
+    let auth_path = codex_home.join("auth.json");
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut auth_file = options
+        .open(&auth_path)
+        .with_context(|| format!("create isolated smoke auth file {}", auth_path.display()))?;
+    serde_json::to_writer(&mut auth_file, &auth_payload)
+        .context("write isolated smoke auth payload")?;
+    auth_file.write_all(b"\n")?;
+    Ok(())
+}
+
+fn set_goal_permissions_smoke_private_dir(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 async fn send_message_v2_with_policies(
     endpoint: &Endpoint,
     config_overrides: &[String],
@@ -1494,6 +1881,7 @@ struct CodexClient {
     command_approval_behavior: CommandApprovalBehavior,
     command_approval_count: usize,
     command_approval_item_ids: Vec<String>,
+    file_change_approval_count: usize,
     command_execution_statuses: Vec<CommandExecutionStatus>,
     command_execution_outputs: Vec<String>,
     command_output_stream: String,
@@ -1583,6 +1971,7 @@ impl CodexClient {
             command_approval_behavior: CommandApprovalBehavior::AlwaysAccept,
             command_approval_count: 0,
             command_approval_item_ids: Vec::new(),
+            file_change_approval_count: 0,
             command_execution_statuses: Vec::new(),
             command_execution_outputs: Vec::new(),
             command_output_stream: String::new(),
@@ -1622,6 +2011,7 @@ impl CodexClient {
             command_approval_behavior: CommandApprovalBehavior::AlwaysAccept,
             command_approval_count: 0,
             command_approval_item_ids: Vec::new(),
+            file_change_approval_count: 0,
             command_execution_statuses: Vec::new(),
             command_execution_outputs: Vec::new(),
             command_output_stream: String::new(),
@@ -1642,6 +2032,21 @@ impl CodexClient {
         {
             self.helper_done_seen = true;
         }
+    }
+
+    fn reset_turn_observations(&mut self) {
+        self.command_approval_count = 0;
+        self.command_approval_item_ids.clear();
+        self.file_change_approval_count = 0;
+        self.command_execution_statuses.clear();
+        self.command_execution_outputs.clear();
+        self.command_output_stream.clear();
+        self.command_item_started = false;
+        self.helper_done_seen = false;
+        self.turn_completed_before_helper_done = false;
+        self.unexpected_items_before_helper_done.clear();
+        self.last_turn_status = None;
+        self.last_turn_error_message = None;
     }
 
     fn initialize(&mut self) -> Result<InitializeResponse> {
@@ -1695,6 +2100,26 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "thread/start")
+    }
+
+    fn thread_goal_set(&mut self, params: ThreadGoalSetParams) -> Result<ThreadGoalSetResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadGoalSet {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/goal/set")
+    }
+
+    fn thread_goal_get(&mut self, params: ThreadGoalGetParams) -> Result<ThreadGoalGetResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadGoalGet {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/goal/get")
     }
 
     fn thread_resume(&mut self, params: ThreadResumeParams) -> Result<ThreadResumeResponse> {
@@ -1818,6 +2243,28 @@ impl CodexClient {
                         println!("< accountRateLimitsUpdated notification: {snapshot:?}");
                     }
                     _ => {}
+                }
+            }
+        }
+    }
+
+    fn wait_for_next_turn_start(&mut self, thread_id: &str) -> Result<String> {
+        loop {
+            let notification = self.next_notification()?;
+            let Ok(server_notification) = ServerNotification::try_from(notification) else {
+                continue;
+            };
+
+            match server_notification {
+                ServerNotification::TurnStarted(payload) if payload.thread_id == thread_id => {
+                    println!("< turn/started notification: {:?}", payload.turn.status);
+                    return Ok(payload.turn.id);
+                }
+                ServerNotification::ThreadGoalUpdated(payload) => {
+                    println!("< thread/goal/updated notification: {payload:?}");
+                }
+                other => {
+                    println!("[before goal continuation] {other:?}");
                 }
             }
         }
@@ -2151,6 +2598,7 @@ impl CodexClient {
         println!(
             "\n< fileChange approval requested for thread {thread_id}, turn {turn_id}, item {item_id}"
         );
+        self.file_change_approval_count += 1;
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
         }
