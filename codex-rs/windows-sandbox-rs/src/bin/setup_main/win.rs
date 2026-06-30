@@ -122,6 +122,14 @@ fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     Ok(())
 }
 
+fn refresh_failure(refresh_errors: &[String]) -> SetupFailure {
+    let detail = refresh_errors.join("; ");
+    SetupFailure::new(
+        SetupErrorCode::HelperSandboxLockFailed,
+        format!("setup refresh had errors: {detail}"),
+    )
+}
+
 fn workspace_write_cap_sids_for_path(
     codex_home: &Path,
     command_cwd: &Path,
@@ -1026,7 +1034,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             log,
             &format!("setup refresh completed with errors: {refresh_errors:?}"),
         )?;
-        anyhow::bail!("setup refresh had errors");
+        return Err(anyhow::Error::new(refresh_failure(&refresh_errors)));
     }
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
@@ -1036,7 +1044,9 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::refresh_failure;
     use super::workspace_write_cap_sids_for_path;
+    use codex_windows_sandbox::SetupErrorCode;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::load_or_create_cap_sids;
     use codex_windows_sandbox::workspace_write_cap_sid_for_root;
@@ -1188,5 +1198,19 @@ mod tests {
         .expect("deny sids");
 
         assert_eq!(deny_sids, vec![workspace_sid, nested_sid]);
+    }
+
+    #[test]
+    fn refresh_failure_preserves_acl_error_details() {
+        let failure = refresh_failure(&[
+            "write ACE failed on C:\\workspace: SetNamedSecurityInfoW failed: 5".to_string(),
+            "deny ACE failed on C:\\workspace\\.git: Access is denied.".to_string(),
+        ]);
+
+        assert_eq!(failure.code, SetupErrorCode::HelperSandboxLockFailed);
+        assert_eq!(
+            failure.message,
+            "setup refresh had errors: write ACE failed on C:\\workspace: SetNamedSecurityInfoW failed: 5; deny ACE failed on C:\\workspace\\.git: Access is denied."
+        );
     }
 }
