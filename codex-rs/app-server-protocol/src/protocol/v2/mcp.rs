@@ -199,6 +199,9 @@ pub struct McpServerOauthLoginParams {
     pub scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
+    pub client_metadata_url_base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
     pub timeout_secs: Option<i64>,
 }
 

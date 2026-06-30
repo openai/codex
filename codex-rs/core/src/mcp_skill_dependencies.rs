@@ -158,6 +158,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             &resolved_scopes.scopes,
             oauth_client_id,
             server_config.oauth_resource.as_deref(),
+            /*client_metadata_url_base*/ None,
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
         )
@@ -175,6 +176,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
                     &[],
                     oauth_client_id,
                     server_config.oauth_resource.as_deref(),
+                    /*client_metadata_url_base*/ None,
                     config.mcp_oauth_callback_port,
                     config.mcp_oauth_callback_url.as_deref(),
                 )

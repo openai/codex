@@ -8458,6 +8458,12 @@
     "McpServerOauthLoginParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "clientMetadataUrlBase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },

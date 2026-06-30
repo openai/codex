@@ -14,6 +14,7 @@ use codex_exec_server::ReqwestHttpClient;
 use reqwest::Url;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::AuthorizationSession;
+use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthClientConfig;
 use rmcp::transport::auth::OAuthHttpClient;
 use rmcp::transport::auth::OAuthState;
@@ -33,6 +34,9 @@ use crate::save_oauth_tokens;
 use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
+
+const TOKEN_ENDPOINT_AUTH_METHOD_PARAM: &str = "token_endpoint_auth_method";
+const TOKEN_ENDPOINT_AUTH_METHOD_NONE: &str = "none";
 
 struct OAuthHttpContext {
     http_headers: Option<HashMap<String, String>>,
@@ -91,6 +95,7 @@ pub async fn perform_oauth_login(
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
+    client_metadata_url_base: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
@@ -104,6 +109,7 @@ pub async fn perform_oauth_login(
         scopes,
         oauth_client_id,
         oauth_resource,
+        client_metadata_url_base,
         callback_port,
         callback_url,
         /*emit_browser_url*/ true,
@@ -122,6 +128,7 @@ pub async fn perform_oauth_login_silent(
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
+    client_metadata_url_base: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
@@ -135,6 +142,7 @@ pub async fn perform_oauth_login_silent(
         scopes,
         oauth_client_id,
         oauth_resource,
+        client_metadata_url_base,
         callback_port,
         callback_url,
         /*emit_browser_url*/ false,
@@ -153,6 +161,7 @@ async fn perform_oauth_login_with_browser_output(
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
+    client_metadata_url_base: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
     emit_browser_url: bool,
@@ -171,6 +180,7 @@ async fn perform_oauth_login_with_browser_output(
         scopes,
         oauth_client_id,
         oauth_resource,
+        client_metadata_url_base,
         /*launch_browser*/ true,
         callback_port,
         callback_url,
@@ -192,6 +202,7 @@ pub async fn perform_oauth_login_return_url(
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
+    client_metadata_url_base: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -206,6 +217,7 @@ pub async fn perform_oauth_login_return_url(
         scopes,
         oauth_client_id,
         oauth_resource,
+        client_metadata_url_base,
         timeout_secs,
         callback_port,
         callback_url,
@@ -225,6 +237,7 @@ pub async fn perform_oauth_login_return_url_with_http_client(
     scopes: &[String],
     oauth_client_id: Option<&str>,
     oauth_resource: Option<&str>,
+    client_metadata_url_base: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -244,6 +257,7 @@ pub async fn perform_oauth_login_return_url_with_http_client(
         scopes,
         oauth_client_id,
         oauth_resource,
+        client_metadata_url_base,
         /*launch_browser*/ false,
         callback_port,
         callback_url,
@@ -467,6 +481,71 @@ fn append_callback_id_to_redirect_uri(redirect_uri: &str, callback_id: &str) -> 
     Ok(parsed.to_string())
 }
 
+fn build_callback_scoped_client_metadata_url(
+    client_metadata_url_base: &str,
+    callback_id: &str,
+    redirect_uri: &str,
+) -> Result<String> {
+    let mut parsed = Url::parse(client_metadata_url_base).with_context(|| {
+        format!("invalid MCP OAuth client metadata URL base `{client_metadata_url_base}`")
+    })?;
+    if parsed.query().is_some() {
+        bail!(
+            "invalid MCP OAuth client metadata URL base `{client_metadata_url_base}`: query is not allowed"
+        );
+    }
+    if parsed.fragment().is_some() {
+        bail!(
+            "invalid MCP OAuth client metadata URL base `{client_metadata_url_base}`: fragment is not allowed"
+        );
+    }
+
+    let base_path = parsed.path().trim_end_matches('/');
+    parsed.set_path(&format!("{base_path}/{callback_id}/client.json"));
+
+    let with_redirect_uri =
+        set_query_param(parsed.as_str(), /*key*/ "redirect_uri", redirect_uri);
+
+    Ok(set_query_param(
+        &with_redirect_uri,
+        TOKEN_ENDPOINT_AUTH_METHOD_PARAM,
+        TOKEN_ENDPOINT_AUTH_METHOD_NONE,
+    ))
+}
+
+fn metadata_allows_public_client_token_exchange(metadata: &AuthorizationMetadata) -> bool {
+    let Some(methods) = metadata
+        .additional_fields
+        .get(/*key*/ "token_endpoint_auth_methods_supported")
+    else {
+        return true;
+    };
+    let Some(methods) = methods.as_array() else {
+        return true;
+    };
+
+    methods
+        .iter()
+        .any(|method| method.as_str() == Some(TOKEN_ENDPOINT_AUTH_METHOD_NONE))
+}
+
+async fn ensure_public_client_token_exchange_supported(
+    server_url: &str,
+    http_client: Arc<dyn OAuthHttpClient>,
+) -> Result<()> {
+    let authorization_manager =
+        AuthorizationManager::new_with_oauth_http_client(server_url, http_client).await?;
+    let metadata = authorization_manager.discover_metadata().await?;
+
+    if !metadata_allows_public_client_token_exchange(&metadata) {
+        bail!(
+            "MCP OAuth server metadata does not support `{TOKEN_ENDPOINT_AUTH_METHOD_PARAM}={TOKEN_ENDPOINT_AUTH_METHOD_NONE}`, which Codex local MCP OAuth requires"
+        );
+    }
+
+    Ok(())
+}
+
 fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
     let parsed = Url::parse(redirect_uri)
         .with_context(|| format!("invalid redirect URI `{redirect_uri}`"))?;
@@ -499,6 +578,7 @@ impl OauthLoginFlow {
         scopes: &[String],
         oauth_client_id: Option<&str>,
         oauth_resource: Option<&str>,
+        client_metadata_url_base: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
         callback_url: Option<&str>,
@@ -521,6 +601,11 @@ impl OauthLoginFlow {
         let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
         let callback_id = callback_id_from_server_url(server_url)?;
         let redirect_uri = append_callback_id_to_redirect_uri(&redirect_uri, &callback_id)?;
+        let client_metadata_url = client_metadata_url_base
+            .map(|url_base| {
+                build_callback_scoped_client_metadata_url(url_base, &callback_id, &redirect_uri)
+            })
+            .transpose()?;
         let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
 
         let (tx, rx) = oneshot::channel();
@@ -541,6 +626,7 @@ impl OauthLoginFlow {
             &scope_refs,
             &redirect_uri,
             oauth_client_id,
+            client_metadata_url.as_deref(),
         )
         .await?;
         let auth_url = append_query_param(
@@ -664,14 +750,29 @@ async fn start_authorization(
     scopes: &[&str],
     redirect_uri: &str,
     oauth_client_id: Option<&str>,
+    client_metadata_url: Option<&str>,
 ) -> Result<OAuthState> {
     let Some(oauth_client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
     else {
+        if client_metadata_url.is_some() {
+            ensure_public_client_token_exchange_supported(server_url, http_client.clone()).await?;
+        }
         let mut oauth_state =
             OAuthState::new_with_oauth_http_client(server_url, http_client).await?;
-        oauth_state
-            .start_authorization(scopes, redirect_uri, Some("Codex"))
-            .await?;
+        if let Some(client_metadata_url) = client_metadata_url {
+            oauth_state
+                .start_authorization_with_metadata_url(
+                    scopes,
+                    redirect_uri,
+                    Some("Codex"),
+                    Some(client_metadata_url),
+                )
+                .await?;
+        } else {
+            oauth_state
+                .start_authorization(scopes, redirect_uri, Some("Codex"))
+                .await?;
+        }
         return Ok(oauth_state);
     };
 
@@ -707,6 +808,29 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
     format!("{url}{separator}{key}={encoded}")
 }
 
+fn set_query_param(url: &str, key: &str, value: &str) -> String {
+    if let Ok(mut parsed) = Url::parse(url) {
+        let existing_pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .filter(|(existing_key, _)| existing_key != key)
+            .map(|(existing_key, existing_value)| {
+                (existing_key.into_owned(), existing_value.into_owned())
+            })
+            .collect();
+        {
+            let mut query = parsed.query_pairs_mut();
+            query.clear();
+            for (existing_key, existing_value) in existing_pairs {
+                query.append_pair(&existing_key, &existing_value);
+            }
+            query.append_pair(key, value);
+        }
+        return parsed.to_string();
+    }
+
+    append_query_param(url, key, Some(value))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -719,17 +843,31 @@ mod tests {
     use reqwest::Url;
     use reqwest::header::HeaderMap;
     use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use tiny_http::Header;
+    use tiny_http::Method;
+    use tiny_http::Response;
+    use tiny_http::Server;
     use tokio::net::TcpListener;
 
     use super::CallbackOutcome;
     use super::OAuthHttpClientAdapter;
+    use super::OAuthHttpContext;
     use super::OAuthProviderError;
+    use super::OauthLoginFlow;
+    use super::TOKEN_ENDPOINT_AUTH_METHOD_NONE;
+    use super::TOKEN_ENDPOINT_AUTH_METHOD_PARAM;
     use super::append_callback_id_to_redirect_uri;
     use super::append_query_param;
+    use super::build_callback_scoped_client_metadata_url;
     use super::callback_id_from_server_url;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
+    use super::set_query_param;
     use super::start_authorization;
+    use codex_config::types::AuthKeyringBackendKind;
+    use codex_config::types::OAuthCredentialsStoreMode;
 
     async fn spawn_oauth_metadata_server() -> String {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -780,6 +918,7 @@ mod tests {
             &[],
             "http://127.0.0.1/callback",
             Some("eci-prd-pub-codex-123"),
+            /*client_metadata_url*/ None,
         )
         .await
         .expect("start oauth authorization");
@@ -795,6 +934,261 @@ mod tests {
             .map(|(_, value)| value.into_owned());
 
         assert_eq!(client_id.as_deref(), Some("eci-prd-pub-codex-123"));
+    }
+
+    struct TestOAuthServer {
+        server: Arc<Server>,
+        base_url: String,
+        registration_hits: Arc<AtomicUsize>,
+    }
+
+    impl TestOAuthServer {
+        fn new(supports_metadata_url: bool) -> Self {
+            Self::new_with_token_endpoint_auth_methods(
+                supports_metadata_url,
+                /*token_endpoint_auth_methods_supported*/ None,
+            )
+        }
+
+        fn new_with_token_endpoint_auth_methods(
+            supports_metadata_url: bool,
+            token_endpoint_auth_methods_supported: Option<Vec<&'static str>>,
+        ) -> Self {
+            let server = Arc::new(Server::http("127.0.0.1:0").expect("bind test OAuth server"));
+            let base_url = local_server_base_url(&server);
+            let registration_hits = Arc::new(AtomicUsize::new(0));
+            let server_for_thread = Arc::clone(&server);
+            let hits_for_thread = Arc::clone(&registration_hits);
+            let base_url_for_thread = base_url.clone();
+            let token_endpoint_auth_methods_supported_for_thread =
+                token_endpoint_auth_methods_supported;
+
+            std::thread::spawn(move || {
+                while let Ok(request) = server_for_thread.recv() {
+                    let path = request
+                        .url()
+                        .split_once('?')
+                        .map(|(path, _)| path)
+                        .unwrap_or_else(|| request.url());
+
+                    match (request.method(), path) {
+                        (&Method::Get, "/.well-known/oauth-authorization-server") => {
+                            let mut body = serde_json::json!({
+                                "authorization_endpoint": format!("{base_url_for_thread}/authorize"),
+                                "token_endpoint": format!("{base_url_for_thread}/token"),
+                                "registration_endpoint": format!("{base_url_for_thread}/register"),
+                                "response_types_supported": ["code"],
+                                "client_id_metadata_document_supported": supports_metadata_url,
+                            });
+                            if let Some(methods) =
+                                token_endpoint_auth_methods_supported_for_thread.as_ref()
+                            {
+                                body["token_endpoint_auth_methods_supported"] =
+                                    serde_json::json!(methods);
+                            }
+                            let _ = request.respond(json_response(body));
+                        }
+                        (&Method::Post, "/register") => {
+                            hits_for_thread.fetch_add(1, Ordering::SeqCst);
+                            let body = serde_json::json!({
+                                "client_id": "dynamic-client",
+                                "client_secret": null,
+                                "client_name": "Codex",
+                                "redirect_uris": ["http://127.0.0.1/callback"],
+                            });
+                            let _ = request.respond(json_response(body));
+                        }
+                        _ => {
+                            let _ = request
+                                .respond(Response::from_string("not found").with_status_code(404));
+                        }
+                    }
+                }
+            });
+
+            Self {
+                server,
+                base_url,
+                registration_hits,
+            }
+        }
+
+        fn base_url(&self) -> &str {
+            &self.base_url
+        }
+
+        fn registration_hits(&self) -> usize {
+            self.registration_hits.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for TestOAuthServer {
+        fn drop(&mut self) {
+            self.server.unblock();
+        }
+    }
+
+    fn local_server_base_url(server: &Server) -> String {
+        match server.server_addr() {
+            tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
+                format!("http://{}:{}", addr.ip(), addr.port())
+            }
+            tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
+                format!("http://[{}]:{}", addr.ip(), addr.port())
+            }
+            #[cfg(not(target_os = "windows"))]
+            _ => panic!("unexpected test server address"),
+        }
+    }
+
+    fn json_response(body: serde_json::Value) -> Response<std::io::Cursor<Vec<u8>>> {
+        Response::from_string(body.to_string()).with_header(
+            Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                .expect("valid content-type header"),
+        )
+    }
+
+    async fn start_test_oauth_flow(
+        oauth_server: &TestOAuthServer,
+        client_metadata_url_base: Option<&str>,
+    ) -> String {
+        try_start_test_oauth_flow(oauth_server, client_metadata_url_base)
+            .await
+            .expect("start OAuth flow")
+    }
+
+    async fn try_start_test_oauth_flow(
+        oauth_server: &TestOAuthServer,
+        client_metadata_url_base: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let flow = OauthLoginFlow::new(
+            "test-server",
+            oauth_server.base_url(),
+            OAuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+            OAuthHttpContext {
+                http_headers: None,
+                env_http_headers: None,
+                http_client: Arc::new(ReqwestHttpClient),
+            },
+            &[],
+            /*oauth_client_id*/ None,
+            /*oauth_resource*/ None,
+            client_metadata_url_base,
+            /*launch_browser*/ false,
+            /*callback_port*/ None,
+            /*callback_url*/ None,
+            Some(1),
+        )
+        .await?;
+        Ok(flow.authorization_url())
+    }
+
+    fn authorization_url_client_id(authorization_url: &str) -> String {
+        Url::parse(authorization_url)
+            .expect("valid authorization URL")
+            .query_pairs()
+            .find_map(|(key, value)| (key == "client_id").then(|| value.into_owned()))
+            .expect("authorization URL includes client_id")
+    }
+
+    fn client_id_redirect_uri(authorization_url: &str) -> String {
+        let client_id = authorization_url_client_id(authorization_url);
+        Url::parse(&client_id)
+            .expect("client_id should be a URL")
+            .query_pairs()
+            .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
+            .expect("client_id includes redirect_uri")
+    }
+
+    fn client_id_query_param(authorization_url: &str, param: &str) -> Option<String> {
+        let client_id = authorization_url_client_id(authorization_url);
+        Url::parse(&client_id)
+            .expect("client_id should be a URL")
+            .query_pairs()
+            .find_map(|(key, value)| (key == param).then(|| value.into_owned()))
+    }
+
+    #[tokio::test]
+    async fn authorization_uses_callback_scoped_client_metadata_url_as_client_id_when_supplied() {
+        let oauth_server = TestOAuthServer::new(/*supports_metadata_url*/ true);
+        let client_metadata_url_base = "https://chatgpt.com/codex/local-mcp/oauth";
+
+        let authorization_url =
+            start_test_oauth_flow(&oauth_server, Some(client_metadata_url_base)).await;
+        let client_id = authorization_url_client_id(&authorization_url);
+        let client_id_url = Url::parse(&client_id).expect("client ID should parse as URL");
+        let callback_id =
+            callback_id_from_server_url(oauth_server.base_url()).expect("server URL should parse");
+
+        assert_eq!(
+            client_id_url.path(),
+            format!("/codex/local-mcp/oauth/{callback_id}/client.json")
+        );
+        assert_eq!(
+            client_id_query_param(&authorization_url, TOKEN_ENDPOINT_AUTH_METHOD_PARAM).as_deref(),
+            Some(TOKEN_ENDPOINT_AUTH_METHOD_NONE)
+        );
+        assert_eq!(
+            Url::parse(&client_id_redirect_uri(&authorization_url))
+                .expect("redirect URI should parse")
+                .path(),
+            format!("/callback/{callback_id}")
+        );
+        assert_eq!(oauth_server.registration_hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_uses_client_metadata_url_when_server_supports_none_auth() {
+        let oauth_server = TestOAuthServer::new_with_token_endpoint_auth_methods(
+            /*supports_metadata_url*/ true,
+            Some(vec![TOKEN_ENDPOINT_AUTH_METHOD_NONE]),
+        );
+        let client_metadata_url_base = "https://chatgpt.com/codex/local-mcp/oauth";
+
+        let authorization_url =
+            start_test_oauth_flow(&oauth_server, Some(client_metadata_url_base)).await;
+
+        assert_eq!(
+            client_id_query_param(&authorization_url, TOKEN_ENDPOINT_AUTH_METHOD_PARAM).as_deref(),
+            Some(TOKEN_ENDPOINT_AUTH_METHOD_NONE)
+        );
+        assert_eq!(oauth_server.registration_hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_rejects_client_metadata_url_when_server_excludes_none_auth() {
+        let oauth_server = TestOAuthServer::new_with_token_endpoint_auth_methods(
+            /*supports_metadata_url*/ true,
+            Some(vec!["private_key_jwt"]),
+        );
+        let client_metadata_url_base = "https://chatgpt.com/codex/local-mcp/oauth";
+
+        let error = try_start_test_oauth_flow(&oauth_server, Some(client_metadata_url_base))
+            .await
+            .expect_err("expected OAuth flow to reject unsupported token auth method");
+
+        assert!(
+            error
+                .to_string()
+                .contains("token_endpoint_auth_method=none"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(oauth_server.registration_hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_omits_client_metadata_url_by_default() {
+        let oauth_server = TestOAuthServer::new(/*supports_metadata_url*/ true);
+
+        let authorization_url =
+            start_test_oauth_flow(&oauth_server, /*client_metadata_url_base*/ None).await;
+
+        assert_eq!(
+            authorization_url_client_id(&authorization_url),
+            "dynamic-client"
+        );
+        assert_eq!(oauth_server.registration_hits(), 1);
     }
 
     #[test]
@@ -901,6 +1295,39 @@ mod tests {
     }
 
     #[test]
+    fn client_metadata_url_base_is_scoped_to_callback_id() {
+        let client_metadata_url = build_callback_scoped_client_metadata_url(
+            "https://chatgpt.com/codex/local-mcp/oauth/",
+            "abc123",
+            "http://127.0.0.1:4321/callback/abc123",
+        )
+        .expect("client metadata URL should build");
+
+        assert_eq!(
+            client_metadata_url,
+            "https://chatgpt.com/codex/local-mcp/oauth/abc123/client.json?redirect_uri=http%3A%2F%2F127.0.0.1%3A4321%2Fcallback%2Fabc123&token_endpoint_auth_method=none"
+        );
+    }
+
+    #[test]
+    fn client_metadata_url_base_rejects_query_or_fragment() {
+        for url in [
+            "https://chatgpt.com/codex/local-mcp/oauth?variant=one",
+            "https://chatgpt.com/codex/local-mcp/oauth#fragment",
+        ] {
+            assert!(
+                build_callback_scoped_client_metadata_url(
+                    url,
+                    "abc123",
+                    "http://127.0.0.1:4321/callback/abc123",
+                )
+                .is_err(),
+                "expected `{url}` to be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn append_query_param_adds_resource_to_absolute_url() {
         let url = append_query_param(
             "https://example.com/authorize?scope=read",
@@ -930,5 +1357,19 @@ mod tests {
         let url = append_query_param("not a url", "resource", Some("api/resource"));
 
         assert_eq!(url, "not a url?resource=api%2Fresource");
+    }
+
+    #[test]
+    fn set_query_param_replaces_existing_value() {
+        let url = set_query_param(
+            "https://example.com/client.json?foo=bar&redirect_uri=old",
+            "redirect_uri",
+            "http://127.0.0.1:4321/callback/abc123",
+        );
+
+        assert_eq!(
+            url,
+            "https://example.com/client.json?foo=bar&redirect_uri=http%3A%2F%2F127.0.0.1%3A4321%2Fcallback%2Fabc123"
+        );
     }
 }
