@@ -37,6 +37,17 @@ use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
 
+#[cfg(windows)]
+fn require_absent_windows_environment(names: &[&str]) -> Result<()> {
+    for name in names {
+        anyhow::ensure!(
+            std::env::var_os(name).is_none(),
+            "cannot establish lowercase Windows environment fixture because {name} is already set"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
@@ -188,6 +199,268 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
             stdout: format!("request|added|unset|{}", codex_home.path().display()),
             stderr: String::new(),
         }
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn command_exec_env_overrides_use_windows_case_folding() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    require_absent_windows_environment(&[
+        "GIT_ALLOW_PROTOCOL",
+        "GIT_NO_LAZY_FETCH",
+        "CASEFOLD_REMOVE_ME",
+    ])?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("git_allow_protocol", Some("ext")),
+            ("git_no_lazy_fetch", Some("0")),
+            ("casefold_remove_me", Some("inherited")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let system_root = std::env::var_os("SystemRoot").context("SystemRoot should be set")?;
+    let powershell = Path::new(&system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let inherited_script = r#"
+$entries = [System.Environment]::GetEnvironmentVariables('Process')
+function Exact-Keys([string] $name) {
+    @($entries.Keys | Where-Object {
+        [string]::Equals(
+            [string] $_,
+            $name,
+            [System.StringComparison]::Ordinal
+        )
+    })
+}
+$allowLower = @(Exact-Keys 'git_allow_protocol')
+$allowUpper = @(Exact-Keys 'GIT_ALLOW_PROTOCOL')
+$noLazyLower = @(Exact-Keys 'git_no_lazy_fetch')
+$noLazyUpper = @(Exact-Keys 'GIT_NO_LAZY_FETCH')
+$removedLower = @(Exact-Keys 'casefold_remove_me')
+$removedUpper = @(Exact-Keys 'CASEFOLD_REMOVE_ME')
+if ($allowLower.Count -ne 1 -or [string] $entries[$allowLower[0]] -ne 'ext') { exit 21 }
+if ($allowUpper.Count -ne 0) { exit 22 }
+if ($noLazyLower.Count -ne 1 -or [string] $entries[$noLazyLower[0]] -ne '0') { exit 23 }
+if ($noLazyUpper.Count -ne 0) { exit 24 }
+if ($removedLower.Count -ne 1 -or [string] $entries[$removedLower[0]] -ne 'inherited') { exit 25 }
+if ($removedUpper.Count -ne 0) { exit 26 }
+[Console]::Out.Write('lowercase-inherited')
+"#;
+    let inherited_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                powershell.display().to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                inherited_script.to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let inherited_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(inherited_request_id))
+        .await?;
+    let inherited_response: CommandExecResponse = to_response(inherited_response)?;
+    assert_eq!(
+        inherited_response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "lowercase-inherited".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    let overridden_script = r#"
+$entries = [System.Environment]::GetEnvironmentVariables('Process')
+function Matching-Keys([string] $name) {
+    @($entries.Keys | Where-Object {
+        [string]::Equals(
+            [string] $_,
+            $name,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    })
+}
+$allow = @(Matching-Keys 'GIT_ALLOW_PROTOCOL')
+$noLazy = @(Matching-Keys 'GIT_NO_LAZY_FETCH')
+$removed = @(Matching-Keys 'CASEFOLD_REMOVE_ME')
+if ($allow.Count -ne 1 -or [string] $entries[$allow[0]] -ne '') { exit 11 }
+if ($noLazy.Count -ne 1 -or [string] $entries[$noLazy[0]] -ne '1') { exit 12 }
+if ($removed.Count -ne 0) { exit 13 }
+[Console]::Out.Write('casefold-ok')
+"#;
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                powershell.display().to_string(),
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                overridden_script.to_string(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: Some(HashMap::from([
+                ("GIT_ALLOW_PROTOCOL".to_string(), Some(String::new())),
+                ("GIT_NO_LAZY_FETCH".to_string(), Some("1".to_string())),
+                ("CASEFOLD_REMOVE_ME".to_string(), None),
+            ])),
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(
+        response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: "casefold-ok".to_string(),
+            stderr: String::new(),
+        }
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn command_exec_empty_git_allowlist_blocks_local_file_transport_on_windows() -> Result<()> {
+    let repository_root = TempDir::new()?;
+    let repository = repository_root.path().join("remote.git");
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "--bare"])
+        .arg(&repository)
+        .output()
+        .context("initialize bare Git repository")?;
+    anyhow::ensure!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let repository_url = url::Url::from_file_path(&repository)
+        .map_err(|()| anyhow::anyhow!("convert repository path to file URL"))?
+        .to_string();
+
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    require_absent_windows_environment(&["GIT_ALLOW_PROTOCOL", "GIT_NO_LAZY_FETCH"])?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("git_allow_protocol", Some("file")),
+            ("git_no_lazy_fetch", Some("0")),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let control_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "git".to_string(),
+                "ls-remote".to_string(),
+                repository_url.clone(),
+            ],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let control_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(control_request_id))
+        .await?;
+    let control_response: CommandExecResponse = to_response(control_response)?;
+    assert_eq!(
+        control_response,
+        CommandExecResponse {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        "inherited lowercase allowlist should permit file:// through command/exec"
+    );
+
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec!["git".to_string(), "ls-remote".to_string(), repository_url],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: Some(HashMap::from([
+                ("GIT_ALLOW_PROTOCOL".to_string(), Some(String::new())),
+                ("GIT_NO_LAZY_FETCH".to_string(), Some("1".to_string())),
+            ])),
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        })
+        .await?;
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_ne!(response.exit_code, 0, "empty allowlist should deny file://");
+    assert_eq!(response.stdout, "");
+    assert!(
+        response.stderr.contains("transport 'file' not allowed"),
+        "expected Git transport denial, got: {}",
+        response.stderr
     );
 
     Ok(())
