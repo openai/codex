@@ -55,6 +55,8 @@ mod exec_policy;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
 mod fork_thread;
+#[cfg(unix)]
+mod generic_git_zsh_fork;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
 #[cfg(not(target_os = "windows"))]

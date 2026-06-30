@@ -96,7 +96,10 @@ enum AgentExecTool {
     UnifiedExec,
 }
 
-async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Result<()> {
+async fn assert_generic_git_prompts_without_amendment(
+    tool: AgentExecTool,
+    command: &str,
+) -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         if matches!(tool, AgentExecTool::UnifiedExec) {
@@ -112,7 +115,7 @@ async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Re
             "git-approval-shell",
             "shell_command",
             json!({
-                "command": "git status --short",
+                "command": command,
                 "timeout_ms": 1_000,
             }),
         ),
@@ -120,7 +123,7 @@ async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Re
             "git-approval-unified-exec",
             "exec_command",
             json!({
-                "cmd": "git status --short",
+                "cmd": command,
                 "yield_time_ms": 1_000,
             }),
         ),
@@ -168,7 +171,7 @@ async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Re
         approval
             .command
             .iter()
-            .any(|argument| argument.contains("git status --short")),
+            .any(|argument| argument.contains(command)),
         "unexpected {tool:?} approval command: {:?}",
         approval.command
     );
@@ -200,12 +203,31 @@ async fn assert_generic_git_prompts_without_amendment(tool: AgentExecTool) -> Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generic_git_shell_command_prompts_without_amendment() -> Result<()> {
-    assert_generic_git_prompts_without_amendment(AgentExecTool::Shell).await
+    assert_generic_git_prompts_without_amendment(AgentExecTool::Shell, "git status --short").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generic_git_unified_exec_prompts_without_amendment() -> Result<()> {
-    assert_generic_git_prompts_without_amendment(AgentExecTool::UnifiedExec).await
+    assert_generic_git_prompts_without_amendment(AgentExecTool::UnifiedExec, "git status --short")
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_wrapped_git_shell_command_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(
+        AgentExecTool::Shell,
+        "env GIT_OPTIONAL_LOCKS=0 git status --short",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_wrapped_git_unified_exec_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(
+        AgentExecTool::UnifiedExec,
+        "env GIT_OPTIONAL_LOCKS=0 git status --short",
+    )
+    .await
 }
 
 #[cfg(windows)]

@@ -337,7 +337,7 @@ impl ExecPolicyManager {
                     },
                     None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
-                        proposed_execpolicy_amendment: suppress_repo_sensitive_git_amendment(
+                        proposed_execpolicy_amendment: suppress_non_durable_execpolicy_amendment(
                             requested_amendment.or_else(|| {
                                 if auto_amendment_allowed {
                                     try_derive_execpolicy_amendment_for_prompt_rules(
@@ -366,7 +366,7 @@ impl ExecPolicyManager {
                             is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                         })
                 }),
-                proposed_execpolicy_amendment: suppress_repo_sensitive_git_amendment(
+                proposed_execpolicy_amendment: suppress_non_durable_execpolicy_amendment(
                     if auto_amendment_allowed {
                         try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                     } else {
@@ -800,6 +800,25 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
     }
 }
 
+/// Return one plain generic Git command when the request can be lowered
+/// without ambiguity.
+///
+/// Zsh-fork uses this to scope a parent approval to the exact intercepted Git
+/// child. Multiple commands, complex parsing, wrappers such as `env`, and
+/// PowerShell-flavored commands deliberately do not qualify.
+pub(crate) fn single_plain_git_command(command: &[String]) -> Option<Vec<String>> {
+    let parsed = commands_for_exec_policy(command);
+    if parsed.used_complex_parsing
+        || parsed.command_origin != ExecPolicyCommandOrigin::Generic
+        || parsed.commands.len() != 1
+    {
+        return None;
+    }
+
+    let command = parsed.commands.into_iter().next()?;
+    starts_with_git_executable(&command).then_some(command)
+}
+
 /// Derive a proposed execpolicy amendment when a command requires user approval
 /// - If any execpolicy rule prompts, return None, because an amendment would not skip that policy requirement.
 /// - Otherwise return the first heuristics Prompt.
@@ -854,22 +873,32 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
 
 /// Generic Git safety depends on the repository discovered at execution time,
 /// so an approval for one checkout must not become a durable allow rule that
-/// silently applies to another checkout. Explicit user-authored policy rules
-/// still take precedence during evaluation; this only removes amendments that
-/// Codex would otherwise offer to persist from a runtime approval.
-fn suppress_repo_sensitive_git_amendment(
+/// silently applies to another checkout. Generic command delegators are also
+/// context-sensitive and can hide Git or another executable behind the same
+/// persisted prefix. Explicit user-authored policy rules still take precedence
+/// during evaluation; this only removes amendments that Codex would otherwise
+/// offer to persist from a runtime approval.
+fn suppress_non_durable_execpolicy_amendment(
     amendment: Option<ExecPolicyAmendment>,
 ) -> Option<ExecPolicyAmendment> {
-    amendment.filter(|amendment| !starts_with_git_executable(&amendment.command))
+    amendment.filter(|amendment| !starts_with_non_durable_executable(&amendment.command))
 }
 
 fn starts_with_git_executable(command: &[String]) -> bool {
-    let Some(executable_name) = command
-        .first()
-        .and_then(|executable| executable.rsplit(['/', '\\']).next())
-    else {
-        return false;
-    };
+    starts_with_executable_named(command, "git")
+}
+
+fn starts_with_non_durable_executable(command: &[String]) -> bool {
+    normalized_executable_name(command)
+        .is_some_and(|name| matches!(name.as_str(), "git" | "env" | "sudo" | "command" | "nice"))
+}
+
+fn starts_with_executable_named(command: &[String], expected: &str) -> bool {
+    normalized_executable_name(command).is_some_and(|name| name == expected)
+}
+
+fn normalized_executable_name(command: &[String]) -> Option<String> {
+    let executable_name = command.first()?.rsplit(['/', '\\']).next()?;
     let executable_name = executable_name
         .as_bytes()
         .get(..2)
@@ -880,7 +909,7 @@ fn starts_with_git_executable(command: &[String]) -> bool {
         .into_iter()
         .find_map(|suffix| executable_name.strip_suffix(suffix))
         .unwrap_or(&executable_name);
-    executable_name == "git"
+    Some(executable_name.to_string())
 }
 
 fn derive_requested_execpolicy_amendment_from_prefix_rule(

@@ -1231,6 +1231,54 @@ fn git_executable_detection_is_platform_independent() {
     }
 }
 
+#[test]
+fn non_durable_wrapper_detection_is_platform_independent() {
+    for executable in [
+        "env",
+        "/usr/bin/env",
+        r"C:\Windows\System32\ENV.EXE",
+        r"C:env.cmd",
+        "/usr/bin/sudo",
+        r"C:\tools\COMMAND.BAT",
+        "/usr/bin/nice",
+    ] {
+        assert!(
+            starts_with_non_durable_executable(&[executable.to_string()]),
+            "expected {executable:?} to be non-durable"
+        );
+    }
+
+    for executable in [
+        "envy",
+        "/tmp/env.exe.old",
+        "/usr/bin/env/",
+        r"C:notenv.exe",
+        "commander",
+        "nicety",
+    ] {
+        assert!(
+            !starts_with_non_durable_executable(&[executable.to_string()]),
+            "expected {executable:?} to remain eligible for normal amendment handling"
+        );
+    }
+}
+
+#[test]
+fn single_plain_git_command_rejects_wrappers_and_multiple_commands() {
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "git status --short"])),
+        Some(vec_str(&["git", "status", "--short"]))
+    );
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "env git status"])),
+        None
+    );
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "git status && git diff",])),
+        None
+    );
+}
+
 #[tokio::test]
 async fn generic_git_policy_matrix_preserves_sandbox_and_escalation_semantics() {
     let command = vec!["git".to_string(), "status".to_string()];
@@ -1327,28 +1375,42 @@ async fn generic_git_one_shot_approval_does_not_create_cross_repo_cache() {
 }
 
 #[tokio::test]
-async fn generic_git_never_offers_requested_or_shell_lowered_durable_amendments() {
+async fn non_durable_commands_never_offer_generated_durable_amendments() {
     for (command, prefix_rule) in [
         (
-            vec!["git".to_string(), "status".to_string()],
-            Some(vec!["git".to_string(), "status".to_string()]),
+            vec_str(&["git", "status"]),
+            Some(vec_str(&["git", "status"])),
         ),
+        (vec_str(&["bash", "-lc", "git status"]), None),
+        (vec_str(&["/usr/bin/git", "status"]), None),
         (
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "git status".to_string(),
-            ],
+            vec_str(&[r"C:\Program Files\Git\cmd\GIT.EXE", "status"]),
             None,
         ),
-        (vec!["/usr/bin/git".to_string(), "status".to_string()], None),
+        (vec_str(&["env", "git", "status"]), None),
+        (vec_str(&["/usr/bin/env", "-i", "git", "status"]), None),
+        (vec_str(&["env", "--", "git", "status"]), None),
         (
-            vec![
-                r"C:\Program Files\Git\cmd\GIT.EXE".to_string(),
-                "status".to_string(),
-            ],
+            vec_str(&["env", "-u", "GIT_CONFIG_SYSTEM", "git", "status"]),
             None,
         ),
+        (
+            vec_str(&["env", "GIT_OPTIONAL_LOCKS=0", "git", "status"]),
+            Some(vec_str(&["env", "GIT_OPTIONAL_LOCKS=0"])),
+        ),
+        (vec_str(&["env", "-S", "git status"]), None),
+        (vec_str(&["env", "FOO=1", "cargo", "check"]), None),
+        (
+            vec_str(&[
+                r"C:\Windows\System32\ENV.EXE",
+                r"C:\Program Files\Git\cmd\git.exe",
+                "status",
+            ]),
+            None,
+        ),
+        (vec_str(&["sudo", "git", "status"]), None),
+        (vec_str(&["command", "git", "status"]), None),
+        (vec_str(&["nice", "git", "status"]), None),
     ] {
         assert_exec_approval_requirement_for_command(
             ExecApprovalRequirementScenario {
@@ -1366,6 +1428,60 @@ async fn generic_git_never_offers_requested_or_shell_lowered_durable_amendments(
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn env_wrappers_suppress_sandbox_fallback_amendments() {
+    for (sandbox_permissions, expected) in [
+        (
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+        (
+            SandboxPermissions::RequireEscalated,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command: vec_str(&["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "git", "status"]),
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions,
+                prefix_rule: None,
+            },
+            expected,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn explicit_user_authored_env_git_rule_still_allows_matching_commands() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(
+                r#"prefix_rule(pattern=["env", "git", "status"], decision="allow")"#.to_string(),
+            ),
+            command: vec_str(&["env", "git", "status"]),
+            approval_policy: AskForApproval::UnlessTrusted,
+            permission_profile: PermissionProfile::workspace_write(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
