@@ -11,6 +11,7 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::RpcServerOutboundEnvelope;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
 use crate::rpc::invalid_request;
@@ -82,7 +83,7 @@ async fn run_connection(
         transport: _transport,
     } = connection;
     let (outgoing_tx, mut outgoing_rx) =
-        mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
+        mpsc::channel::<RpcServerOutboundEnvelope>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
     let handler = Arc::new(ExecServerHandler::new(
         session_registry,
@@ -91,15 +92,26 @@ async fn run_connection(
     ));
 
     let outbound_task = tokio::spawn(async move {
-        while let Some(message) = outgoing_rx.recv().await {
-            let json_message = match encode_server_message(message) {
+        while let Some(envelope) = outgoing_rx.recv().await {
+            let outbound_span = server_outbound_span(&envelope);
+            let json_message = match outbound_span.in_scope(|| {
+                tracing::info_span!("exec_server.rpc_server.build_jsonrpc_envelope")
+                    .in_scope(|| encode_server_message(envelope.message))
+            }) {
                 Ok(json_message) => json_message,
                 Err(err) => {
                     warn!("failed to serialize exec-server outbound message: {err}");
                     break;
                 }
             };
-            if json_outgoing_tx.send(json_message).await.is_err() {
+            let transport_enqueue_span = outbound_span
+                .in_scope(|| tracing::info_span!("exec_server.rpc_server.transport_queue_enqueue"));
+            if json_outgoing_tx
+                .send(json_message)
+                .instrument(transport_enqueue_span)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -114,19 +126,27 @@ async fn run_connection(
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
                 warn!("ignoring malformed exec-server message: {reason}");
-                if outgoing_tx
-                    .send(RpcServerOutboundMessage::Error {
+                let permit = outgoing_tx
+                    .reserve()
+                    .instrument(tracing::info_span!(
+                        "exec_server.rpc_server.outbound_queue_enqueue",
+                        message_kind = "error",
+                    ))
+                    .await;
+                let Ok(permit) = permit else {
+                    break;
+                };
+                permit.send(RpcServerOutboundEnvelope::from_current_span(
+                    RpcServerOutboundMessage::Error {
                         request_id: codex_exec_server_protocol::RequestId::Integer(-1),
                         error: invalid_request(reason),
-                    })
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+                    },
+                ));
             }
-            JsonRpcConnectionEvent::Message(message) => match message {
+            JsonRpcConnectionEvent::Message(message)
+            | JsonRpcConnectionEvent::TracedMessage { message, .. } => match message {
                 codex_exec_server_protocol::JSONRPCMessage::Request(request) => {
+                    record_request_dequeued(&request);
                     let request_started_at = Instant::now();
                     if let Some((method, route)) = router.request_route(request.method.as_str()) {
                         let request_span = request_span(method, &request);
@@ -144,16 +164,29 @@ async fn run_connection(
                             }
                         };
                         let result = request_result(&message);
-                        if let Some(message) = message
-                            && outgoing_tx.send(message).await.is_err()
-                        {
-                            request_span.record("result", "disconnected");
-                            telemetry.request_completed(
-                                method,
-                                "disconnected",
-                                request_started_at.elapsed(),
-                            );
-                            break;
+                        let request_trace = codex_otel::span_w3c_trace_context(&request_span);
+                        if let Some(message) = message {
+                            let enqueue_span = request_span.in_scope(|| {
+                                tracing::info_span!(
+                                    "exec_server.rpc_server.outbound_queue_enqueue",
+                                    message_kind = "response",
+                                    method,
+                                )
+                            });
+                            let permit = outgoing_tx.reserve().instrument(enqueue_span).await;
+                            let Ok(permit) = permit else {
+                                request_span.record("result", "disconnected");
+                                telemetry.request_completed(
+                                    method,
+                                    "disconnected",
+                                    request_started_at.elapsed(),
+                                );
+                                break;
+                            };
+                            permit.send(RpcServerOutboundEnvelope::with_trace(
+                                message,
+                                request_trace,
+                            ));
                         }
                         request_span.record("result", result);
                         telemetry.request_completed(method, result, request_started_at.elapsed());
@@ -161,17 +194,18 @@ async fn run_connection(
                     } else {
                         let method = "unknown";
                         let request_span = request_span(method, &request);
-                        if outgoing_tx
-                            .send(RpcServerOutboundMessage::Error {
-                                request_id: request.id,
-                                error: method_not_found(format!(
-                                    "exec-server stub does not implement `{}` yet",
-                                    request.method
-                                )),
-                            })
-                            .await
-                            .is_err()
-                        {
+                        let request_trace = codex_otel::span_w3c_trace_context(&request_span);
+                        let permit = outgoing_tx
+                            .reserve()
+                            .instrument(request_span.in_scope(|| {
+                                tracing::info_span!(
+                                    "exec_server.rpc_server.outbound_queue_enqueue",
+                                    message_kind = "error",
+                                    method,
+                                )
+                            }))
+                            .await;
+                        let Ok(permit) = permit else {
                             request_span.record("result", "disconnected");
                             telemetry.request_completed(
                                 method,
@@ -179,7 +213,17 @@ async fn run_connection(
                                 request_started_at.elapsed(),
                             );
                             break;
-                        }
+                        };
+                        permit.send(RpcServerOutboundEnvelope::with_trace(
+                            RpcServerOutboundMessage::Error {
+                                request_id: request.id,
+                                error: method_not_found(format!(
+                                    "exec-server stub does not implement `{}` yet",
+                                    request.method
+                                )),
+                            },
+                            request_trace,
+                        ));
                         request_span.record("result", "error");
                         telemetry.request_completed(method, "error", request_started_at.elapsed());
                     }
@@ -239,6 +283,61 @@ async fn run_connection(
         let _ = task.await;
     }
     let _ = outbound_task.await;
+}
+
+fn server_outbound_span(envelope: &RpcServerOutboundEnvelope) -> tracing::Span {
+    let (message_kind, method, request_id, process_id, seq) = match &envelope.message {
+        RpcServerOutboundMessage::Response { request_id, .. } => {
+            ("response", "", request_id.to_string(), "", None)
+        }
+        RpcServerOutboundMessage::Error { request_id, .. } => {
+            ("error", "", request_id.to_string(), "", None)
+        }
+        RpcServerOutboundMessage::Notification(notification) => {
+            let process_id = notification
+                .params
+                .as_ref()
+                .and_then(|params| params.get("processId"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let seq = notification
+                .params
+                .as_ref()
+                .and_then(|params| params.get("seq"))
+                .and_then(serde_json::Value::as_u64);
+            (
+                "notification",
+                notification.method.as_str(),
+                String::new(),
+                process_id,
+                seq,
+            )
+        }
+    };
+    let span = tracing::info_span!(
+        "exec_server.rpc_server.outbound_queue_dequeued",
+        message_kind,
+        method,
+        request_id,
+        process_id,
+        seq,
+        queue_wait_ms = envelope.queued_at.elapsed().as_secs_f64() * 1_000.0,
+    );
+    if let Some(trace) = envelope.trace.as_ref() {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+    }
+    span
+}
+
+fn record_request_dequeued(request: &codex_exec_server_protocol::JSONRPCRequest) {
+    let method = request.method.as_str();
+    let span = tracing::info_span!("exec_server.processor.request_dequeued", method,);
+    if let Some(trace) = &request.trace
+        && !codex_otel::set_parent_from_w3c_trace_context(&span, trace)
+    {
+        warn!(method, "ignoring invalid inbound exec-server trace carrier");
+    }
+    span.in_scope(|| {});
 }
 
 fn request_span(
@@ -302,6 +401,7 @@ mod tests {
     use tracing_subscriber::filter::filter_fn;
     use tracing_subscriber::prelude::*;
 
+    use super::record_request_dequeued;
     use super::request_span;
     use super::run_connection;
     use crate::ExecServerRuntimePaths;
@@ -351,6 +451,7 @@ mod tests {
                 params: None,
                 trace: Some(trace),
             };
+            record_request_dequeued(&request);
             let request_span = request_span("unknown", &request);
             request_span.in_scope(|| {});
             drop(request_span);
@@ -372,6 +473,12 @@ mod tests {
         );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
+        let dequeued_span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == "exec_server.processor.request_dequeued")
+            .expect("request dequeued span");
+        assert_eq!(dequeued_span.span_context.trace_id(), trace_id);
+        assert_eq!(dequeued_span.parent_span_id, parent_span_id);
     }
 
     #[tokio::test]

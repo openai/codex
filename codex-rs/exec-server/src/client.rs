@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -162,6 +163,7 @@ pub(crate) struct SessionState {
     ordered_events: StdMutex<OrderedSessionEvents>,
     recoverable: AtomicBool,
     next_write_id: AtomicU64,
+    trace_context: Option<W3cTraceContext>,
 }
 
 #[derive(Default)]
@@ -846,6 +848,7 @@ impl SessionState {
             ordered_events: StdMutex::new(OrderedSessionEvents::default()),
             recoverable: AtomicBool::new(recoverable),
             next_write_id: AtomicU64::new(1),
+            trace_context: codex_otel::current_span_w3c_trace_context(),
         }
     }
 
@@ -1157,6 +1160,7 @@ async fn handle_server_notification(
                         chunk: params.chunk,
                     }));
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1172,6 +1176,7 @@ async fn handle_server_notification(
                     sandbox_denied: params.sandbox_denied,
                 });
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1180,6 +1185,18 @@ async fn handle_server_notification(
             let params: ExecClosedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             if let Some(session) = inner.get_session(&params.process_id) {
+                let received_span = tracing::info_span!(
+                    "exec_server.client.closed_notification_received",
+                    process_id = %params.process_id,
+                    seq = params.seq,
+                );
+                if let Some(trace_context) = session.trace_context.as_ref() {
+                    let _ = codex_otel::set_parent_from_w3c_trace_context(
+                        &received_span,
+                        trace_context,
+                    );
+                }
+                received_span.in_scope(|| {});
                 session.note_change(params.seq);
                 // Closed is terminal, but it can arrive before tail output or
                 // exited. Keep routing this process until the ordered publisher
@@ -1187,6 +1204,7 @@ async fn handle_server_notification(
                 let published_closed =
                     session.publish_ordered_event(ExecProcessEvent::Closed { seq: params.seq });
                 if published_closed {
+                    record_closed_published(&session, &params.process_id);
                     inner.remove_session_if(&params.process_id, &session);
                 }
             }
@@ -1201,6 +1219,17 @@ async fn handle_server_notification(
         }
     }
     Ok(())
+}
+
+fn record_closed_published(session: &SessionState, process_id: &ProcessId) {
+    let published_span = tracing::info_span!(
+        "exec_server.client.closed_notification_published",
+        process_id = %process_id,
+    );
+    if let Some(trace_context) = session.trace_context.as_ref() {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&published_span, trace_context);
+    }
+    published_span.in_scope(|| {});
 }
 
 #[cfg(test)]

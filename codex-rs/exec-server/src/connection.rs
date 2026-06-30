@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use axum::extract::ws::Message as AxumWebSocketMessage;
 use axum::extract::ws::WebSocket as AxumWebSocket;
 use codex_exec_server_protocol::JSONRPCMessage;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Sink;
 use futures::SinkExt;
 use futures::Stream;
@@ -38,8 +40,19 @@ pub(crate) const WEBSOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
     Message(JSONRPCMessage),
-    MalformedMessage { reason: String },
-    Disconnected { reason: Option<String> },
+    // Constructed by the stacked Noise transport change.
+    #[allow(dead_code)]
+    TracedMessage {
+        message: JSONRPCMessage,
+        trace: Option<W3cTraceContext>,
+        queued_at: Instant,
+    },
+    MalformedMessage {
+        reason: String,
+    },
+    Disconnected {
+        reason: Option<String>,
+    },
 }
 
 #[derive(Clone)]
