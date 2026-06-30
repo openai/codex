@@ -636,7 +636,7 @@ async fn run_websocket_response_stream(
     turn_state: Option<&OnceLock<String>>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
-    let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
+    let mut safety_buffering_treatment: Option<SafetyBufferingTreatment> = None;
     send_websocket_request(
         ws_stream,
         request_text,
@@ -690,17 +690,10 @@ async fn run_websocket_response_stream(
                 {
                     let _ = turn_state.set(response_turn_state);
                 }
-                if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
-                    && let Some(treatment) =
-                        treatment_from_headers(&json_headers_to_http_headers(headers))
-                {
-                    safety_buffering_treatment = treatment;
-                }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
-                let safety_buffering = event
-                    .safety_buffering()
-                    .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
+                let safety_buffering =
+                    safety_buffering_for_event(&event, &mut safety_buffering_treatment);
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -773,6 +766,21 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+fn safety_buffering_for_event(
+    event: &ResponsesStreamEvent,
+    treatment: &mut Option<SafetyBufferingTreatment>,
+) -> Option<crate::common::SafetyBuffering> {
+    if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
+        && let Some(updated_treatment) =
+            treatment_from_headers(&json_headers_to_http_headers(headers))
+    {
+        *treatment = Some(updated_treatment);
+    }
+    event
+        .safety_buffering()
+        .map(|buffering| buffering.with_treatment(treatment.as_ref()))
 }
 
 async fn send_websocket_request(
@@ -1041,5 +1049,116 @@ mod tests {
             merged.get("x-default-only"),
             Some(&HeaderValue::from_static("default-only"))
         );
+    }
+
+    #[test]
+    fn direct_websocket_safety_buffering_uses_wire_faster_model() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "faster_model": "gpt-fast-wire"
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = None;
+
+        let buffering = safety_buffering_for_event(&event, &mut treatment)
+            .expect("expected safety buffering payload");
+
+        assert!(buffering.show_buffering_ui);
+        assert_eq!(buffering.faster_model.as_deref(), Some("gpt-fast-wire"));
+    }
+
+    #[test]
+    fn websocket_safety_buffering_treatment_metadata_overrides_wire_values() {
+        let metadata: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "x-codex-safety-buffering-enabled": "true",
+                "x-codex-safety-buffering-faster-model": "gpt-fast-header"
+            }
+        }))
+        .expect("deserialize treatment metadata");
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "faster_model": "gpt-fast-wire"
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = None;
+
+        assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
+        let buffering = safety_buffering_for_event(&event, &mut treatment)
+            .expect("expected safety buffering payload");
+
+        assert!(buffering.show_buffering_ui);
+        assert_eq!(buffering.faster_model.as_deref(), Some("gpt-fast-header"));
+    }
+
+    #[test]
+    fn websocket_safety_buffering_treatment_can_clear_wire_values() {
+        for (headers, expected_show_buffering_ui) in [
+            (json!({"x-codex-safety-buffering-enabled": "true"}), true),
+            (
+                json!({
+                    "x-codex-safety-buffering-enabled": "false",
+                    "x-codex-safety-buffering-faster-model": "ignored-header-model"
+                }),
+                false,
+            ),
+        ] {
+            let metadata: ResponsesStreamEvent = serde_json::from_value(json!({
+                "type": "codex.response.metadata",
+                "headers": headers
+            }))
+            .expect("deserialize treatment metadata");
+            let event: ResponsesStreamEvent = serde_json::from_value(json!({
+                "type": "response.output_text.delta",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"],
+                    "faster_model": "gpt-fast-wire"
+                }
+            }))
+            .expect("deserialize safety buffering event");
+            let mut treatment = None;
+
+            assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
+            let buffering = safety_buffering_for_event(&event, &mut treatment)
+                .expect("expected safety buffering payload");
+
+            assert_eq!(buffering.show_buffering_ui, expected_show_buffering_ui);
+            assert_eq!(buffering.faster_model, None);
+        }
+    }
+
+    #[test]
+    fn direct_websocket_safety_buffering_accepts_missing_and_null_faster_model() {
+        for faster_model in [None, Some(Value::Null)] {
+            let mut payload = json!({
+                "type": "response.output_text.delta",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            });
+            if let Some(faster_model) = faster_model {
+                payload["safety_buffering"]["faster_model"] = faster_model;
+            }
+            let event: ResponsesStreamEvent =
+                serde_json::from_value(payload).expect("deserialize safety buffering event");
+            let mut treatment = None;
+
+            let buffering = safety_buffering_for_event(&event, &mut treatment)
+                .expect("expected safety buffering payload");
+
+            assert!(buffering.show_buffering_ui);
+            assert_eq!(buffering.faster_model, None);
+        }
     }
 }

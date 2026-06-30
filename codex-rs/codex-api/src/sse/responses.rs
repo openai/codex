@@ -517,7 +517,7 @@ async fn process_sse_with_treatment(
         let turn_moderation_metadata = event.turn_moderation_metadata();
         let safety_buffering = event
             .safety_buffering()
-            .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
+            .map(|buffering| buffering.with_treatment(Some(&safety_buffering_treatment)));
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -1354,7 +1354,8 @@ mod tests {
                 "delta": "hello",
                 "safety_buffering": {
                     "use_cases": ["cyber"],
-                    "reasons": ["user_risk"]
+                    "reasons": ["user_risk"],
+                    "faster_model": "unexpected-wire-model"
                 }
             }),
             json!({
@@ -1381,7 +1382,10 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::SafetyBuffering(buffering)
-                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+                if buffering.use_cases == ["cyber"]
+                    && buffering.reasons == ["user_risk"]
+                    && !buffering.show_buffering_ui
+                    && buffering.faster_model.is_none()
         );
         assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
         assert_matches!(
