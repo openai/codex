@@ -684,14 +684,11 @@ async fn branch_remote_and_distance(
         let mut found_remote_sha: Option<GitSha> = None;
         for remote in remotes {
             let remote_ref = format!("refs/remotes/{remote}/{}", branch.name);
-            let Some(verify_output) = run_git_command_with_timeout(
+            let verify_output = run_git_command_with_timeout(
                 &["rev-parse", "--verify", "--quiet", &remote_ref],
                 cwd,
             )
-            .await
-            else {
-                return None;
-            };
+            .await?;
             if !verify_output.status.success() {
                 continue;
             }
