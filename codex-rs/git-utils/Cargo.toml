@@ -20,6 +20,7 @@ gix = { workspace = true }
 once_cell = { workspace = true }
 regex = "1"
 schemars = { workspace = true }
+same-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 similar = { workspace = true }
 tempfile = { workspace = true }
