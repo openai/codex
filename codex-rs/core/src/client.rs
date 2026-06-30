@@ -151,6 +151,7 @@ const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
+const X_OPENAI_RETRY_UNCOMPRESSED_HEADER: &str = "x-openai-retry-uncompressed";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // `/responses/compact` is unary, so the timeout covers the full response rather than one idle
@@ -1364,6 +1365,7 @@ impl ModelClientSession {
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut retry_uncompressed = false;
         loop {
             let client_setup = self.client.current_client_setup().await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
@@ -1379,7 +1381,11 @@ impl ModelClientSession {
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
                 self.client.state.auth_env_telemetry.clone(),
             );
-            let compression = self.responses_request_compression(client_setup.auth.as_ref());
+            let compression = if retry_uncompressed {
+                Compression::None
+            } else {
+                self.responses_request_compression(client_setup.auth.as_ref())
+            };
             let mut options = self
                 .build_responses_options(
                     responses_metadata,
@@ -1442,6 +1448,19 @@ impl ModelClientSession {
                         )
                         .await?,
                     );
+                    continue;
+                }
+                Err(err) if should_retry_uncompressed(&err, compression) => {
+                    let response_debug_context =
+                        extract_response_debug_context_from_api_error(&err);
+                    let mapped_err = self.client.state.provider.map_api_error(err);
+                    inference_trace_attempt.record_failed(
+                        &mapped_err,
+                        response_debug_context.request_id.as_deref(),
+                        /*output_items*/ &[],
+                    );
+                    pending_retry = PendingUnauthorizedRetry::default();
+                    retry_uncompressed = true;
                     continue;
                 }
                 Err(err) => {
@@ -2236,6 +2255,22 @@ fn api_error_http_status(error: &ApiError) -> Option<u16> {
         ApiError::Transport(TransportError::Http { status, .. }) => Some(status.as_u16()),
         _ => None,
     }
+}
+
+fn should_retry_uncompressed(error: &ApiError, compression: Compression) -> bool {
+    let ApiError::Transport(TransportError::Http {
+        status, headers, ..
+    }) = error
+    else {
+        return false;
+    };
+
+    compression == Compression::Zstd
+        && *status == StatusCode::BAD_REQUEST
+        && headers
+            .as_ref()
+            .and_then(|headers| headers.get(X_OPENAI_RETRY_UNCOMPRESSED_HEADER))
+            .is_some_and(|value| value.as_bytes() == b"true")
 }
 
 struct ApiTelemetry {
