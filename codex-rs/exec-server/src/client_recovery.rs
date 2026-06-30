@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout_at;
+use tracing::Instrument;
 
 use super::ConnectionStatus;
 use super::ExecServerClient;
@@ -502,8 +503,43 @@ impl ExecServerClient {
                     return;
                 };
                 match event {
-                    RpcClientEvent::Notification(notification) => {
-                        if let Err(error) = handle_server_notification(&inner, notification).await {
+                    RpcClientEvent::Notification {
+                        notification,
+                        queued_at,
+                        trace,
+                    } => {
+                        let process_id = notification
+                            .params
+                            .as_ref()
+                            .and_then(|params| params.get("processId"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let seq = notification
+                            .params
+                            .as_ref()
+                            .and_then(|params| params.get("seq"))
+                            .and_then(serde_json::Value::as_u64);
+                        let span = tracing::info_span!(
+                            "exec_server.client.notification_event_dequeued",
+                            method = notification.method,
+                            process_id,
+                            seq,
+                            queue_wait_ms = queued_at.elapsed().as_secs_f64() * 1_000.0,
+                        );
+                        if let Some(trace) = trace.as_ref() {
+                            let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+                        } else if !process_id.is_empty()
+                            && let Some(session) =
+                                inner.get_session(&crate::ProcessId::from(process_id))
+                            && let Some(session_trace) = session.trace_context.as_ref()
+                        {
+                            let _ =
+                                codex_otel::set_parent_from_w3c_trace_context(&span, session_trace);
+                        }
+                        if let Err(error) = handle_server_notification(&inner, notification)
+                            .instrument(span)
+                            .await
+                        {
                             rpc_client.close_transport().await;
                             inner.request_recovery(
                                 rpc_client,
