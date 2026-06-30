@@ -323,7 +323,7 @@ async fn queued_generation_keeps_its_barrier_when_in_flight_update_fails() {
 
 #[derive(Clone)]
 struct WorkerSpanParentLayer {
-    parent_name: Arc<StdMutex<Option<String>>>,
+    parent_name: Arc<StdMutex<Option<Option<String>>>>,
 }
 
 impl<S> Layer<S> for WorkerSpanParentLayer
@@ -342,23 +342,46 @@ where
         if span.metadata().name() != "thread_store.metadata_update_worker" {
             return;
         }
-        *self.parent_name.lock().expect("parent name lock") = span
-            .parent()
-            .map(|parent| parent.metadata().name().to_string());
+        *self.parent_name.lock().expect("parent name lock") = Some(
+            span.parent()
+                .map(|parent| parent.metadata().name().to_string()),
+        );
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn metadata_worker_span_preserves_append_trace() {
-    let (store, mut updates) = ControlledThreadStore::new();
-    let live_thread = create_live_thread(Arc::clone(&store)).await;
     let parent_name = Arc::new(StdMutex::new(None));
     let _guard = tracing_subscriber::registry()
         .with(WorkerSpanParentLayer {
             parent_name: Arc::clone(&parent_name),
         })
         .set_default();
+
+    // Register both production callsites before rebuilding the process-global interest cache.
+    // The subscriber must be active first because tracing otherwise short-circuits at level OFF.
+    {
+        let (store, mut updates) = ControlledThreadStore::new();
+        let live_thread = create_live_thread(Arc::clone(&store)).await;
+        live_thread
+            .append_items(&[user_message("warm up tracing callsites")])
+            .await
+            .expect("warm-up append should succeed");
+        next_update(&mut updates)
+            .await
+            .completion
+            .send(Ok(()))
+            .expect("warm-up metadata worker should still be waiting");
+        live_thread
+            .flush()
+            .await
+            .expect("warm-up flush should drain metadata");
+    }
     tracing::callsite::rebuild_interest_cache();
+    *parent_name.lock().expect("parent name lock") = None;
+
+    let (store, mut updates) = ControlledThreadStore::new();
+    let live_thread = create_live_thread(Arc::clone(&store)).await;
 
     live_thread
         .append_items(&[user_message("trace me")])
@@ -374,9 +397,10 @@ async fn metadata_worker_span_preserves_append_trace() {
         .await
         .expect("flush should drain metadata");
 
+    let parent_name = parent_name.lock().expect("parent name lock");
     assert_eq!(
-        parent_name.lock().expect("parent name lock").as_deref(),
-        Some("thread_store.live_append.observe_metadata")
+        parent_name.as_ref().map(Option::as_deref),
+        Some(Some("thread_store.live_append.observe_metadata"))
     );
 }
 

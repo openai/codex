@@ -2469,22 +2469,28 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     )
     .await??;
 
-    let read_id = mcp
-        .send_thread_read_request(ThreadReadParams {
-            thread_id: thread_id.clone(),
-            include_turns: false,
-        })
-        .await?;
-    let read_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
-    )
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let read_id = mcp
+                .send_thread_read_request(ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: false,
+                })
+                .await?;
+            let read_resp: JSONRPCResponse = mcp
+                .read_stream_until_response_message(RequestId::Integer(read_id))
+                .await?;
+            let ThreadReadResponse {
+                thread: after_turn_start,
+                ..
+            } = to_response::<ThreadReadResponse>(read_resp)?;
+            if after_turn_start.recency_at > before_resume.recency_at {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
     .await??;
-    let ThreadReadResponse {
-        thread: after_turn_start,
-        ..
-    } = to_response::<ThreadReadResponse>(read_resp)?;
-    assert!(after_turn_start.recency_at > before_resume.recency_at);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
