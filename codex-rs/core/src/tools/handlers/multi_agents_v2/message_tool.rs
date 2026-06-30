@@ -4,9 +4,9 @@
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_timing::now_unix_timestamp_ms;
-use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::InterAgentCommunication;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -93,23 +93,18 @@ pub(crate) async fn handle_message_string_tool(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let mut communication =
+    let communication =
         communication_from_tool_message(author, receiver_agent_path.clone(), message);
     let communication_kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
     };
-    communication.agent_communication_metadata = Some(
-        crate::agent_communication::new_agent_communication_metadata(
+    let communication_context =
+        crate::agent_communication::AgentCommunicationContext::from_tool_call(
             communication_kind,
             session.thread_id,
-            Some(call_id.as_str()),
-        ),
-    );
-    crate::agent_communication::emit_agent_communication_created(
-        &communication,
-        receiver_thread_id,
-    );
+            call_id.as_str(),
+        );
 
     let resume_config = build_agent_resume_config(turn.as_ref())?;
     session
@@ -121,7 +116,11 @@ pub(crate) async fn handle_message_string_tool(
     let result = session
         .services
         .agent_control
-        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
+        .send_inter_agent_communication(
+            receiver_thread_id,
+            mode.apply(communication),
+            communication_context,
+        )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err));
     result?;

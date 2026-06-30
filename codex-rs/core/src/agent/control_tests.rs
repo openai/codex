@@ -3,6 +3,7 @@ use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -23,7 +24,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -459,29 +459,22 @@ async fn failed_communication_send_emits_created_without_enqueued() {
     let harness = AgentControlHarness::new().await;
     let sender_thread_id = ThreadId::new();
     let receiver_thread_id = ThreadId::new();
-    let metadata = codex_protocol::protocol::AgentCommunicationMetadata {
-        id: uuid::Uuid::new_v4().to_string(),
-        kind: codex_protocol::protocol::AgentCommunicationKind::Message,
+    let context = crate::agent_communication::AgentCommunicationContext::from_tool_call(
+        AgentCommunicationKind::Message,
         sender_thread_id,
-        source_call_id: Some("call-1".to_string()),
-    };
-    let id = metadata.id.clone();
-    let mut communication = InterAgentCommunication::new(
+        "call-1",
+    );
+    let id = context.id().to_string();
+    let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/missing").expect("agent path"),
         Vec::new(),
         "mail".to_string(),
         /*trigger_turn*/ false,
     );
-    communication.agent_communication_metadata = Some(metadata);
-    crate::agent_communication::emit_agent_communication_created(
-        &communication,
-        receiver_thread_id,
-    );
-
     let err = harness
         .control
-        .send_inter_agent_communication(receiver_thread_id, communication)
+        .send_inter_agent_communication(receiver_thread_id, communication, context)
         .await
         .expect_err("send should fail for missing receiver");
     assert_matches!(err, CodexErr::ThreadNotFound(id) if id == receiver_thread_id);
@@ -594,12 +587,17 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
         /*trigger_turn*/ false,
     );
 
+    let context = crate::agent_communication::AgentCommunicationContext::without_source_call(
+        AgentCommunicationKind::Message,
+        ThreadId::new(),
+    );
+    let communication_id = context.id().to_string();
     let submission_id = harness
         .control
-        .send_inter_agent_communication(thread_id, communication.clone())
+        .send_inter_agent_communication(thread_id, communication.clone(), context)
         .await
         .expect("send_inter_agent_communication should succeed");
-    assert!(!submission_id.is_empty());
+    assert_eq!(submission_id, communication_id);
 
     let expected = (
         thread_id,
@@ -721,7 +719,14 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication.clone())
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication.clone(),
+            crate::agent_communication::AgentCommunicationContext::without_source_call(
+                AgentCommunicationKind::Message,
+                ThreadId::new(),
+            ),
+        )
         .await
         .expect("send_inter_agent_communication should succeed after reload");
     let expected = (
@@ -868,7 +873,14 @@ async fn encrypted_inter_agent_communication_clears_existing_last_task_message()
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication)
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication,
+            crate::agent_communication::AgentCommunicationContext::without_source_call(
+                AgentCommunicationKind::Followup,
+                ThreadId::new(),
+            ),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
 
@@ -2191,24 +2203,10 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
                 if thread_id != worker_thread_id {
                     continue;
                 }
-                let Op::InterAgentCommunication { mut communication } = op else {
+                let Op::InterAgentCommunication { communication } = op else {
                     continue;
                 };
-                let metadata = communication.agent_communication_metadata.take();
                 if communication == expected {
-                    let metadata = metadata.expect("completion communication metadata");
-                    assert_eq!(
-                        (
-                            metadata.kind,
-                            metadata.sender_thread_id,
-                            metadata.source_call_id,
-                        ),
-                        (
-                            AgentCommunicationKind::Result,
-                            tester_thread_id,
-                            /*source_call_id*/ None,
-                        )
-                    );
                     return;
                 }
             }

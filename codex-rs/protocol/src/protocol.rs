@@ -737,11 +737,6 @@ pub struct InterAgentCommunication {
     #[ts(optional)]
     pub internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     pub trigger_turn: bool,
-    /// Runtime-only metadata used to emit communication lifecycle records.
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub agent_communication_metadata: Option<AgentCommunicationMetadata>,
 }
 
 impl InterAgentCommunication {
@@ -761,7 +756,6 @@ impl InterAgentCommunication {
             encrypted_content: None,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
-            agent_communication_metadata: None,
         }
     }
 
@@ -781,7 +775,6 @@ impl InterAgentCommunication {
             encrypted_content: Some(encrypted_content),
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
-            agent_communication_metadata: None,
         }
     }
 
@@ -4279,48 +4272,6 @@ pub struct SubAgentActivityEvent {
     pub kind: SubAgentActivityKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentCommunicationKind {
-    InitialTask,
-    Message,
-    Followup,
-    Result,
-}
-
-impl AgentCommunicationKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::InitialTask => "initialTask",
-            Self::Message => "message",
-            Self::Followup => "followup",
-            Self::Result => "result",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentCommunicationState {
-    Created,
-    Enqueued,
-}
-
-impl AgentCommunicationState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Created => "created",
-            Self::Enqueued => "enqueued",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentCommunicationMetadata {
-    pub id: String,
-    pub kind: AgentCommunicationKind,
-    pub sender_thread_id: ThreadId,
-    pub source_call_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingBeginEvent {
     #[serde(default)]
@@ -4569,7 +4520,6 @@ mod tests {
             encrypted_content: None,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn: true,
-            agent_communication_metadata: None,
         };
         communication.set_turn_id_if_missing("turn-1");
         let mut serialized_communication = communication.clone();

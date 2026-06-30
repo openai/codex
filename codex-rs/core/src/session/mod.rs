@@ -14,6 +14,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -111,7 +112,6 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AdditionalContextEntry;
-use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -893,7 +893,7 @@ impl Codex {
 ///
 /// Some use cases take advantage of the fact that these are UUID7 which
 /// encodes a timestamp, so think carefully before changing this.
-fn new_submission_id() -> String {
+pub(crate) fn new_submission_id() -> String {
     Uuid::now_v7().to_string()
 }
 
@@ -1861,28 +1861,22 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
-        let mut communication = InterAgentCommunication::new(
+        let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
             /*trigger_turn*/ false,
         );
-        communication.agent_communication_metadata = Some(
-            crate::agent_communication::new_agent_communication_metadata(
+        let communication_context =
+            crate::agent_communication::AgentCommunicationContext::without_source_call(
                 AgentCommunicationKind::Result,
                 self.thread_id,
-                /*source_call_id*/ None,
-            ),
-        );
-        crate::agent_communication::emit_agent_communication_created(
-            &communication,
-            parent_thread_id,
-        );
+            );
         if let Err(err) = self
             .services
             .agent_control
-            .send_inter_agent_communication(parent_thread_id, communication)
+            .send_inter_agent_communication(parent_thread_id, communication, communication_context)
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");

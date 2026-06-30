@@ -13,6 +13,7 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
+use crate::session::new_submission_id;
 use crate::session::resolve_multi_agent_version;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -56,6 +57,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -1146,13 +1148,31 @@ impl ThreadManagerState {
 
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
+        self.send_op_with_id(thread_id, new_submission_id(), op)
+            .await
+    }
+
+    pub(crate) async fn send_op_with_id(
+        &self,
+        thread_id: ThreadId,
+        id: String,
+        op: Op,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
         {
             log.push((thread_id, op.clone()));
         }
-        thread.submit(op).await
+        thread
+            .submit_with_id(Submission {
+                id: id.clone(),
+                op,
+                client_user_message_id: None,
+                trace: None,
+            })
+            .await?;
+        Ok(id)
     }
 
     /// Remove a thread from the manager by ID, returning it when present.

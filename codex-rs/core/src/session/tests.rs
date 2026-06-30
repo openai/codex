@@ -9806,29 +9806,15 @@ async fn mailbox_enqueue_emits_enqueued_communication_with_same_id() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let (session, _) = make_session_and_context().await;
-    let sender_thread_id = ThreadId::new();
     let id = Uuid::new_v4().to_string();
-    let mut communication = InterAgentCommunication::new(
+    let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root(),
         Vec::new(),
         "mail".to_string(),
         /*trigger_turn*/ false,
     );
-    communication.agent_communication_metadata =
-        Some(codex_protocol::protocol::AgentCommunicationMetadata {
-            id: id.clone(),
-            kind: codex_protocol::protocol::AgentCommunicationKind::Message,
-            sender_thread_id,
-            source_call_id: Some("call-1".to_string()),
-        });
-
-    super::handlers::inter_agent_communication(
-        &Arc::new(session),
-        "turn-1".to_string(),
-        communication,
-    )
-    .await;
+    super::handlers::inter_agent_communication(&Arc::new(session), id.clone(), communication).await;
 
     let events = String::from_utf8(output.lock().expect("buffer lock").clone())
         .expect("JSON logs should be UTF-8")

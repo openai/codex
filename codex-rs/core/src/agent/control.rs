@@ -4,6 +4,8 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
@@ -24,7 +26,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentCommunicationKind;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -68,6 +69,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) agent_communication_context: Option<AgentCommunicationContext>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +77,11 @@ pub(crate) struct LiveAgent {
     pub(crate) thread_id: ThreadId,
     pub(crate) metadata: AgentMetadata,
     pub(crate) status: AgentStatus,
+}
+
+enum SubmissionId<'a> {
+    Generated,
+    Provided(&'a str),
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -145,8 +152,13 @@ impl AgentControl {
         let state = self.upgrade()?;
         self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, initial_operation)
-            .await
+        self.send_input_after_capacity_check(
+            agent_id,
+            &state,
+            initial_operation,
+            SubmissionId::Generated,
+        )
+        .await
     }
 
     async fn send_input_after_capacity_check(
@@ -154,6 +166,7 @@ impl AgentControl {
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
         initial_operation: Op,
+        submission_id: SubmissionId<'_>,
     ) -> CodexResult<String> {
         let last_task_message = match &initial_operation {
             Op::InterAgentCommunication { communication } => {
@@ -161,12 +174,16 @@ impl AgentControl {
             }
             _ => non_empty_task_message(render_input_preview(&initial_operation)),
         };
+        let send_result = match submission_id {
+            SubmissionId::Generated => state.send_op(agent_id, initial_operation).await,
+            SubmissionId::Provided(id) => {
+                state
+                    .send_op_with_id(agent_id, id.to_string(), initial_operation)
+                    .await
+            }
+        };
         let result = self
-            .handle_thread_request_result(
-                agent_id,
-                state,
-                state.send_op(agent_id, initial_operation).await,
-            )
+            .handle_thread_request_result(agent_id, state, send_result)
             .await;
         if result.is_ok() {
             match last_task_message {
@@ -183,23 +200,23 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
     ) -> CodexResult<String> {
-        let last_task_message = last_task_message_from_communication(&communication);
+        crate::agent_communication::emit_agent_communication_created(
+            &context,
+            &communication,
+            agent_id,
+        );
         let state = self.upgrade()?;
         let op = Op::InterAgentCommunication { communication };
         self.ensure_execution_capacity_for_op(agent_id, &op).await?;
-        let result = self
-            .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
-            .await;
-        if result.is_ok() {
-            match last_task_message {
-                Some(last_task_message) => self
-                    .state
-                    .update_last_task_message(agent_id, last_task_message),
-                None => self.state.clear_last_task_message(agent_id),
-            }
-        }
-        result
+        self.send_input_after_capacity_check(
+            agent_id,
+            &state,
+            op,
+            SubmissionId::Provided(context.id()),
+        )
+        .await
     }
 
     /// Interrupt the current task for an existing agent thread.
@@ -474,26 +491,23 @@ impl AgentControl {
                 ) else {
                     return;
                 };
-                let mut communication = InterAgentCommunication::new(
+                let communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
                     /*trigger_turn*/ false,
                 );
-                communication.agent_communication_metadata = Some(
-                    crate::agent_communication::new_agent_communication_metadata(
-                        AgentCommunicationKind::Result,
-                        child_thread_id,
-                        /*source_call_id*/ None,
-                    ),
-                );
-                crate::agent_communication::emit_agent_communication_created(
-                    &communication,
-                    parent_thread_id,
+                let communication_context = AgentCommunicationContext::without_source_call(
+                    AgentCommunicationKind::Result,
+                    child_thread_id,
                 );
                 let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication)
+                    .send_inter_agent_communication(
+                        parent_thread_id,
+                        communication,
+                        communication_context,
+                    )
                     .await;
                 return;
             }

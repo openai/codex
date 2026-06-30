@@ -356,17 +356,26 @@ impl AgentControl {
         )
         .await;
 
-        if multi_agent_version == MultiAgentVersion::V2
-            && let Op::InterAgentCommunication { communication } = &initial_operation
-        {
+        if let (Some(context), Op::InterAgentCommunication { communication }) = (
+            options.agent_communication_context.as_ref(),
+            &initial_operation,
+        ) {
             crate::agent_communication::emit_agent_communication_created(
+                context,
                 communication,
                 new_thread.thread_id,
             );
         }
-
-        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
-            .await?;
+        self.send_input_after_capacity_check(
+            new_thread.thread_id,
+            &state,
+            initial_operation,
+            match options.agent_communication_context.as_ref() {
+                Some(context) => SubmissionId::Provided(context.id()),
+                None => SubmissionId::Generated,
+            },
+        )
+        .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path

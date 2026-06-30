@@ -26,29 +26,26 @@ fn emits_structured_lifecycle_events_at_trace() {
 
     let sender_thread_id = ThreadId::new();
     let receiver_thread_id = ThreadId::new();
-    let mut communication = InterAgentCommunication::new(
+    let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root(),
         Vec::new(),
         "hello".to_string(),
         /*trigger_turn*/ false,
     );
-    let metadata = new_agent_communication_metadata(
+    let context = AgentCommunicationContext::from_tool_call(
         AgentCommunicationKind::Message,
         sender_thread_id,
-        Some("call-1"),
+        "call-1",
     );
-    communication.agent_communication_metadata = Some(metadata.clone());
-    emit_agent_communication_created(&communication, receiver_thread_id);
-    emit_agent_communication_enqueued(metadata.clone());
+    emit_agent_communication_created(&context, &communication, receiver_thread_id);
+    emit_agent_communication_enqueued(context.id());
 
-    let result_metadata = new_agent_communication_metadata(
+    let result_context = AgentCommunicationContext::without_source_call(
         AgentCommunicationKind::Result,
         receiver_thread_id,
-        /*source_call_id*/ None,
     );
-    communication.agent_communication_metadata = Some(result_metadata.clone());
-    emit_agent_communication_created(&communication, sender_thread_id);
+    emit_agent_communication_created(&result_context, &communication, sender_thread_id);
 
     let events = String::from_utf8(output.lock().expect("buffer lock").clone())
         .expect("JSON logs should be UTF-8")
@@ -63,7 +60,7 @@ fn emits_structured_lifecycle_events_at_trace() {
         json!({
             "message": "agent communication updated",
             "event.name": "codex.agent_communication",
-            "communication_id": metadata.id,
+            "communication_id": context.id(),
             "kind": "message",
             "state": "created",
             "sender_thread_id": sender_thread_id.to_string(),
@@ -79,7 +76,7 @@ fn emits_structured_lifecycle_events_at_trace() {
         json!({
             "message": "agent communication updated",
             "event.name": "codex.agent_communication",
-            "communication_id": metadata.id,
+            "communication_id": context.id(),
             "state": "enqueued",
         })
     );
@@ -88,7 +85,7 @@ fn emits_structured_lifecycle_events_at_trace() {
         json!({
             "message": "agent communication updated",
             "event.name": "codex.agent_communication",
-            "communication_id": result_metadata.id,
+            "communication_id": result_context.id(),
             "kind": "result",
             "state": "created",
             "sender_thread_id": receiver_thread_id.to_string(),
@@ -100,14 +97,16 @@ fn emits_structured_lifecycle_events_at_trace() {
 
 #[test]
 fn content_prefers_plaintext_and_falls_back_to_encrypted_content() {
-    let mut plaintext = InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::root(),
-        Vec::new(),
-        "plain".to_string(),
-        /*trigger_turn*/ false,
-    );
-    plaintext.encrypted_content = Some("encrypted".to_string());
+    let plaintext = InterAgentCommunication {
+        encrypted_content: Some("encrypted".to_string()),
+        ..InterAgentCommunication::new(
+            AgentPath::root(),
+            AgentPath::root(),
+            Vec::new(),
+            "plain".to_string(),
+            /*trigger_turn*/ false,
+        )
+    };
     let encrypted = InterAgentCommunication::new_encrypted(
         AgentPath::root(),
         AgentPath::root(),
