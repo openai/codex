@@ -806,6 +806,7 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
 /// Zsh-fork uses this to scope a parent approval to the exact intercepted Git
 /// child. Multiple commands, complex parsing, wrappers such as `env`, and
 /// PowerShell-flavored commands deliberately do not qualify.
+#[cfg(any(unix, test))]
 pub(crate) fn single_plain_git_command(command: &[String]) -> Option<Vec<String>> {
     let parsed = commands_for_exec_policy(command);
     if parsed.used_complex_parsing
@@ -884,6 +885,7 @@ fn suppress_non_durable_execpolicy_amendment(
     amendment.filter(|amendment| !starts_with_non_durable_executable(&amendment.command))
 }
 
+#[cfg(any(unix, test))]
 fn starts_with_git_executable(command: &[String]) -> bool {
     starts_with_executable_named(command, "git")
 }
@@ -893,6 +895,7 @@ fn starts_with_non_durable_executable(command: &[String]) -> bool {
         .is_some_and(|name| matches!(name.as_str(), "git" | "env" | "sudo" | "command" | "nice"))
 }
 
+#[cfg(any(unix, test))]
 fn starts_with_executable_named(command: &[String], expected: &str) -> bool {
     normalized_executable_name(command).is_some_and(|name| name == expected)
 }
