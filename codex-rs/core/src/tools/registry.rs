@@ -13,6 +13,7 @@ use crate::memory_usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
+use crate::tool_search_debug::ToolSearchInspection;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -140,6 +141,10 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
     /// Creates an optional consumer for streamed tool argument diffs.
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        None
+    }
+
+    fn inspect_tool_search(&self, _query: &str, _limit: usize) -> Option<ToolSearchInspection> {
         None
     }
 }
@@ -317,6 +322,10 @@ impl CoreToolRuntime for ExposureOverride {
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.handler.create_diff_consumer()
     }
+
+    fn inspect_tool_search(&self, query: &str, limit: usize) -> Option<ToolSearchInspection> {
+        self.handler.inspect_tool_search(query, limit)
+    }
 }
 
 pub struct ToolRegistry {
@@ -387,6 +396,15 @@ impl ToolRegistry {
     pub(crate) fn waits_for_runtime_cancellation(&self, name: &ToolName) -> Option<bool> {
         let tool = self.tool(name)?;
         Some(tool.waits_for_runtime_cancellation())
+    }
+
+    pub(crate) fn inspect_tool_search(
+        &self,
+        name: &ToolName,
+        query: &str,
+        limit: usize,
+    ) -> Option<ToolSearchInspection> {
+        self.tool(name)?.inspect_tool_search(query, limit)
     }
 
     #[allow(dead_code)]

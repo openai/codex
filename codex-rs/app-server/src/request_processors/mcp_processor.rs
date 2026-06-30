@@ -53,6 +53,15 @@ impl McpRequestProcessor {
             .map(|()| None)
     }
 
+    pub(crate) async fn tool_search_inspect(
+        &self,
+        params: ToolSearchInspectParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.tool_search_inspect_response(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn mcp_resource_read(
         &self,
         request_id: &ConnectionRequestId,
@@ -107,6 +116,32 @@ impl McpRequestProcessor {
             .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
+    }
+
+    async fn tool_search_inspect_response(
+        &self,
+        params: ToolSearchInspectParams,
+    ) -> Result<ToolSearchInspectResponse, JSONRPCErrorError> {
+        let ToolSearchInspectParams {
+            thread_id,
+            query,
+            limit,
+        } = params;
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(invalid_request("query must not be empty"));
+        }
+        let limit = limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT as u32);
+        if limit == 0 {
+            return Err(invalid_request("limit must be greater than zero"));
+        }
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let inspection = thread
+            .inspect_tool_search(query, limit as usize)
+            .await
+            .map_err(|err| internal_error(format!("failed to inspect tool_search: {err}")))?;
+        tool_search_inspection_to_response(inspection)
     }
 
     async fn mcp_server_oauth_login_response(
@@ -497,4 +532,64 @@ fn with_mcp_tool_call_thread_id_meta(
         }
         other => other,
     }
+}
+
+fn tool_search_inspection_to_response(
+    inspection: codex_core::ToolSearchInspection,
+) -> Result<ToolSearchInspectResponse, JSONRPCErrorError> {
+    Ok(ToolSearchInspectResponse {
+        indexed_tool_count: usize_to_u32(inspection.indexed_tool_count, "indexed_tool_count")?,
+        matching_tool_count: usize_to_u32(inspection.matching_tool_count, "matching_tool_count")?,
+        requested_limit: usize_to_u32(inspection.requested_limit, "requested_limit")?,
+        effective_limit: usize_to_u32(inspection.effective_limit, "effective_limit")?,
+        top_k_truncated: inspection.top_k_truncated,
+        results: inspection
+            .results
+            .into_iter()
+            .map(tool_search_result_to_response)
+            .collect::<Result<Vec<_>, _>>()?,
+        output_tools: inspection
+            .output_tools
+            .into_iter()
+            .map(tool_search_output_tool_to_response)
+            .collect(),
+    })
+}
+
+fn tool_search_result_to_response(
+    result: codex_core::ToolSearchInspectionResult,
+) -> Result<ToolSearchInspectResult, JSONRPCErrorError> {
+    Ok(ToolSearchInspectResult {
+        rank: usize_to_u32(result.rank, "rank")?,
+        index: usize_to_u32(result.index, "index")?,
+        score: result.score,
+        source: result.source.map(|source| ToolSearchInspectSource {
+            name: source.name,
+            description: source.description,
+        }),
+        tools: result
+            .tools
+            .into_iter()
+            .map(|tool| ToolSearchInspectTool {
+                namespace: tool.namespace,
+                name: tool.name,
+                canonical_name: tool.canonical_name,
+            })
+            .collect(),
+        searchable_text: result.searchable_text,
+    })
+}
+
+fn tool_search_output_tool_to_response(
+    output_tool: codex_core::ToolSearchInspectionOutputTool,
+) -> ToolSearchInspectOutputTool {
+    ToolSearchInspectOutputTool {
+        namespace: output_tool.namespace,
+        tool_names: output_tool.tool_names,
+    }
+}
+
+fn usize_to_u32(value: usize, field: &str) -> Result<u32, JSONRPCErrorError> {
+    u32::try_from(value)
+        .map_err(|_| internal_error(format!("tool_search inspection field {field} exceeds u32")))
 }

@@ -968,6 +968,12 @@ client_request_definitions! {
         serialization: global("mcp-registry"),
         response: v2::ListMcpServerStatusResponse,
     },
+    #[experimental("toolSearch/inspect")]
+    ToolSearchInspect => "toolSearch/inspect" {
+        params: v2::ToolSearchInspectParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ToolSearchInspectResponse,
+    },
 
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
