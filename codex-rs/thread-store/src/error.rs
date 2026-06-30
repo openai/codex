@@ -16,7 +16,7 @@ pub(crate) fn reject_paginated_history_mode(
 }
 
 /// Error type shared by thread-store implementations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ThreadStoreError {
     /// The requested thread does not exist in this store.
     #[error("thread {thread_id} not found")]

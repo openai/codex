@@ -572,6 +572,26 @@ impl CodexThread {
         live_thread.append_items(items).await
     }
 
+    /// Appends rollout items and waits until their derived thread metadata is queryable.
+    ///
+    /// Most turn-path appends intentionally project metadata in the background. Callers that
+    /// respond before a first turn exists, such as thread goals, need this stronger visibility
+    /// contract so an immediate thread read/list observes the new preview.
+    pub async fn append_rollout_items_and_flush_metadata(
+        &self,
+        items: &[RolloutItem],
+    ) -> ThreadStoreResult<()> {
+        let live_thread = self
+            .codex
+            .session
+            .live_thread_for_persistence("append rollout items and flush metadata")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        live_thread.append_items(items).await?;
+        live_thread.flush().await
+    }
+
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
     }
