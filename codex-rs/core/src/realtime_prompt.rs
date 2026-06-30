@@ -77,6 +77,7 @@ mod tests {
         assert!(prompt.starts_with("## Identity, tone, and role"));
         assert!(prompt.contains("You are Codex, an OpenAI general-purpose agentic assistant"));
         assert!(prompt.contains("The user's name is "));
+        assert!(prompt.contains("Avoid stock acknowledgement openers that repeat across turns"));
         assert!(!prompt.contains("{{ user_first_name }}"));
     }
 }
