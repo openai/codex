@@ -168,6 +168,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -979,6 +980,33 @@ fn push_prompt_fragment(
     }
 }
 
+#[derive(Clone, Copy)]
+enum EventDeliveryTrace {
+    None,
+    ExecEnd,
+}
+
+impl EventDeliveryTrace {
+    fn for_event(event: &Event) -> Self {
+        if matches!(&event.msg, EventMsg::ExecCommandEnd(_)) {
+            Self::ExecEnd
+        } else {
+            Self::None
+        }
+    }
+
+    fn span(self, make_span: impl FnOnce() -> Span) -> Span {
+        match self {
+            Self::ExecEnd => make_span(),
+            Self::None => Span::none(),
+        }
+    }
+
+    fn in_scope<T>(self, make_span: impl FnOnce() -> Span, f: impl FnOnce() -> T) -> T {
+        self.span(make_span).in_scope(f)
+    }
+}
+
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -1741,6 +1769,12 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        let trace_exec_end = matches!(&legacy_source, EventMsg::ExecCommandEnd(_));
+        let event_trace = if trace_exec_end {
+            EventDeliveryTrace::ExecEnd
+        } else {
+            EventDeliveryTrace::None
+        };
         if let EventMsg::Error(error) = &legacy_source
             && error
                 .codex_error_info
@@ -1759,25 +1793,70 @@ impl Session {
         self.services
             .rollout_thread_trace
             .record_tool_call_event(turn_context.sub_id.clone(), &legacy_source);
-        let event = Event {
-            id: turn_context.sub_id.clone(),
-            msg,
-        };
-        self.send_event_raw(event).await;
+        async {
+            let event = event_trace.in_scope(
+                || info_span!("session.exec_end.primary.construct_event"),
+                || Event {
+                    id: turn_context.sub_id.clone(),
+                    msg,
+                },
+            );
+            self.send_event_raw_with_trace(event, event_trace).await;
+        }
+        .instrument(if trace_exec_end {
+            info_span!("session.exec_end.primary")
+        } else {
+            Span::none()
+        })
+        .await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+            .instrument(if trace_exec_end {
+                info_span!("session.exec_end.notify_parent")
+            } else {
+                Span::none()
+            })
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
+            .instrument(if trace_exec_end {
+                info_span!("session.exec_end.mirror_realtime")
+            } else {
+                Span::none()
+            })
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+            .instrument(if trace_exec_end {
+                info_span!("session.exec_end.clear_realtime_handoff")
+            } else {
+                Span::none()
+            })
             .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
-            let legacy_event = Event {
-                id: turn_context.sub_id.clone(),
-                msg: legacy,
+            let trace_legacy_exec_end =
+                trace_exec_end || matches!(&legacy, EventMsg::ExecCommandEnd(_));
+            let legacy_event_trace = if trace_legacy_exec_end {
+                EventDeliveryTrace::ExecEnd
+            } else {
+                EventDeliveryTrace::None
             };
-            self.send_event_raw(legacy_event).await;
+            async {
+                let legacy_event = legacy_event_trace.in_scope(
+                    || info_span!("session.exec_end.legacy.construct_event"),
+                    || Event {
+                        id: turn_context.sub_id.clone(),
+                        msg: legacy,
+                    },
+                );
+                self.send_event_raw_with_trace(legacy_event, legacy_event_trace)
+                    .await;
+            }
+            .instrument(if trace_legacy_exec_end {
+                info_span!("session.exec_end.legacy")
+            } else {
+                Span::none()
+            })
+            .await;
         }
     }
 
@@ -1914,21 +1993,53 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        let event_trace = EventDeliveryTrace::for_event(&event);
+        self.send_event_raw_with_trace(event, event_trace).await;
+    }
+
+    async fn send_event_raw_with_trace(&self, event: Event, event_trace: EventDeliveryTrace) {
         // Persist the event into rollout storage (the store filters as needed).
-        let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
-        self.persist_rollout_items(&rollout_items).await;
-        self.services
-            .rollout_thread_trace
-            .record_protocol_event(&event.msg);
-        self.deliver_event_raw(event).await;
+        let rollout_items = event_trace.in_scope(
+            || info_span!("session.exec_end.construct_rollout_items"),
+            || vec![RolloutItem::EventMsg(event.msg.clone())],
+        );
+        self.persist_rollout_items(&rollout_items)
+            .instrument(event_trace.span(|| info_span!("session.exec_end.rollout_append")))
+            .await;
+        event_trace.in_scope(
+            || info_span!("session.exec_end.record_protocol_event"),
+            || {
+                self.services
+                    .rollout_thread_trace
+                    .record_protocol_event(&event.msg);
+            },
+        );
+        self.deliver_event_raw_with_trace(event, event_trace)
+            .instrument(event_trace.span(|| info_span!("session.exec_end.downstream_delivery")))
+            .await;
     }
 
     async fn deliver_event_raw(&self, event: Event) {
+        let event_trace = EventDeliveryTrace::for_event(&event);
+        self.deliver_event_raw_with_trace(event, event_trace).await;
+    }
+
+    async fn deliver_event_raw_with_trace(&self, event: Event, event_trace: EventDeliveryTrace) {
         // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
-        }
-        if let Err(e) = self.tx_event.send(event).await {
+        event_trace.in_scope(
+            || info_span!("session.exec_end.broadcast_agent_status"),
+            || {
+                if let Some(status) = agent_status_from_event(&event.msg) {
+                    self.agent_status.send_replace(status);
+                }
+            },
+        );
+        if let Err(e) = self
+            .tx_event
+            .send(event)
+            .instrument(event_trace.span(|| info_span!("session.exec_end.client_delivery_barrier")))
+            .await
+        {
             debug!("dropping event because channel is closed: {e}");
         }
     }
