@@ -2846,7 +2846,8 @@ impl Session {
             turn_context.environments.clone()
         };
         if deferred_executor_enabled {
-            self.services
+            let _ = self
+                .services
                 .agents_md_manager
                 .refresh(&turn_context.config, &environments)
                 .await;
