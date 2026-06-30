@@ -22,6 +22,7 @@ use crate::GitSha;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::EXECUTABLE_FILTER_CONFIG_PATTERN;
 use crate::safe_git::config_output_has_untrusted_executable_helpers;
+use crate::safe_git::isolate_tokio_git_command_environment;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -434,6 +435,7 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
         // Both probes are fast, bounded metadata queries that do not inspect the
         // worktree or index, so do not reduce the requested command's timeout.
         let mut command = Command::new(self.git);
+        isolate_tokio_git_command_environment(&mut command);
         command.args(args).current_dir(self.cwd).kill_on_drop(true);
         match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
             Ok(Ok(output)) if output.status.success() => Some(output.stdout),
@@ -455,6 +457,7 @@ async fn run_git_command_with_timeout_from(
 ) -> Option<std::process::Output> {
     let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
     let mut command = Command::new(git);
+    isolate_tokio_git_command_environment(&mut command);
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
@@ -474,6 +477,7 @@ async fn run_git_command_with_timeout_from(
 
 async fn has_configured_executable_filters_from(git: &Path, cwd: &Path) -> Option<bool> {
     let mut command = Command::new(git);
+    isolate_tokio_git_command_environment(&mut command);
     command
         .args([
             "config",

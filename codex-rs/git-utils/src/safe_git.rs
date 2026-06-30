@@ -7,12 +7,42 @@ pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|
 pub(crate) const EXECUTABLE_PATCH_CONFIG_PATTERN: &str =
     r"^(filter\..*\.(clean|smudge|process)|merge\..*\.driver)$";
 
+const ISOLATED_GIT_ENVIRONMENT: [&str; 9] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_PREFIX",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+];
+
+/// Keep internal worktree operations bound to their explicit cwd and pathspec
+/// semantics instead of inheriting repository, index, or pathspec selectors.
+/// Deliberately leave Git config channels intact: callers may rely on normal
+/// system/global configuration, and executable helpers are probed separately.
+pub(crate) fn isolate_git_command_environment(command: &mut Command) {
+    for name in ISOLATED_GIT_ENVIRONMENT {
+        command.env_remove(name);
+    }
+}
+
+pub(crate) fn isolate_tokio_git_command_environment(command: &mut tokio::process::Command) {
+    for name in ISOLATED_GIT_ENVIRONMENT {
+        command.env_remove(name);
+    }
+}
+
 pub(crate) fn ensure_no_executable_git_config(
     cwd: &Path,
     pattern: &str,
     git_config_args: &[String],
 ) -> io::Result<()> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    isolate_git_command_environment(&mut command);
+    let output = command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         .args([
@@ -39,7 +69,7 @@ pub(crate) fn ensure_no_executable_git_config(
     if config_output_has_untrusted_executable_helpers(&output.stdout) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "refusing to run an internal Git worktree operation with repository- or command-scoped executable Git helpers configured",
+            "refusing to run an internal Git worktree operation with executable Git helpers configured",
         ));
     }
     Ok(())
@@ -60,9 +90,15 @@ pub(crate) fn config_output_has_untrusted_executable_helpers(stdout: &[u8]) -> b
         let Some(value_separator) = entry.iter().position(|byte| *byte == b'\n') else {
             return true;
         };
+        let key = &entry[..value_separator];
         let value = &entry[value_separator + 1..];
         let trusted_scope = scope == b"system" || scope == b"global";
-        if !trusted_scope && !value.is_empty() {
+        // Repositories choose merge drivers through `.gitattributes`, so even
+        // a globally configured driver is repository-triggerable. Filters at
+        // system/global scope remain trusted to preserve normal Git LFS and
+        // user normalization behavior.
+        let merge_driver = key.starts_with(b"merge.") && key.ends_with(b".driver");
+        if !value.is_empty() && (merge_driver || !trusted_scope) {
             return true;
         }
     }
@@ -83,6 +119,12 @@ mod tests {
             b"command\0merge.example.driver\nhelper\0"
         ));
         assert!(config_output_has_untrusted_executable_helpers(
+            b"global\0merge.example.driver\nhelper\0"
+        ));
+        assert!(config_output_has_untrusted_executable_helpers(
+            b"system\0merge.example.driver\nhelper\0"
+        ));
+        assert!(config_output_has_untrusted_executable_helpers(
             b"worktree\0filter.example.process\nhelper\0"
         ));
     }
@@ -93,10 +135,10 @@ mod tests {
             b"global\0filter.lfs.process\ngit-lfs filter-process\0"
         ));
         assert!(!config_output_has_untrusted_executable_helpers(
-            b"system\0merge.trusted.driver\ntrusted-driver\0"
+            b"local\0filter.example.clean\n\0"
         ));
         assert!(!config_output_has_untrusted_executable_helpers(
-            b"local\0filter.example.clean\n\0"
+            b"global\0merge.disabled.driver\n\0"
         ));
     }
 
