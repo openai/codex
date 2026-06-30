@@ -11,7 +11,28 @@ fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
 
     assert_eq!(
         search_info.entry.search_text,
-        "mcp__calendar___create_event _create_event createEvent codex-apps Create event Create a calendar event. Calendar Plan events. Calendar plugin attendees start_time"
+        "Create a calendar event. Plan events. attendees start_time"
+    );
+    assert_eq!(
+        search_info.entry.identity,
+        ToolSearchIdentity {
+            canonical_aliases: vec![
+                "mcp__calendar___create_event".to_string(),
+                "mcp__calendar__._create_event".to_string(),
+                "mcp__calendar_____create_event".to_string(),
+            ],
+            tool_aliases: vec![
+                "_create_event".to_string(),
+                "createEvent".to_string(),
+                "Create event".to_string(),
+            ],
+            source_aliases: vec![
+                "codex-apps".to_string(),
+                "Calendar".to_string(),
+                "Calendar plugin".to_string(),
+                "mcp__calendar__".to_string(),
+            ],
+        }
     );
     assert_eq!(
         search_info.source_info,
