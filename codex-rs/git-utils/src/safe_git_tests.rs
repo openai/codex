@@ -193,9 +193,10 @@ async fn ordinary_apply_allows_an_unselected_executable_filter() {
     })
     .expect("unused filter must not block apply");
     assert_eq!(result.exit_code, 0);
-    assert_eq!(
-        std::fs::read_to_string(repo_path.join("test.txt")).expect("read result"),
-        "new\n"
+    let contents = std::fs::read_to_string(repo_path.join("test.txt")).expect("read result");
+    assert!(
+        matches!(contents.as_str(), "new\n" | "new\r\n"),
+        "expected the patched contents with a platform line ending, got {contents:?}"
     );
 }
 
