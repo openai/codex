@@ -109,8 +109,8 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
-    #[instrument(level = "trace", skip_all)]
-    pub fn build_tool_call(item: ResponseItem) -> Option<ToolCall> {
+    #[instrument(level = "trace", skip_all, err)]
+    pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {
         match item {
             ResponseItem::FunctionCall {
                 name,
@@ -120,11 +120,11 @@ impl ToolRouter {
                 ..
             } => {
                 let tool_name = ToolName::new(namespace, name);
-                Some(ToolCall {
+                Ok(Some(ToolCall {
                     tool_name,
                     call_id,
                     payload: ToolPayload::Function { arguments },
-                })
+                }))
             }
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
@@ -138,25 +138,25 @@ impl ToolRouter {
                     query: String::new(),
                     limit: None,
                 });
-                Some(ToolCall {
+                Ok(Some(ToolCall {
                     tool_name: ToolName::plain("tool_search"),
                     call_id,
                     payload: ToolPayload::ToolSearch { arguments },
-                })
+                }))
             }
-            ResponseItem::ToolSearchCall { .. } => None,
+            ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
                 namespace,
                 input,
                 call_id,
                 ..
-            } => Some(ToolCall {
+            } => Ok(Some(ToolCall {
                 tool_name: ToolName::new(namespace, name),
                 call_id,
                 payload: ToolPayload::Custom { input },
-            }),
-            _ => None,
+            })),
+            _ => Ok(None),
         }
     }
 

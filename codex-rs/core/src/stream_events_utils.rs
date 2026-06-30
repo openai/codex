@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::ContextualUserFragment;
 use crate::context::ImageGenerationInstructions;
+use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -22,6 +23,8 @@ use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::memory_citation::MemoryCitation;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -409,7 +412,7 @@ pub(crate) async fn handle_output_item_done(
 
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
-        Some(call) => {
+        Ok(Some(call)) => {
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
@@ -440,7 +443,7 @@ pub(crate) async fn handle_output_item_done(
             output.tool_future = Some(tool_future);
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
-        None => {
+        Ok(None) => {
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
@@ -479,6 +482,32 @@ pub(crate) async fn handle_output_item_done(
             .await;
 
             output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
+        }
+        // The tool request should be answered directly (or was denied); push that response into the transcript.
+        Err(FunctionCallError::RespondToModel(message)) => {
+            let response = ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(message),
+                    ..Default::default()
+                },
+            };
+            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+                .await;
+            if let Some(response_item) = response_input_to_response_item(&response) {
+                ctx.sess
+                    .record_conversation_items(
+                        &ctx.turn_context,
+                        std::slice::from_ref(&response_item),
+                    )
+                    .await;
+            }
+
+            output.needs_follow_up = true;
+        }
+        // A fatal error occurred; surface it back into history.
+        Err(FunctionCallError::Fatal(message)) => {
+            return Err(CodexErr::Fatal(message));
         }
     }
 
@@ -588,6 +617,53 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
         }
         ResponseItem::ImageGenerationCall { .. } => true,
         _ => false,
+    }
+}
+
+pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
+    match input {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            Some(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: call_id.clone(),
+                output: output.clone(),
+                internal_chat_message_metadata_passthrough: None,
+            })
+        }
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => Some(ResponseItem::CustomToolCallOutput {
+            id: None,
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: output.clone(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        ResponseInputItem::McpToolCallOutput { call_id, output } => {
+            let output = output.as_function_call_output_payload();
+            Some(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: call_id.clone(),
+                output,
+                internal_chat_message_metadata_passthrough: None,
+            })
+        }
+        ResponseInputItem::ToolSearchOutput {
+            call_id,
+            status,
+            execution,
+            tools,
+        } => Some(ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some(call_id.clone()),
+            status: status.clone(),
+            execution: execution.clone(),
+            tools: tools.clone(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        _ => None,
     }
 }
 

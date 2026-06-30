@@ -161,7 +161,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         arguments: "{}".to_string(),
         call_id: "call-namespace".to_string(),
         internal_chat_message_metadata_passthrough: None,
-    })
+    })?
     .expect("function_call should produce a tool call");
 
     assert_eq!(
@@ -191,7 +191,7 @@ async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Re
         namespace: Some("mcp__python".to_string()),
         input: "print('hello')".to_string(),
         internal_chat_message_metadata_passthrough: None,
-    })
+    })?
     .expect("custom_tool_call should produce a tool call");
 
     assert_eq!(
@@ -419,7 +419,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
         arguments: json!({ "message": "hello" }).to_string(),
         call_id: "call-extension".to_string(),
         internal_chat_message_metadata_passthrough: None,
-    })
+    })?
     .expect("function_call should produce a tool call");
     let result = router
         .dispatch_tool_call_with_code_mode_result(
