@@ -3,6 +3,7 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
@@ -12,6 +13,7 @@ use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
@@ -477,6 +479,125 @@ async fn run_code_mode_turn_with_rmcp_config(
 
     test.submit_turn(prompt).await?;
     Ok((test, second_mock))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_reports_pending_mcp_elicitation_on_yield_and_wait() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.enable(Feature::ToolCallMcpElicitation);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "rmcp".to_string(),
+            McpServerConfig {
+                auth: Default::default(),
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: "local".to_string(),
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+    });
+    let test = builder.build(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"// @exec: {"yield_time_ms": 1000}
+await tools.mcp__rmcp__sync({});"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let initial_yield = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-2"),
+            responses::ev_function_call(
+                "call-2",
+                "wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "cell_id": "1",
+                    "yield_time_ms": 10,
+                }))?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let later_wait = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "waiting"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn_with_approval_and_permission_profile(
+        "request confirmation from code mode",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let initial_items = custom_tool_output_items(&initial_yield.single_request(), "call-1");
+    assert_eq!(initial_items.len(), 1);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script running with cell ID 1\n",
+            r"Waiting for user input\n",
+            r"Wall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&initial_items, /*index*/ 0),
+    );
+
+    let wait_items = function_tool_output_items(&later_wait.single_request(), "call-2");
+    assert_eq!(wait_items.len(), 1);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script running with cell ID 1\n",
+            r"Waiting for user input\n",
+            r"Wall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&wait_items, /*index*/ 0),
+    );
+
+    Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]

@@ -218,6 +218,10 @@ impl Session {
             };
         }
 
+        let _pending_elicitation = turn_context
+            .turn_metadata_state
+            .track_pending_mcp_elicitation();
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;

@@ -184,7 +184,7 @@ pub(super) async fn handle_runtime_response(
     max_output_tokens: Option<usize>,
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
-    let script_status = format_script_status(&response);
+    let script_status = format_script_status(exec, &response);
 
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
@@ -228,8 +228,14 @@ fn sanitize_runtime_image_detail(turn: &TurnContext, items: &mut [FunctionCallOu
     sanitize_image_detail_items(can_request_original_image_detail(&turn.model_info), items);
 }
 
-fn format_script_status(response: &RuntimeResponse) -> String {
+fn format_script_status(exec: &ExecContext, response: &RuntimeResponse) -> String {
     match response {
+        RuntimeResponse::Yielded { cell_id, .. }
+            if exec.session.is_out_of_band_elicitation_paused()
+                || exec.turn.turn_metadata_state.has_pending_mcp_elicitation() =>
+        {
+            format!("Script running with cell ID {cell_id}\nWaiting for user input")
+        }
         RuntimeResponse::Yielded { cell_id, .. } => {
             format!("Script running with cell ID {cell_id}")
         }

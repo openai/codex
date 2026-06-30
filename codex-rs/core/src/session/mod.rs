@@ -1145,6 +1145,10 @@ impl Session {
         self.out_of_band_elicitation_paused.subscribe()
     }
 
+    pub(crate) fn is_out_of_band_elicitation_paused(&self) -> bool {
+        *self.out_of_band_elicitation_paused.borrow()
+    }
+
     pub(crate) fn set_out_of_band_elicitation_pause_state(&self, paused: bool) {
         self.out_of_band_elicitation_paused.send_replace(paused);
     }
