@@ -91,7 +91,7 @@ pub(crate) async fn safe_untracked_paths_for_diff_checked(
         let path =
             git_path_bytes_to_path_buf(path).ok_or_else(|| invalid_output("untrackedPaths"))?;
         if std::fs::symlink_metadata(requested_cwd.join(path))
-            .map_err(|_| command_failed("pathMetadata", None))?
+            .map_err(|_| command_failed("pathMetadata", /*exit_code*/ None))?
             .file_type()
             .is_dir()
         {
@@ -226,7 +226,8 @@ pub(crate) fn read_effective_config_with_fallback(
     pattern: &str,
     probe: &str,
 ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    let scoped = run_effective_config_query(git, cwd, git_config_args, pattern, true)?;
+    let scoped =
+        run_effective_config_query(git, cwd, git_config_args, pattern, /*show_scope*/ true)?;
     if scoped
         .status
         .code()
@@ -235,7 +236,13 @@ pub(crate) fn read_effective_config_with_fallback(
         return parse_effective_config(&scoped.stdout);
     }
 
-    let legacy = run_effective_config_query(git, cwd, git_config_args, pattern, false)?;
+    let legacy = run_effective_config_query(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        /*show_scope*/ false,
+    )?;
     if !legacy
         .status
         .code()
@@ -275,7 +282,7 @@ async fn read_filter_config_async(
     git: &GitRunner,
     cwd: &Path,
 ) -> Result<BTreeMap<String, GitConfigEntry>, GitReadError> {
-    let scoped = run_filter_config_query_async(git, cwd, true).await?;
+    let scoped = run_filter_config_query_async(git, cwd, /*show_scope*/ true).await?;
     if scoped
         .status
         .code()
@@ -284,7 +291,7 @@ async fn read_filter_config_async(
         return parse_effective_config(&scoped.stdout).map_err(|_| invalid_output("filterConfig"));
     }
 
-    let legacy = run_filter_config_query_async(git, cwd, false).await?;
+    let legacy = run_filter_config_query_async(git, cwd, /*show_scope*/ false).await?;
     if !legacy
         .status
         .code()
@@ -366,11 +373,12 @@ async fn read_filter_attributes_async(
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut input = tempfile::tempfile().map_err(|_| command_failed("filterAttributes", None))?;
+    let mut input = tempfile::tempfile()
+        .map_err(|_| command_failed("filterAttributes", /*exit_code*/ None))?;
     write_nul_paths(&mut input, paths).map_err(|_| invalid_output("filterAttributes"))?;
     input
         .rewind()
-        .map_err(|_| command_failed("filterAttributes", None))?;
+        .map_err(|_| command_failed("filterAttributes", /*exit_code*/ None))?;
 
     let mut command = git.tokio_command();
     command
@@ -407,7 +415,7 @@ async fn command_output(
         Ok(Err(error)) if error.kind() == io::ErrorKind::NotFound => {
             Err(GitReadError::NoTrustedGit)
         }
-        Ok(Err(_)) => Err(command_failed(operation, None)),
+        Ok(Err(_)) => Err(command_failed(operation, /*exit_code*/ None)),
         Ok(Ok(output)) => Ok(output),
     }
 }

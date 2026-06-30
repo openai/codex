@@ -317,7 +317,13 @@ pub(crate) fn classify_patch_paths(
     let mut exact_candidates = exact_leaves.clone();
     exact_candidates.extend(traversed_ancestors.iter().cloned());
     exact_candidates.extend(canonical_candidates.iter().cloned());
-    let records = read_index_stage_records(git, git_root, &exact_candidates, false, None)?;
+    let records = read_index_stage_records(
+        git,
+        git_root,
+        &exact_candidates,
+        /*ignore_case*/ false,
+        /*index_file*/ None,
+    )?;
     let mut exact_gitlinks = std::collections::BTreeMap::new();
     for record in records {
         if !exact_candidates.contains(&record.path) {
@@ -344,8 +350,13 @@ pub(crate) fn classify_patch_paths(
     // `:(icase)` is discovery only. Confirm a differently-cased candidate by
     // filesystem identity so case-sensitive siblings remain independent.
     if !traversed_ancestors.is_empty() {
-        let icase_records =
-            read_index_stage_records(git, git_root, &traversed_ancestors, true, None)?;
+        let icase_records = read_index_stage_records(
+            git,
+            git_root,
+            &traversed_ancestors,
+            /*ignore_case*/ true,
+            /*index_file*/ None,
+        )?;
         for record in icase_records {
             if record.mode != "160000" || traversed_ancestors.contains(&record.path) {
                 continue;
@@ -452,7 +463,13 @@ pub(crate) fn validate_gitlink_updates(
         .iter()
         .cloned()
         .collect::<std::collections::BTreeSet<_>>();
-    let records = read_index_stage_records(git, git_root, &candidates, false, Some(&scratch_path))?;
+    let records = read_index_stage_records(
+        git,
+        git_root,
+        &candidates,
+        /*ignore_case*/ false,
+        Some(&scratch_path),
+    )?;
     let mut resulting_gitlinks = std::collections::BTreeMap::new();
     for record in records {
         if !candidates.contains(&record.path) {

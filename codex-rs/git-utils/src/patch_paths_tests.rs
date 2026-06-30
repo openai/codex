@@ -808,7 +808,10 @@ fn gitlink_guard_ignores_inherited_git_selection_environment() {
         let root = PathBuf::from(
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
-        let error = ensure_paths_do_not_enter_submodules(&root, &["NESTED/file.txt".to_string()])
+        // Use the exact indexed spelling so this test isolates inherited Git
+        // selectors on both case-sensitive and case-insensitive filesystems.
+        // Case-distinct sibling behavior is covered by dedicated tests.
+        let error = ensure_paths_do_not_enter_submodules(&root, &["nested/file.txt".to_string()])
             .expect_err("reject target-repository gitlink");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert!(!configured_filter_ran(&root.join("nested")));
