@@ -12,6 +12,7 @@ use crate::tools::spec_plan::build_tool_router;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolExecutor;
@@ -130,11 +131,19 @@ impl ToolRouter {
                 execution,
                 arguments,
                 ..
-            } if execution == "client" && !call_id.is_empty() => Some(ToolCall {
-                tool_name: ToolName::plain("tool_search"),
-                call_id,
-                payload: ToolPayload::ToolSearch { arguments },
-            }),
+            } if execution == "client" && !call_id.is_empty() => {
+                let arguments = serde_json::from_value(arguments).unwrap_or(SearchToolCallParams {
+                    // Enter the handler's normal validation failure path without retaining
+                    // or logging the malformed payload.
+                    query: String::new(),
+                    limit: None,
+                });
+                Some(ToolCall {
+                    tool_name: ToolName::plain("tool_search"),
+                    call_id,
+                    payload: ToolPayload::ToolSearch { arguments },
+                })
+            }
             ResponseItem::ToolSearchCall { .. } => None,
             ResponseItem::CustomToolCall {
                 name,

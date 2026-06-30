@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used)]
-
 use anyhow::Result;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;

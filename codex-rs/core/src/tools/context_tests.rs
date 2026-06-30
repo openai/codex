@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::SearchToolCallParams;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -320,7 +321,10 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
 #[test]
 fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
     let payload = ToolPayload::ToolSearch {
-        arguments: json!({ "query": "calendar" }),
+        arguments: SearchToolCallParams {
+            query: "calendar".to_string(),
+            limit: None,
+        },
     };
     let response = ToolSearchOutput {
         tools: vec![LoadableToolSpec::Function(codex_tools::ResponsesApiTool {

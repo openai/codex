@@ -10,7 +10,6 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
-use codex_protocol::models::SearchToolCallParams;
 use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -19,7 +18,6 @@ use codex_tools::ToolSearchEntry;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
-use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::instrument;
@@ -121,7 +119,7 @@ impl ToolSearchHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
-        let arguments = match payload {
+        let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::Fatal(format!(
@@ -129,14 +127,6 @@ impl ToolSearchHandler {
                 )));
             }
         };
-        let args = SearchToolCallParams::deserialize(&arguments).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to parse tool_search arguments: {:?} validation at line {}, column {}",
-                err.classify(),
-                err.line(),
-                err.column()
-            ))
-        })?;
 
         let query = args.query.trim();
         if query.is_empty() {

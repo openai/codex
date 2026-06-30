@@ -2709,28 +2709,24 @@ impl Session {
         }
     }
 
-    /// Prepares the history and raw-response views used when recording conversation items.
-    fn prepare_conversation_items_for_recording<'a>(
+    /// Records conversation items: append to history, persist to rollout, and
+    /// notify clients observing raw response items.
+    pub(crate) fn prepare_conversation_items_for_history<'a>(
         &self,
         turn_context: &TurnContext,
         items: &'a [ResponseItem],
-    ) -> (Cow<'a, [ResponseItem]>, Option<Vec<ResponseItem>>) {
+    ) -> Cow<'a, [ResponseItem]> {
         let mut items = Cow::Borrowed(items);
         prepare_response_items(items.to_mut());
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in items.to_mut() {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
-        let raw_response_items = if turn_context.config.features.enabled(Feature::ItemIds) {
+        if turn_context.config.features.enabled(Feature::ItemIds) {
             Self::assign_missing_response_item_ids(items)
         } else {
             items
-        };
-        let history_items = crate::context_manager::canonicalize_for_durable_history(
-            &self.thread_id,
-            raw_response_items.as_ref(),
-        );
-        (raw_response_items, history_items)
+        }
     }
 
     fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
@@ -2781,9 +2777,12 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let (raw_items, history_items) =
-            self.prepare_conversation_items_for_recording(turn_context, items);
-        let history_items = history_items.as_deref().unwrap_or(raw_items.as_ref());
+        let raw_items = self.prepare_conversation_items_for_history(turn_context, items);
+        let history_items = crate::context_manager::canonicalize_for_durable_history(
+            &self.thread_id,
+            raw_items.as_ref(),
+        );
+        let history_items = history_items.as_ref();
         {
             let mut state = self.state.lock().await;
             state
@@ -2886,11 +2885,11 @@ impl Session {
     ) {
         communication.set_turn_id_if_missing(&turn_context.sub_id);
         let response_item = communication.to_model_input_item();
-        let (raw_items, history_items) = self.prepare_conversation_items_for_recording(
+        let items = self.prepare_conversation_items_for_history(
             turn_context,
             std::slice::from_ref(&response_item),
         );
-        let items = history_items.as_deref().unwrap_or(raw_items.as_ref());
+        let items = items.as_ref();
         let response_item = items[0].clone();
         {
             let mut state = self.state.lock().await;
@@ -2907,8 +2906,7 @@ impl Session {
             RolloutItem::ResponseItem(response_item),
         ])
         .await;
-        self.send_raw_response_items(turn_context, raw_items.as_ref())
-            .await;
+        self.send_raw_response_items(turn_context, items).await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(
