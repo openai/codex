@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Error as SerdeJsonError;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -69,8 +70,16 @@ pub unsafe fn sync_persistent_deny_read_acls(
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("parse deny-read ACL state {}", path.display())),
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(err) if should_reset_corrupted_state(&err) => {
+                let _ = std::fs::rename(path, corrupted_state_backup_path(path));
+                Ok(PersistentDenyReadAclState::default())
+            }
+            Err(err) => {
+                Err(err).with_context(|| format!("parse deny-read ACL state {}", path.display()))
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             Ok(PersistentDenyReadAclState::default())
         }
@@ -80,8 +89,72 @@ fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
     }
 }
 
+fn should_reset_corrupted_state(err: &SerdeJsonError) -> bool {
+    err.is_syntax() || err.is_eof() || err.is_data()
+}
+
+fn corrupted_state_backup_path(path: &Path) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    file_name.push(".corrupt");
+    path.with_file_name(file_name)
+}
+
 fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state).context("serialize deny-read ACL state")?;
     std::fs::write(path, bytes)
         .with_context(|| format!("write deny-read ACL state {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersistentDenyReadAclState;
+    use super::corrupted_state_backup_path;
+    use super::load_state;
+    use super::store_state;
+    use crate::setup::sandbox_dir;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn state_path(codex_home: &Path) -> PathBuf {
+        sandbox_dir(codex_home).join("deny_read_acl_state.json")
+    }
+
+    #[test]
+    fn load_state_recovers_from_nul_filled_file() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let sandbox = sandbox_dir(codex_home.path());
+        std::fs::create_dir_all(&sandbox).expect("create sandbox dir");
+        let state_path = state_path(codex_home.path());
+        std::fs::write(&state_path, vec![0_u8; 128]).expect("write corrupted state");
+
+        let state = load_state(&state_path).expect("recover from corrupted state");
+
+        assert_eq!(state.principals, BTreeMap::new());
+        assert!(
+            corrupted_state_backup_path(&state_path).exists(),
+            "expected a backup of the corrupted state file"
+        );
+    }
+
+    #[test]
+    fn store_state_rewrites_after_corrupted_recovery() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let sandbox = sandbox_dir(codex_home.path());
+        std::fs::create_dir_all(&sandbox).expect("create sandbox dir");
+        let state_path = state_path(codex_home.path());
+        std::fs::write(&state_path, "{").expect("write invalid json");
+
+        let recovered = load_state(&state_path).expect("recover from invalid json");
+        store_state(&state_path, &recovered).expect("rewrite state");
+
+        let reloaded: PersistentDenyReadAclState =
+            serde_json::from_slice(&std::fs::read(&state_path).expect("read rewritten state"))
+                .expect("parse rewritten state");
+        assert_eq!(reloaded.principals, BTreeMap::new());
+    }
 }
