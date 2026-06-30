@@ -117,6 +117,7 @@ where
             command.env(key, value);
         }
     }
+    command.envs(crate::local_only_git_env());
     command.args(&args_vec);
     let output = command.output()?;
     if !output.status.success() {
