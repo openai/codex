@@ -13,12 +13,31 @@ use crate::git_config::parse_effective_config;
 use crate::git_config::parse_effective_config_with_origins;
 
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
+pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str =
+    r"^filter\..*\.(clean|smudge|process|required)$";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FilterAttributeValue {
     Driver(String),
     AmbiguousSentinel(String),
+}
+
+pub(crate) struct GitFilterNeutralization {
+    git_config_args: Vec<String>,
+    _config_dir: Option<tempfile::TempDir>,
+    filter_config: BTreeMap<String, GitConfigEntry>,
+}
+
+impl GitFilterNeutralization {
+    pub(crate) fn git_config_args(&self) -> &[String] {
+        &self.git_config_args
+    }
+
+    pub(crate) fn filter_value(&self, driver: &str, name: &str) -> Option<&str> {
+        self.filter_config
+            .get(&format!("filter.{driver}.{name}"))
+            .map(|entry| entry.value.as_str())
+    }
 }
 
 const ISOLATED_GIT_ENVIRONMENT: [&str; 11] = [
@@ -53,11 +72,15 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
     cwd: &Path,
     paths: &[String],
     git_config_args: &[String],
-) -> io::Result<()> {
+) -> io::Result<GitFilterNeutralization> {
     let entries = read_filter_config(git, cwd, git_config_args)?;
     let executable_drivers = executable_filter_drivers(&entries)?;
     if executable_drivers.is_empty() {
-        return Ok(());
+        return Ok(GitFilterNeutralization {
+            git_config_args: Vec::new(),
+            _config_dir: None,
+            filter_config: entries,
+        });
     }
     let paths = paths
         .iter()
@@ -74,7 +97,71 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
             ),
         ));
     }
-    Ok(())
+    executable_filter_guard(git, cwd, entries, &executable_drivers)
+}
+
+fn executable_filter_guard(
+    git: &GitRunner,
+    cwd: &Path,
+    filter_config: BTreeMap<String, GitConfigEntry>,
+    executable_drivers: &BTreeSet<String>,
+) -> io::Result<GitFilterNeutralization> {
+    let config_dir = tempfile::tempdir()?;
+    let config_path = config_dir.path().join("filter-neutralization.gitconfig");
+    std::fs::write(&config_path, [])?;
+    let guard = GitFilterNeutralization {
+        git_config_args: vec![
+            "-c".to_string(),
+            format!(
+                "include.path={}",
+                config_path
+                    .to_str()
+                    .ok_or_else(|| invalid_filter_output("non-UTF-8 filter guard path"))?
+            ),
+        ],
+        _config_dir: Some(config_dir),
+        filter_config,
+    };
+    for driver in executable_drivers {
+        debug_assert!(["clean", "smudge", "process"].into_iter().any(|name| {
+            guard
+                .filter_value(driver, name)
+                .is_some_and(|value| !value.is_empty())
+        }));
+        for command in ["clean", "smudge", "process"] {
+            guard.write_config_value(git, cwd, &config_path, driver, command, "")?;
+        }
+        guard.write_config_value(git, cwd, &config_path, driver, "required", "false")?;
+    }
+    Ok(guard)
+}
+
+impl GitFilterNeutralization {
+    fn write_config_value(
+        &self,
+        git: &GitRunner,
+        cwd: &Path,
+        config_path: &Path,
+        driver: &str,
+        name: &str,
+        value: &str,
+    ) -> io::Result<()> {
+        let mut command = git.command();
+        command
+            .args(["config", "--file"])
+            .arg(config_path)
+            .args(["--add", &format!("filter.{driver}.{name}"), value])
+            .current_dir(cwd);
+        let output = git.output(command)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to write Git filter neutralization for {driver:?} (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn read_filter_config(
@@ -333,6 +420,9 @@ fn executable_filter_drivers(
 ) -> io::Result<BTreeSet<String>> {
     let mut executable_drivers = BTreeSet::new();
     for entry in entries.values() {
+        if entry.key.ends_with(".required") {
+            continue;
+        }
         let driver = filter_driver_name(&entry.key)?;
         if !entry.value.is_empty() {
             executable_drivers.insert(driver);

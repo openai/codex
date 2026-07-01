@@ -1,11 +1,24 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
+use std::fs::File;
+use std::fs::FileTimes;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 const PATCH: &str =
     "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-orig\n+next\n";
 const FILTER_COMMAND: &str = "git config codex.filterran true && git hash-object --stdin";
+const PROCESS_FILTER_COMMAND: &str =
+    "git config codex.filterran true && git rev-parse --verify refs/codex-filter-must-not-run";
+const COMMAND_SCOPED_FILTER_CONFIG: &str =
+    "filter.demo.clean=git config codex.filterran true && git hash-object --stdin";
+
+#[derive(Clone, Copy, Debug)]
+enum PatchKind {
+    Direct,
+    ThreeWay,
+}
 
 fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
     let mut command = std::process::Command::new("git");
@@ -40,9 +53,116 @@ fn init_repo() -> tempfile::TempDir {
 }
 
 fn configure_filter(root: &Path, driver: &str) {
+    configure_filter_command(root, driver, "clean", FILTER_COMMAND);
+}
+
+fn configure_filter_command(root: &Path, driver: &str, name: &str, command: &str) {
     run_success(
         root,
-        &["config", &format!("filter.{driver}.clean"), FILTER_COMMAND],
+        &["config", &format!("filter.{driver}.{name}"), command],
+    );
+}
+
+fn make_index_racy(root: &Path) {
+    let index = File::options()
+        .write(true)
+        .open(root.join(".git/index"))
+        .expect("open index");
+    index
+        .set_times(FileTimes::new().set_modified(UNIX_EPOCH))
+        .expect("make index entries racy");
+}
+
+fn build_patch(root: &Path, kind: PatchKind, paths: &[&str]) -> String {
+    if matches!(kind, PatchKind::Direct) && paths == ["file.txt"] {
+        return PATCH.to_string();
+    }
+    std::fs::write(root.join("file.txt"), "next\n").expect("write target postimage");
+    let mut args = vec!["diff"];
+    if matches!(kind, PatchKind::ThreeWay) {
+        args.extend(["--full-index", "--binary"]);
+    }
+    args.push("--");
+    args.extend_from_slice(paths);
+    let (code, stdout, stderr) = run(root, &args);
+    assert_eq!(code, 0, "generate patch: {stderr}");
+    let mut checkout = vec!["checkout", "-q", "--"];
+    checkout.extend_from_slice(paths);
+    run_success(root, &checkout);
+    stdout
+}
+
+fn index_contents(root: &Path, path: &str) -> String {
+    let (code, stdout, stderr) = run(root, &["show", &format!(":{path}")]);
+    assert_eq!(code, 0, "read index {path}: {stderr}");
+    stdout
+}
+
+fn setup_racy_offpath_filter(
+    driver: &str,
+    name: &str,
+    command: &str,
+    kind: PatchKind,
+) -> (tempfile::TempDir, String, String) {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("outside.txt"), "outside\n").expect("write off-path file");
+    std::fs::write(
+        root.join(".gitattributes"),
+        format!("outside.txt filter={driver}\n"),
+    )
+    .expect("write off-path attributes");
+    run_success(root, &["add", ".gitattributes", "outside.txt"]);
+    run_success(root, &["commit", "-m", "off-path filter target"]);
+    let patch = build_patch(root, kind, &["file.txt"]);
+    configure_filter_command(root, driver, name, command);
+    run_success(
+        root,
+        &["config", &format!("filter.{driver}.required"), "true"],
+    );
+    let outside_index = index_contents(root, "outside.txt");
+    make_index_racy(root);
+    (repo, patch, outside_index)
+}
+
+fn assert_guarded_round_trip(
+    repo: &tempfile::TempDir,
+    patch: String,
+    outside_index: &str,
+    context: &str,
+) {
+    let root = repo.path();
+    let forward = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: patch.clone(),
+        revert: false,
+        preflight: false,
+    })
+    .expect("guard forward apply");
+    assert_eq!(forward.exit_code, 0, "{context}: {}", forward.stderr);
+    assert!(!configured_filter_ran(root), "{context}: forward helper");
+    assert_eq!(index_contents(root, "file.txt"), "next\n", "{context}");
+    assert_eq!(
+        index_contents(root, "outside.txt"),
+        outside_index,
+        "{context}"
+    );
+
+    make_index_racy(root);
+    let reverse = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: patch,
+        revert: true,
+        preflight: false,
+    })
+    .expect("guard reverse apply");
+    assert_eq!(reverse.exit_code, 0, "{context}: {}", reverse.stderr);
+    assert!(!configured_filter_ran(root), "{context}: reverse helper");
+    assert_eq!(index_contents(root, "file.txt"), "orig\n", "{context}");
+    assert_eq!(
+        index_contents(root, "outside.txt"),
+        outside_index,
+        "{context}"
     );
 }
 
@@ -224,4 +344,136 @@ fn apply_allows_effectively_empty_empty_name_filter() {
     .expect("allow effectively empty empty-name filter");
     assert_eq!(result.exit_code, 0);
     assert!(!configured_filter_ran(root));
+}
+
+#[test]
+fn apply_neutralizes_racy_offpath_clean_and_process_filters() {
+    for (name, command) in [
+        ("clean", FILTER_COMMAND),
+        ("process", PROCESS_FILTER_COMMAND),
+    ] {
+        for kind in [PatchKind::Direct, PatchKind::ThreeWay] {
+            let (repo, patch, outside_index) =
+                setup_racy_offpath_filter("demo", name, command, kind);
+            assert_guarded_round_trip(&repo, patch, &outside_index, &format!("{name} {kind:?}"));
+        }
+    }
+}
+
+#[test]
+fn apply_neutralizes_empty_and_equals_filter_driver_names() {
+    for (driver, name, command, kind) in [
+        ("", "clean", FILTER_COMMAND, PatchKind::Direct),
+        (
+            "x=y",
+            "process",
+            PROCESS_FILTER_COMMAND,
+            PatchKind::ThreeWay,
+        ),
+    ] {
+        let (repo, patch, outside_index) = setup_racy_offpath_filter(driver, name, command, kind);
+        assert_guarded_round_trip(
+            &repo,
+            patch,
+            &outside_index,
+            &format!("driver {driver:?} {name}"),
+        );
+    }
+}
+
+#[test]
+fn command_scoped_offpath_filter_is_neutralized_after_local_config() {
+    if std::env::var_os("CODEX_GIT_UTILS_APPLY_FILTER_ENV_CHILD").is_none() {
+        run_isolated_test(
+            "apply::filter_tests::command_scoped_offpath_filter_is_neutralized_after_local_config",
+            &[(
+                "CODEX_APPLY_GIT_CFG",
+                OsStr::new(COMMAND_SCOPED_FILTER_CONFIG),
+            )],
+        );
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("outside.txt"), "outside\n").expect("write off-path file");
+    std::fs::write(root.join(".gitattributes"), "outside.txt filter=demo\n")
+        .expect("write off-path attributes");
+    run_success(root, &["add", ".gitattributes", "outside.txt"]);
+    run_success(root, &["commit", "-m", "off-path filter target"]);
+    run_success(root, &["config", "filter.demo.clean", ""]);
+    run_success(root, &["config", "filter.demo.required", "true"]);
+    let outside_index = index_contents(root, "outside.txt");
+    make_index_racy(root);
+    assert_guarded_round_trip(
+        &repo,
+        PATCH.to_string(),
+        &outside_index,
+        "command-scoped clean",
+    );
+}
+
+#[test]
+fn apply_neutralizes_filter_activated_for_racy_offpath_by_same_patch() {
+    for (name, command) in [
+        ("clean", FILTER_COMMAND),
+        ("process", PROCESS_FILTER_COMMAND),
+    ] {
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("outside.txt"), "outside\n").expect("write off-path file");
+        std::fs::write(root.join(".gitattributes"), "outside.txt -filter\n")
+            .expect("write preimage attributes");
+        run_success(root, &["add", ".gitattributes", "outside.txt"]);
+        run_success(root, &["commit", "-m", "off-path filter preimage"]);
+
+        std::fs::write(root.join(".gitattributes"), "outside.txt filter=demo\n")
+            .expect("write postimage attributes");
+        let patch = build_patch(root, PatchKind::ThreeWay, &[".gitattributes", "file.txt"]);
+        configure_filter_command(root, "demo", name, command);
+        run_success(root, &["config", "filter.demo.required", "true"]);
+        let outside_index = index_contents(root, "outside.txt");
+        make_index_racy(root);
+
+        assert_guarded_round_trip(
+            &repo,
+            patch,
+            &outside_index,
+            &format!("dynamic off-path {name}"),
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".gitattributes")).expect("read restored attributes"),
+            "outside.txt -filter\n"
+        );
+    }
+}
+
+#[test]
+fn apply_still_refuses_clean_and_process_filters_selected_for_target() {
+    for (name, command) in [
+        ("clean", FILTER_COMMAND),
+        ("process", PROCESS_FILTER_COMMAND),
+    ] {
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join(".gitattributes"), "file.txt filter=demo\n")
+            .expect("write target attributes");
+        run_success(root, &["add", ".gitattributes"]);
+        run_success(root, &["commit", "-m", "target filter"]);
+        configure_filter_command(root, "demo", name, command);
+        run_success(root, &["config", "filter.demo.required", "true"]);
+
+        let error = apply_git_patch(&request(
+            root, /*revert*/ false, /*preflight*/ false,
+        ))
+        .expect_err("refuse selected target filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{name}");
+        assert!(!configured_filter_ran(root), "{name}");
+        assert_eq!(index_contents(root, "file.txt"), "orig\n", "{name}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("file.txt")).expect("read target"),
+            "orig\n",
+            "{name}"
+        );
+    }
 }

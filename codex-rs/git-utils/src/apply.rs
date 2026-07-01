@@ -55,7 +55,10 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
     let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
-    ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    let filter_guard =
+        ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    cfg_parts.extend(safe_git_config_parts());
+    cfg_parts.extend_from_slice(filter_guard.git_config_args());
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
@@ -67,8 +70,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     if req.revert {
         args.push("-R".into());
     }
-
-    cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
 

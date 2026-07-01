@@ -230,7 +230,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths = extract_effective_paths_from_patch(&git, &patch_path, /*revert*/ true)?;
     let _guard = tmpdir;
-    stage_effective_paths(&git, git_root, &paths, &[])
+    stage_effective_paths(&git, git_root, &paths, &safe_git_config_parts())
 }
 
 pub(crate) fn stage_effective_paths(
@@ -261,9 +261,7 @@ pub(crate) fn stage_effective_paths(
         "--".to_string(),
     ];
     args.extend(existing);
-    let mut config_parts = git_config_args.to_vec();
-    config_parts.extend(safe_git_config_parts());
-    let (_code, _, _) = run_git(git, git_root, &config_parts, &args)?;
+    let (_code, _, _) = run_git(git, git_root, git_config_args, &args)?;
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
     Ok(())
 }

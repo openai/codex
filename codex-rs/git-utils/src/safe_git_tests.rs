@@ -2,6 +2,7 @@ use super::*;
 use crate::git_config::GitConfigScope;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 #[test]
@@ -54,6 +55,47 @@ fn selected_filter_policy_allows_effective_empty_value() {
     assert_eq!(
         selected_executable_filter(&disabled, &selected).expect("empty filter policy"),
         None
+    );
+}
+
+#[test]
+fn filter_snapshot_retains_required_without_treating_it_as_executable() {
+    let mut entries = filter_entries(
+        GitConfigScope::Local,
+        Path::new("config"),
+        "filter.demo.smudge",
+        "smudge-command",
+    );
+    entries.extend(filter_entries(
+        GitConfigScope::Command,
+        Path::new("command line:"),
+        "filter.demo.required",
+        "true",
+    ));
+    assert_eq!(
+        executable_filter_drivers(&entries).expect("executable drivers"),
+        BTreeSet::from(["demo".to_string()])
+    );
+    let neutralization = GitFilterNeutralization {
+        git_config_args: Vec::new(),
+        _config_dir: None,
+        filter_config: entries,
+    };
+    assert_eq!(
+        neutralization.filter_value("demo", "required"),
+        Some("true")
+    );
+
+    let required_only = filter_entries(
+        GitConfigScope::Local,
+        Path::new("config"),
+        "filter.demo.required",
+        "true",
+    );
+    assert!(
+        executable_filter_drivers(&required_only)
+            .expect("required-only config")
+            .is_empty()
     );
 }
 
