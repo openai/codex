@@ -2,11 +2,14 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
 
 use crate::GitToolingError;
-
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+use crate::git_command::GitRunner;
+use crate::safe_git::DISABLED_HOOKS_PATH;
+#[cfg(test)]
+use crate::safe_git::isolate_git_command_environment;
 
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
@@ -110,16 +113,16 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
-    let mut command = Command::new("git");
+    let git = GitRunner::for_cwd_io(dir)?;
+    let mut command = git.command();
     command.current_dir(dir);
     if let Some(envs) = env {
         for (key, value) in envs {
             command.env(key, value);
         }
     }
-    command.envs(crate::local_only_git_env());
     command.args(&args_vec);
-    let output = command.output()?;
+    let output = git.output(command)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(GitToolingError::GitCommand {
@@ -149,4 +152,73 @@ fn build_command_string(args: &[OsString]) -> String {
 struct GitRun {
     command: String,
     output: std::process::Output,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let mut command = Command::new("git");
+        isolate_git_command_environment(&mut command);
+        let status = command
+            .args(["init", "-q"])
+            .current_dir(repo.path())
+            .status()
+            .expect("initialize repository");
+        assert!(status.success());
+        repo
+    }
+
+    #[test]
+    fn caller_env_cannot_restore_repository_or_pathspec_selectors() {
+        let target = init_repo();
+        let alternate = init_repo();
+        std::fs::write(target.path().join("target.txt"), "target\n").expect("target file");
+        std::fs::write(alternate.path().join("alternate.txt"), "alternate\n")
+            .expect("alternate file");
+        for (repo, path) in [(&target, "target.txt"), (&alternate, "alternate.txt")] {
+            let mut command = Command::new("git");
+            isolate_git_command_environment(&mut command);
+            let status = command
+                .args(["add", path])
+                .current_dir(repo.path())
+                .status()
+                .expect("add file");
+            assert!(status.success());
+        }
+
+        let alternate_git_dir = alternate.path().join(".git");
+        let env = [
+            (
+                OsString::from("GIT_DIR"),
+                alternate_git_dir.as_os_str().into(),
+            ),
+            (
+                OsString::from("GIT_WORK_TREE"),
+                alternate.path().as_os_str().into(),
+            ),
+            (
+                OsString::from("GIT_COMMON_DIR"),
+                alternate_git_dir.as_os_str().into(),
+            ),
+            (
+                OsString::from("GIT_INDEX_FILE"),
+                alternate_git_dir.join("index").into_os_string(),
+            ),
+            (OsString::from("GIT_PREFIX"), OsString::from("elsewhere/")),
+            (OsString::from("GIT_LITERAL_PATHSPECS"), OsString::from("1")),
+            (OsString::from("GIT_GLOB_PATHSPECS"), OsString::from("1")),
+            (OsString::from("GIT_NOGLOB_PATHSPECS"), OsString::from("1")),
+            (OsString::from("GIT_ICASE_PATHSPECS"), OsString::from("1")),
+            (
+                OsString::from("GIT_CONFIG"),
+                alternate_git_dir.join("config").into_os_string(),
+            ),
+        ];
+        let output = run_git_for_stdout(target.path(), ["ls-files"], Some(&env))
+            .expect("query cwd-selected index");
+        assert_eq!(output, "target.txt");
+    }
 }
