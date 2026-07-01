@@ -7,6 +7,7 @@ use std::process::Command;
 use crate::errors::GitReadError;
 use crate::git_config::path_is_within;
 use crate::safe_git::isolate_git_command_environment;
+use crate::safe_git::isolate_tokio_git_command_environment;
 
 /// A Git executable outside the repository-controlled roots for one operation.
 #[derive(Clone, Debug)]
@@ -34,10 +35,25 @@ impl GitRunner {
         Command::new(&self.executable)
     }
 
+    pub(crate) fn tokio_command(&self) -> tokio::process::Command {
+        tokio::process::Command::new(&self.executable)
+    }
+
     pub(crate) fn output(&self, mut command: Command) -> io::Result<std::process::Output> {
         isolate_git_command_environment(&mut command);
         command.envs(crate::local_only_git_env());
         command.output()
+    }
+
+    /// Spawn a configured Tokio command after applying the final
+    /// repository-selector environment lock.
+    pub(crate) async fn output_tokio(
+        &self,
+        mut command: tokio::process::Command,
+    ) -> io::Result<std::process::Output> {
+        isolate_tokio_git_command_environment(&mut command);
+        command.envs(crate::local_only_git_env());
+        command.output().await
     }
 
     fn from_search_path(
@@ -72,6 +88,11 @@ impl GitRunner {
             });
         }
         Err(GitReadError::NoTrustedGit)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn from_executable_for_test(executable: PathBuf) -> Self {
+        Self { executable }
     }
 }
 
