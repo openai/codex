@@ -285,6 +285,19 @@ pub async fn inter_agent_communication(
     sess.input_queue
         .enqueue_mailbox_communication(communication)
         .await;
+    if crate::agent_communication::logging_enabled() {
+        let communication_id = sub_id.clone();
+        let thread_id = sess.thread_id;
+        let time_provider = Arc::clone(&sess.services.simclock_time_provider);
+        sess.services.runtime_handle.spawn(async move {
+            let simclock_time =
+                crate::agent_communication::read_simclock_time(time_provider, thread_id).await;
+            crate::agent_communication::emit_agent_communication_receive(
+                &communication_id,
+                simclock_time,
+            );
+        });
+    }
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
