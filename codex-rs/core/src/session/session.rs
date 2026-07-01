@@ -557,6 +557,9 @@ impl Session {
                 .effective_agent_max_threads(MultiAgentVersion::V2)
                 .unwrap_or(usize::MAX),
         );
+        let simclock_time_provider: Arc<dyn TimeProvider> = external_time_provider
+            .clone()
+            .unwrap_or_else(|| Arc::new(crate::current_time::SystemTimeProvider));
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
             external_time_provider,
@@ -1094,6 +1097,7 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
+                simclock_time_provider,
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     if config.features.enabled(Feature::UseAgentIdentity) {
