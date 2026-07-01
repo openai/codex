@@ -55,11 +55,14 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
     let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
-    ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    let filter_guard =
+        ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    cfg_parts.extend(safe_git_config_parts());
+    cfg_parts.extend_from_slice(filter_guard.git_config_args());
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git, &git_root, &patch_paths)?;
+        stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
     }
 
     // Build git args
@@ -67,8 +70,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     if req.revert {
         args.push("-R".into());
     }
-
-    cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
 
@@ -256,6 +257,10 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
 mod transport_tests;
 
 #[cfg(test)]
+#[path = "apply_filter_tests.rs"]
+mod filter_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
@@ -371,6 +376,13 @@ mod tests {
         code == 0
     }
 
+    #[cfg(unix)]
+    fn trusted_git_directory() -> PathBuf {
+        std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
+            .find(|directory| directory.is_absolute() && directory.join("git").is_file())
+            .expect("trusted Git directory")
+    }
+
     #[test]
     fn parse_output_unescapes_quoted_paths() {
         let stderr = "error: patch failed: \"hello\\tworld.txt\":1\n";
@@ -451,6 +463,77 @@ mod tests {
         .expect("apply in cwd-selected repository");
         assert_eq!(result.exit_code, 0);
         assert_eq!(read_file_normalized(&root.join("file.txt")), "new\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_uses_logical_process_cwd_to_reject_enclosing_git() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_CHILD").is_none() {
+            let fixture = tempfile::tempdir().expect("fixture");
+            let outer = fixture.path().join("outer");
+            let physical_nested = fixture.path().join("physical-nested");
+            let lexical_nested = outer.join("nested");
+            let outer_bin = outer.join("bin");
+            let outer_git = outer_bin.join("git");
+            let marker = outer_bin.join("git.ran");
+            std::fs::create_dir_all(&outer_bin).expect("outer Git directory");
+            std::fs::create_dir_all(&physical_nested).expect("physical nested repository");
+            let (outer_init, _, outer_err) = run(&outer, &["git", "init", "-q"]);
+            assert_eq!(outer_init, 0, "init outer repository: {outer_err}");
+            let (nested_init, _, nested_err) = run(&physical_nested, &["git", "init", "-q"]);
+            assert_eq!(nested_init, 0, "init nested repository: {nested_err}");
+            std::os::unix::fs::symlink(&physical_nested, &lexical_nested)
+                .expect("symlink nested repository");
+            std::fs::write(&outer_git, "#!/bin/sh\nprintf ran >\"$0.ran\"\nexit 1\n")
+                .expect("outer Git shim");
+            let mut permissions = std::fs::metadata(&outer_git)
+                .expect("outer Git metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&outer_git, permissions).expect("executable outer Git");
+            let path = std::env::join_paths([outer_bin, trusted_git_directory()]).expect("PATH");
+
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test binary"));
+            isolate_git_command_environment(&mut command);
+            let output = command
+                .arg("apply::tests::apply_uses_logical_process_cwd_to_reject_enclosing_git")
+                .arg("--exact")
+                .arg("--nocapture")
+                .current_dir(&lexical_nested)
+                .env("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_CHILD", "1")
+                .env("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_MARKER", &marker)
+                .env("PWD", &lexical_nested)
+                .env("PATH", path)
+                .env("RUST_TEST_THREADS", "1")
+                .output()
+                .expect("run isolated logical-cwd test");
+            assert!(
+                output.status.success(),
+                "isolated logical-cwd test failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!marker.exists(), "enclosing Git shim must not run");
+            return;
+        }
+
+        let cwd = std::env::current_dir().expect("physical process cwd");
+        let marker = PathBuf::from(
+            std::env::var_os("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_MARKER").expect("marker path"),
+        );
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd,
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: true,
+        })
+        .expect("preflight through trusted Git");
+        assert_eq!(result.exit_code, 0, "preflight should succeed");
+        assert!(!marker.exists(), "enclosing Git shim must not run");
     }
 
     #[test]

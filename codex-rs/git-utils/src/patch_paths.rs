@@ -231,23 +231,29 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths = extract_effective_paths_from_patch(&git, &patch_path, /*revert*/ true)?;
     let _guard = tmpdir;
-    stage_effective_paths(&git, git_root, &paths)
+    stage_effective_paths(&git, git_root, &paths, &safe_git_config_parts())
 }
 
 pub(crate) fn stage_effective_paths(
     git: &GitRunner,
     git_root: &Path,
     paths: &[String],
+    git_config_args: &[String],
 ) -> io::Result<()> {
     let confined = confine_patch_paths(git, git_root, paths)?;
     let mut existing = Vec::new();
+    let mut content_filter_paths = Vec::new();
     for path in confined.into_exact_leaves()? {
         let joined = git_root.join(&path);
         if let Ok(metadata) = std::fs::symlink_metadata(&joined) {
-            if leaf_is_traversable_directory(metadata.file_type()) {
+            let file_type = metadata.file_type();
+            if leaf_is_traversable_directory(file_type) {
                 return Err(containment_error(
                     "refusing to recursively stage a directory patch path",
                 ));
+            }
+            if leaf_may_run_git_content_filter(file_type) {
+                content_filter_paths.push(path.clone());
             }
             existing.push(path);
         }
@@ -255,15 +261,17 @@ pub(crate) fn stage_effective_paths(
     if existing.is_empty() {
         return Ok(());
     }
-    ensure_no_selected_git_add_filters(git, git_root, &existing, &[])?;
+    let filter_guard =
+        ensure_no_selected_git_add_filters(git, git_root, &content_filter_paths, git_config_args)?;
     let mut args = vec![
         "--literal-pathspecs".to_string(),
         "add".to_string(),
         "--".to_string(),
     ];
     args.extend(existing);
-    let config_parts = safe_git_config_parts();
-    let (_code, _, _) = run_git(git, git_root, &config_parts, &args)?;
+    let mut guarded_config = git_config_args.to_vec();
+    guarded_config.extend_from_slice(filter_guard.git_config_args());
+    let (_code, _, _) = run_git(git, git_root, &guarded_config, &args)?;
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
     Ok(())
 }
@@ -271,6 +279,21 @@ pub(crate) fn stage_effective_paths(
 #[cfg(not(windows))]
 fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     file_type.is_dir()
+}
+
+#[cfg(unix)]
+fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
+    // Git stages an exact Unix symlink as a mode-120000 blob containing the
+    // link target. The whole-command neutralizer covers unrelated racy index
+    // entries while this target is omitted from the selected-filter refusal.
+    !file_type.is_symlink()
+}
+
+#[cfg(not(unix))]
+fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
+    // Keep the conservative policy on platforms whose symlink staging
+    // behavior can depend on repository and host configuration.
+    true
 }
 
 #[cfg(windows)]

@@ -6,6 +6,7 @@ use crate::git_config::GitConfigScope;
 use crate::patch_paths::stage_paths;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::ffi::OsStr;
 use std::path::Path;
@@ -91,18 +92,69 @@ fn git_add_filter_policy_rejects_clean_and_process_but_allows_smudge_only() {
 }
 
 #[test]
+fn filter_snapshot_retains_required_without_treating_it_as_executable() {
+    let mut entries = filter_entries(
+        GitConfigScope::Local,
+        Path::new("config"),
+        "filter.demo.smudge",
+        "smudge-command",
+    );
+    entries.extend(filter_entries(
+        GitConfigScope::Command,
+        Path::new("command line:"),
+        "filter.demo.required",
+        "true",
+    ));
+    assert_eq!(
+        executable_filter_drivers(&entries).expect("executable drivers"),
+        BTreeSet::from(["demo".to_string()])
+    );
+    let neutralization = GitFilterNeutralization {
+        git_config_args: Vec::new(),
+        _config_dir: None,
+        filter_config: entries,
+    };
+    assert_eq!(
+        neutralization.filter_value("demo", "required"),
+        Some("true")
+    );
+
+    let required_only = filter_entries(
+        GitConfigScope::Local,
+        Path::new("config"),
+        "filter.demo.required",
+        "true",
+    );
+    assert!(
+        executable_filter_drivers(&required_only)
+            .expect("required-only config")
+            .is_empty()
+    );
+}
+
+#[test]
+fn filter_driver_parser_accepts_empty_name() {
+    assert_eq!(
+        filter_driver_name("filter..clean").expect("empty filter name"),
+        ""
+    );
+}
+
+#[test]
 fn filter_attribute_parser_rejects_malformed_or_unexpected_records() {
     let paths = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
     let parsed =
         parse_filter_attributes(b"a.txt\0filter\0unspecified\0b.txt\0filter\0lfs\0", &paths)
             .expect("parse attributes");
     assert_eq!(
-        parsed.get(b"a.txt".as_slice()).map(String::as_str),
-        Some("unspecified")
+        parsed.get(b"a.txt".as_slice()),
+        Some(&FilterAttributeValue::AmbiguousSentinel(
+            "unspecified".to_string()
+        ))
     );
     assert_eq!(
-        parsed.get(b"b.txt".as_slice()).map(String::as_str),
-        Some("lfs")
+        parsed.get(b"b.txt".as_slice()),
+        Some(&FilterAttributeValue::Driver("lfs".to_string()))
     );
 
     for output in [
