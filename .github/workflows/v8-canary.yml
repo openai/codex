@@ -343,7 +343,7 @@ jobs:
           name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-x86_64-apple-darwin
           path: dist/x86_64-apple-darwin
 
-      - name: Smoke test staged artifact with Cargo
+      - name: Smoke test staged artifact and code-mode runtime
         env:
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: x86_64-apple-darwin
@@ -358,18 +358,20 @@ jobs:
             exit 1
           fi
 
-          cargo_args=(test -p codex-v8-poc)
-          if [[ "${SANDBOX}" == "true" ]]; then
-            cargo_args+=(--features sandbox)
-          fi
+          .github/scripts/smoke_macos_x86_v8.sh \
+            "${GITHUB_WORKSPACE}/${archive}" \
+            "${GITHUB_WORKSPACE}/${binding}" \
+            "${SANDBOX}" \
+            "${RUNNER_TEMP}/rusty-v8-cargo-smoke-${TARGET}-${SANDBOX}"
 
-          (
-            cd codex-rs
-            CARGO_TARGET_DIR="${RUNNER_TEMP}/rusty-v8-cargo-smoke-${TARGET}-${SANDBOX}" \
-            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
-            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
-            cargo "${cargo_args[@]}"
-          )
+      - name: Upload crash reports
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-x86_64-macos-crash-reports
+          path: ${{ runner.temp }}/rusty-v8-cargo-smoke-x86_64-apple-darwin-${{ matrix.sandbox }}/crash-reports/*
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Check for a clean worktree
         if: always() && !cancelled()

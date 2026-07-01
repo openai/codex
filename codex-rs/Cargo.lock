@@ -4427,7 +4427,11 @@ dependencies = [
 name = "codex-v8-poc"
 version = "0.0.0"
 dependencies = [
+ "codex-code-mode",
+ "codex-utils-rustls-provider",
  "pretty_assertions",
+ "rustls",
+ "tokio",
  "v8",
 ]
 

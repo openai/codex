@@ -18,5 +18,11 @@ workspace = true
 [dependencies]
 v8 = { workspace = true }
 
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+codex-code-mode = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }

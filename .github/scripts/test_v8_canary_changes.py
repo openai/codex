@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from v8_canary_changes import changed_files
+from v8_canary_changes import canary_required
 from v8_canary_changes import merge_base
 from v8_canary_changes import resolved_v8_version
 from v8_canary_changes import windows_source_required
@@ -55,6 +56,14 @@ version = "149.2.0"
                 force=True,
             )
         )
+
+    def test_runtime_smoke_changes_require_canary(self) -> None:
+        for path in (
+            ".github/scripts/smoke_macos_x86_v8.sh",
+            "codex-rs/v8-poc/examples/code_mode_runtime_smoke.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(canary_required({path}, "149.2.0", "149.2.0"))
 
     def test_changed_files_excludes_changes_made_only_on_base_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
