@@ -8,6 +8,7 @@ mod git_command;
 mod git_config;
 mod info;
 mod local_only;
+mod merge_driver;
 mod operations;
 mod patch_paths;
 mod platform;

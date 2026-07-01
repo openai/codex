@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
+use crate::merge_driver::ensure_no_selected_merge_drivers;
 use crate::patch_paths::extract_effective_paths_from_patch;
 use crate::patch_paths::stage_effective_paths;
 use crate::safe_git::DISABLED_HOOKS_PATH;
@@ -57,20 +58,8 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
     ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
 
-    if req.revert && !req.preflight {
-        // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git, &git_root, &patch_paths)?;
-    }
-
-    // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
-    if req.revert {
-        args.push("-R".into());
-    }
-
     cfg_parts.extend(safe_git_config_parts());
-
-    args.push(patch_path.to_string_lossy().to_string());
+    let patch_arg = patch_path.to_string_lossy().to_string();
 
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
@@ -78,7 +67,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         if req.revert {
             check_args.push("-R".to_string());
         }
-        check_args.push(patch_path.to_string_lossy().to_string());
+        check_args.push(patch_arg);
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
         let (c_code, c_out, c_err) = run_git(&git, &git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
@@ -99,6 +88,35 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
             cmd_for_log: rendered,
         });
     }
+
+    // Avoid three-way machinery entirely when the patch applies cleanly.
+    // A selected merge driver is relevant only to the three-way fallback.
+    let mut plain_check_args = vec![
+        "apply".to_string(),
+        "--check".to_string(),
+        "--index".to_string(),
+    ];
+    if req.revert {
+        plain_check_args.push("-R".to_string());
+    }
+    plain_check_args.push(patch_arg.clone());
+    let (plain_check_code, _, _) = run_git(&git, &git_root, &cfg_parts, &plain_check_args)?;
+
+    let mut args = vec!["apply".to_string()];
+    if plain_check_code != 0 {
+        ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
+        if req.revert {
+            // Stage WT paths first to avoid index mismatch on three-way revert.
+            stage_effective_paths(&git, &git_root, &patch_paths)?;
+        }
+        args.push("--3way".to_string());
+    } else {
+        args.push("--index".to_string());
+    }
+    if req.revert {
+        args.push("-R".to_string());
+    }
+    args.push(patch_arg);
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
     let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
