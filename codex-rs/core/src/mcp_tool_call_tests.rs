@@ -398,21 +398,45 @@ fn approval_not_required_when_read_only_and_other_hints_are_absent() {
 }
 
 #[test]
-fn prompt_mode_does_not_allow_persistent_remember() {
+fn writes_mode_requires_approval_for_non_read_only_tools() {
+    let annotations = annotations(Some(false), Some(false), Some(false));
     assert_eq!(
-        normalize_approval_decision_for_mode(
-            McpToolApprovalDecision::AcceptForSession,
-            AppToolApproval::Prompt,
-        ),
-        McpToolApprovalDecision::Accept
+        requires_mcp_tool_approval_for_mode(Some(&annotations), AppToolApproval::Writes),
+        true
     );
     assert_eq!(
-        normalize_approval_decision_for_mode(
-            McpToolApprovalDecision::AcceptAndRemember,
-            AppToolApproval::Prompt,
-        ),
-        McpToolApprovalDecision::Accept
+        requires_mcp_tool_approval_for_mode(/*annotations*/ None, AppToolApproval::Writes),
+        true
     );
+}
+
+#[test]
+fn writes_mode_does_not_require_approval_for_read_only_tools() {
+    let annotations = annotations(Some(true), Some(true), Some(true));
+    assert_eq!(
+        requires_mcp_tool_approval_for_mode(Some(&annotations), AppToolApproval::Writes),
+        false
+    );
+}
+
+#[test]
+fn prompting_modes_do_not_allow_persistent_remember() {
+    for approval_mode in [AppToolApproval::Prompt, AppToolApproval::Writes] {
+        assert_eq!(
+            normalize_approval_decision_for_mode(
+                McpToolApprovalDecision::AcceptForSession,
+                approval_mode,
+            ),
+            McpToolApprovalDecision::Accept
+        );
+        assert_eq!(
+            normalize_approval_decision_for_mode(
+                McpToolApprovalDecision::AcceptAndRemember,
+                approval_mode,
+            ),
+            McpToolApprovalDecision::Accept
+        );
+    }
 }
 
 #[tokio::test]
