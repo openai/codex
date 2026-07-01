@@ -229,6 +229,44 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
+async fn skills_for_config_keeps_repo_root_discovery_with_snapshot_cache_lifecycle() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_service = SkillsService::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let outcome1 =
+        skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
+    let repo_skill_dir = cwd.path().join(".agents/skills/repo");
+    fs::create_dir_all(&repo_skill_dir).expect("create repo skill dir");
+    fs::write(
+        repo_skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: repo description\n---\n\n# Body\n",
+    )
+    .expect("write repo skill");
+
+    let outcome2 =
+        skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
+    assert_eq!(outcome2.errors, outcome1.errors);
+    assert_eq!(outcome2.skills, outcome1.skills);
+
+    skills_service.clear_cache();
+
+    let outcome3 =
+        skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
+    assert!(
+        outcome3
+            .skills
+            .iter()
+            .any(|skill| skill.name == "repo-skill"),
+        "expected repo-skill after clearing the snapshot cache"
+    );
+}
+
+#[tokio::test]
 async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
