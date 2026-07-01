@@ -4,6 +4,7 @@ use std::io;
 use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
@@ -15,6 +16,63 @@ use crate::git_config::parse_effective_config_with_origins;
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
 
+#[derive(Debug)]
+pub(crate) struct GitConfigOverrideFile {
+    git_config_args: [String; 2],
+    config_path: PathBuf,
+    _config_dir: tempfile::TempDir,
+}
+
+impl GitConfigOverrideFile {
+    pub(crate) fn new(file_name: &str) -> io::Result<Self> {
+        let config_dir = tempfile::tempdir()?;
+        let config_path = config_dir.path().join(file_name);
+        std::fs::write(&config_path, [])?;
+        let config_path_arg = config_path.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "non-UTF-8 Git config override path",
+            )
+        })?;
+        Ok(Self {
+            git_config_args: ["-c".to_string(), format!("include.path={config_path_arg}")],
+            config_path,
+            _config_dir: config_dir,
+        })
+    }
+
+    pub(crate) fn git_config_args(&self) -> &[String] {
+        &self.git_config_args
+    }
+
+    pub(crate) fn add_value(
+        &self,
+        git: &GitRunner,
+        cwd: &Path,
+        key: &str,
+        value: &str,
+        description: &str,
+    ) -> io::Result<()> {
+        let mut command = git.command();
+        command
+            .args(["config", "--file"])
+            .arg(&self.config_path)
+            .arg("--add")
+            .arg(key)
+            .arg(value)
+            .current_dir(cwd);
+        let output = git.output(command)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "failed to write {description} (status {}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FilterAttributeValue {
     Driver(String),
@@ -22,18 +80,15 @@ enum FilterAttributeValue {
 }
 
 pub(crate) struct GitFilterNeutralization {
-    git_config_args: Vec<String>,
-    _config_dir: Option<tempfile::TempDir>,
-    filter_config: BTreeMap<String, GitConfigEntry>,
+    config_override: Option<GitConfigOverrideFile>,
 }
 
 impl GitFilterNeutralization {
     pub(crate) fn git_config_args(&self) -> &[String] {
-        &self.git_config_args
-    }
-
-    pub(crate) fn filter_value(&self, driver: &str, name: &str) -> Option<&str> {
-        effective_filter_value(&self.filter_config, driver, name)
+        self.config_override
+            .as_ref()
+            .map(GitConfigOverrideFile::git_config_args)
+            .unwrap_or_default()
     }
 }
 
@@ -109,9 +164,7 @@ fn ensure_no_selected_executable_git_filters_for(
     };
     if target_drivers.is_empty() {
         return Ok(GitFilterNeutralization {
-            git_config_args: Vec::new(),
-            _config_dir: None,
-            filter_config: entries,
+            config_override: None,
         });
     }
     let paths = paths
@@ -138,9 +191,7 @@ fn ensure_no_selected_executable_git_filters_for(
     }
     if neutralized_drivers.is_empty() {
         return Ok(GitFilterNeutralization {
-            git_config_args: Vec::new(),
-            _config_dir: None,
-            filter_config: entries,
+            config_override: None,
         });
     }
     executable_filter_guard(git, cwd, entries, &neutralized_drivers)
@@ -152,62 +203,33 @@ fn executable_filter_guard(
     filter_config: BTreeMap<String, GitConfigEntry>,
     executable_drivers: &BTreeSet<String>,
 ) -> io::Result<GitFilterNeutralization> {
-    let config_dir = tempfile::tempdir()?;
-    let config_path = config_dir.path().join("filter-neutralization.gitconfig");
-    std::fs::write(&config_path, [])?;
-    let guard = GitFilterNeutralization {
-        git_config_args: vec![
-            "-c".to_string(),
-            format!(
-                "include.path={}",
-                config_path
-                    .to_str()
-                    .ok_or_else(|| invalid_filter_output("non-UTF-8 filter guard path"))?
-            ),
-        ],
-        _config_dir: Some(config_dir),
-        filter_config,
-    };
+    let config_override = GitConfigOverrideFile::new("filter-neutralization.gitconfig")?;
     for driver in executable_drivers {
         debug_assert!(["clean", "smudge", "process"].into_iter().any(|name| {
-            guard
-                .filter_value(driver, name)
+            effective_filter_value(&filter_config, driver, name)
                 .is_some_and(|value| !value.is_empty())
         }));
+        let description = format!("Git filter neutralization for {driver:?}");
         for command in ["clean", "smudge", "process"] {
-            guard.write_config_value(git, cwd, &config_path, driver, command, "")?;
+            config_override.add_value(
+                git,
+                cwd,
+                &format!("filter.{driver}.{command}"),
+                "",
+                &description,
+            )?;
         }
-        guard.write_config_value(git, cwd, &config_path, driver, "required", "false")?;
+        config_override.add_value(
+            git,
+            cwd,
+            &format!("filter.{driver}.required"),
+            "false",
+            &description,
+        )?;
     }
-    Ok(guard)
-}
-
-impl GitFilterNeutralization {
-    fn write_config_value(
-        &self,
-        git: &GitRunner,
-        cwd: &Path,
-        config_path: &Path,
-        driver: &str,
-        name: &str,
-        value: &str,
-    ) -> io::Result<()> {
-        let mut command = git.command();
-        command
-            .args(["config", "--file"])
-            .arg(config_path)
-            .args(["--add", &format!("filter.{driver}.{name}"), value])
-            .current_dir(cwd);
-        let output = git.output(command)?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "failed to write Git filter neutralization for {driver:?} (status {}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
-    }
+    Ok(GitFilterNeutralization {
+        config_override: Some(config_override),
+    })
 }
 
 #[derive(Clone, Copy)]

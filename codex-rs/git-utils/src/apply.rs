@@ -90,13 +90,14 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         });
     }
 
-    // Avoid three-way machinery entirely when the patch applies cleanly.
-    // A selected merge driver is relevant only to the three-way fallback.
-    let mut plain_check_args = vec![
-        "apply".to_string(),
-        "--check".to_string(),
-        "--index".to_string(),
-    ];
+    // Avoid three-way machinery entirely when the patch applies cleanly. A
+    // reverse check must inspect the working tree before staging: requiring
+    // the old index to match would misclassify a clean undo as a three-way
+    // fallback. Forward direct application still requires index agreement.
+    let mut plain_check_args = vec!["apply".to_string(), "--check".to_string()];
+    if !req.revert {
+        plain_check_args.push("--index".to_string());
+    }
     if req.revert {
         plain_check_args.push("-R".to_string());
     }
@@ -104,15 +105,21 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let (plain_check_code, _, _) = run_git(&git, &git_root, &cfg_parts, &plain_check_args)?;
 
     let mut args = vec!["apply".to_string()];
-    if plain_check_code != 0 {
-        ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
-        if req.revert {
-            // Stage WT paths first to avoid index mismatch on three-way revert.
-            stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
+    let merge_guard = if plain_check_code != 0 {
+        let guard = ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
+        if let Some(guard) = &guard {
+            cfg_parts.extend_from_slice(guard.git_config_args());
         }
         args.push("--3way".to_string());
+        guard
     } else {
         args.push("--index".to_string());
+        None
+    };
+    if req.revert {
+        // Stage only after the worktree-only applicability decision. The
+        // guarded config is shared with the final Git command.
+        stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
     }
     if req.revert {
         args.push("-R".to_string());
@@ -121,6 +128,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
     let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
+    drop(merge_guard);
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);

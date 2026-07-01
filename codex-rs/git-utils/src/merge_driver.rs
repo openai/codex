@@ -8,6 +8,7 @@ use std::process::Stdio;
 
 use crate::git_command::GitRunner;
 use crate::git_config::GitConfigEntry;
+use crate::safe_git::GitConfigOverrideFile;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
 use crate::safe_git::read_effective_config_with_fallback;
@@ -19,7 +20,7 @@ pub(crate) fn ensure_no_selected_merge_drivers(
     cwd: &Path,
     paths: &[String],
     git_config_args: &[String],
-) -> io::Result<()> {
+) -> io::Result<Option<GitConfigOverrideFile>> {
     let entries = read_merge_config(git, cwd, git_config_args)?;
     let attributes = read_merge_attributes(git, cwd, paths, git_config_args)?;
     if let Some((driver, path)) = untrusted_driver_selection(&entries, &attributes)? {
@@ -30,7 +31,27 @@ pub(crate) fn ensure_no_selected_merge_drivers(
             ),
         ));
     }
-    Ok(())
+
+    let driver_keys = entries
+        .values()
+        .filter(|entry| entry.key != "merge.default" && !entry.value.is_empty())
+        .map(|entry| entry.key.clone())
+        .collect::<Vec<_>>();
+    if driver_keys.is_empty() {
+        return Ok(None);
+    }
+
+    let guard = GitConfigOverrideFile::new("merge-driver-neutralization.gitconfig")?;
+    for key in driver_keys {
+        guard.add_value(
+            git,
+            cwd,
+            &key,
+            "",
+            &format!("Git merge-driver neutralization for {key:?}"),
+        )?;
+    }
+    Ok(Some(guard))
 }
 
 fn read_merge_config(
@@ -176,3 +197,7 @@ fn invalid_config_entry(message: &str) -> io::Error {
 #[cfg(test)]
 #[path = "merge_driver_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "merge_driver_race_tests.rs"]
+mod race_tests;
