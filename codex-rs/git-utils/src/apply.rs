@@ -59,7 +59,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git, &git_root, &patch_paths)?;
+        stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
     }
 
     // Build git args
@@ -254,6 +254,10 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "apply_filter_tests.rs"]
+mod filter_tests;
 
 #[cfg(test)]
 mod tests {

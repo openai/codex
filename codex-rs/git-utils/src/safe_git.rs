@@ -15,6 +15,12 @@ use crate::git_config::parse_effective_config_with_origins;
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FilterAttributeValue {
+    Driver(String),
+    AmbiguousSentinel(String),
+}
+
 const ISOLATED_GIT_ENVIRONMENT: [&str; 11] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -49,14 +55,16 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
     git_config_args: &[String],
 ) -> io::Result<()> {
     let entries = read_filter_config(git, cwd, git_config_args)?;
-    if !entries.values().any(|entry| !entry.value.is_empty()) {
+    let executable_drivers = executable_filter_drivers(&entries)?;
+    if executable_drivers.is_empty() {
         return Ok(());
     }
     let paths = paths
         .iter()
         .map(|path| path.as_bytes().to_vec())
         .collect::<Vec<_>>();
-    let attributes = read_filter_attributes(git, cwd, &paths, git_config_args)?;
+    let attributes =
+        read_filter_attributes(git, cwd, &paths, git_config_args, &executable_drivers)?;
     if let Some((driver, path)) = selected_executable_filter(&entries, &attributes)? {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -147,6 +155,7 @@ fn read_filter_attributes(
     cwd: &Path,
     paths: &[Vec<u8>],
     git_config_args: &[String],
+    executable_drivers: &BTreeSet<String>,
 ) -> io::Result<BTreeMap<Vec<u8>, String>> {
     if paths.is_empty() {
         return Ok(BTreeMap::new());
@@ -179,13 +188,149 @@ fn read_filter_attributes(
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    parse_filter_attributes(&output.stdout, paths)
+    let attributes = parse_filter_attributes(&output.stdout, paths)?;
+    resolve_filter_attribute_sentinels(git, cwd, attributes, git_config_args, executable_drivers)
+}
+
+fn resolve_filter_attribute_sentinels(
+    git: &GitRunner,
+    cwd: &Path,
+    attributes: BTreeMap<Vec<u8>, FilterAttributeValue>,
+    git_config_args: &[String],
+    executable_drivers: &BTreeSet<String>,
+) -> io::Result<BTreeMap<Vec<u8>, String>> {
+    let mut resolved = BTreeMap::new();
+    for (path, attribute) in attributes {
+        match attribute {
+            FilterAttributeValue::Driver(driver) => {
+                resolved.insert(path, driver);
+            }
+            FilterAttributeValue::AmbiguousSentinel(driver) => {
+                if executable_drivers.contains(&driver)
+                    && sentinel_spelling_selects_filter_driver(
+                        git,
+                        cwd,
+                        &path,
+                        &driver,
+                        git_config_args,
+                    )?
+                {
+                    resolved.insert(path, driver);
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// `git check-attr` serializes both its three special states and literal
+/// driver names with the same `set`, `unset`, and `unspecified` strings. Ask
+/// Git to resolve the ambiguity with every command for that driver overridden
+/// to empty. A required literal driver fails while a special state succeeds.
+/// Retrying with the driver optional distinguishes that expected failure from
+/// an unrelated probe error. No filter process or shell is started.
+fn sentinel_spelling_selects_filter_driver(
+    git: &GitRunner,
+    cwd: &Path,
+    path: &[u8],
+    driver: &str,
+    git_config_args: &[String],
+) -> io::Result<bool> {
+    let required = run_sentinel_selection_probe(
+        git,
+        cwd,
+        path,
+        driver,
+        git_config_args,
+        /*required*/ true,
+    )?;
+    if required.status.success() {
+        return Ok(false);
+    }
+    let optional = run_sentinel_selection_probe(
+        git,
+        cwd,
+        path,
+        driver,
+        git_config_args,
+        /*required*/ false,
+    )?;
+    if optional.status.success() {
+        return Ok(true);
+    }
+    Err(io::Error::other(format!(
+        "git filter attribute selection probe failed with required status {} and optional status {}: {}",
+        required.status,
+        optional.status,
+        String::from_utf8_lossy(&optional.stderr).trim()
+    )))
+}
+
+fn run_sentinel_selection_probe(
+    git: &GitRunner,
+    cwd: &Path,
+    path: &[u8],
+    driver: &str,
+    git_config_args: &[String],
+    required: bool,
+) -> io::Result<std::process::Output> {
+    let mut command = git.command();
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(git_config_args)
+        .args([
+            "-c",
+            &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            &format!("filter.{driver}.required={required}"),
+            "-c",
+            &format!("filter.{driver}.clean="),
+            "-c",
+            &format!("filter.{driver}.smudge="),
+            "-c",
+            &format!("filter.{driver}.process="),
+            "hash-object",
+            "--stdin",
+        ])
+        .arg("--path")
+        .arg(git_path_argument(path)?)
+        .current_dir(cwd)
+        .stdin(Stdio::null());
+    git.output(command)
+}
+
+#[cfg(unix)]
+fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
+    use std::os::unix::ffi::OsStringExt;
+
+    Ok(std::ffi::OsString::from_vec(path.to_vec()))
+}
+
+#[cfg(not(unix))]
+fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
+    let path = std::str::from_utf8(path)
+        .map_err(|_| invalid_filter_output("non-UTF-8 Git filter attribute path"))?;
+    Ok(path.into())
 }
 
 fn selected_executable_filter(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<Vec<u8>, String>,
 ) -> io::Result<Option<(String, Vec<u8>)>> {
+    let executable_drivers = executable_filter_drivers(entries)?;
+    for (path, driver) in attributes {
+        if executable_drivers.contains(driver) {
+            return Ok(Some((driver.clone(), path.clone())));
+        }
+    }
+    Ok(None)
+}
+
+fn executable_filter_drivers(
+    entries: &BTreeMap<String, GitConfigEntry>,
+) -> io::Result<BTreeSet<String>> {
     let mut executable_drivers = BTreeSet::new();
     for entry in entries.values() {
         let driver = filter_driver_name(&entry.key)?;
@@ -193,12 +338,7 @@ fn selected_executable_filter(
             executable_drivers.insert(driver);
         }
     }
-    for (path, driver) in attributes {
-        if executable_drivers.contains(driver) {
-            return Ok(Some((driver.clone(), path.clone())));
-        }
-    }
-    Ok(None)
+    Ok(executable_drivers)
 }
 
 fn filter_driver_name(key: &str) -> io::Result<String> {
@@ -208,7 +348,6 @@ fn filter_driver_name(key: &str) -> io::Result<String> {
     let driver = [".clean", ".smudge", ".process"]
         .into_iter()
         .find_map(|suffix| remainder.strip_suffix(suffix))
-        .filter(|driver| !driver.is_empty())
         .ok_or_else(|| invalid_filter_output("malformed filter config key"))?;
     Ok(driver.to_string())
 }
@@ -230,7 +369,7 @@ fn write_nul_paths(input: &mut std::fs::File, paths: &[Vec<u8>]) -> io::Result<(
 fn parse_filter_attributes(
     output: &[u8],
     expected_paths: &[Vec<u8>],
-) -> io::Result<BTreeMap<Vec<u8>, String>> {
+) -> io::Result<BTreeMap<Vec<u8>, FilterAttributeValue>> {
     let expected = expected_paths
         .iter()
         .map(Vec::as_slice)
@@ -258,10 +397,13 @@ fn parse_filter_attributes(
         }
         let driver = std::str::from_utf8(record[2])
             .map_err(|_| invalid_filter_output("non-UTF-8 Git filter attribute value"))?;
-        if attributes
-            .insert(record[0].to_vec(), driver.to_string())
-            .is_some()
-        {
+        let value = match driver {
+            "set" | "unset" | "unspecified" => {
+                FilterAttributeValue::AmbiguousSentinel(driver.to_string())
+            }
+            _ => FilterAttributeValue::Driver(driver.to_string()),
+        };
+        if attributes.insert(record[0].to_vec(), value).is_some() {
             return Err(invalid_filter_output(
                 "duplicate Git filter attribute record",
             ));

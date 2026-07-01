@@ -58,18 +58,28 @@ fn selected_filter_policy_allows_effective_empty_value() {
 }
 
 #[test]
+fn filter_driver_parser_accepts_empty_name() {
+    assert_eq!(
+        filter_driver_name("filter..clean").expect("empty filter name"),
+        ""
+    );
+}
+
+#[test]
 fn filter_attribute_parser_rejects_malformed_or_unexpected_records() {
     let paths = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
     let parsed =
         parse_filter_attributes(b"a.txt\0filter\0unspecified\0b.txt\0filter\0lfs\0", &paths)
             .expect("parse attributes");
     assert_eq!(
-        parsed.get(b"a.txt".as_slice()).map(String::as_str),
-        Some("unspecified")
+        parsed.get(b"a.txt".as_slice()),
+        Some(&FilterAttributeValue::AmbiguousSentinel(
+            "unspecified".to_string()
+        ))
     );
     assert_eq!(
-        parsed.get(b"b.txt".as_slice()).map(String::as_str),
-        Some("lfs")
+        parsed.get(b"b.txt".as_slice()),
+        Some(&FilterAttributeValue::Driver("lfs".to_string()))
     );
 
     for output in [
