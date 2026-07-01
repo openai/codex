@@ -16,7 +16,7 @@ pub(crate) struct GitRunner {
 
 struct UntrustedGitLocations {
     roots: Vec<PathBuf>,
-    common_dir: Option<PathBuf>,
+    common_dirs: Vec<PathBuf>,
 }
 
 impl GitRunner {
@@ -76,25 +76,110 @@ impl GitRunner {
 }
 
 fn untrusted_git_locations_for_cwd(cwd: &Path) -> Result<UntrustedGitLocations, GitReadError> {
+    let lexical_cwd = if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| GitReadError::NotRepository {
+                path: cwd.to_path_buf(),
+            })?
+            .join(cwd)
+    };
     let canonical_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
         path: cwd.to_path_buf(),
     })?;
     let worktree_root = crate::get_git_repo_root(&canonical_cwd)
         .and_then(|root| std::fs::canonicalize(root).ok())
         .unwrap_or_else(|| canonical_cwd.clone());
-    let mut roots = vec![worktree_root.clone()];
+    let mut locations = UntrustedGitLocations {
+        roots: Vec::new(),
+        common_dirs: Vec::new(),
+    };
+    record_repository_ancestry(&worktree_root, &mut locations)?;
+
+    // Canonicalization can erase a repository-controlled symlink prefix. Walk
+    // the requested spelling too, deliberately retaining symlink and `..`
+    // components so every lexical enclosing checkout remains untrusted.
+    let lexical_base = if lexical_cwd.is_dir() {
+        lexical_cwd
+    } else {
+        lexical_cwd
+            .parent()
+            .ok_or_else(|| GitReadError::NotRepository {
+                path: cwd.to_path_buf(),
+            })?
+            .to_path_buf()
+    };
+    record_repository_ancestry(&lexical_base, &mut locations)?;
+
+    // Callers commonly obtain their default cwd from `current_dir()`, which
+    // can already have erased a symlink spelling. Recover the standard logical
+    // process cwd only when it is absolute and resolves to both the requested
+    // cwd and the process cwd. Treating extra roots as untrusted cannot widen
+    // executable selection.
+    if let Some(logical_cwd) = validated_logical_process_cwd(&canonical_cwd) {
+        record_repository_ancestry(&logical_cwd, &mut locations)?;
+    }
+    Ok(locations)
+}
+
+fn validated_logical_process_cwd(canonical_cwd: &Path) -> Option<PathBuf> {
+    let process_cwd = std::fs::canonicalize(std::env::current_dir().ok()?).ok()?;
+    if !paths_equal(&process_cwd, canonical_cwd) {
+        return None;
+    }
+    let logical_cwd = PathBuf::from(std::env::var_os("PWD")?);
+    if !logical_cwd.is_absolute() {
+        return None;
+    }
+    let canonical_logical_cwd = std::fs::canonicalize(&logical_cwd).ok()?;
+    paths_equal(&canonical_logical_cwd, canonical_cwd).then_some(logical_cwd)
+}
+
+fn record_repository_ancestry(
+    start: &Path,
+    locations: &mut UntrustedGitLocations,
+) -> Result<(), GitReadError> {
+    push_unique(&mut locations.roots, start.to_path_buf());
+    record_repository_marker(start, locations)?;
+    for ancestor in start.parent().into_iter().flat_map(Path::ancestors) {
+        let dot_git = ancestor.join(".git");
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(_) => {
+                push_unique(&mut locations.roots, ancestor.to_path_buf());
+                let canonical_root =
+                    std::fs::canonicalize(ancestor).map_err(|_| GitReadError::NoTrustedGit)?;
+                push_unique(&mut locations.roots, canonical_root.clone());
+                record_repository_marker(ancestor, locations)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(GitReadError::NoTrustedGit),
+        }
+    }
+    Ok(())
+}
+
+fn record_repository_marker(
+    worktree_root: &Path,
+    locations: &mut UntrustedGitLocations,
+) -> Result<(), GitReadError> {
     let dot_git = worktree_root.join(".git");
     let common_dir = match std::fs::symlink_metadata(&dot_git) {
-        Ok(_) => Some(resolve_common_git_dir(&dot_git).map_err(|()| GitReadError::NoTrustedGit)?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Ok(_) => resolve_common_git_dir(&dot_git).map_err(|()| GitReadError::NoTrustedGit)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(GitReadError::NoTrustedGit),
     };
-    if let Some(common_dir) = &common_dir
-        && !path_is_within(common_dir, &worktree_root)
-    {
-        roots.push(common_dir.clone());
+    if !path_is_within(&common_dir, worktree_root) {
+        push_unique(&mut locations.roots, common_dir.clone());
     }
-    Ok(UntrustedGitLocations { roots, common_dir })
+    push_unique(&mut locations.common_dirs, common_dir);
+    Ok(())
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| paths_equal(existing, &path)) {
+        paths.push(path);
+    }
 }
 
 fn path_is_untrusted(path: &Path, locations: &UntrustedGitLocations) -> bool {
@@ -106,9 +191,9 @@ fn path_is_untrusted(path: &Path, locations: &UntrustedGitLocations) -> bool {
         return true;
     }
     locations
-        .common_dir
-        .as_deref()
-        .is_some_and(|common_dir| path_is_in_worktree_for_common_dir(path, common_dir))
+        .common_dirs
+        .iter()
+        .any(|common_dir| path_is_in_worktree_for_common_dir(path, common_dir))
 }
 
 fn path_is_in_worktree_for_common_dir(path: &Path, expected_common_dir: &Path) -> bool {
