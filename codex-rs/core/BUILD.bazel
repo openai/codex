@@ -1,4 +1,4 @@
-load("//:defs.bzl", "codex_rust_crate")
+load("//:defs.bzl", "codex_rust_crate", "workspace_root_test")
 
 codex_rust_crate(
     name = "core",
@@ -49,4 +49,18 @@ codex_rust_crate(
     },
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
+)
+
+workspace_root_test(
+    name = "core-code-mode-host-test",
+    timeout = "long",
+    env = {
+        "TESTBRIDGE_TEST_ONLY": "suite::code_mode::",
+    },
+    runfile_env = {
+        "//codex-rs/code-mode-host:codex-code-mode-host": "CODEX_CODE_MODE_HOST_PATH",
+    },
+    tags = ["no-sandbox"],
+    test_bin = ":core-all-test",
+    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
 )
