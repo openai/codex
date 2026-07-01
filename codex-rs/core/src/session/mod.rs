@@ -2777,18 +2777,25 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items = self.prepare_conversation_items_for_history(turn_context, items);
-        let items = items.as_ref();
+        let raw_items = self.prepare_conversation_items_for_history(turn_context, items);
+        let history_items = crate::context_manager::canonicalize_for_durable_history(
+            &self.thread_id,
+            raw_items.as_ref(),
+        );
+        let history_items = history_items.as_ref();
         {
             let mut state = self.state.lock().await;
-            state.current_time_reminder.note_recorded_items(items);
+            state
+                .current_time_reminder
+                .note_recorded_items(history_items);
             state.record_items(
-                items.iter(),
+                history_items.iter(),
                 turn_context.model_info.truncation_policy.into(),
             );
         }
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        self.persist_rollout_response_items(history_items).await;
+        self.send_raw_response_items(turn_context, raw_items.as_ref())
+            .await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(

@@ -131,13 +131,13 @@ impl ToolRouter {
                 execution,
                 arguments,
                 ..
-            } if execution == "client" => {
-                let arguments: SearchToolCallParams =
-                    serde_json::from_value(arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse tool_search arguments: {err}"
-                        ))
-                    })?;
+            } if execution == "client" && !call_id.is_empty() => {
+                let arguments = serde_json::from_value(arguments).unwrap_or(SearchToolCallParams {
+                    // Enter the handler's normal validation failure path without retaining
+                    // or logging the malformed payload.
+                    query: String::new(),
+                    limit: None,
+                });
                 Ok(Some(ToolCall {
                     tool_name: ToolName::plain("tool_search"),
                     call_id,
