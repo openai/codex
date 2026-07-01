@@ -217,6 +217,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         eprintln!("OpenAI Codex v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
+            let value = sanitize_config_summary_value(&value);
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
@@ -414,6 +415,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             );
         }
     }
+}
+
+/// Converts a config-summary value into printable single-line terminal text.
+fn sanitize_config_summary_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_control() { '�' } else { ch })
+        .collect()
 }
 
 fn config_summary_entries(
