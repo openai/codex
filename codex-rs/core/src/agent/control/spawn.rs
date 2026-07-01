@@ -356,8 +356,20 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
-            .await?;
+        match (multi_agent_version, initial_operation) {
+            (MultiAgentVersion::V2, Op::InterAgentCommunication { communication }) => {
+                self.submit_inter_agent_communication(new_thread.thread_id, &state, communication)
+                    .await?;
+            }
+            (_, initial_operation) => {
+                self.send_input_after_capacity_check(
+                    new_thread.thread_id,
+                    &state,
+                    initial_operation,
+                )
+                .await?;
+            }
+        }
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
