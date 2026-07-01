@@ -608,7 +608,7 @@ impl TestCodexBuilder {
             user_instructions_provider,
             /*analytics_events_client*/ None,
             thread_store,
-            state_db.clone(),
+            codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id,
             /*attestation_provider*/ None,
             /*external_time_provider*/ self.external_time_provider.clone(),
@@ -658,12 +658,13 @@ impl TestCodexBuilder {
                 Box::pin(
                     thread_manager.start_thread_with_options(StartThreadOptions {
                         config: config.clone(),
+                        allow_provider_model_fallback: false,
                         initial_history: InitialHistory::New,
+                        history_mode: None,
                         session_source: None,
                         thread_source: None,
                         dynamic_tools: Vec::new(),
                         metrics_service_name: None,
-                        multi_agent_mode: None,
                         parent_trace: None,
                         environments,
                         thread_extension_init: Default::default(),

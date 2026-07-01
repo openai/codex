@@ -17,12 +17,14 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
+use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
@@ -47,6 +49,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use codex_utils_path_uri::PathUri;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::assert_regex_match;
 use core_test_support::is_remote_test_environment;
 use core_test_support::responses;
@@ -267,6 +270,7 @@ fn copy_binary_to_remote_env(
 
 struct TestMcpServerOptions {
     environment_id: String,
+    auth: McpServerAuth,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
 }
@@ -275,6 +279,7 @@ impl Default for TestMcpServerOptions {
     fn default() -> Self {
         Self {
             environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+            auth: McpServerAuth::default(),
             supports_parallel_tool_calls: false,
             tool_timeout_sec: None,
         }
@@ -315,6 +320,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
+            auth: options.auth,
             environment_id: options.environment_id,
             enabled: true,
             required: false,
@@ -1227,6 +1233,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
                     environment_id: remote_aware_environment_id(),
+                    auth: Default::default(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
@@ -1352,6 +1359,9 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             connector_id: None,
             mcp_app_resource_uri: None,
             link_id: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
             plugin_id: None,
         },
     );
@@ -1641,6 +1651,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
                 model_messages: None,
+                include_skills_usage_instructions: false,
                 supports_reasoning_summaries: false,
                 default_reasoning_summary: ReasoningSummary::Auto,
                 support_verbosity: false,
@@ -2298,6 +2309,174 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_configured_auth_precedes_chatgpt_auth() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let Some(configured_auth_server) =
+        start_streamable_http_test_server("configured-auth", Some("configured-token")).await?
+    else {
+        return Ok(());
+    };
+    let configured_auth_url = configured_auth_server.url().to_string();
+
+    let configured_auth_fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                "configured_auth",
+                McpServerTransportConfig::StreamableHttp {
+                    url: configured_auth_url,
+                    bearer_token_env_var: None,
+                    http_headers: Some(HashMap::from([(
+                        "Authorization".to_string(),
+                        "Bearer configured-token".to_string(),
+                    )])),
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    auth: McpServerAuth::ChatGpt,
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    wait_for_mcp_server(&configured_auth_fixture.codex, "configured_auth").await?;
+    drop(configured_auth_fixture);
+    configured_auth_server.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_chatgpt_auth_is_not_sent_to_configured_origin() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let untrusted_server = MockServer::start().await;
+    let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
+    let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
+    let untrusted_chatgpt_base_url = untrusted_apps.chatgpt_base_url;
+
+    let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = untrusted_chatgpt_base_url;
+            insert_mcp_server(
+                config,
+                "untrusted_origin",
+                McpServerTransportConfig::StreamableHttp {
+                    url: untrusted_mcp_url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                TestMcpServerOptions {
+                    auth: McpServerAuth::ChatGpt,
+                    ..Default::default()
+                },
+            );
+        })
+        .build(&server)
+        .await?;
+
+    wait_for_mcp_server(&fixture.codex, "untrusted_origin").await?;
+    let observed_requests = untrusted_server
+        .received_requests()
+        .await
+        .expect("mock server should capture MCP startup requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/api/codex/apps")
+        .filter_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
+            let method = body.get("method")?.as_str()?.to_string();
+            let authorization = request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            Some((method, authorization))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        observed_requests,
+        vec![
+            ("initialize".to_string(), None),
+            ("notifications/initialized".to_string(), None),
+            ("tools/list".to_string(), None),
+        ],
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn configured_chatgpt_base_url_does_not_grant_mcp_chatgpt_auth() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let untrusted_server = MockServer::start().await;
+    let untrusted_apps = AppsTestServer::mount(&untrusted_server).await?;
+    let untrusted_mcp_url = format!("{}/api/codex/apps", untrusted_apps.chatgpt_base_url);
+    let untrusted_chatgpt_base_url = untrusted_apps.chatgpt_base_url;
+
+    let fixture = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_pre_build_hook(move |codex_home| {
+            fs::write(
+                codex_home.join("config.toml"),
+                format!(
+                    r#"
+chatgpt_base_url = "{untrusted_chatgpt_base_url}"
+
+[mcp_servers.untrusted_origin]
+url = "{untrusted_mcp_url}"
+auth = "chatgpt"
+"#,
+                ),
+            )
+            .expect("write attacker-controlled MCP config");
+        })
+        .build(&server)
+        .await?;
+
+    wait_for_mcp_server(&fixture.codex, "untrusted_origin").await?;
+    let observed_requests = untrusted_server
+        .received_requests()
+        .await
+        .expect("mock server should capture MCP startup requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/api/codex/apps")
+        .filter_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
+            let method = body.get("method")?.as_str()?.to_string();
+            let authorization = request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            Some((method, authorization))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        observed_requests,
+        vec![
+            ("initialize".to_string(), None),
+            ("notifications/initialized".to_string(), None),
+            ("tools/list".to_string(), None),
+        ],
+    );
+
+    Ok(())
+}
+
 /// This test writes to a fallback credentials file in CODEX_HOME.
 /// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
 #[test]
@@ -2760,6 +2939,7 @@ async fn wait_for_remote_streamable_http_server(
             headers: Vec::new(),
             body: None,
             timeout_ms: Some(remaining.as_millis().clamp(1, 1_000) as u64),
+            redirect_policy: HttpRedirectPolicy::Follow,
             request_id: "buffered-request".to_string(),
             stream_response: false,
         };

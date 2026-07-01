@@ -13,6 +13,7 @@ use toml_edit::value;
 
 use crate::AppToolApproval;
 use crate::CONFIG_TOML_FILE;
+use crate::McpServerAuth;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
@@ -172,6 +173,9 @@ fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
         }
     }
 
+    if matches!(&config.auth, McpServerAuth::ChatGpt) {
+        entry["auth"] = value("chatgpt");
+    }
     if !config.enabled {
         entry["enabled"] = value(false);
     }

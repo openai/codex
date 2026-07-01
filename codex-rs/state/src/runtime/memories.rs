@@ -136,6 +136,7 @@ WHERE kind = ? AND job_key = ?
     /// - starts from `threads` filtered to active threads and allowed sources
     ///   (`push_thread_filters`)
     /// - excludes threads with `memory_mode != 'enabled'`
+    /// - excludes paginated threads because stage 1 still full-loads rollout JSONL
     /// - excludes the current thread id
     /// - keeps only threads whose millisecond `updated_at` is in the age window
     /// - checks memory staleness against the memories DB
@@ -177,6 +178,7 @@ SELECT
     threads.updated_at_ms AS updated_at,
     threads.recency_at_ms AS recency_at,
     threads.source,
+    threads.history_mode,
     threads.thread_source,
     threads.agent_path,
     threads.agent_nickname,
@@ -211,8 +213,9 @@ FROM threads
                 sort_direction: SortDirection::Desc,
                 search_term: None,
             },
+            /*include_thread_id_tiebreaker*/ false,
         );
-        builder.push(" AND threads.memory_mode = 'enabled'");
+        builder.push(" AND threads.memory_mode = 'enabled' AND threads.history_mode = 'legacy'");
         builder
             .push(" AND threads.id != ")
             .push_bind(current_thread_id.as_str());
@@ -548,6 +551,7 @@ SELECT
     threads.updated_at_ms AS updated_at,
     threads.recency_at_ms AS recency_at,
     threads.source,
+    threads.history_mode,
     threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,
@@ -568,7 +572,7 @@ SELECT
     threads.git_branch,
     threads.git_origin_url
 FROM threads
-WHERE threads.id = ? AND threads.memory_mode = 'enabled'
+WHERE threads.id = ? AND threads.memory_mode = 'enabled' AND threads.history_mode = 'legacy'
             "#,
         )
         .bind(thread_id.to_string())
@@ -1672,6 +1676,7 @@ mod tests {
     use chrono::Duration;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::ThreadHistoryMode;
     use pretty_assertions::assert_eq;
     use sqlx::Row;
     use std::sync::Arc;
@@ -2160,7 +2165,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_stage1_jobs_skips_threads_with_disabled_memory_mode() {
+    async fn claim_stage1_jobs_skips_threads_without_legacy_enabled_memory() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2173,6 +2178,8 @@ mod tests {
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
         let disabled_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("disabled thread id");
+        let paginated_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("paginated thread id");
         let enabled_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("enabled thread id");
 
@@ -2198,6 +2205,19 @@ mod tests {
             .execute(runtime.pool.as_ref())
             .await
             .expect("disable thread memory mode");
+
+        let mut paginated = test_thread_metadata(
+            &codex_home,
+            paginated_thread_id,
+            codex_home.join("paginated"),
+        );
+        paginated.created_at = eligible_at;
+        paginated.updated_at = eligible_at;
+        paginated.history_mode = ThreadHistoryMode::Paginated;
+        runtime
+            .upsert_thread(&paginated)
+            .await
+            .expect("upsert paginated thread");
 
         let mut enabled =
             test_thread_metadata(&codex_home, enabled_thread_id, codex_home.join("enabled"));

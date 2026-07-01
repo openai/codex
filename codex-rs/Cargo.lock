@@ -2173,9 +2173,11 @@ dependencies = [
  "futures",
  "gethostname",
  "hmac 0.12.1",
+ "httpdate",
  "jsonwebtoken",
  "owo-colors",
  "pretty_assertions",
+ "rand 0.9.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2314,6 +2316,7 @@ name = "codex-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "app_test_support",
  "assert_cmd",
  "assert_matches",
  "clap",
@@ -2503,6 +2506,7 @@ dependencies = [
  "codex-code-mode-protocol",
  "codex-protocol",
  "deno_core_icudata",
+ "futures",
  "pretty_assertions",
  "serde_json",
  "tokio",
@@ -2514,6 +2518,17 @@ dependencies = [
 [[package]]
 name = "codex-code-mode-host"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-code-mode",
+ "codex-code-mode-protocol",
+ "codex-protocol",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "codex-code-mode-protocol"
@@ -2557,6 +2572,7 @@ dependencies = [
  "multimap",
  "pretty_assertions",
  "prost 0.14.3",
+ "regex-lite",
  "schemars 0.8.22",
  "serde",
  "serde_ignored",
@@ -2584,6 +2600,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-config",
+ "codex-plugin",
+ "indexmap 2.14.0",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2592,6 +2610,18 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+]
+
+[[package]]
+name = "codex-connectors-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-connectors",
+ "codex-core-plugins",
+ "codex-plugin",
+ "codex-utils-path-uri",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2615,6 +2645,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-graph-store",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -2755,6 +2786,7 @@ dependencies = [
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
  "codex-git-utils",
@@ -2772,7 +2804,6 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
- "indexmap 2.14.0",
  "libc",
  "pretty_assertions",
  "regex",
@@ -2888,6 +2919,7 @@ dependencies = [
  "codex-exec-server-protocol",
  "codex-file-system",
  "codex-network-proxy",
+ "codex-otel",
  "codex-protocol",
  "codex-sandboxing",
  "codex-test-binary-support",
@@ -2899,9 +2931,13 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "libc",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "prost 0.14.3",
+ "rcgen",
  "reqwest 0.12.28",
+ "rustls",
  "serde",
  "serde_json",
  "serial_test",
@@ -2913,6 +2949,8 @@ dependencies = [
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "uuid",
  "windows-sys 0.52.0",
  "wiremock",
@@ -2989,6 +3027,7 @@ dependencies = [
  "codex-tools",
  "codex-utils-absolute-path",
  "pretty_assertions",
+ "serde_json",
  "tokio",
 ]
 
@@ -3306,6 +3345,7 @@ dependencies = [
  "codex-api",
  "codex-async-utils",
  "codex-config",
+ "codex-connectors",
  "codex-exec-server",
  "codex-login",
  "codex-model-provider",
@@ -3335,6 +3375,7 @@ name = "codex-mcp-extension"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "codex-connectors-extension",
  "codex-core",
  "codex-core-plugins",
  "codex-exec-server",
@@ -3548,6 +3589,7 @@ dependencies = [
  "rama-tcp",
  "rama-tls-rustls",
  "rama-unix",
+ "rand 0.9.3",
  "rustls-native-certs",
  "schannel",
  "security-framework 3.5.1",
@@ -3735,7 +3777,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "codex-api",
- "codex-client",
  "codex-config",
  "codex-exec-server",
  "codex-keyring-store",
@@ -4013,7 +4054,6 @@ dependencies = [
 name = "codex-tools"
 version = "0.0.0"
 dependencies = [
- "codex-app-server-protocol",
  "codex-code-mode",
  "codex-connectors",
  "codex-features",

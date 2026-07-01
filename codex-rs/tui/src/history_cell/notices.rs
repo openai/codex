@@ -85,61 +85,77 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
-const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
-
 #[derive(Debug)]
-pub(crate) struct CyberPolicyNoticeCell;
-
-pub(crate) fn new_cyber_policy_error_event() -> CyberPolicyNoticeCell {
-    CyberPolicyNoticeCell
+pub(crate) struct SafetyAccessBlockCell {
+    body: &'static str,
+    trusted_access_url: &'static str,
 }
 
-impl HistoryCell for CyberPolicyNoticeCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(
-            vec![
-                "ⓘ ".cyan(),
-                "This chat was flagged for possible cybersecurity risk".bold(),
-            ]
-            .into(),
-        );
+const SAFETY_ACCESS_BLOCK_TITLE: &str = "This content can't be shown";
+const SAFETY_ACCESS_BLOCK_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
 
+pub(crate) fn new_safety_access_block_event() -> SafetyAccessBlockCell {
+    SafetyAccessBlockCell {
+        body: "We take extra caution with requests involving biological research and applications that could pose safety risks. Eligible researchers can apply for Trusted Access.",
+        trusted_access_url: "https://www.openai.com/form/trusted-access-for-biology-research/",
+    }
+}
+
+pub(crate) fn new_cyber_policy_error_event() -> SafetyAccessBlockCell {
+    SafetyAccessBlockCell {
+        body: "We take extra caution with cybersecurity requests. If you’re a security professional, you may be able to apply for Trusted Access.",
+        trusted_access_url: "https://openai.com/form/enterprise-trusted-access-for-cyber/",
+    }
+}
+
+impl HistoryCell for SafetyAccessBlockCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = vec![HyperlinkLine::new(
+            vec!["ⓘ ".cyan(), SAFETY_ACCESS_BLOCK_TITLE.bold()].into(),
+        )];
+        let body = Line::from(vec!["  ".into(), self.body.dim()]);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
-        let body = Line::from(vec![
-            "  If this seems wrong, try rephrasing your request. To get authorized for security work, join the "
-                .dim(),
-            "Trusted Access for Cyber".cyan().underlined(),
-            " program.".dim(),
-        ]);
         let wrapped = adaptive_wrap_line(
             &body,
             RtOptions::new(wrap_width).subsequent_indent("  ".into()),
         );
-        push_owned_lines(&wrapped, &mut lines);
-        lines.push(
-            vec![
-                "  ".into(),
-                TRUSTED_ACCESS_FOR_CYBER_URL.cyan().underlined(),
-            ]
-            .into(),
-        );
+        let mut wrapped_body = Vec::new();
+        push_owned_lines(&wrapped, &mut wrapped_body);
+        lines.extend(plain_hyperlink_lines(wrapped_body));
 
+        for (label, url) in [
+            ("Trusted Access", self.trusted_access_url),
+            ("Learn more", SAFETY_ACCESS_BLOCK_LEARN_MORE_URL),
+        ] {
+            let source = crate::terminal_hyperlinks::annotate_web_urls_in_line(
+                vec![format!("  {label}: ").dim(), url.cyan().underlined()].into(),
+            );
+            let wrapped = crate::wrapping::word_wrap_line(
+                &source.line,
+                RtOptions::new(wrap_width).subsequent_indent("  ".into()),
+            );
+            let mut wrapped_links = Vec::new();
+            push_owned_lines(&wrapped, &mut wrapped_links);
+            lines.extend(crate::terminal_hyperlinks::remap_wrapped_line(
+                &source,
+                wrapped_links,
+            ));
+        }
         lines
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        let trusted_access_url = self.trusted_access_url;
         vec![
-            Line::from("This chat was flagged for possible cybersecurity risk"),
-            Line::from(
-                "If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program.",
-            ),
-            Line::from(TRUSTED_ACCESS_FOR_CYBER_URL),
+            Line::from(SAFETY_ACCESS_BLOCK_TITLE),
+            Line::from(self.body),
+            Line::from(format!("Trusted Access: {trusted_access_url}")),
+            Line::from(format!("Learn more: {SAFETY_ACCESS_BLOCK_LEARN_MORE_URL}")),
         ]
-    }
-
-    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        crate::terminal_hyperlinks::annotate_web_urls(self.display_lines(width))
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {

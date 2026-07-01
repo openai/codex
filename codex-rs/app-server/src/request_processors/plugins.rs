@@ -101,6 +101,15 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
             ref_name,
             sha,
         },
+        MarketplacePluginSource::Npm {
+            package,
+            version,
+            registry,
+        } => PluginSource::Npm {
+            package,
+            version,
+            registry,
+        },
     }
 }
 
@@ -134,7 +143,7 @@ fn share_context_for_source(
                 creator_name: None,
                 share_principals: None,
             }),
-        MarketplacePluginSource::Git { .. } => None,
+        MarketplacePluginSource::Git { .. } | MarketplacePluginSource::Npm { .. } => None,
     }
 }
 
@@ -1883,6 +1892,7 @@ impl PluginRequestProcessor {
                 let notification = ServerNotification::McpServerOauthLoginCompleted(
                     McpServerOauthLoginCompletedNotification {
                         name: notification_name,
+                        thread_id: None,
                         success,
                         error,
                     },
@@ -2158,7 +2168,7 @@ fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginS
     PluginSummary {
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
-        local_version: None,
+        local_version: summary.local_version,
         name: summary.name,
         share_context: summary
             .share_context

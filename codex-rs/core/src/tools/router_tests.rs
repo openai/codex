@@ -110,8 +110,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let mcp_tools = session
         .services
-        .mcp_connection_manager
-        .load_full()
+        .latest_mcp_runtime()
+        .manager()
         .list_all_tools()
         .await;
     let router = ToolRouter::from_context(
@@ -175,6 +175,35 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
         }
         other => panic!("expected function payload, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_custom_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
+    let tool_name = "exec".to_string();
+
+    let call = ToolRouter::build_tool_call(ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "call-namespace".to_string(),
+        name: tool_name.clone(),
+        namespace: Some("mcp__python".to_string()),
+        input: "print('hello')".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })?
+    .expect("custom_tool_call should produce a tool call");
+
+    assert_eq!(
+        call,
+        ToolCall {
+            tool_name: ToolName::namespaced("mcp__python", tool_name),
+            call_id: "call-namespace".to_string(),
+            payload: ToolPayload::Custom {
+                input: "print('hello')".to_string(),
+            },
+        }
+    );
 
     Ok(())
 }

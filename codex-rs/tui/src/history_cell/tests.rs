@@ -700,6 +700,13 @@ fn cyber_policy_error_event_snapshot() {
 }
 
 #[test]
+fn safety_access_block_event_snapshot() {
+    let cell = new_safety_access_block_event();
+    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn cyber_policy_error_event_narrow_snapshot() {
     let cell = new_cyber_policy_error_event();
     let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");

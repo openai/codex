@@ -373,7 +373,7 @@ impl MessageProcessor {
                 )),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
-                state_db.clone(),
+                codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
                 installation_id,
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
@@ -1037,6 +1037,9 @@ impl MessageProcessor {
             ClientRequest::EnvironmentAdd { params, .. } => {
                 self.environment_processor.environment_add(params).await
             }
+            ClientRequest::EnvironmentInfo { params, .. } => {
+                self.environment_processor.environment_info(params).await
+            }
             ClientRequest::FsReadFile { params, .. } => self
                 .fs_processor
                 .read_file(params)
@@ -1205,7 +1208,7 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadRollback { params, .. } => {
                 self.thread_processor
-                    .thread_rollback(&request_id, params)
+                    .thread_rollback(&request_id, params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::ThreadList { params, .. } => {

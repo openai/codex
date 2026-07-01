@@ -68,9 +68,7 @@ async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Resu
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         config_path,
-        format!(
-            "{config}\n[features]\napps = true\nplugins = true\nremote_plugin = true\ntool_suggest = true\n"
-        ),
+        format!("{config}\n[features]\napps = true\nplugins = true\ntool_suggest = true\n"),
     )?;
 
     let sqlite_home = codex_home.path().to_string_lossy();

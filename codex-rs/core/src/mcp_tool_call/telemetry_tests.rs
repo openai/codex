@@ -14,14 +14,31 @@ fn metric_call_tool_result(
 }
 
 #[test]
+fn mcp_call_metric_tags_include_server_name() {
+    assert_eq!(
+        mcp_call_metric_tags(
+            "error",
+            "docs server",
+            "search docs",
+            Some("connector/docs"),
+            Some("Docs connector"),
+        ),
+        vec![
+            ("status", "error".to_string()),
+            ("server", "docs_server".to_string()),
+            ("tool", "search_docs".to_string()),
+            ("connector_id", "connector/docs".to_string()),
+            ("connector_name", "Docs_connector".to_string()),
+        ],
+    );
+}
+
+#[test]
 fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
     assert_eq!(
-        mcp_call_metric_outcome(
-            &Ok(metric_call_tool_result(
-                /*is_error*/ false, /*structured_content*/ None,
-            )),
-            McpErrorCodeSource::HostedPluginService,
-        ),
+        mcp_call_metric_outcome(&Ok(metric_call_tool_result(
+            /*is_error*/ false, /*structured_content*/ None,
+        )),),
         McpCallMetricOutcome {
             status: "ok",
             error_type: None,
@@ -29,13 +46,10 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
         }
     );
     assert_eq!(
-        mcp_call_metric_outcome(
-            &Ok(metric_call_tool_result(
-                /*is_error*/ true,
-                Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
-            )),
-            McpErrorCodeSource::HostedPluginService,
-        ),
+        mcp_call_metric_outcome(&Ok(metric_call_tool_result(
+            /*is_error*/ true,
+            Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
+        )),),
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
@@ -43,10 +57,7 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
         }
     );
     assert_eq!(
-        mcp_call_metric_outcome(
-            &Err("connection closed".to_string()),
-            McpErrorCodeSource::HostedPluginService,
-        ),
+        mcp_call_metric_outcome(&Err("connection closed".to_string())),
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_MCP_REQUEST),
@@ -56,24 +67,24 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
 }
 
 #[test]
-fn mcp_call_metric_outcome_ignores_untrusted_tool_error_codes() {
+fn mcp_call_metric_outcome_reports_server_tool_error_codes() {
     let result = Ok(metric_call_tool_result(
         /*is_error*/ true,
         Some(serde_json::json!({"error_code": "arbitrary-user-value"})),
     ));
 
     assert_eq!(
-        mcp_call_metric_outcome(&result, McpErrorCodeSource::Untrusted),
+        mcp_call_metric_outcome(&result),
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
+            error_code: Some("arbitrary-user-value".to_string()),
         }
     );
 }
 
 #[test]
-fn mcp_call_metric_outcome_reads_hosted_auth_error_code_from_meta() {
+fn mcp_call_metric_outcome_reads_auth_error_code_from_meta() {
     let result = CallToolResult {
         content: Vec::new(),
         structured_content: None,
@@ -89,7 +100,7 @@ fn mcp_call_metric_outcome_reads_hosted_auth_error_code_from_meta() {
     };
 
     assert_eq!(
-        mcp_call_metric_outcome(&Ok(result), McpErrorCodeSource::HostedPluginService),
+        mcp_call_metric_outcome(&Ok(result)),
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
@@ -99,7 +110,7 @@ fn mcp_call_metric_outcome_reads_hosted_auth_error_code_from_meta() {
 }
 
 #[test]
-fn mcp_call_metric_outcome_bounds_and_sanitizes_hosted_error_code() {
+fn mcp_call_metric_outcome_bounds_and_sanitizes_error_code() {
     let raw_error_code = format!("BAD CODE {}", "x".repeat(300));
     let result = Ok(metric_call_tool_result(
         /*is_error*/ true,
@@ -107,7 +118,7 @@ fn mcp_call_metric_outcome_bounds_and_sanitizes_hosted_error_code() {
     ));
 
     assert_eq!(
-        mcp_call_metric_outcome(&result, McpErrorCodeSource::HostedPluginService),
+        mcp_call_metric_outcome(&result),
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),

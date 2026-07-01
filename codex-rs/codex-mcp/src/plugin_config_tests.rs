@@ -32,6 +32,7 @@ fn stdio_server(
     env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
             args: Vec::new(),
@@ -66,6 +67,7 @@ fn declared_placement_preserves_local_plugin_normalization() {
         Vec::new(),
     );
     let expected_http = McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: "https://example.com/mcp".to_string(),
             bearer_token_env_var: None,
@@ -269,6 +271,98 @@ fn environment_placement_rejects_orchestrator_env_vars() {
                     "env_vars entry `TOKEN` cannot use source `local` in an executor-owned plugin"
                         .to_string(),
             }],
+        }
+    );
+}
+
+#[test]
+fn remote_environment_placement_rejects_http_env_references() {
+    let plugin_root = plugin_root();
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri(&plugin_root),
+        r#"{
+            "bearer": {
+                "url": "https://example.com/bearer",
+                "bearer_token_env_var": "TOKEN"
+            },
+            "headers": {
+                "url": "https://example.com/headers",
+                "env_http_headers": {"Authorization": "TOKEN"}
+            }
+        }"#,
+        "executor-1",
+    )
+    .expect("parse plugin MCP config");
+
+    assert_eq!(
+        outcome,
+        PluginMcpConfigParseOutcome {
+            servers: BTreeMap::new(),
+            errors: vec![
+                PluginMcpServerParseError {
+                    name: "bearer".to_string(),
+                    message: "`bearer_token_env_var` requires executor-side environment resolution for an executor-owned HTTP MCP"
+                        .to_string(),
+                },
+                PluginMcpServerParseError {
+                    name: "headers".to_string(),
+                    message: "`env_http_headers` requires executor-side environment resolution for an executor-owned HTTP MCP"
+                        .to_string(),
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn local_environment_placement_preserves_http_env_references() {
+    let plugin_root = plugin_root();
+    let outcome = parse_executor_plugin_mcp_config(
+        &plugin_root_uri(&plugin_root),
+        r#"{
+            "demo": {
+                "url": "https://example.com/mcp",
+                "bearer_token_env_var": "TOKEN",
+                "env_http_headers": {"X-Account": "ACCOUNT_ID"}
+            }
+        }"#,
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
+    )
+    .expect("parse plugin MCP config");
+
+    assert_eq!(
+        outcome,
+        PluginMcpConfigParseOutcome {
+            servers: BTreeMap::from([(
+                "demo".to_string(),
+                McpServerConfig {
+                    auth: Default::default(),
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://example.com/mcp".to_string(),
+                        bearer_token_env_var: Some("TOKEN".to_string()),
+                        http_headers: None,
+                        env_http_headers: Some(HashMap::from([(
+                            "X-Account".to_string(),
+                            "ACCOUNT_ID".to_string(),
+                        )])),
+                    },
+                    environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            )]),
+            errors: Vec::new(),
         }
     );
 }

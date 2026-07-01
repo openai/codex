@@ -1,3 +1,4 @@
+use super::PreviousSectionState;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
@@ -5,11 +6,9 @@ use crate::context::environment_context::NetworkContext;
 use crate::context::environment_context::push_xml_escaped_text;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::turn_context::TurnContext;
-use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_protocol::protocol::TurnContextItem;
-use codex_protocol::protocol::TurnContextNetworkItem;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 
 /// Environment values visible to the model.
@@ -36,29 +35,6 @@ impl EnvironmentsState {
             filesystem: Some(FileSystemContext::from_permission_profile(
                 &turn_context.permission_profile,
                 &turn_context.config.effective_workspace_roots(),
-            )),
-            subagents: None,
-        }
-    }
-
-    pub(crate) fn from_turn_context_item(turn_context_item: &TurnContextItem) -> Self {
-        Self {
-            environments: [(
-                LOCAL_ENVIRONMENT_ID.to_string(),
-                EnvironmentState {
-                    cwd: PathUri::from_abs_path(&turn_context_item.cwd),
-                    status: EnvironmentStatus::Available,
-                    shell: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-            current_date: turn_context_item.current_date.clone(),
-            timezone: turn_context_item.timezone.clone(),
-            network: network_from_turn_context_item(turn_context_item),
-            filesystem: Some(FileSystemContext::from_permission_profile(
-                &turn_context_item.permission_profile(),
-                &workspace_roots_from_turn_context_item(turn_context_item),
             )),
             subagents: None,
         }
@@ -91,17 +67,52 @@ impl EnvironmentsState {
 }
 
 impl WorldStateSection for EnvironmentsState {
-    fn render_diff(&self, previous: Option<&Self>) -> Option<Box<dyn ContextualUserFragment>> {
-        let empty = Self::default();
-        let previous = previous.unwrap_or(&empty);
-        let turn_context_values_changed = self.current_date != previous.current_date
-            || self.timezone != previous.timezone
-            || self.network != previous.network
-            || self.filesystem != previous.filesystem;
+    const ID: &'static str = "environments";
+    type Snapshot = EnvironmentsSnapshot;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        EnvironmentsSnapshot {
+            environments: self
+                .environments
+                .iter()
+                .map(|(id, environment)| {
+                    (
+                        id.clone(),
+                        EnvironmentSnapshot {
+                            cwd: environment.cwd.inferred_native_path_string(),
+                            status: environment.status,
+                            shell: environment.shell.clone(),
+                        },
+                    )
+                })
+                .collect(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            network: self.network.as_ref().map(NetworkContext::render),
+            filesystem: self.filesystem.as_ref().map(FileSystemContext::render),
+            subagents: self.subagents.clone(),
+        }
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
+        let current = self.snapshot();
+        let empty = EnvironmentsSnapshot::default();
+        let previous = match previous {
+            PreviousSectionState::Known(previous) => previous,
+            PreviousSectionState::Absent | PreviousSectionState::Unknown => &empty,
+        };
+        let turn_context_values_changed = current.current_date != previous.current_date
+            || current.timezone != previous.timezone
+            || current.network != previous.network
+            || current.filesystem != previous.filesystem;
         let mut updates = self
             .environments
             .iter()
-            .filter(|(id, environment)| {
+            .filter(|(id, _)| {
+                let environment = &current.environments[*id];
                 previous
                     .environments
                     .get(*id)
@@ -269,7 +280,24 @@ struct EnvironmentState {
     shell: Option<String>,
 }
 
-impl EnvironmentState {
+#[derive(Default, Deserialize, Serialize)]
+pub(crate) struct EnvironmentsSnapshot {
+    environments: BTreeMap<String, EnvironmentSnapshot>,
+    current_date: Option<String>,
+    timezone: Option<String>,
+    network: Option<String>,
+    filesystem: Option<String>,
+    subagents: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct EnvironmentSnapshot {
+    cwd: String,
+    status: EnvironmentStatus,
+    shell: Option<String>,
+}
+
+impl EnvironmentSnapshot {
     fn has_same_diff_value(&self, other: &Self) -> bool {
         self.cwd == other.cwd
             && self.status == other.status
@@ -281,7 +309,8 @@ impl EnvironmentState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum EnvironmentStatus {
     Starting,
     Available,
@@ -351,27 +380,6 @@ fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContex
             .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
             .unwrap_or_default(),
     ))
-}
-
-fn network_from_turn_context_item(turn_context_item: &TurnContextItem) -> Option<NetworkContext> {
-    let TurnContextNetworkItem {
-        allowed_domains,
-        denied_domains,
-    } = turn_context_item.network.as_ref()?;
-    Some(NetworkContext::new(
-        allowed_domains.clone(),
-        denied_domains.clone(),
-    ))
-}
-
-fn workspace_roots_from_turn_context_item(
-    turn_context_item: &TurnContextItem,
-) -> Vec<AbsolutePathBuf> {
-    if let Some(workspace_roots) = turn_context_item.workspace_roots.as_ref() {
-        return workspace_roots.clone();
-    }
-
-    vec![turn_context_item.cwd.clone()]
 }
 
 #[cfg(test)]

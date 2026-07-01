@@ -943,6 +943,13 @@ client_request_definitions! {
         serialization: global("environment"),
         response: v2::EnvironmentAddResponse,
     },
+    #[experimental("environment/info")]
+    /// Reads information from a configured execution environment.
+    EnvironmentInfo => "environment/info" {
+        params: v2::EnvironmentInfoParams,
+        serialization: global_shared_read("environment"),
+        response: v2::EnvironmentInfoResponse,
+    },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,
@@ -1913,6 +1920,7 @@ mod tests {
             request_id: request_id(),
             params: v2::McpServerOauthLoginParams {
                 name: "server-a".to_string(),
+                thread_id: None,
                 scopes: None,
                 timeout_secs: None,
             },
@@ -2579,6 +2587,7 @@ mod tests {
                     parent_thread_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
+                    history_mode: Default::default(),
                     model_provider: "openai".to_string(),
                     created_at: 1,
                     updated_at: 2,
@@ -2629,6 +2638,7 @@ mod tests {
                         "parentThreadId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
+                        "historyMode": "legacy",
                         "modelProvider": "openai",
                         "createdAt": 1,
                         "updatedAt": 2,

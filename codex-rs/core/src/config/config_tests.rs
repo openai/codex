@@ -6,6 +6,10 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
+use codex_config::McpServerCommandMatcher;
+use codex_config::McpServerIdentity;
+use codex_config::McpServerRequirement;
+use codex_config::McpServerValueMatcher;
 use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
 use codex_config::Sourced;
@@ -113,10 +117,15 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
+    stdio_mcp_with_args(command, &[])
+}
+
+fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::Stdio {
             command: command.to_string(),
-            args: Vec::new(),
+            args: args.iter().map(ToString::to_string).collect(),
             env: None,
             env_vars: Vec::new(),
             cwd: None,
@@ -140,6 +149,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
 
 fn http_mcp(url: &str) -> McpServerConfig {
     McpServerConfig {
+        auth: Default::default(),
         transport: McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,
@@ -475,10 +485,12 @@ async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
 enabled = true
 reminder_threshold_tokens = 16000
 reminder_message_template = "Custom reminder: {n_remaining} tokens."
+guidance_message = "Preserve important state before compaction."
 "#,
             TokenBudgetConfig {
                 reminder_threshold_tokens: Some(16_000),
                 reminder_message_template: "Custom reminder: {n_remaining} tokens.".to_string(),
+                guidance_message: Some("Preserve important state before compaction.".to_string()),
             },
         ),
     ] {
@@ -621,12 +633,16 @@ current_time_reminder = true
             r#"
 [features.current_time_reminder]
 enabled = true
-reminder_interval_seconds = 4
+reminder_interval_seconds = 0
 clock_source = "external"
+delivery_mode = "after_user_or_tool_output"
+sleep_tool = true
 "#,
             CurrentTimeReminderConfig {
-                reminder_interval_seconds: 4,
+                reminder_interval_seconds: 0,
                 clock_source: CurrentTimeSource::External,
+                delivery_mode: CurrentTimeReminderDeliveryMode::AfterUserOrToolOutput,
+                sleep_tool: true,
             },
         ),
     ] {
@@ -634,26 +650,6 @@ clock_source = "external"
         assert!(config.features.enabled(Feature::CurrentTimeReminder));
         assert_eq!(config.current_time_reminder, Some(expected));
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_rejects_zero_current_time_reminder_interval() -> std::io::Result<()> {
-    let error = load_current_time_reminder_config(
-        r#"
-[features.current_time_reminder]
-enabled = true
-reminder_interval_seconds = 0
-"#,
-    )
-    .await
-    .expect_err("zero reminder interval should be rejected");
-
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "features.current_time_reminder.reminder_interval_seconds must be positive"
-    );
     Ok(())
 }
 
@@ -4325,7 +4321,7 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
         BTreeMap::from([
             (
                 MISMATCHED_URL_SERVER.to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Url {
                         url: "https://example.com/other".to_string(),
                     },
@@ -4333,7 +4329,7 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
             ),
             (
                 MISMATCHED_COMMAND_SERVER.to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Command {
                         command: "other-cmd".to_string(),
                     },
@@ -4341,7 +4337,7 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
             ),
             (
                 MATCHED_URL_SERVER.to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Url {
                         url: GOOD_URL.to_string(),
                     },
@@ -4349,7 +4345,7 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
             ),
             (
                 MATCHED_COMMAND_SERVER.to_string(),
-                McpServerRequirement {
+                McpServerRequirement::Identity {
                     identity: McpServerIdentity::Command {
                         command: GOOD_CMD.to_string(),
                     },
@@ -4407,6 +4403,117 @@ fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
 }
 
 #[test]
+fn filter_mcp_servers_by_matchers_enforces_command_and_positional_args() {
+    let mut servers = HashMap::from([
+        (
+            "internal_mcp_proxy".to_string(),
+            stdio_mcp_with_args(
+                "company-cli",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "unlisted".to_string(),
+            stdio_mcp_with_args(
+                "company-cli",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "wrong-order".to_string(),
+            stdio_mcp_with_args(
+                "company-cli",
+                &[
+                    "proxy",
+                    "mcp",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                ],
+            ),
+        ),
+        (
+            "trailing-arg".to_string(),
+            stdio_mcp_with_args(
+                "company-cli",
+                &[
+                    "mcp",
+                    "proxy",
+                    "--server",
+                    "https://pricing.mcp.internal.example.com",
+                    "--verbose",
+                ],
+            ),
+        ),
+        (
+            "wrong-host".to_string(),
+            stdio_mcp_with_args(
+                "company-cli",
+                &["mcp", "proxy", "--server", "https://mcp.example.com"],
+            ),
+        ),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
+        executable: "company-cli".to_string(),
+        args: vec![
+            McpServerValueMatcher::Exact {
+                value: "mcp".to_string(),
+            },
+            McpServerValueMatcher::Exact {
+                value: "proxy".to_string(),
+            },
+            McpServerValueMatcher::Exact {
+                value: "--server".to_string(),
+            },
+            McpServerValueMatcher::Regex {
+                expression:
+                    r"^https://[A-Za-z0-9-]+\.mcp\.internal\.example\.com(?::443)?(?:/.*)?$"
+                        .to_string(),
+            },
+        ],
+    });
+    let requirements = Sourced::new(
+        BTreeMap::from([
+            ("internal_mcp_proxy".to_string(), requirement.clone()),
+            ("wrong-order".to_string(), requirement.clone()),
+            ("trailing-arg".to_string(), requirement.clone()),
+            ("wrong-host".to_string(), requirement),
+        ]),
+        source.clone(),
+    );
+
+    filter_mcp_servers_by_requirements(&mut servers, Some(&requirements));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            ("internal_mcp_proxy".to_string(), (true, None)),
+            ("unlisted".to_string(), (false, reason.clone())),
+            ("wrong-order".to_string(), (false, reason.clone())),
+            ("trailing-arg".to_string(), (false, reason.clone())),
+            ("wrong-host".to_string(), (false, reason)),
+        ])
+    );
+}
+
+#[test]
 fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
     let mut servers = HashMap::from([
         ("server-a".to_string(), stdio_mcp("cmd-a")),
@@ -4456,7 +4563,7 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
                 mcp_servers: Some(BTreeMap::from([
                     (
                         MATCHED_SERVER.to_string(),
-                        McpServerRequirement {
+                        McpServerRequirement::Identity {
                             identity: McpServerIdentity::Command {
                                 command: GOOD_CMD.to_string(),
                             },
@@ -4464,7 +4571,7 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
                     ),
                     (
                         MISMATCHED_SERVER.to_string(),
-                        McpServerRequirement {
+                        McpServerRequirement::Identity {
                             identity: McpServerIdentity::Command {
                                 command: GOOD_CMD.to_string(),
                             },
@@ -4505,7 +4612,7 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
             codex_config::PluginRequirementsToml {
                 mcp_servers: Some(BTreeMap::from([(
                     "server-a".to_string(),
-                    McpServerRequirement {
+                    McpServerRequirement::Identity {
                         identity: McpServerIdentity::Command {
                             command: "cmd-a".to_string(),
                         },
@@ -4536,6 +4643,65 @@ fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
     );
 }
 
+#[test]
+fn filter_plugin_mcp_servers_by_matchers_enforces_name_and_invocation() {
+    const MATCHED_SERVER: &str = "matched";
+    const MISMATCHED_SERVER: &str = "mismatched";
+    const UNLISTED_SERVER: &str = "unlisted";
+
+    let mut servers = HashMap::from([
+        (
+            MATCHED_SERVER.to_string(),
+            stdio_mcp_with_args("company-cli", &["approved"]),
+        ),
+        (
+            MISMATCHED_SERVER.to_string(),
+            stdio_mcp_with_args("company-cli", &["rejected"]),
+        ),
+        (
+            UNLISTED_SERVER.to_string(),
+            stdio_mcp_with_args("company-cli", &["approved"]),
+        ),
+    ]);
+    let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+    let requirement = McpServerRequirement::Command(McpServerCommandMatcher {
+        executable: "company-cli".to_string(),
+        args: vec![McpServerValueMatcher::Exact {
+            value: "approved".to_string(),
+        }],
+    });
+    let requirements = Sourced::new(
+        BTreeMap::from([(
+            "sample@test".to_string(),
+            codex_config::PluginRequirementsToml {
+                mcp_servers: Some(BTreeMap::from([
+                    (MATCHED_SERVER.to_string(), requirement.clone()),
+                    (MISMATCHED_SERVER.to_string(), requirement),
+                ])),
+            },
+        )]),
+        source.clone(),
+    );
+
+    filter_plugin_mcp_servers_by_requirements("sample@test", &mut servers, Some(&requirements));
+
+    let reason = Some(McpServerDisabledReason::Requirements { source });
+    assert_eq!(
+        servers
+            .iter()
+            .map(|(name, server)| (
+                name.clone(),
+                (server.enabled, server.disabled_reason.clone())
+            ))
+            .collect::<HashMap<String, (bool, Option<McpServerDisabledReason>)>>(),
+        HashMap::from([
+            (MATCHED_SERVER.to_string(), (true, None)),
+            (MISMATCHED_SERVER.to_string(), (false, reason.clone())),
+            (UNLISTED_SERVER.to_string(), (false, reason)),
+        ])
+    );
+}
+
 #[tokio::test]
 async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -4545,7 +4711,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
     let mcp_requirements = BTreeMap::from([
         (
             "session_overrides_user".to_string(),
-            McpServerRequirement {
+            McpServerRequirement::Identity {
                 identity: McpServerIdentity::Command {
                     command: "session-command".to_string(),
                 },
@@ -4553,7 +4719,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         ),
         (
             "managed_overrides_session".to_string(),
-            McpServerRequirement {
+            McpServerRequirement::Identity {
                 identity: McpServerIdentity::Command {
                     command: "managed-command".to_string(),
                 },
@@ -4561,7 +4727,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         ),
         (
             "fresh_global".to_string(),
-            McpServerRequirement {
+            McpServerRequirement::Identity {
                 identity: McpServerIdentity::Command {
                     command: "fresh-global-command".to_string(),
                 },
@@ -4569,7 +4735,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         ),
         (
             "fresh_project".to_string(),
-            McpServerRequirement {
+            McpServerRequirement::Identity {
                 identity: McpServerIdentity::Command {
                     command: "fresh-project-command".to_string(),
                 },
@@ -5747,6 +5913,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     servers.insert(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
@@ -6104,6 +6271,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: vec!["--verbose".to_string()],
@@ -6183,6 +6351,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6238,6 +6407,7 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6296,6 +6466,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6351,6 +6522,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6418,6 +6590,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6500,6 +6673,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
     let mut servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6538,6 +6712,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
     servers.insert(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -6605,6 +6780,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
         (
             "docs".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: Some("MCP_TOKEN".to_string()),
@@ -6633,6 +6809,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
         (
             "logs".to_string(),
             McpServerConfig {
+                auth: Default::default(),
                 transport: McpServerTransportConfig::Stdio {
                     command: "logs-server".to_string(),
                     args: vec!["--follow".to_string()],
@@ -6721,6 +6898,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6771,6 +6949,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6821,6 +7000,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
@@ -6876,6 +7056,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
     let servers = BTreeMap::from([(
         "docs".to_string(),
         McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
@@ -8871,6 +9052,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         enforce_residency: None,
         network: None,
         permissions: None,
+        models: None,
         guardian_policy_config: None,
     };
     let requirement_source = codex_config::RequirementSource::Unknown;

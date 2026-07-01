@@ -15,6 +15,8 @@ mod directory_cache;
 pub mod filter;
 pub mod merge;
 pub mod metadata;
+mod plugin_config;
+mod snapshot;
 
 pub use app_info::AppBranding;
 pub use app_info::AppInfo;
@@ -27,6 +29,10 @@ pub use app_tool_policy::AppToolPolicyInput;
 pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
 pub use directory_cache::ConnectorDirectoryCacheContext;
+pub use plugin_config::parse_plugin_app_config;
+pub use plugin_config::parse_plugin_app_config_value;
+pub use snapshot::ConnectorSnapshot;
+pub use snapshot::PluginConnectorSource;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
@@ -84,6 +90,10 @@ pub struct DirectoryApp {
     logo_url: Option<String>,
     #[serde(alias = "logoUrlDark")]
     logo_url_dark: Option<String>,
+    #[serde(alias = "iconAssets")]
+    icon_assets: Option<HashMap<String, String>>,
+    #[serde(alias = "iconDarkAssets")]
+    icon_dark_assets: Option<HashMap<String, String>>,
     #[serde(alias = "distributionChannel")]
     distribution_channel: Option<String>,
     visibility: Option<String>,
@@ -279,6 +289,8 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
         labels,
         logo_url,
         logo_url_dark,
+        icon_assets,
+        icon_dark_assets,
         distribution_channel,
         visibility: _,
     } = incoming;
@@ -301,6 +313,23 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
     }
     if existing.logo_url_dark.is_none() && logo_url_dark.is_some() {
         existing.logo_url_dark = logo_url_dark;
+    }
+    if existing.icon_assets.as_ref().is_none_or(HashMap::is_empty)
+        && icon_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.is_empty())
+    {
+        existing.icon_assets = icon_assets;
+    }
+    if existing
+        .icon_dark_assets
+        .as_ref()
+        .is_none_or(HashMap::is_empty)
+        && icon_dark_assets
+            .as_ref()
+            .is_some_and(|assets| !assets.is_empty())
+    {
+        existing.icon_dark_assets = icon_dark_assets;
     }
     if existing.distribution_channel.is_none() && distribution_channel.is_some() {
         existing.distribution_channel = distribution_channel;
@@ -420,6 +449,8 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         description: app.description,
         logo_url: app.logo_url,
         logo_url_dark: app.logo_url_dark,
+        icon_assets: app.icon_assets,
+        icon_dark_assets: app.icon_dark_assets,
         distribution_channel: app.distribution_channel,
         branding: app.branding,
         app_metadata: app.app_metadata,
@@ -512,9 +543,61 @@ mod tests {
             labels: None,
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             visibility: None,
         }
+    }
+
+    #[test]
+    fn directory_app_icon_assets_reach_app_info() -> anyhow::Result<()> {
+        let response: DirectoryListResponse = serde_json::from_value(serde_json::json!({
+            "apps": [{
+                "id": "alpha",
+                "name": "Alpha",
+                "icon_assets": {},
+                "icon_dark_assets": {}
+            }, {
+                "id": "alpha",
+                "name": "",
+                "icon_assets": {
+                    "256_square": "https://example.com/alpha-square.png"
+                },
+                "icon_dark_assets": {
+                    "256_square": "https://example.com/alpha-square-dark.png"
+                }
+            }],
+            "next_token": null
+        }))?;
+
+        let app_info = directory_app_to_app_info(merge_directory_apps(response.apps).remove(0));
+
+        assert_eq!(
+            serde_json::to_value(app_info)?,
+            serde_json::json!({
+                "id": "alpha",
+                "name": "Alpha",
+                "description": null,
+                "logoUrl": null,
+                "logoUrlDark": null,
+                "iconAssets": {
+                    "256_square": "https://example.com/alpha-square.png"
+                },
+                "iconDarkAssets": {
+                    "256_square": "https://example.com/alpha-square-dark.png"
+                },
+                "distributionChannel": null,
+                "branding": null,
+                "appMetadata": null,
+                "labels": null,
+                "installUrl": null,
+                "isAccessible": false,
+                "isEnabled": true,
+                "pluginDisplayNames": []
+            })
+        );
+        Ok(())
     }
 
     #[tokio::test]

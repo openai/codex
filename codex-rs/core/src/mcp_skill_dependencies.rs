@@ -199,15 +199,8 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         warn!("failed to refresh MCP dependencies for mentioned skills: {err}");
         return;
     }
-    let refresh_servers = sess.runtime_mcp_servers(&refresh_config).await;
-    sess.refresh_mcp_servers_now(
-        turn_context,
-        refresh_servers,
-        config.mcp_oauth_credentials_store_mode,
-        config.auth_keyring_backend_kind(),
-        elicitation_reviewer,
-    )
-    .await;
+    sess.refresh_mcp_servers_now(turn_context, &refresh_config, elicitation_reviewer)
+        .await;
 }
 
 async fn should_install_mcp_dependencies(
@@ -357,6 +350,7 @@ fn mcp_dependency_to_server_config(
             .as_ref()
             .ok_or_else(|| "missing url for streamable_http dependency".to_string())?;
         return Ok(McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::StreamableHttp {
                 url: url.clone(),
                 bearer_token_env_var: None,
@@ -386,6 +380,7 @@ fn mcp_dependency_to_server_config(
             .as_ref()
             .ok_or_else(|| "missing command for stdio dependency".to_string())?;
         return Ok(McpServerConfig {
+            auth: Default::default(),
             transport: McpServerTransportConfig::Stdio {
                 command: command.clone(),
                 args: Vec::new(),

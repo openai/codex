@@ -6406,6 +6406,24 @@
               "null"
             ]
           },
+          "iconAssets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "iconDarkAssets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -8395,6 +8413,16 @@
             "type": [
               "object",
               "null"
+            ]
+          },
+          "models": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelsRequirements"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         },
@@ -12008,6 +12036,12 @@
           },
           "success": {
             "type": "boolean"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12029,6 +12063,12 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -12063,6 +12103,12 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "McpServerRefreshResponse",
         "type": "object"
+      },
+      "McpServerStartupFailureReason": {
+        "enum": [
+          "reauthenticationRequired"
+        ],
+        "type": "string"
       },
       "McpServerStartupState": {
         "enum": [
@@ -12135,6 +12181,16 @@
               "null"
             ]
           },
+          "failureReason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerStartupFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -12202,6 +12258,18 @@
       },
       "McpToolCallAppContext": {
         "properties": {
+          "actionName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "connectorId": {
             "type": "string"
           },
@@ -12212,6 +12280,12 @@
             ]
           },
           "resourceUri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "templateId": {
             "type": [
               "string",
               "null"
@@ -12770,6 +12844,21 @@
         "title": "ModelVerificationNotification",
         "type": "object"
       },
+      "ModelsRequirements": {
+        "properties": {
+          "newThread": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/NewThreadModelDefaults"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "MultiAgentMode": {
         "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
         "enum": [
@@ -12916,6 +13005,33 @@
           "deny"
         ],
         "type": "string"
+      },
+      "NewThreadModelDefaults": {
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelReasoningEffort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "serviceTier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "NonSteerableTurnKind": {
         "enum": [
@@ -14089,6 +14205,40 @@
               "url"
             ],
             "title": "GitPluginSource",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "package": {
+                "type": "string"
+              },
+              "registry": {
+                "description": "Optional HTTPS registry URL. Authentication stays in the user's npm config.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "npm"
+                ],
+                "title": "NpmPluginSourceType",
+                "type": "string"
+              },
+              "version": {
+                "description": "Optional npm version or version range.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "package",
+              "type"
+            ],
+            "title": "NpmPluginSource",
             "type": "object"
           },
           {
@@ -15359,6 +15509,12 @@
               },
               "name": {
                 "type": "string"
+              },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "type": [
@@ -17129,6 +17285,13 @@
           "ephemeral": {
             "type": "boolean"
           },
+          "lastTurnId": {
+            "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "model": {
             "description": "Configuration overrides for the forked thread, if any.",
             "type": [
@@ -17447,6 +17610,13 @@
         ],
         "title": "ThreadGoalUpdatedNotification",
         "type": "object"
+      },
+      "ThreadHistoryMode": {
+        "enum": [
+          "legacy",
+          "paginated"
+        ],
+        "type": "string"
       },
       "ThreadId": {
         "type": "string"
@@ -18967,6 +19137,7 @@
       },
       "ThreadRollbackParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "DEPRECATED: `thread/rollback` will be removed soon.",
         "properties": {
           "numTurns": {
             "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",

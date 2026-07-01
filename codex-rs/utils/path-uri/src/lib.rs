@@ -18,7 +18,10 @@ use thiserror::Error;
 use ts_rs::TS;
 use url::Url;
 
+mod absolute_path_normalization;
 mod api_path_string;
+
+use absolute_path_normalization::path_uri_from_segments;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
@@ -589,7 +592,7 @@ fn parse_posix_path(path: &str) -> Option<PathUri> {
             format!("/{path}").as_bytes(),
         ));
     }
-    path_uri_from_segments(/*host*/ None, path.split('/'))
+    path_uri_from_segments(PathConvention::Posix, /*host*/ None, path.split('/'))
 }
 
 fn parse_windows_path(path: &str) -> Option<PathUri> {
@@ -612,6 +615,7 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
             if drive.is_ascii_alphabetic() && is_windows_separator_byte(*separator)
     ) {
         return path_uri_from_segments(
+            PathConvention::Windows,
             /*host*/ None,
             std::iter::once(&path[..2]).chain(path[3..].split(is_windows_separator_char)),
         );
@@ -623,29 +627,15 @@ fn parse_windows_path(path: &str) -> Option<PathUri> {
         let mut components = path[2..].split(is_windows_separator_char);
         let host = components.next().filter(|host| !host.is_empty())?;
         let share = components.next().filter(|share| !share.is_empty())?;
-        return path_uri_from_segments(Some(host), std::iter::once(share).chain(components))
-            .or_else(|| Some(windows_opaque_path_uri(path)));
+        return path_uri_from_segments(
+            PathConvention::Windows,
+            Some(host),
+            std::iter::once(share).chain(components),
+        )
+        .or_else(|| Some(windows_opaque_path_uri(path)));
     }
 
     None
-}
-
-fn path_uri_from_segments<'a>(
-    host: Option<&str>,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<PathUri> {
-    let mut url = Url::parse("file:///").ok()?;
-    if let Some(host) = host {
-        url.set_host(Some(host)).ok()?;
-    }
-    {
-        let mut url_segments = url.path_segments_mut().ok()?;
-        url_segments.clear();
-        for segment in segments {
-            url_segments.push(segment);
-        }
-    }
-    PathUri::try_from(url).ok()
 }
 
 fn windows_opaque_path_uri(path: &str) -> PathUri {

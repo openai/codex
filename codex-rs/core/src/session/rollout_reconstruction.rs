@@ -1,4 +1,5 @@
 use super::*;
+use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::protocol::SessionContextWindow;
 use uuid::Uuid;
@@ -10,6 +11,7 @@ pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
     pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
     pub(super) reference_context_item: Option<TurnContextItem>,
+    pub(super) world_state_baseline: Option<WorldStateSnapshot>,
     pub(super) window_number: u64,
     pub(super) first_window_id: Option<Uuid>,
     pub(super) previous_window_id: Option<Uuid>,
@@ -46,6 +48,7 @@ struct ActiveReplaySegment<'a> {
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
+    world_state_replay: Vec<&'a RolloutItem>,
     base_replacement_history: Option<&'a [ResponseItem]>,
     window: Option<ReconstructedWindow>,
 }
@@ -60,6 +63,7 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
+    world_state_replay: &mut Vec<&'a RolloutItem>,
     window: &mut Option<ReconstructedWindow>,
     pending_rollback_turns: &mut usize,
 ) {
@@ -72,6 +76,8 @@ fn finalize_active_segment<'a>(
         }
         return;
     }
+
+    world_state_replay.extend(active_segment.world_state_replay);
 
     // A surviving replacement-history checkpoint is a complete history base. Once we
     // know the newest surviving one, older rollout items do not affect rebuilt history.
@@ -133,6 +139,7 @@ impl Session {
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
+        let mut world_state_replay = Vec::new();
         let mut window = None;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
@@ -149,6 +156,7 @@ impl Session {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.world_state_replay.push(item);
                     if active_segment.window.is_none()
                         && let Some(window_number) = compacted.window_number
                     {
@@ -235,6 +243,11 @@ impl Session {
                         }
                     }
                 }
+                RolloutItem::WorldState(_) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.world_state_replay.push(item);
+                }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     // `TurnStarted` is the oldest boundary of the active reverse segment.
                     if active_segment.as_ref().is_some_and(|active_segment| {
@@ -249,6 +262,7 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
+                            &mut world_state_replay,
                             &mut window,
                             &mut pending_rollback_turns,
                         );
@@ -264,8 +278,9 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.counts_as_user_turn = true;
                 }
-                RolloutItem::InterAgentCommunicationMetadata { .. } => {}
-                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::EventMsg(_)
+                | RolloutItem::SessionMeta(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
             }
 
             if base_replacement_history.is_some()
@@ -285,6 +300,7 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
+                &mut world_state_replay,
                 &mut window,
                 &mut pending_rollback_turns,
             );
@@ -351,6 +367,7 @@ impl Session {
                 }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
+                | RolloutItem::WorldState(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
         }
@@ -367,6 +384,43 @@ impl Session {
             reference_context_item
         };
 
+        // Segments and their contents were collected newest-first; replay the surviving records
+        // chronologically so compaction resets and merge patches have their original meaning.
+        world_state_replay.reverse();
+        let mut world_state_baseline: Option<WorldStateSnapshot> = None;
+        for item in world_state_replay {
+            match item {
+                RolloutItem::Compacted(_) => world_state_baseline = None,
+                RolloutItem::WorldState(world_state) if world_state.full => {
+                    world_state_baseline = match serde_json::from_value(world_state.state.clone()) {
+                        Ok(snapshot) => Some(snapshot),
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to restore world-state snapshot");
+                            None
+                        }
+                    };
+                }
+                RolloutItem::WorldState(world_state) => {
+                    let Some(baseline) = world_state_baseline.as_mut() else {
+                        tracing::warn!("ignored world-state patch without a full snapshot");
+                        continue;
+                    };
+                    if let Err(err) = baseline.apply_merge_patch(&world_state.state) {
+                        tracing::warn!(%err, "failed to apply world-state patch");
+                        world_state_baseline = None;
+                    }
+                }
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => {
+                    unreachable!("only world-state replay items are collected")
+                }
+            }
+        }
+
         let window = window.or(initial_window).unwrap_or(ReconstructedWindow {
             number: fallback_window_number,
             first_id: None,
@@ -377,6 +431,7 @@ impl Session {
             history: history.into_raw_items(),
             previous_turn_settings,
             reference_context_item,
+            world_state_baseline,
             window_number: window.number,
             first_window_id: window.first_id,
             previous_window_id: window.previous_id,

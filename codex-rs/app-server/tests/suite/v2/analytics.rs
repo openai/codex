@@ -145,7 +145,7 @@ pub(crate) async fn wait_for_goal_event(
     .await
 }
 
-async fn wait_for_matching_analytics_event(
+pub(crate) async fn wait_for_matching_analytics_event(
     server: &MockServer,
     read_timeout: Duration,
     matches: impl Fn(&Value) -> bool,
@@ -191,6 +191,7 @@ pub(crate) fn assert_basic_thread_initialized_event(
     event: &Value,
     thread_id: &str,
     session_id: &str,
+    expected_product_client_id: &str,
     expected_model: &str,
     initialization_mode: &str,
     expected_thread_source: &str,
@@ -199,7 +200,7 @@ pub(crate) fn assert_basic_thread_initialized_event(
     assert_eq!(event["event_params"]["session_id"], session_id);
     assert_eq!(
         event["event_params"]["app_server_client"]["product_client_id"],
-        DEFAULT_CLIENT_NAME
+        expected_product_client_id
     );
     assert_eq!(
         event["event_params"]["app_server_client"]["client_name"],

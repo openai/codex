@@ -545,6 +545,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         unreachable!("event guard guarantees McpToolCallBegin");
     };
     assert_eq!(begin.call_id, "calendar-call-1");
+    assert_eq!(begin.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(begin.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         begin.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
@@ -559,6 +561,8 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     };
     assert_eq!(end.call_id, "calendar-call-1");
     assert_eq!(end.connector_id.as_deref(), Some("calendar"));
+    assert_eq!(end.app_name.as_deref(), Some("Calendar"));
+    assert_eq!(end.action_name.as_deref(), Some("calendar_create_event"));
     assert_eq!(
         end.mcp_app_resource_uri.as_deref(),
         Some(CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI)
@@ -823,7 +827,7 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
     assert!(
         !first_request_body
             .to_string()
-            .contains("Only use `spawn_agent` if and only if"),
+            .contains("### When to delegate vs. do the subtask yourself"),
         "deferred v1 multi-agent guidance should stay out of initial developer context"
     );
 
@@ -854,10 +858,10 @@ async fn tool_search_returns_deferred_v1_multi_agent_tools() -> Result<()> {
         .and_then(Value::as_str)
         .expect("spawn_agent description should be present");
     assert!(description.contains(
-        "Do not spawn sub-agents unless the user explicitly asks for sub-agents, delegation, or parallel agent work."
+        "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work."
     ));
     assert!(description.contains("### Designing delegated subtasks"));
-    assert!(!description.contains("### When to delegate vs. do the subtask yourself"));
+    assert!(description.contains("### When to delegate vs. do the subtask yourself"));
 
     Ok(())
 }
@@ -1090,6 +1094,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1216,6 +1221,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
@@ -1364,6 +1370,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
             servers.insert(
                 "rmcp".to_string(),
                 McpServerConfig {
+                    auth: Default::default(),
                     transport: McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),

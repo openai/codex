@@ -2,13 +2,22 @@ use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 use super::Capability;
 use super::CapabilitySet;
+use super::DelegateRequestId;
 use super::HandshakeRejectReason;
 use super::ProtocolVersion;
+use super::RequestId;
 use super::SessionId;
 use super::SupportedProtocolVersions;
+use super::WireCellId;
+use super::WireExecuteRequest;
+use super::WireNestedToolCall;
+use super::WireRuntimeResponse;
+use super::WireWaitOutcome;
+use super::WireWaitRequest;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,27 +125,135 @@ impl HostHello {
 }
 
 /// Messages sent from a client to the code-mode host.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum ClientToHost {
     #[serde(rename = "connection/hello")]
     ClientHello(ClientHello),
-    #[serde(rename = "session/open")]
-    OpenSession { session_id: SessionId },
-    #[serde(rename = "session/close")]
-    CloseSession { session_id: SessionId },
+    #[serde(rename = "operation/request")]
+    Request { id: RequestId, request: HostRequest },
+    #[serde(rename = "operation/cancel")]
+    CancelRequest { id: RequestId },
+    #[serde(rename = "delegate/response")]
+    DelegateResponse {
+        id: DelegateRequestId,
+        result: WireResult<DelegateResponse>,
+    },
 }
 
 /// Messages sent from the code-mode host to a client.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
 pub enum HostToClient {
     #[serde(rename = "connection/ready")]
     HostHello(HostHello),
     #[serde(rename = "connection/rejected")]
     HandshakeRejected { reason: HandshakeRejectReason },
+    #[serde(rename = "operation/response")]
+    Response {
+        id: RequestId,
+        result: WireResult<HostResponse>,
+    },
+    #[serde(rename = "execute/initialResponse")]
+    InitialResponse {
+        id: RequestId,
+        result: WireResult<WireRuntimeResponse>,
+    },
+    #[serde(rename = "delegate/request")]
+    DelegateRequest {
+        id: DelegateRequestId,
+        session_id: SessionId,
+        request: DelegateRequest,
+    },
+    #[serde(rename = "delegate/cancel")]
+    CancelDelegateRequest { id: DelegateRequestId },
+    #[serde(rename = "cell/closed")]
+    CellClosed {
+        session_id: SessionId,
+        cell_id: WireCellId,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "method", rename_all_fields = "camelCase")]
+pub enum HostRequest {
+    #[serde(rename = "session/open")]
+    OpenSession { session_id: SessionId },
+    #[serde(rename = "session/execute")]
+    Execute {
+        session_id: SessionId,
+        request: WireExecuteRequest,
+    },
+    #[serde(rename = "session/wait")]
+    Wait {
+        session_id: SessionId,
+        request: WireWaitRequest,
+    },
+    #[serde(rename = "session/terminate")]
+    Terminate {
+        session_id: SessionId,
+        cell_id: WireCellId,
+    },
+    #[serde(rename = "session/shutdown")]
+    ShutdownSession { session_id: SessionId },
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
+pub enum HostResponse {
     #[serde(rename = "session/ready")]
     SessionReady { session_id: SessionId },
+    #[serde(rename = "execution/started")]
+    ExecutionStarted { cell_id: WireCellId },
+    #[serde(rename = "wait/completed")]
+    WaitCompleted { outcome: WireWaitOutcome },
     #[serde(rename = "session/closed")]
     SessionClosed { session_id: SessionId },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
+pub enum DelegateRequest {
+    #[serde(rename = "tool/invoke")]
+    InvokeTool { invocation: WireNestedToolCall },
+    #[serde(rename = "notification/send")]
+    Notify {
+        call_id: String,
+        cell_id: WireCellId,
+        text: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "type", rename_all_fields = "camelCase")]
+pub enum DelegateResponse {
+    #[serde(rename = "tool/result")]
+    ToolResult { result: JsonValue },
+    #[serde(rename = "notification/delivered")]
+    NotificationDelivered,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, tag = "status", rename_all_fields = "camelCase")]
+pub enum WireResult<T> {
+    #[serde(rename = "ok")]
+    Ok { value: T },
+    #[serde(rename = "error")]
+    Err { message: String },
+}
+
+impl<T> WireResult<T> {
+    pub fn from_result(result: Result<T, String>) -> Self {
+        match result {
+            Ok(value) => Self::Ok { value },
+            Err(message) => Self::Err { message },
+        }
+    }
+
+    pub fn into_result(self) -> Result<T, String> {
+        match self {
+            Self::Ok { value } => Ok(value),
+            Self::Err { message } => Err(message),
+        }
+    }
 }
