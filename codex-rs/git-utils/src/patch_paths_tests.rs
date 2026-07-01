@@ -427,6 +427,31 @@ fn commit_seed(root: &Path) {
     assert_eq!(run(root, &["git", "commit", "-m", "seed"]).0, 0);
 }
 
+fn init_repo_with_selected_filter(config_key: &str) -> tempfile::TempDir {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=selected\n")
+        .expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write tracked file");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                config_key,
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::write(root.join("file.txt"), "new\n").expect("modify tracked file");
+    repo
+}
+
 #[cfg(any(unix, windows))]
 fn create_dir_alias(target: &Path, alias: &Path) -> DirectoryAlias {
     #[cfg(unix)]
@@ -786,4 +811,110 @@ fn staging_rejects_global_lfs_filter_without_running_it() {
     let (diff_code, staged, diff_err) = run(root, &["git", "diff", "--cached", "--name-only"]);
     assert_eq!(diff_code, 0, "read staged paths: {diff_err}");
     assert!(staged.is_empty(), "staging changed the index: {staged}");
+}
+
+#[test]
+fn staging_rejects_selected_process_but_allows_smudge_only_filter() {
+    let process_repo = init_repo_with_selected_filter("filter.selected.process");
+    let process_root = process_repo.path();
+    let process_git = GitRunner::for_cwd_io(process_root).expect("trusted Git");
+    let error = stage_effective_paths(&process_git, process_root, &["file.txt".to_string()])
+        .expect_err("reject selected process filter");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
+    let smudge_repo = init_repo_with_selected_filter("filter.selected.smudge");
+    let smudge_root = smudge_repo.path();
+    let smudge_git = GitRunner::for_cwd_io(smudge_root).expect("trusted Git");
+    stage_effective_paths(&smudge_git, smudge_root, &["file.txt".to_string()])
+        .expect("smudge-only filters do not run during staging");
+    let (code, staged, stderr) = run(smudge_root, &["git", "diff", "--cached", "--name-only"]);
+    assert_eq!(code, 0, "read staged paths: {stderr}");
+    assert_eq!(staged, "file.txt\n");
+}
+
+#[test]
+fn staging_filter_probe_uses_only_existing_non_directory_leaves() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "missing.txt filter=selected\ndeleted.txt filter=selected\n",
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("deleted.txt"), "old\n").expect("write deleted fixture");
+    std::fs::write(root.join("kept.txt"), "old\n").expect("write kept fixture");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.selected.clean",
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::remove_file(root.join("deleted.txt")).expect("delete tracked file");
+    std::fs::write(root.join("kept.txt"), "new\n").expect("modify kept fixture");
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    stage_effective_paths(
+        &git,
+        root,
+        &[
+            "missing.txt".to_string(),
+            "deleted.txt".to_string(),
+            "kept.txt".to_string(),
+        ],
+    )
+    .expect("probe only the surviving staging leaf");
+
+    let (code, staged, stderr) = run(root, &["git", "diff", "--cached", "--name-only"]);
+    assert_eq!(code, 0, "read staged paths: {stderr}");
+    assert_eq!(staged, "kept.txt\n");
+    assert!(!root.join("missing.txt").exists());
+    assert!(!root.join("deleted.txt").exists());
+}
+
+#[test]
+fn staging_skips_filter_probe_when_no_leaf_will_be_staged() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "missing.txt filter=selected\ndeleted.txt filter=selected\n",
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("deleted.txt"), "old\n").expect("write deleted fixture");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.selected.clean",
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::remove_file(root.join("deleted.txt")).expect("delete tracked file");
+    let before = git_index_bytes(root);
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    stage_effective_paths(
+        &git,
+        root,
+        &["missing.txt".to_string(), "deleted.txt".to_string()],
+    )
+    .expect("skip staging when every effective leaf is absent");
+
+    assert_eq!(git_index_bytes(root), before);
 }

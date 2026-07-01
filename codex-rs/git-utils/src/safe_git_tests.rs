@@ -67,6 +67,30 @@ fn selected_filter_policy_allows_effective_empty_value() {
 }
 
 #[test]
+fn git_add_filter_policy_rejects_clean_and_process_but_allows_smudge_only() {
+    let selected = BTreeMap::from([(b"file.txt".to_vec(), "demo".to_string())]);
+    for (key, rejected) in [
+        ("filter.demo.clean", true),
+        ("filter.demo.smudge", false),
+        ("filter.demo.process", true),
+    ] {
+        let entries = filter_entries(
+            GitConfigScope::Local,
+            Path::new(".git/config"),
+            key,
+            "codex-definitely-missing-filter-command",
+        );
+        assert_eq!(
+            selected_executable_filter_for(&entries, &selected, FilterExecution::GitAdd)
+                .expect("Git add filter policy")
+                .is_some(),
+            rejected,
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn filter_attribute_parser_rejects_malformed_or_unexpected_records() {
     let paths = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
     let parsed =

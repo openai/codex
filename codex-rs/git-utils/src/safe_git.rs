@@ -48,6 +48,37 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
     paths: &[String],
     git_config_args: &[String],
 ) -> io::Result<()> {
+    ensure_no_selected_executable_git_filters_for(
+        git,
+        cwd,
+        paths,
+        git_config_args,
+        FilterExecution::AnyWorktreeOperation,
+    )
+}
+
+pub(crate) fn ensure_no_selected_git_add_filters(
+    git: &GitRunner,
+    cwd: &Path,
+    paths: &[String],
+    git_config_args: &[String],
+) -> io::Result<()> {
+    ensure_no_selected_executable_git_filters_for(
+        git,
+        cwd,
+        paths,
+        git_config_args,
+        FilterExecution::GitAdd,
+    )
+}
+
+fn ensure_no_selected_executable_git_filters_for(
+    git: &GitRunner,
+    cwd: &Path,
+    paths: &[String],
+    git_config_args: &[String],
+    execution: FilterExecution,
+) -> io::Result<()> {
     let entries = read_filter_config(git, cwd, git_config_args)?;
     if !entries.values().any(|entry| !entry.value.is_empty()) {
         return Ok(());
@@ -57,7 +88,8 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
         .map(|path| path.as_bytes().to_vec())
         .collect::<Vec<_>>();
     let attributes = read_filter_attributes(git, cwd, &paths, git_config_args)?;
-    if let Some((driver, path)) = selected_executable_filter(&entries, &attributes)? {
+    if let Some((driver, path)) = selected_executable_filter_for(&entries, &attributes, execution)?
+    {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             format!(
@@ -67,6 +99,19 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FilterExecution {
+    AnyWorktreeOperation,
+    GitAdd,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterCommand {
+    Clean,
+    Smudge,
+    Process,
 }
 
 fn read_filter_config(
@@ -182,14 +227,19 @@ fn read_filter_attributes(
     parse_filter_attributes(&output.stdout, paths)
 }
 
-fn selected_executable_filter(
+fn selected_executable_filter_for(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<Vec<u8>, String>,
+    execution: FilterExecution,
 ) -> io::Result<Option<(String, Vec<u8>)>> {
     let mut executable_drivers = BTreeSet::new();
     for entry in entries.values() {
-        let driver = filter_driver_name(&entry.key)?;
-        if !entry.value.is_empty() {
+        let (driver, command) = filter_driver_and_command(&entry.key)?;
+        let relevant = match execution {
+            FilterExecution::AnyWorktreeOperation => true,
+            FilterExecution::GitAdd => command != FilterCommand::Smudge,
+        };
+        if relevant && !entry.value.is_empty() {
             executable_drivers.insert(driver);
         }
     }
@@ -201,16 +251,37 @@ fn selected_executable_filter(
     Ok(None)
 }
 
+#[cfg(test)]
+fn selected_executable_filter(
+    entries: &BTreeMap<String, GitConfigEntry>,
+    attributes: &BTreeMap<Vec<u8>, String>,
+) -> io::Result<Option<(String, Vec<u8>)>> {
+    selected_executable_filter_for(entries, attributes, FilterExecution::AnyWorktreeOperation)
+}
+
+#[cfg(test)]
 fn filter_driver_name(key: &str) -> io::Result<String> {
+    filter_driver_and_command(key).map(|(driver, _command)| driver)
+}
+
+fn filter_driver_and_command(key: &str) -> io::Result<(String, FilterCommand)> {
     let Some(remainder) = key.strip_prefix("filter.") else {
         return Err(invalid_filter_output("malformed filter config key"));
     };
-    let driver = [".clean", ".smudge", ".process"]
-        .into_iter()
-        .find_map(|suffix| remainder.strip_suffix(suffix))
-        .filter(|driver| !driver.is_empty())
-        .ok_or_else(|| invalid_filter_output("malformed filter config key"))?;
-    Ok(driver.to_string())
+    let (driver, command) = [
+        (".clean", FilterCommand::Clean),
+        (".smudge", FilterCommand::Smudge),
+        (".process", FilterCommand::Process),
+    ]
+    .into_iter()
+    .find_map(|(suffix, command)| {
+        remainder
+            .strip_suffix(suffix)
+            .map(|driver| (driver, command))
+    })
+    .filter(|(driver, _command)| !driver.is_empty())
+    .ok_or_else(|| invalid_filter_output("malformed filter config key"))?;
+    Ok((driver.to_string(), command))
 }
 
 fn write_nul_paths(input: &mut std::fs::File, paths: &[Vec<u8>]) -> io::Result<()> {
