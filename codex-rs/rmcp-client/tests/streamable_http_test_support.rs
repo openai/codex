@@ -230,6 +230,24 @@ pub(crate) async fn arm_initialized_notification_post_json_rpc_failure(
     status: u16,
     remaining: usize,
 ) -> anyhow::Result<()> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": -32000,
+            "message": "transient session failure",
+        },
+    })
+    .to_string();
+    arm_initialized_notification_post_response(base_url, status, remaining, &body).await
+}
+
+pub(crate) async fn arm_initialized_notification_post_response(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+    body: &str,
+) -> anyhow::Result<()> {
     let response = reqwest::Client::new()
         .post(format!(
             "{base_url}{INITIALIZED_NOTIFICATION_POST_FAILURE_CONTROL_PATH}"
@@ -238,14 +256,7 @@ pub(crate) async fn arm_initialized_notification_post_json_rpc_failure(
             "status": status,
             "remaining": remaining,
             "content_type": "application/json",
-            "body": json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "error": {
-                    "code": -32000,
-                    "message": "transient session failure",
-                },
-            }).to_string(),
+            "body": body,
         }))
         .send()
         .await?;
@@ -277,20 +288,31 @@ pub(crate) async fn arm_initialize_post_json_rpc_failure(
     status: u16,
     remaining: usize,
 ) -> anyhow::Result<()> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": -32000,
+            "message": "transient initialize failure",
+        },
+    })
+    .to_string();
+    arm_initialize_post_response(base_url, status, remaining, &body).await
+}
+
+pub(crate) async fn arm_initialize_post_response(
+    base_url: &str,
+    status: u16,
+    remaining: usize,
+    body: &str,
+) -> anyhow::Result<()> {
     let response = reqwest::Client::new()
         .post(format!("{base_url}{INITIALIZE_POST_FAILURE_CONTROL_PATH}"))
         .json(&json!({
             "status": status,
             "remaining": remaining,
             "content_type": "application/json",
-            "body": json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "error": {
-                    "code": -32000,
-                    "message": "transient initialize failure",
-                },
-            }).to_string(),
+            "body": body,
         }))
         .send()
         .await?;
