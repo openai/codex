@@ -21,6 +21,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -107,6 +108,7 @@ struct WebsocketTestHarness {
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
+    reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
     session_telemetry: SessionTelemetry,
 }
 
@@ -156,7 +158,14 @@ async fn responses_websocket_streams_request() {
     ]]])
     .await;
 
-    let harness = websocket_harness(&server).await;
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    provider.request_max_retries = Some(0);
+    provider.stream_max_retries = Some(0);
+    provider.stream_idle_timeout_ms = Some(5_000);
+    let mut harness =
+        websocket_harness_with_provider_options(provider, /*runtime_metrics_enabled*/ false).await;
+    harness.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
     let mut client_session = harness.client.new_session();
     let mut prompt = prompt_with_input(vec![message_item("hello")]);
     prompt.input[0].set_id(Some("msg_existing".to_string()));
@@ -172,6 +181,10 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
     assert_eq!(body["input"][0].get("id"), None);
+    assert_eq!(
+        body["stream_options"],
+        json!({ "reasoning_summary_delivery": "concurrent_cutoff" })
+    );
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(OPENAI_BETA_HEADER),
@@ -397,6 +410,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
         )
@@ -461,6 +475,7 @@ async fn responses_websocket_request_prewarm_uses_caller_supplied_metadata() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
         )
@@ -505,6 +520,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &prewarm_responses_metadata,
         )
@@ -551,6 +567,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &inference_trace,
@@ -724,6 +741,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -764,6 +782,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &prewarm_responses_metadata,
         )
@@ -777,6 +796,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -832,6 +852,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
         )
@@ -1238,6 +1259,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -1313,6 +1335,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -1969,6 +1992,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2058,6 +2082,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2262,6 +2287,7 @@ async fn websocket_harness_with_provider_options(
         model_info,
         effort,
         summary,
+        reasoning_summary_delivery: None,
         session_telemetry,
     }
 }
@@ -2295,6 +2321,7 @@ async fn stream_until_complete_with_model_info(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2344,6 +2371,7 @@ async fn stream_until_complete_with_metadata(
             &harness.session_telemetry,
             harness.effort.clone(),
             harness.summary,
+            harness.reasoning_summary_delivery,
             service_tier.map(|service_tier| service_tier.request_value().to_string()),
             responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),

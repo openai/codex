@@ -12,6 +12,7 @@ use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 #[cfg(test)]
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::state_db::StateDbHandle;
@@ -41,6 +42,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) initial_turns_page:
         Option<codex_app_server_protocol::ThreadResumeInitialTurnsPageParams>,
     pub(crate) redact_resume_payloads: bool,
+    pub(crate) reasoning_summary_delivery: Option<Option<ReasoningSummaryDelivery>>,
 }
 
 // ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.

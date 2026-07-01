@@ -7,6 +7,7 @@ use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -265,6 +266,7 @@ pub struct Config {
     pub compact_prompt: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<String>,
     pub analytics: Option<AnalyticsConfig>,

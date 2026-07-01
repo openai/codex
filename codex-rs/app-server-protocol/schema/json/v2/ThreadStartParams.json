@@ -227,6 +227,15 @@
       ],
       "type": "string"
     },
+    "ReasoningSummaryDelivery": {
+      "description": "Controls when reasoning summaries are delivered relative to later response items.",
+      "enum": [
+        "sequential",
+        "concurrent",
+        "concurrent_cutoff"
+      ],
+      "type": "string"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -359,6 +368,23 @@
       "anyOf": [
         {
           "$ref": "#/definitions/Personality"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reasoningSummaryDelivery": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummaryDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         {
           "type": "null"

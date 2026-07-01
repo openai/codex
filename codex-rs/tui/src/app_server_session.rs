@@ -1415,6 +1415,7 @@ fn thread_start_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(config),
         service_tier: service_tier_override_from_config(config),
+        reasoning_summary_delivery: config.reasoning_summary_delivery.map(Some),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
@@ -1453,6 +1454,7 @@ fn thread_resume_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
+        reasoning_summary_delivery: config.reasoning_summary_delivery.map(Some),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
@@ -1488,6 +1490,7 @@ fn thread_fork_params_from_config(
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
+        reasoning_summary_delivery: config.reasoning_summary_delivery.map(Some),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
@@ -1773,6 +1776,7 @@ mod tests {
     use codex_features::Feature;
     use codex_protocol::config_types::Personality;
     use codex_protocol::config_types::ReasoningSummary;
+    use codex_protocol::config_types::ReasoningSummaryDelivery;
     use codex_protocol::config_types::ServiceTier;
     use codex_protocol::config_types::Verbosity;
     use codex_protocol::config_types::WebSearchMode;
@@ -2178,6 +2182,7 @@ mod tests {
             .expect("test web search mode should be allowed");
         config.bypass_hook_trust = true;
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+        config.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
         let thread_id = ThreadId::new();
 
         let start = thread_start_params_from_config(
@@ -2203,6 +2208,10 @@ mod tests {
         assert_eq!(start.service_tier, expected_service_tier);
         assert_eq!(resume.service_tier, expected_service_tier);
         assert_eq!(fork.service_tier, expected_service_tier);
+        let expected_delivery = Some(Some(ReasoningSummaryDelivery::ConcurrentCutoff));
+        assert_eq!(start.reasoning_summary_delivery, expected_delivery);
+        assert_eq!(resume.reasoning_summary_delivery, expected_delivery);
+        assert_eq!(fork.reasoning_summary_delivery, expected_delivery);
         let string = |value: &str| serde_json::Value::String(value.to_string());
         let expected_config = HashMap::from([
             ("model_reasoning_effort".to_string(), string("high")),

@@ -4176,6 +4176,16 @@
             }
           ]
         },
+        "reasoning_summary_delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummaryDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "review_model": {
           "type": [
             "string",
@@ -11248,6 +11258,15 @@
         }
       ]
     },
+    "ReasoningSummaryDelivery": {
+      "description": "Controls when reasoning summaries are delivered relative to later response items.",
+      "enum": [
+        "sequential",
+        "concurrent",
+        "concurrent_cutoff"
+      ],
+      "type": "string"
+    },
     "ReasoningSummaryPartAddedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -15108,6 +15127,23 @@
             "null"
           ]
         },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -16841,6 +16877,23 @@
             }
           ]
         },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -17232,6 +17285,23 @@
           "anyOf": [
             {
               "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "null"

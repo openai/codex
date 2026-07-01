@@ -747,6 +747,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: None,
             sandbox: None,
             permissions: None,
+            reasoning_summary_delivery: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,

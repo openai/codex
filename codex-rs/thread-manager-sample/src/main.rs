@@ -255,6 +255,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
         model_reasoning_summary: None,
+        reasoning_summary_delivery: None,
         model_supports_reasoning_summaries: None,
         model_catalog: None,
         model_verbosity: None,

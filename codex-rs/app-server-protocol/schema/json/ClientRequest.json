@@ -2300,6 +2300,15 @@
         }
       ]
     },
+    "ReasoningSummaryDelivery": {
+      "description": "Controls when reasoning summaries are delivered relative to later response items.",
+      "enum": [
+        "sequential",
+        "concurrent",
+        "concurrent_cutoff"
+      ],
+      "type": "string"
+    },
     "RemoteControlDisableParams": {
       "properties": {
         "ephemeral": {
@@ -3673,6 +3682,23 @@
             "null"
           ]
         },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -4184,6 +4210,23 @@
             }
           ]
         },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -4355,6 +4398,23 @@
           "anyOf": [
             {
               "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoningSummaryDelivery": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningSummaryDelivery"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "null"

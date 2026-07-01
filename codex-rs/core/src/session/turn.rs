@@ -1916,6 +1916,7 @@ async fn try_run_sampling_request(
             &turn_context.session_telemetry,
             turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
+            turn_context.config.reasoning_summary_delivery,
             turn_context.config.service_tier.clone(),
             responses_metadata,
             &inference_trace,

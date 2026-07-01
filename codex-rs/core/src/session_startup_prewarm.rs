@@ -312,6 +312,7 @@ async fn schedule_startup_prewarm_inner(
             &startup_turn_context.session_telemetry,
             startup_turn_context.reasoning_effort.clone(),
             startup_turn_context.reasoning_summary,
+            startup_turn_context.config.reasoning_summary_delivery,
             startup_turn_context.config.service_tier.clone(),
             &responses_metadata,
         )

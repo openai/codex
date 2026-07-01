@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -55,6 +56,7 @@ pub(crate) struct SessionConfiguration {
 
     pub(super) collaboration_mode: CollaborationMode,
     pub(super) model_reasoning_summary: Option<ReasoningSummaryConfig>,
+    pub(super) reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
     pub(super) service_tier: Option<String>,
 
     /// Developer instructions that supplement the base instructions.
@@ -234,6 +236,9 @@ impl SessionConfiguration {
         }
         if let Some(summary) = updates.reasoning_summary {
             next_configuration.model_reasoning_summary = Some(summary);
+        }
+        if let Some(reasoning_summary_delivery) = updates.reasoning_summary_delivery {
+            next_configuration.reasoning_summary_delivery = reasoning_summary_delivery;
         }
         if let Some(service_tier) = updates.service_tier.clone() {
             // TODO(aibrahim): Remove once v2 clients no longer send the legacy
@@ -427,6 +432,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
+    pub(crate) reasoning_summary_delivery: Option<Option<ReasoningSummaryDelivery>>,
     pub(crate) service_tier: Option<Option<String>>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,

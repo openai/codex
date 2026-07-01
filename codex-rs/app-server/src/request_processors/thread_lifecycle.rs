@@ -628,6 +628,25 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
+    if let Some(reasoning_summary_delivery) = pending.reasoning_summary_delivery
+        && let Err(error) = conversation
+            .set_reasoning_summary_delivery(reasoning_summary_delivery)
+            .await
+    {
+        let _ = thread_state_manager
+            .unsubscribe_connection_from_thread(conversation_id, connection_id)
+            .await;
+        outgoing
+            .send_error(
+                request_id,
+                invalid_request(format!(
+                    "invalid reasoning_summary_delivery override: {error}"
+                )),
+            )
+            .await;
+        return;
+    }
+
     let config_snapshot = pending.config_snapshot;
     let cwd = config_snapshot.cwd().clone();
     let ThreadConfigSnapshot {

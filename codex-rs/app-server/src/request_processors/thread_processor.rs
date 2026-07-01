@@ -3,6 +3,7 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -910,13 +911,14 @@ impl ThreadRequestProcessor {
             model_provider,
             allow_provider_model_fallback,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
             permissions,
-            config,
+            config: request_overrides,
             service_name,
             base_instructions,
             developer_instructions,
@@ -978,8 +980,9 @@ impl ThreadRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 supports_openai_form_elicitation,
-                config,
+                request_overrides,
                 typesafe_overrides,
+                reasoning_summary_delivery,
                 dynamic_tools,
                 selected_capability_roots.unwrap_or_default(),
                 history_mode.map(Into::into),
@@ -1056,6 +1059,7 @@ impl ThreadRequestProcessor {
         supports_openai_form_elicitation: bool,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
+        reasoning_summary_delivery: Option<Option<ReasoningSummaryDelivery>>,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         history_mode: Option<ThreadHistoryMode>,
@@ -1137,6 +1141,10 @@ impl ThreadRequestProcessor {
                 )
                 .await
                 .map_err(|err| config_load_error(&err))?;
+        }
+
+        if let Some(reasoning_summary_delivery) = reasoning_summary_delivery {
+            config.reasoning_summary_delivery = reasoning_summary_delivery;
         }
 
         let environments = environments.unwrap_or_else(|| {
@@ -2681,6 +2689,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -2741,7 +2750,7 @@ impl ThreadRequestProcessor {
         .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -2753,6 +2762,9 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if let Some(reasoning_summary_delivery) = reasoning_summary_delivery {
+            config.reasoning_summary_delivery = reasoning_summary_delivery;
+        }
 
         let response_history = thread_history.clone();
 
@@ -3122,6 +3134,7 @@ impl ThreadRequestProcessor {
                     include_turns: !params.exclude_turns,
                     initial_turns_page: params.initial_turns_page.clone(),
                     redact_resume_payloads,
+                    reasoning_summary_delivery: params.reasoning_summary_delivery,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -3392,6 +3405,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -3477,11 +3491,14 @@ impl ThreadRequestProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = self
+        let mut config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        if let Some(reasoning_summary_delivery) = reasoning_summary_delivery {
+            config.reasoning_summary_delivery = reasoning_summary_delivery;
+        }
 
         let fallback_model_provider = config.model_provider_id.clone();
 
