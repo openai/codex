@@ -7,6 +7,7 @@ use crate::init_state_db;
 use crate::local_agent_graph_store_from_state_db;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
@@ -56,6 +57,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_utils_path_uri::PathUri;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -1040,6 +1042,60 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
     assert!(result.get("task_name").is_none());
     assert!(result.get("nickname").is_some());
     assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
+async fn spawn_agent_inherits_environments_from_step_context() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let turn = Arc::new(turn);
+    let step_cwd = turn.config.cwd.join("step-environment");
+    tokio::fs::create_dir_all(&step_cwd)
+        .await
+        .expect("create step environment cwd");
+    let mut step_environments = turn.environments.clone();
+    let previous_environment = step_environments.turn_environments[0].clone();
+    step_environments.turn_environments[0] = TurnEnvironment::new(
+        previous_environment.environment_id,
+        previous_environment.environment,
+        PathUri::from_abs_path(&step_cwd),
+        previous_environment.shell,
+    );
+    let expected_environments = step_environments.to_selections();
+    let mut invocation = invocation(
+        Arc::new(session),
+        Arc::clone(&turn),
+        "spawn_agent",
+        function_payload(json!({"message": "inspect this repo"})),
+    );
+    invocation.step_context = Arc::new(StepContext::new(
+        turn,
+        step_environments,
+        /*loaded_agents_md*/ None,
+    ));
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation)
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let child_id = parse_agent_id(
+        result["agent_id"]
+            .as_str()
+            .expect("spawn_agent result should include agent_id"),
+    );
+    let child = manager
+        .get_thread(child_id)
+        .await
+        .expect("spawned agent thread should exist");
+
+    assert_eq!(
+        child.config_snapshot().await.environment_selections(),
+        expected_environments
+    );
 }
 
 #[tokio::test]

@@ -3,7 +3,7 @@ use crate::agent::status::is_final;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use codex_protocol::ThreadId;
@@ -12,6 +12,7 @@ use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
@@ -88,6 +89,7 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
+    environment_selections: Vec<TurnEnvironmentSelection>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,9 +109,10 @@ fn required_state_db(
 
 async fn build_runner_options(
     session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
+    step_context: &StepContext,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
+    let turn = &step_context.turn;
     let multi_agent_version = turn.multi_agent_version;
     if multi_agent_version == MultiAgentVersion::Disabled {
         return Err(FunctionCallError::RespondToModel(
@@ -128,6 +131,7 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
+        environment_selections: step_context.environments.to_selections(),
     })
 }
 
@@ -155,7 +159,6 @@ fn normalize_max_runtime_seconds(requested: Option<u64>) -> Result<Option<u64>, 
 
 async fn run_agent_job_loop(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
     db: Arc<codex_state::StateRuntime>,
     job_id: String,
     options: JobRunnerOptions,
@@ -209,7 +212,7 @@ async fn run_agent_job_loop(
                         )))),
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.thread_id),
-                            environments: Some(turn.environments.to_selections()),
+                            environments: Some(options.environment_selections.clone()),
                             ..Default::default()
                         },
                     )
