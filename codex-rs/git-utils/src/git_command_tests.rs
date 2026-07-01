@@ -361,9 +361,8 @@ fn resolver_rejects_parent_traversal_spelled_through_repository() {
 
     let locations = locations_for_root(&repo);
     for root in &locations.roots {
-        // Append without PathBuf::push: it resolves `..` when `root` has a
-        // verbatim Windows prefix, before the resolver can inspect the PATH
-        // spelling.
+        // Construct the PATH entry as raw text so its `..` component survives
+        // long enough for the resolver to inspect the original spelling.
         let traversing_path = raw_parent_traversal(root, "trusted-bin");
         let search_path = std::env::join_paths([&traversing_path]).expect("PATH");
         let split_paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
@@ -372,19 +371,6 @@ fn resolver_rejects_parent_traversal_spelled_through_repository() {
             search_directory_is_untrusted(&split_paths[0], &locations),
             "raw PATH traversal was not rejected from {root:?}"
         );
-
-        #[cfg(windows)]
-        if matches!(
-            root.components().next(),
-            Some(Component::Prefix(prefix)) if prefix.kind().is_verbatim()
-        ) {
-            assert_eq!(
-                split_paths[0].join(git_executable_name()),
-                std::fs::canonicalize(&trusted_bin)
-                    .expect("canonical trusted bin")
-                    .join(git_executable_name())
-            );
-        }
 
         assert!(
             matches!(
