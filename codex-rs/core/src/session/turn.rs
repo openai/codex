@@ -1296,7 +1296,7 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_context(
+    let router = ToolRouter::from_context(
         step_context,
         ToolRouterParams {
             mcp_tools,
@@ -1306,7 +1306,9 @@ pub(crate) async fn built_tools(
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
         &sess.services.tool_search_handler_cache,
-    )))
+    )
+    .map_err(CodexErr::InvalidRequest)?;
+    Ok(Arc::new(router))
 }
 
 #[derive(Debug)]

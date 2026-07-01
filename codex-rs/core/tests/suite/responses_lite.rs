@@ -282,6 +282,7 @@ async fn responses_lite_exposes_standalone_tools_for_actor_authorized_provider()
             configure_responses_tools(config);
             config.model_provider.name = "local".to_string();
             config.model_provider.requires_openai_auth = false;
+            config.model_provider.namespace_tools = Some(true);
             config.model_provider.http_headers = Some(HashMap::from([(
                 "x-openai-actor-authorization".to_string(),
                 "test-actor-authorization".to_string(),

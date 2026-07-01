@@ -55,6 +55,15 @@ impl HookToolName {
         Self::new("Bash")
     }
 
+    /// Adds a matcher-only compatibility name without changing the canonical
+    /// name serialized into hook stdin.
+    pub(crate) fn add_matcher_alias(&mut self, alias: impl Into<String>) {
+        let alias = alias.into();
+        if alias != self.name && !self.matcher_aliases.contains(&alias) {
+            self.matcher_aliases.push(alias);
+        }
+    }
+
     /// Returns the canonical hook name serialized into hook stdin.
     pub(crate) fn name(&self) -> &str {
         &self.name

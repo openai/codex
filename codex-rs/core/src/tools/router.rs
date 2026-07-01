@@ -62,7 +62,7 @@ impl ToolRouter {
         step_context: &StepContext,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
-    ) -> Self {
+    ) -> Result<Self, String> {
         build_tool_router(step_context, params, tool_search_handler_cache)
     }
 

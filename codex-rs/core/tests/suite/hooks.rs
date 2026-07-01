@@ -668,7 +668,11 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn write_logging_pre_and_blocking_post_tool_use_hooks(home: &Path, feedback: &str) -> Result<()> {
+fn write_logging_pre_and_blocking_post_tool_use_hooks(
+    home: &Path,
+    matcher: &str,
+    feedback: &str,
+) -> Result<()> {
     let pre_script_path = home.join("pre_tool_use_hook.py");
     let pre_log_path = home.join("pre_tool_use_hook_log.jsonl");
     let post_script_path = home.join("post_tool_use_hook.py");
@@ -702,7 +706,7 @@ raise SystemExit(2)
     let hooks = serde_json::json!({
         "hooks": {
             "PreToolUse": [{
-                "matcher": "Bash",
+                "matcher": matcher,
                 "hooks": [{
                     "type": "command",
                     "command": format!("python3 {}", pre_script_path.display()),
@@ -710,7 +714,7 @@ raise SystemExit(2)
                 }]
             }],
             "PostToolUse": [{
-                "matcher": "Bash",
+                "matcher": matcher,
                 "hooks": [{
                     "type": "command",
                     "command": format!("python3 {}", post_script_path.display()),
@@ -4010,6 +4014,76 @@ async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
 }
 
 #[tokio::test]
+async fn flattened_alias_matches_pre_and_post_tool_use_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "flattened-hook-alias";
+    let feedback = "flattened alias post hook ran";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "agents__list_agents", "{}"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "hook alias observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            write_logging_pre_and_blocking_post_tool_use_hooks(
+                home,
+                "agents__list_agents",
+                feedback,
+            )
+            .expect("failed to write flattened alias hook fixture");
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            config.model_provider.namespace_tools = Some(false);
+            trust_discovered_hooks(config);
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("list agents").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("list_agents output string");
+    assert_eq!(output, feedback);
+
+    let pre_hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(pre_hook_inputs.len(), 1);
+    assert_eq!(pre_hook_inputs[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(pre_hook_inputs[0]["tool_name"], "agentslist_agents");
+    assert_eq!(pre_hook_inputs[0]["tool_use_id"], call_id);
+
+    let post_hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(post_hook_inputs.len(), 1);
+    assert_eq!(post_hook_inputs[0]["hook_event_name"], "PostToolUse");
+    assert_eq!(post_hook_inputs[0]["tool_name"], "agentslist_agents");
+    assert_eq!(post_hook_inputs[0]["tool_use_id"], call_id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_host_windows!(Ok(()));
@@ -4063,7 +4137,7 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
 
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
-            write_logging_pre_and_blocking_post_tool_use_hooks(home, feedback)
+            write_logging_pre_and_blocking_post_tool_use_hooks(home, "Bash", feedback)
                 .expect("failed to write tool use hook test fixture");
         })
         .with_config(|config| {

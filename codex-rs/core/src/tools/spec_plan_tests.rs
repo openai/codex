@@ -177,10 +177,10 @@ impl ToolPlanProbe {
     }
 }
 
-async fn probe_with(
+async fn probe_result_with(
     configure_turn: impl FnOnce(&mut TurnContext),
     inputs: ToolPlanInputs,
-) -> ToolPlanProbe {
+) -> Result<ToolPlanProbe, String> {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
     let turn = Arc::new(turn);
@@ -195,8 +195,17 @@ async fn probe_with(
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
         &Default::default(),
-    );
-    ToolPlanProbe::from_router(router)
+    )?;
+    Ok(ToolPlanProbe::from_router(router))
+}
+
+async fn probe_with(
+    configure_turn: impl FnOnce(&mut TurnContext),
+    inputs: ToolPlanInputs,
+) -> ToolPlanProbe {
+    probe_result_with(configure_turn, inputs)
+        .await
+        .expect("tool plan should build")
 }
 
 async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
@@ -701,17 +710,20 @@ async fn environment_tools_follow_the_step_context() {
         /*loaded_agents_md*/ None,
     ));
 
-    let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
-        step_context.as_ref(),
-        ToolRouterParams {
-            mcp_tools: None,
-            deferred_mcp_tools: None,
-            tool_suggest_candidates: None,
-            extension_tool_executors: Vec::new(),
-            dynamic_tools: &[],
-        },
-        &Default::default(),
-    ));
+    let plan = ToolPlanProbe::from_router(
+        ToolRouter::from_context(
+            step_context.as_ref(),
+            ToolRouterParams {
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                tool_suggest_candidates: None,
+                extension_tool_executors: Vec::new(),
+                dynamic_tools: &[],
+            },
+            &Default::default(),
+        )
+        .expect("tool plan should build"),
+    );
 
     plan.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
 }
@@ -859,6 +871,123 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 }
 
 #[tokio::test]
+async fn namespace_tools_disabled_rejects_flat_alias_collision_with_plain_tool() {
+    let err = match probe_result_with(
+        |turn| {
+            turn.model_info.supports_search_tool = false;
+            disable_namespace_tools(turn);
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                None,
+                "agents__spawn_agent",
+                // This plain runtime is not discoverable with search disabled,
+                // but its exact registry name would still steal the alias.
+                /*defer_loading*/
+                true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("flat alias collision should reject the tool plan"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err,
+        "cannot flatten namespace tools because canonical flat tool names collide: `agents__spawn_agent`: namespace `agents` tool `spawn_agent`, plain tool `agents__spawn_agent`"
+    );
+}
+
+#[tokio::test]
+async fn namespace_tools_disabled_rejects_cross_source_namespaced_flat_collisions() {
+    let err = match probe_result_with(
+        |turn| {
+            disable_namespace_tools(turn);
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            update_config(turn, |config| {
+                config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("agents_"),
+                "spawn_agent",
+                /*defer_loading*/ false,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("cross-source flat collision should reject the tool plan"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err,
+        "cannot flatten namespace tools because canonical flat tool names collide: `agents__spawn_agent`: namespace `agents` tool `spawn_agent`, namespace `agents_` tool `spawn_agent`"
+    );
+}
+
+#[tokio::test]
+async fn namespace_tools_disabled_rejects_discoverable_flat_collisions() {
+    let err = match probe_result_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+            disable_namespace_tools(turn);
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("agents"), "spawn_agent", /*defer_loading*/ true),
+                dynamic_tool(Some("agents_"), "spawn_agent", /*defer_loading*/ true),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("discoverable flat collision should reject the tool plan"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err,
+        "cannot flatten namespace tools because canonical flat tool names collide: `agents__spawn_agent`: namespace `agents` tool `spawn_agent`, namespace `agents_` tool `spawn_agent`"
+    );
+}
+
+#[tokio::test]
+async fn namespace_tools_disabled_ignores_unreachable_flat_collisions() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = false;
+            disable_namespace_tools(turn);
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("agents"), "spawn_agent", /*defer_loading*/ true),
+                dynamic_tool(Some("agents_"), "spawn_agent", /*defer_loading*/ true),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["agents__spawn_agent", "tool_search"]);
+    plan.assert_registered_contains(&[
+        &ToolName::namespaced("agents", "spawn_agent").to_string(),
+        &ToolName::namespaced("agents_", "spawn_agent").to_string(),
+    ]);
+}
+
+#[tokio::test]
 async fn deferred_extension_tools_are_discoverable_with_tool_search() {
     let plan = probe_with(
         |turn| {
@@ -895,7 +1024,8 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
             dynamic_tools: &[],
         },
         &cache,
-    );
+    )
+    .expect("first tool plan should build");
     let first_plan = ToolPlanProbe::from_router(first_router);
 
     let (_session, mut second_turn) = make_session_and_context().await;
@@ -912,7 +1042,8 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
             dynamic_tools: &[],
         },
         &cache,
-    );
+    )
+    .expect("second tool plan should build");
     let second_plan = ToolPlanProbe::from_router(second_router);
 
     let ToolSpec::ToolSearch {
