@@ -302,7 +302,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
         let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
             h_token.raw(),
-            &req.command,
+            &req.launch,
             &effective_cwd,
             &req.env,
             req.use_private_desktop,
@@ -334,7 +334,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         };
         let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
             h_token.raw(),
-            &req.command,
+            &req.launch,
             &effective_cwd,
             &req.env,
             stdin_mode,
