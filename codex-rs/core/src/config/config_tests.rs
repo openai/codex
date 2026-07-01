@@ -75,6 +75,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
@@ -8696,6 +8697,36 @@ async fn explicit_null_service_tier_override_maps_to_default_service_tier() -> s
         Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
     assert_eq!(config.notices.fast_default_opt_out, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reasoning_summary_delivery_override_preserves_tri_state() -> std::io::Result<()> {
+    let mut fixture = create_test_fixture()?;
+    fixture.cfg.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::Sequential);
+
+    for (override_value, expected) in [
+        (None, Some(ReasoningSummaryDelivery::Sequential)),
+        (Some(None), None),
+        (
+            Some(Some(ReasoningSummaryDelivery::ConcurrentCutoff)),
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff),
+        ),
+    ] {
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd_path()),
+                reasoning_summary_delivery: override_value,
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )
+        .await?;
+
+        assert_eq!(config.reasoning_summary_delivery, expected);
+    }
+
     Ok(())
 }
 

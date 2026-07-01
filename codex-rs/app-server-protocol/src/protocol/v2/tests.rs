@@ -2,6 +2,7 @@ use super::*;
 use crate::ServerNotification;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
@@ -1718,6 +1719,7 @@ fn config_granular_approval_policy_is_marked_experimental() {
         compact_prompt: None,
         model_reasoning_effort: None,
         model_reasoning_summary: None,
+        reasoning_summary_delivery: None,
         model_verbosity: None,
         service_tier: None,
         analytics: None,
@@ -1751,6 +1753,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         compact_prompt: None,
         model_reasoning_effort: None,
         model_reasoning_summary: None,
+        reasoning_summary_delivery: None,
         model_verbosity: None,
         service_tier: None,
         analytics: None,
@@ -3919,20 +3922,40 @@ fn dynamic_tool_response_serializes_text_and_image_content_items() {
 }
 
 #[test]
-fn thread_start_params_preserve_explicit_null_service_tier() {
-    let params: ThreadStartParams =
-        serde_json::from_value(json!({ "serviceTier": null })).expect("params should deserialize");
+fn thread_start_params_preserve_nullable_overrides() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "serviceTier": null,
+        "reasoningSummaryDelivery": "concurrent_cutoff"
+    }))
+    .expect("params should deserialize");
     assert_eq!(params.service_tier, Some(None));
+    assert_eq!(
+        params.reasoning_summary_delivery,
+        Some(Some(ReasoningSummaryDelivery::ConcurrentCutoff))
+    );
 
     let serialized = serde_json::to_value(&params).expect("params should serialize");
     assert_eq!(
         serialized.get("serviceTier"),
         Some(&serde_json::Value::Null)
     );
+    assert_eq!(
+        serialized.get("reasoningSummaryDelivery"),
+        Some(&json!("concurrent_cutoff"))
+    );
+
+    let params: ThreadStartParams =
+        serde_json::from_value(json!({ "reasoningSummaryDelivery": null }))
+            .expect("params should deserialize");
+    assert_eq!(params.reasoning_summary_delivery, Some(None));
 
     let serialized_without_override =
         serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
     assert_eq!(serialized_without_override.get("serviceTier"), None);
+    assert_eq!(
+        serialized_without_override.get("reasoningSummaryDelivery"),
+        None
+    );
 }
 
 #[test]

@@ -53,6 +53,16 @@ pub enum ReasoningSummary {
     None,
 }
 
+/// Controls when reasoning summaries are delivered relative to later response items.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ReasoningSummaryDelivery {
+    Sequential,
+    Concurrent,
+    ConcurrentCutoff,
+}
+
 /// Controls output length/detail on GPT-5 models via the Responses API.
 /// Serialized with lowercase values to match the OpenAI API.
 #[derive(

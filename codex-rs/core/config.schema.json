@@ -774,6 +774,9 @@
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
+        "reasoning_summary_delivery": {
+          "$ref": "#/definitions/ReasoningSummaryDelivery"
+        },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
         },
@@ -2710,6 +2713,15 @@
           "type": "string"
         }
       ]
+    },
+    "ReasoningSummaryDelivery": {
+      "description": "Controls when reasoning summaries are delivered relative to later response items.",
+      "enum": [
+        "sequential",
+        "concurrent",
+        "concurrent_cutoff"
+      ],
+      "type": "string"
     },
     "RolloutBudgetConfigToml": {
       "additionalProperties": false,
@@ -5411,6 +5423,9 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "reasoning_summary_delivery": {
+      "$ref": "#/definitions/ReasoningSummaryDelivery"
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

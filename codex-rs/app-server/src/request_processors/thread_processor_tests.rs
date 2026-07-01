@@ -123,6 +123,7 @@ mod thread_processor_behavior_tests {
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::ReasoningSummaryDelivery;
     use codex_protocol::config_types::Settings;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
@@ -712,6 +713,10 @@ mod thread_processor_behavior_tests {
                     ("features.plugins".to_string(), json!(true)),
                     ("bypass_hook_trust".to_string(), json!(true)),
                     (
+                        "reasoning_summary_delivery".to_string(),
+                        json!("sequential"),
+                    ),
+                    (
                         "model_providers.session".to_string(),
                         json!({
                             "name": "request",
@@ -720,7 +725,12 @@ mod thread_processor_behavior_tests {
                         }),
                     ),
                 ])),
-                ConfigOverrides::default(),
+                ConfigOverrides {
+                    reasoning_summary_delivery: Some(Some(
+                        ReasoningSummaryDelivery::ConcurrentCutoff,
+                    )),
+                    ..Default::default()
+                },
             )
             .await?;
 
@@ -728,6 +738,10 @@ mod thread_processor_behavior_tests {
         assert_eq!(config.model_provider, session_provider);
         assert!(!config.features.enabled(Feature::Plugins));
         assert!(config.bypass_hook_trust);
+        assert_eq!(
+            config.reasoning_summary_delivery,
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff)
+        );
         Ok(())
     }
 
@@ -747,6 +761,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: None,
             sandbox: None,
             permissions: None,
+            reasoning_summary_delivery: None,
             config: None,
             base_instructions: None,
             developer_instructions: None,

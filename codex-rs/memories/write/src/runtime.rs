@@ -283,6 +283,7 @@ impl MemoryStartupContext {
                 &context.session_telemetry,
                 context.reasoning_effort.clone(),
                 context.reasoning_summary,
+                config.reasoning_summary_delivery,
                 context.service_tier.clone(),
                 &responses_metadata,
                 &InferenceTraceContext::disabled(),

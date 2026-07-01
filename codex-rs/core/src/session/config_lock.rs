@@ -134,6 +134,7 @@ fn save_config_resolved_fields(
     lock_config.web_search = Some(config.web_search_mode.value());
     lock_config.model_provider = Some(config.model_provider_id.clone());
     lock_config.plan_mode_reasoning_effort = config.plan_mode_reasoning_effort.clone();
+    lock_config.reasoning_summary_delivery = config.reasoning_summary_delivery;
     lock_config.model_verbosity = config.model_verbosity;
     lock_config.include_permissions_instructions = Some(config.include_permissions_instructions);
     lock_config.include_apps_instructions = Some(config.include_apps_instructions);
@@ -238,6 +239,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::config_types::ReasoningSummaryDelivery;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
 
@@ -265,6 +267,7 @@ mod tests {
             .enable(Feature::RolloutBudget)
             .expect("rollout_budget should be enableable in tests");
         config.current_time_reminder = Some(crate::config::CurrentTimeReminderConfig::default());
+        config.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
         config
             .features
             .enable(Feature::CurrentTimeReminder)
@@ -280,6 +283,10 @@ mod tests {
         assert_eq!(lock.instructions, Some(sc.base_instructions.clone()));
         assert_eq!(lock.developer_instructions, sc.developer_instructions);
         assert_eq!(lock.compact_prompt, sc.compact_prompt);
+        assert_eq!(
+            lock.reasoning_summary_delivery,
+            Some(ReasoningSummaryDelivery::ConcurrentCutoff)
+        );
         assert_eq!(lock.model, Some(sc.collaboration_mode.model().to_string()));
         assert_eq!(
             lock.model_reasoning_effort,

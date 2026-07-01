@@ -64,6 +64,7 @@ export type { ReasoningEffort } from "./ReasoningEffort";
 export type { ReasoningItemContent } from "./ReasoningItemContent";
 export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSummary";
 export type { ReasoningSummary } from "./ReasoningSummary";
+export type { ReasoningSummaryDelivery } from "./ReasoningSummaryDelivery";
 export type { RequestId } from "./RequestId";
 export type { Resource } from "./Resource";
 export type { ResourceContent } from "./ResourceContent";
