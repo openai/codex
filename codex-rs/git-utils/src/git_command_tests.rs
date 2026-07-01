@@ -62,8 +62,13 @@ fn write_git_candidate(directory: &Path) {
 }
 
 fn locations_for_root(root: &Path) -> UntrustedGitLocations {
+    let mut roots = vec![root.to_path_buf()];
+    push_unique(
+        &mut roots,
+        std::fs::canonicalize(root).expect("canonical root"),
+    );
     UntrustedGitLocations {
-        roots: vec![std::fs::canonicalize(root).expect("canonical root")],
+        roots,
         common_dirs: Vec::new(),
     }
 }
@@ -329,12 +334,17 @@ fn resolver_rejects_parent_traversal_spelled_through_repository() {
     write_git_candidate(&trusted_bin);
 
     let locations = locations_for_root(&repo);
-    let traversing_path = locations.roots[0].join("../trusted-bin");
-    let search_path = std::env::join_paths([traversing_path]).expect("PATH");
-    assert!(matches!(
-        GitRunner::from_search_path(&locations, &search_path),
-        Err(GitReadError::NoTrustedGit)
-    ));
+    for root in &locations.roots {
+        let traversing_path = root.join("../trusted-bin");
+        let search_path = std::env::join_paths([traversing_path]).expect("PATH");
+        assert!(
+            matches!(
+                GitRunner::from_search_path(&locations, &search_path),
+                Err(GitReadError::NoTrustedGit)
+            ),
+            "resolver accepted parent traversal from {root:?}"
+        );
+    }
 }
 
 #[cfg(windows)]
