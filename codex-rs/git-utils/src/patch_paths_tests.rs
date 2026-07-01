@@ -433,6 +433,11 @@ fn create_dir_alias(target: &Path, alias: &Path) -> DirectoryAlias {
     std::os::unix::fs::symlink(target, alias).expect("create directory symlink");
     #[cfg(windows)]
     {
+        // Bazel's GNU Windows runner can surface temporary paths with `/`
+        // separators. `mklink` treats those separators as option prefixes, so
+        // pass native separators to the cmd.exe built-in.
+        let alias = alias.as_os_str().to_string_lossy().replace('/', "\\");
+        let target = target.as_os_str().to_string_lossy().replace('/', "\\");
         let output = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(alias)
