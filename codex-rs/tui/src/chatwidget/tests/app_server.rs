@@ -125,6 +125,21 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("safety_buffering_retry_prompt", popup);
 
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let opened_url = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::OpenUrlInBrowser { url }) => break url,
+            Ok(_) => continue,
+            Err(err) => panic!("expected learn-more URL event: {err}"),
+        }
+    };
+    assert_eq!(opened_url, "https://help.openai.com/en/articles/20001326");
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let (event_thread_id, event_turn_id, model, turn) = loop {
         match rx.try_recv() {
@@ -201,6 +216,9 @@ async fn safety_buffering_without_retry_shows_short_app_message() {
         Some(ReplayKind::ThreadSnapshot),
     );
     assert_eq!(render_popup(&chat), popup);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
 }
 
 #[tokio::test]
