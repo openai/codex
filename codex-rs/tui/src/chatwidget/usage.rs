@@ -6,12 +6,13 @@ use uuid::Uuid;
 use super::rate_limits::get_limits_duration;
 use super::*;
 
-const USAGE_MENU_VIEW_ID: &str = "usage-menu";
+pub(super) const USAGE_MENU_VIEW_ID: &str = "usage-menu";
 const RATE_LIMIT_RESET_VIEW_ID: &str = "rate-limit-reset";
 
 impl ChatWidget {
     pub(super) fn open_usage_menu(&mut self) {
         self.clear_pending_rate_limit_reset_hint();
+        self.start_referral_offer_refresh();
         let should_refresh_reset_availability = self.available_rate_limit_reset_credits == Some(0);
         self.bottom_pane
             .show_selection_view(self.usage_menu_params());
@@ -25,7 +26,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn usage_menu_params(&self) -> SelectionViewParams {
+    pub(super) fn usage_menu_params(&self) -> SelectionViewParams {
         let reset_eligible = self.has_chatgpt_account;
         let (reset_action_enabled, reset_description) =
             match (reset_eligible, self.available_rate_limit_reset_credits) {
@@ -41,32 +42,37 @@ impl ChatWidget {
                     (false, "No usage limit resets available.".to_string())
                 }
             };
+        let mut items = vec![
+            SelectionItem {
+                name: "Show usage".to_string(),
+                description: Some("View recent account token usage.".to_string()),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenTokenActivity);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Redeem usage limit reset".to_string(),
+                description: Some(reset_description),
+                is_disabled: !reset_action_enabled,
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenRateLimitResetCredits);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        if let Some(referral_item) = self.referral_menu_item() {
+            items.push(referral_item);
+        }
+
         SelectionViewParams {
             view_id: Some(USAGE_MENU_VIEW_ID),
             title: Some("Usage".to_string()),
             subtitle: Some("View account usage or redeem an earned reset.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
-            items: vec![
-                SelectionItem {
-                    name: "Show usage".to_string(),
-                    description: Some("View recent account token usage.".to_string()),
-                    actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenTokenActivity);
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "Redeem usage limit reset".to_string(),
-                    description: Some(reset_description),
-                    is_disabled: !reset_action_enabled,
-                    actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenRateLimitResetCredits);
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
+            items,
             ..Default::default()
         }
     }
@@ -87,7 +93,11 @@ impl ChatWidget {
         if let Ok(response) = result {
             self.available_rate_limit_reset_credits = Some(response.available_count);
         }
-        let params = self.usage_menu_params();
+        let selected = self
+            .bottom_pane
+            .selected_index_for_active_view(USAGE_MENU_VIEW_ID);
+        let mut params = self.usage_menu_params();
+        params.initial_selected_idx = selected;
         if self
             .bottom_pane
             .replace_selection_view_if_present(USAGE_MENU_VIEW_ID, params)

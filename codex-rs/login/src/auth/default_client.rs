@@ -202,6 +202,37 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+/// Create an HTTP client for non-idempotent requests that must not be retried or redirected.
+pub fn create_single_attempt_client() -> CodexHttpClient {
+    let inner = try_build_single_attempt_reqwest_client().unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "failed to build single-attempt reqwest client");
+        with_chatgpt_cloudflare_cookie_store(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never()),
+        )
+        .build()
+        .unwrap_or_else(|fallback_error| {
+            tracing::warn!(
+                error = %fallback_error,
+                "failed to build fallback single-attempt reqwest client with ChatGPT Cloudflare cookie store"
+            );
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .build()
+                .unwrap_or_else(|final_error| {
+                    tracing::error!(
+                        error = %final_error,
+                        "failed to build fallback single-attempt reqwest client"
+                    );
+                    std::process::abort()
+                })
+        })
+    });
+    CodexHttpClient::new(inner)
+}
+
 /// Builds the default reqwest client used for ordinary Codex HTTP traffic.
 ///
 /// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
@@ -233,6 +264,16 @@ pub fn build_reqwest_client() -> reqwest::Client {
 /// this method directly.
 pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
     build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
+}
+
+/// Tries to build the default reqwest client with retries and redirects disabled.
+pub fn try_build_single_attempt_reqwest_client()
+-> Result<reqwest::Client, BuildCustomCaTransportError> {
+    build_reqwest_client_with_custom_ca(
+        default_reqwest_client_builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never()),
+    )
 }
 
 fn default_reqwest_client_builder() -> reqwest::ClientBuilder {

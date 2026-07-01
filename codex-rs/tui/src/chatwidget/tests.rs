@@ -248,6 +248,7 @@ mod plan_mode;
 #[path = "tests/plugin_catalog_tests.rs"]
 mod plugin_catalog;
 mod popups_and_settings;
+mod referrals;
 mod review_mode;
 mod side;
 mod slash_commands;

@@ -45,6 +45,7 @@ use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -77,6 +78,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_chatgpt::referrals::ReferralClient;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
@@ -261,6 +263,7 @@ pub struct InProcessClientHandle {
     client: InProcessClientSender,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     runtime_handle: tokio::task::JoinHandle<()>,
+    referral_client: Arc<ReferralClient>,
     #[cfg(test)]
     _test_codex_home: Option<tempfile::TempDir>,
 }
@@ -342,6 +345,10 @@ impl InProcessClientHandle {
     pub fn sender(&self) -> InProcessClientSender {
         self.client.clone()
     }
+
+    pub fn referral_client(&self) -> Arc<ReferralClient> {
+        Arc::clone(&self.referral_client)
+    }
 }
 
 /// Starts an in-process app-server runtime and performs initialize handshake.
@@ -376,12 +383,18 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
+    let referral_auth_manager = Arc::new(OnceLock::new());
+    let referral_client = Arc::new(ReferralClient::new(
+        Arc::clone(&referral_auth_manager),
+        args.config.chatgpt_base_url.clone(),
+    ));
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
                 .await;
+        let _ = referral_auth_manager.set(Arc::clone(&auth_manager));
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
@@ -716,11 +729,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             let _ = done_tx.send(());
         }
     });
-
     Ok(InProcessClientHandle {
         client: InProcessClientSender { client_tx },
         event_rx,
         runtime_handle,
+        referral_client,
         #[cfg(test)]
         _test_codex_home: None,
     })

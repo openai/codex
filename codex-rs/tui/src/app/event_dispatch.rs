@@ -912,6 +912,30 @@ impl App {
                 self.chat_widget
                     .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
             }
+            AppEvent::RefreshReferralOffer(request_id) => {
+                self.refresh_referral_offer(app_server, request_id);
+            }
+            AppEvent::ReferralOfferLoaded(request_id, offer) => {
+                self.chat_widget
+                    .finish_referral_offer_refresh(request_id, offer.map(|offer| *offer));
+            }
+            AppEvent::OpenReferralEmailPrompt => {
+                self.chat_widget.show_referral_email_prompt();
+            }
+            AppEvent::OpenReferralConfirmation(email) => {
+                self.chat_widget.show_referral_confirmation(email);
+            }
+            AppEvent::SendReferralInvite { email, offer } => {
+                if let Some((request_id, offer)) =
+                    self.chat_widget.start_referral_send(&email, *offer)
+                {
+                    self.send_referral_invite(app_server, request_id, offer, email);
+                }
+            }
+            AppEvent::ReferralInviteSent(request_id, reward_status) => {
+                self.chat_widget
+                    .finish_referral_send(request_id, reward_status);
+            }
             AppEvent::OpenRateLimitResetCredits => {
                 let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
                 self.refresh_rate_limit_reset_credits(app_server, request_id);

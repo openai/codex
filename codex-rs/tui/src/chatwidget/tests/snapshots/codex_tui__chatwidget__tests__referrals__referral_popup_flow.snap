@@ -1,0 +1,35 @@
+---
+source: tui/src/chatwidget/tests/referrals.rs
+expression: "format!(\"EMAIL\\n{email_prompt}\\nCONFIRMATION\\n{confirmation}\\nSENDING\\n{sending}\\nSUCCESS\\n{success}\")"
+---
+EMAIL
+▌ Invite someone to Codex
+▌ Enter one email address, then press Enter.
+▌
+▌ name@example.com
+
+Press enter to confirm or esc to go back
+CONFIRMATION
+  Send referral invite?
+  Invite a friend and earn a usage reset.
+  Recipient: friend@example.com
+  • Your friend must be new to Codex.
+  By sending, you confirm that you have this
+  person's consent.
+
+  1. Send invite
+› 2. Cancel
+
+  Press enter to confirm or esc to go back
+SENDING
+  Invite someone to Codex
+  Sending an invite to friend@example.com...
+
+›    Sending invite...
+SUCCESS
+  Invite someone to Codex
+  Invite sent to friend@example.com.
+
+› 1. Close
+
+  Press enter to confirm or esc to go back
