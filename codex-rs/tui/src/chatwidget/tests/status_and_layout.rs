@@ -195,6 +195,36 @@ async fn raw_output_status_line_value_only_shows_when_enabled() {
 }
 
 #[tokio::test]
+async fn status_line_permissions_distinguish_no_sandbox_from_full_access() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("set permission profile");
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())
+        .expect("set approval policy");
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::Permissions),
+        Some("No Sandbox".to_string())
+    );
+
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never.to_core())
+        .expect("set approval policy");
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::Permissions),
+        Some("Full Access".to_string())
+    );
+}
+
+#[tokio::test]
 async fn status_line_branch_changes_render_no_changes() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_git_summary = Some(StatusLineGitSummary {
