@@ -1,3 +1,4 @@
+use super::history_reconciliation::HistoryReconciliationConfig;
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
@@ -804,6 +805,26 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    pub(super) async fn history_reconciliation_config(&self) -> HistoryReconciliationConfig {
+        let session_configuration = self.default_turn_configuration().await;
+        let per_turn_config = Self::build_per_turn_config(
+            &session_configuration,
+            session_configuration.cwd().clone(),
+        );
+        let model_info = self
+            .services
+            .models_manager
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config.to_models_manager_config(),
+            )
+            .await;
+        HistoryReconciliationConfig {
+            truncation_policy: model_info.truncation_policy.into(),
+            auto_compact_token_limit_scope: per_turn_config.model_auto_compact_token_limit_scope,
+        }
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {

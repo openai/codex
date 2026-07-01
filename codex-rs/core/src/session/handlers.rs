@@ -461,6 +461,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
+    let _history_guard = sess.acquire_history_persistence_lock().await;
     let has_active_turn = { sess.active_turn.lock().await.is_some() };
     if has_active_turn {
         sess.send_event_raw(Event {

@@ -27,6 +27,8 @@ pub use codex_thread::BackgroundTerminalInfo;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadSettingsOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
+pub use codex_thread::ThreadHistoryReconciliationOutcome;
+pub use codex_thread::ThreadHistoryReconciliationSnapshot;
 pub use codex_thread::TryStartTurnIfIdleError;
 pub use codex_thread::TryStartTurnIfIdleRejectionReason;
 pub use session::turn_context::TurnContext;

@@ -20,6 +20,8 @@ use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_CLOSE_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 
@@ -37,6 +39,18 @@ fn recognizes_legacy_token_budget_as_contextual_developer_content() {
     let content = vec![ContentItem::InputText {
         text: "<token_budget>\nYou have 710 tokens left in this context window.\n</token_budget>"
             .to_string(),
+    }];
+
+    assert!(is_contextual_dev_message_content(&content));
+    assert!(!has_non_contextual_dev_message_content(&content));
+}
+
+#[test]
+fn recognizes_token_budget_reminder_as_contextual_developer_content() {
+    let content = vec![ContentItem::InputText {
+        text: format!(
+            "{TOKEN_BUDGET_REMINDER_OPEN_TAG}\nOnly 400 tokens remain.\n{TOKEN_BUDGET_REMINDER_CLOSE_TAG}"
+        ),
     }];
 
     assert!(is_contextual_dev_message_content(&content));
