@@ -183,12 +183,31 @@ impl AgentControl {
         agent_id: ThreadId,
         communication: InterAgentCommunication,
     ) -> CodexResult<String> {
-        let last_task_message = last_task_message_from_communication(&communication);
         let state = self.upgrade()?;
         let op = Op::InterAgentCommunication { communication };
         self.ensure_execution_capacity_for_op(agent_id, &op).await?;
+        let Op::InterAgentCommunication { communication } = op else {
+            unreachable!("constructed as an inter-agent communication operation");
+        };
+        self.send_inter_agent_communication_after_capacity_check(agent_id, &state, communication)
+            .await
+    }
+
+    async fn send_inter_agent_communication_after_capacity_check(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<String> {
+        let last_task_message = last_task_message_from_communication(&communication);
         let result = self
-            .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
+            .handle_thread_request_result(
+                agent_id,
+                state,
+                state
+                    .send_op(agent_id, Op::InterAgentCommunication { communication })
+                    .await,
+            )
             .await;
         if result.is_ok() {
             match last_task_message {
