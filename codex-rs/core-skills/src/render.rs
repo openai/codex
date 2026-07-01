@@ -62,13 +62,19 @@ pub const SKILLS_HOW_TO_USE_WITH_ALIASES: &str = r###"- Discovery: The list abov
   - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
 - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue."###;
 
-pub fn render_available_skills_body(skill_root_lines: &[String], skill_lines: &[String]) -> String {
+pub fn render_available_skills_body(
+    skill_root_lines: &[String],
+    skill_lines: &[String],
+    include_intro: bool,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
-    if skill_root_lines.is_empty() {
+    if include_intro && skill_root_lines.is_empty() {
         lines.push(SKILLS_INTRO_WITH_ABSOLUTE_PATHS.to_string());
-    } else {
+    } else if include_intro {
         lines.push(SKILLS_INTRO_WITH_ALIASES.to_string());
+    }
+    if !skill_root_lines.is_empty() {
         lines.push("### Skill roots".to_string());
         lines.extend(skill_root_lines.iter().cloned());
     }
@@ -802,8 +808,8 @@ fn aliased_metadata_overhead_cost(
     skill_root_lines: &[String],
 ) -> usize {
     let empty_skill_lines: &[String] = &[];
-    let absolute_body = render_available_skills_body(&[], empty_skill_lines);
-    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines);
+    let absolute_body = render_available_skills_body(&[], empty_skill_lines, true);
+    let aliased_body = render_available_skills_body(skill_root_lines, empty_skill_lines, true);
     budget
         .cost(&aliased_body)
         .saturating_sub(budget.cost(&absolute_body))
