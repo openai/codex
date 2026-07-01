@@ -9,6 +9,16 @@ struct SpawnAgentThreadInheritance {
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
 }
 
+/// Initial input delivered after a spawned agent acquires execution capacity.
+///
+/// V2 communication spawns keep the communication and its context paired so centralized
+/// submission and lifecycle logging cannot receive one without the other. Other spawn sources
+/// submit a protocol [`Op`] directly.
+enum SpawnInitialInput {
+    Op(Box<Op>),
+    InterAgentCommunication(InterAgentCommunication, AgentCommunicationContext),
+}
+
 fn default_agent_nickname_list() -> Vec<&'static str> {
     AGENT_NAMES
         .lines()
@@ -94,7 +104,7 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let spawned_agent = Box::pin(self.spawn_agent_internal(
             config,
-            initial_operation,
+            SpawnInitialInput::Op(Box::new(initial_operation)),
             session_source,
             SpawnAgentOptions::default(),
         ))
@@ -110,8 +120,30 @@ impl AgentControl {
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions, // TODO(jif) drop with new fork.
     ) -> CodexResult<LiveAgent> {
-        Box::pin(self.spawn_agent_internal(config, initial_operation, session_source, options))
-            .await
+        Box::pin(self.spawn_agent_internal(
+            config,
+            SpawnInitialInput::Op(Box::new(initial_operation)),
+            session_source,
+            options,
+        ))
+        .await
+    }
+
+    pub(crate) async fn spawn_agent_with_communication(
+        &self,
+        config: Config,
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
+        session_source: Option<SessionSource>,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<LiveAgent> {
+        Box::pin(self.spawn_agent_internal(
+            config,
+            SpawnInitialInput::InterAgentCommunication(communication, context),
+            session_source,
+            options,
+        ))
+        .await
     }
 
     pub(crate) async fn ensure_v2_agent_loaded(
@@ -197,7 +229,7 @@ impl AgentControl {
     async fn spawn_agent_internal(
         &self,
         config: Config,
-        initial_operation: Op,
+        initial_input: SpawnInitialInput,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
@@ -356,8 +388,25 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
-            .await?;
+        match initial_input {
+            SpawnInitialInput::Op(initial_operation) => {
+                self.send_input_after_capacity_check(
+                    new_thread.thread_id,
+                    &state,
+                    *initial_operation,
+                )
+                .await?;
+            }
+            SpawnInitialInput::InterAgentCommunication(communication, context) => {
+                self.send_inter_agent_communication_after_capacity_check(
+                    new_thread.thread_id,
+                    &state,
+                    communication,
+                    context,
+                )
+                .await?;
+            }
+        }
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path

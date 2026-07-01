@@ -1,6 +1,11 @@
 use anyhow::Result;
+use chrono::DateTime;
+use chrono::Utc;
+use codex_core::SleepFuture;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TimeFuture;
+use codex_core::TimeProvider;
 use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
@@ -39,10 +44,15 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 use test_case::test_case;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tracing::Level;
+use tracing_test::internal::MockWriter;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
@@ -61,6 +71,29 @@ const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
 const SUBAGENT_STOP_CONTINUATION: &str = "continue only the child";
 const INTERNAL_SUBAGENT_PROMPT: &str = "internal subagent: review";
+const ROOT_SIMCLOCK_TIME: i64 = 1_000;
+const CHILD_SIMCLOCK_TIME: i64 = 2_000;
+
+#[derive(Default)]
+struct ThreadSimClock(OnceLock<ThreadId>);
+
+impl TimeProvider for ThreadSimClock {
+    fn current_time(&self, thread_id: ThreadId) -> TimeFuture<'_> {
+        let timestamp = if self.0.get().copied() == Some(thread_id) {
+            ROOT_SIMCLOCK_TIME
+        } else {
+            CHILD_SIMCLOCK_TIME
+        };
+        Box::pin(async move {
+            Ok(DateTime::<Utc>::from_timestamp(timestamp, 0)
+                .expect("test simclock timestamp should be valid"))
+        })
+    }
+
+    fn sleep(&self, _thread_id: ThreadId, _duration: Duration) -> SleepFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     decoded_body(req)
@@ -94,6 +127,13 @@ fn decoded_body(req: &wiremock::Request) -> Option<Vec<u8>> {
     } else {
         Some(req.body.clone())
     }
+}
+
+fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}=");
+    line.split_ascii_whitespace()
+        .find_map(|field| field.strip_prefix(&prefix))
+        .map(|value| value.trim_matches('"'))
 }
 
 fn has_subagent_notification(req: &ResponsesRequest) -> bool {
@@ -1042,8 +1082,16 @@ async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Res
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result<()> {
+    let output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_writer(MockWriter::new(output))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
     let server = start_mock_server().await;
     let encrypted_message = "opaque-encrypted-message";
     let spawn_args = serde_json::to_string(&json!({
@@ -1087,17 +1135,23 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
     )
     .await;
 
-    let mut builder = test_codex().with_model("koffing").with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-    });
+    let simclock = Arc::new(ThreadSimClock::default());
+    let mut builder = test_codex()
+        .with_model("koffing")
+        .with_external_time_provider(simclock.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build(&server).await?;
+    let root_thread_id = test.session_configured.thread_id;
+    assert!(simclock.0.set(root_thread_id).is_ok());
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
@@ -1123,6 +1177,44 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
             ],
         })])
     );
+
+    let child_thread_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != root_thread_id)
+        .expect("child thread ID");
+    let logs = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let logs = String::from_utf8(output.lock().expect("buffer lock").clone())
+                .expect("logs should be UTF-8");
+            if logs.contains("kind=\"spawn\"") && logs.contains("state=\"receive\"") {
+                break logs;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("spawn communication logs should be emitted");
+    let send = logs
+        .lines()
+        .find(|line| line.contains("kind=\"spawn\"") && line.contains("state=\"send\""))
+        .expect("spawn send event");
+    assert!(send.contains(&format!("sender_thread_id={root_thread_id}")));
+    assert!(send.contains(&format!("receiver_thread_id={child_thread_id}")));
+    assert!(send.contains(&format!("content=\"{encrypted_message}\"")));
+    assert!(send.contains(&format!("simclock_time={ROOT_SIMCLOCK_TIME}")));
+
+    let communication_id = log_field(send, "communication_id").expect("communication ID");
+    let receive = logs
+        .lines()
+        .find(|line| {
+            line.contains("state=\"receive\"")
+                && log_field(line, "communication_id") == Some(communication_id)
+        })
+        .expect("correlated receive event");
+    assert!(receive.contains(&format!("simclock_time={CHILD_SIMCLOCK_TIME}")));
 
     Ok(())
 }

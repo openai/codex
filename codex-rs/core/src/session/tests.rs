@@ -5431,6 +5431,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )),
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
+        simclock_time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             AgentIdentityAuthPolicy::JwtOnly,
@@ -7557,6 +7558,7 @@ where
         )),
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
+        simclock_time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             AgentIdentityAuthPolicy::JwtOnly,
