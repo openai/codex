@@ -3,6 +3,8 @@ use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -531,7 +533,11 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     let submission_id = harness
         .control
-        .send_inter_agent_communication(thread_id, communication.clone())
+        .send_inter_agent_communication(
+            thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
     assert!(!submission_id.is_empty());
@@ -656,7 +662,11 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication.clone())
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed after reload");
     let expected = (
@@ -803,7 +813,11 @@ async fn encrypted_inter_agent_communication_clears_existing_last_task_message()
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication)
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication,
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
 
