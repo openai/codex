@@ -427,6 +427,99 @@ fn commit_seed(root: &Path) {
     assert_eq!(run(root, &["git", "commit", "-m", "seed"]).0, 0);
 }
 
+fn init_repo_with_selected_filter(config_key: &str) -> tempfile::TempDir {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=selected\n")
+        .expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write tracked file");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                config_key,
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::write(root.join("file.txt"), "new\n").expect("modify tracked file");
+    repo
+}
+
+#[cfg(unix)]
+struct RacyFilterFixture {
+    repo: tempfile::TempDir,
+    marker: PathBuf,
+}
+
+#[cfg(unix)]
+fn init_racy_filter_fixture(driver: &str, command: &str) -> RacyFilterFixture {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
+    use std::time::Duration;
+    use std::time::SystemTime;
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        format!(
+            "outside.txt filter={driver}\nlink filter={driver}\nselected.txt filter={driver}\n"
+        ),
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("outside.txt"), "outside-racy\n").expect("write racy file");
+    std::fs::write(root.join("target.txt"), "old target\n").expect("write target");
+    std::fs::write(root.join("selected.txt"), "old selected\n").expect("write selected target");
+    symlink("old-target", root.join("link")).expect("create initial symlink");
+
+    let future = SystemTime::UNIX_EPOCH + Duration::from_secs(1_893_484_800);
+    let outside = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(root.join("outside.txt"))
+        .expect("open racy file");
+    outside
+        .set_times(std::fs::FileTimes::new().set_modified(future))
+        .expect("set future racy mtime");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+
+    let marker = root.join("filter-ran");
+    let helper = root.join("filter-helper.sh");
+    let helper_body = if command == "clean" {
+        format!("#!/bin/sh\n: > '{}'\ncat\n", marker.display())
+    } else {
+        format!("#!/bin/sh\n: > '{}'\nexit 1\n", marker.display())
+    };
+    std::fs::write(&helper, helper_body).expect("write filter helper");
+    let mut permissions = std::fs::metadata(&helper)
+        .expect("filter helper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&helper, permissions).expect("make filter helper executable");
+    let key = format!("filter.{driver}.{command}");
+    let helper_arg = helper.to_string_lossy().into_owned();
+    assert_eq!(run(root, &["git", "config", &key, &helper_arg]).0, 0);
+    let required_key = format!("filter.{driver}.required");
+    assert_eq!(run(root, &["git", "config", &required_key, "true"]).0, 0);
+    assert!(!marker.exists(), "fixture setup must not run the filter");
+    RacyFilterFixture { repo, marker }
+}
+
+#[cfg(unix)]
+fn index_entry(root: &Path, path: &str) -> String {
+    let (code, stdout, stderr) = run(root, &["git", "ls-files", "--stage", "--", path]);
+    assert_eq!(code, 0, "read index entry: {stderr}");
+    stdout
+}
+
 #[cfg(any(unix, windows))]
 fn create_dir_alias(target: &Path, alias: &Path) -> DirectoryAlias {
     #[cfg(unix)]
@@ -727,8 +820,13 @@ fn staging_rejects_global_lfs_filter_without_running_it() {
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
         let git = GitRunner::for_cwd_io(&root).expect("trusted Git");
-        let error = stage_effective_paths(&git, &root, &["file.txt".to_string()])
-            .expect_err("reject global Git LFS filter");
+        let error = stage_effective_paths(
+            &git,
+            &root,
+            &["file.txt".to_string()],
+            &safe_git_config_parts(),
+        )
+        .expect_err("reject global Git LFS filter");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         return;
     }
@@ -786,4 +884,347 @@ fn staging_rejects_global_lfs_filter_without_running_it() {
     let (diff_code, staged, diff_err) = run(root, &["git", "diff", "--cached", "--name-only"]);
     assert_eq!(diff_code, 0, "read staged paths: {diff_err}");
     assert!(staged.is_empty(), "staging changed the index: {staged}");
+}
+
+#[test]
+fn staging_rejects_selected_process_but_allows_smudge_only_filter() {
+    let process_repo = init_repo_with_selected_filter("filter.selected.process");
+    let process_root = process_repo.path();
+    let process_git = GitRunner::for_cwd_io(process_root).expect("trusted Git");
+    let error = stage_effective_paths(
+        &process_git,
+        process_root,
+        &["file.txt".to_string()],
+        &safe_git_config_parts(),
+    )
+    .expect_err("reject selected process filter");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
+    let smudge_repo = init_repo_with_selected_filter("filter.selected.smudge");
+    let smudge_root = smudge_repo.path();
+    let smudge_git = GitRunner::for_cwd_io(smudge_root).expect("trusted Git");
+    stage_effective_paths(
+        &smudge_git,
+        smudge_root,
+        &["file.txt".to_string()],
+        &safe_git_config_parts(),
+    )
+    .expect("smudge-only filters do not run during staging");
+    let (code, staged, stderr) = run(smudge_root, &["git", "diff", "--cached", "--name-only"]);
+    assert_eq!(code, 0, "read staged paths: {stderr}");
+    assert_eq!(staged, "file.txt\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn staging_neutralizes_off_path_racy_filters_without_changing_their_index_entry() {
+    for (driver, command) in [
+        ("selected", "clean"),
+        ("selected", "process"),
+        ("", "clean"),
+        ("x=y", "clean"),
+    ] {
+        let control = init_racy_filter_fixture(driver, command);
+        let control_root = control.repo.path();
+        std::fs::write(control_root.join("target.txt"), "new target\n")
+            .expect("modify control target");
+        let _ = run(control_root, &["git", "add", "--", "target.txt"]);
+        assert!(
+            control.marker.exists(),
+            "raw git add should execute the off-path racy {driver:?} {command} filter"
+        );
+
+        let guarded = init_racy_filter_fixture(driver, command);
+        let guarded_root = guarded.repo.path();
+        let outside_before = index_entry(guarded_root, "outside.txt");
+        std::fs::write(guarded_root.join("target.txt"), "new target\n")
+            .expect("modify guarded target");
+        let git = GitRunner::for_cwd_io(guarded_root).expect("trusted Git");
+        stage_effective_paths(
+            &git,
+            guarded_root,
+            &["target.txt".to_string()],
+            &safe_git_config_parts(),
+        )
+        .expect("stage with off-path filters neutralized");
+
+        assert!(
+            !guarded.marker.exists(),
+            "guarded staging must not execute the off-path racy {driver:?} {command} filter"
+        );
+        assert_eq!(
+            index_entry(guarded_root, "outside.txt"),
+            outside_before,
+            "staging must preserve the unrelated index entry for {driver:?} {command}"
+        );
+        let (code, staged, stderr) = run(guarded_root, &["git", "diff", "--cached", "--name-only"]);
+        assert_eq!(code, 0, "read staged paths: {stderr}");
+        assert_eq!(
+            staged, "target.txt\n",
+            "driver={driver:?} command={command}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn staging_allows_selected_symlink_while_neutralizing_off_path_filters() {
+    use std::os::unix::fs::symlink;
+
+    for (command, core_symlinks) in [("clean", true), ("process", false)] {
+        let fixture = init_racy_filter_fixture("selected", command);
+        let root = fixture.repo.path();
+        assert_eq!(
+            run(
+                root,
+                &[
+                    "git",
+                    "config",
+                    "core.symlinks",
+                    if core_symlinks { "true" } else { "false" },
+                ],
+            )
+            .0,
+            0
+        );
+        std::fs::remove_file(root.join("link")).expect("remove old symlink");
+        symlink("new-target", root.join("link")).expect("create updated symlink");
+        let outside_before = index_entry(root, "outside.txt");
+
+        let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+        stage_effective_paths(&git, root, &["link".to_string()], &safe_git_config_parts())
+            .expect("stage selected symlink");
+
+        assert!(
+            !fixture.marker.exists(),
+            "staging a symlink must not run {command} filters"
+        );
+        assert_eq!(index_entry(root, "outside.txt"), outside_before);
+        let link_entry = index_entry(root, "link");
+        assert!(
+            link_entry.starts_with("120000 "),
+            "symlink index mode with core.symlinks={core_symlinks}: {link_entry:?}"
+        );
+        let (code, blob, stderr) = run(root, &["git", "show", ":link"]);
+        assert_eq!(code, 0, "read staged link: {stderr}");
+        assert_eq!(blob, "new-target");
+        let (code, staged, stderr) = run(root, &["git", "diff", "--cached", "--name-only"]);
+        assert_eq!(code, 0, "read staged paths: {stderr}");
+        assert_eq!(staged, "link\n");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn staging_allows_optional_smudge_only_but_refuses_required_or_malformed_smudge() {
+    use std::io::Write as _;
+
+    for (required, accepted) in [
+        ("absent", true),
+        ("empty", true),
+        ("false", true),
+        ("yes", false),
+        ("implicit", false),
+        ("not-a-bool", false),
+    ] {
+        let fixture = init_racy_filter_fixture("selected", "smudge");
+        let root = fixture.repo.path();
+        if matches!(required, "absent" | "implicit") {
+            assert_eq!(
+                run(
+                    root,
+                    &["git", "config", "--unset-all", "filter.selected.required"],
+                )
+                .0,
+                0
+            );
+        }
+        match required {
+            "absent" => {}
+            "implicit" => {
+                let mut config = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(root.join(".git/config"))
+                    .expect("open repository config");
+                writeln!(config, "[filter \"selected\"]\n\trequired")
+                    .expect("write implicit true required value");
+            }
+            value => {
+                let value = if value == "empty" { "" } else { value };
+                assert_eq!(
+                    run(root, &["git", "config", "filter.selected.required", value],).0,
+                    0
+                );
+            }
+        }
+        std::fs::write(root.join("selected.txt"), "new selected\n")
+            .expect("modify selected target");
+        let before = git_index_bytes(root);
+        let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+        let result = stage_effective_paths(
+            &git,
+            root,
+            &["selected.txt".to_string()],
+            &safe_git_config_parts(),
+        );
+
+        assert!(
+            !fixture.marker.exists(),
+            "smudge helper must not run for required={required}"
+        );
+        if accepted {
+            result.expect("stage optional smudge-only target");
+            let (code, staged, stderr) = run(root, &["git", "diff", "--cached", "--name-only"]);
+            assert_eq!(code, 0, "read staged paths: {stderr}");
+            assert_eq!(staged, "selected.txt\n");
+        } else {
+            let error = result.expect_err("refuse required or malformed smudge-only target");
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert_eq!(git_index_bytes(root), before);
+        }
+    }
+}
+
+#[test]
+fn optional_smudge_target_does_not_mask_a_later_clean_target() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "a.txt filter=smudger\nz.txt filter=cleaner\n",
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("a.txt"), "old a\n").expect("write smudge target");
+    std::fs::write(root.join("z.txt"), "old z\n").expect("write clean target");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.smudger.smudge",
+                "codex-definitely-missing-smudge-command",
+            ],
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.cleaner.clean",
+                "codex-definitely-missing-clean-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::write(root.join("a.txt"), "new a\n").expect("modify smudge target");
+    std::fs::write(root.join("z.txt"), "new z\n").expect("modify clean target");
+    let before = git_index_bytes(root);
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let error = stage_effective_paths(
+        &git,
+        root,
+        &["a.txt".to_string(), "z.txt".to_string()],
+        &safe_git_config_parts(),
+    )
+    .expect_err("reject the selected clean target after optional smudge");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(git_index_bytes(root), before);
+}
+
+#[test]
+fn staging_filter_probe_uses_only_existing_non_directory_leaves() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "missing.txt filter=selected\ndeleted.txt filter=selected\n",
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("deleted.txt"), "old\n").expect("write deleted fixture");
+    std::fs::write(root.join("kept.txt"), "old\n").expect("write kept fixture");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.selected.clean",
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::remove_file(root.join("deleted.txt")).expect("delete tracked file");
+    std::fs::write(root.join("kept.txt"), "new\n").expect("modify kept fixture");
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    stage_effective_paths(
+        &git,
+        root,
+        &[
+            "missing.txt".to_string(),
+            "deleted.txt".to_string(),
+            "kept.txt".to_string(),
+        ],
+        &safe_git_config_parts(),
+    )
+    .expect("probe only the surviving staging leaf");
+
+    let (code, staged, stderr) = run(root, &["git", "diff", "--cached", "--name-only"]);
+    assert_eq!(code, 0, "read staged paths: {stderr}");
+    assert_eq!(staged, "kept.txt\n");
+    assert!(!root.join("missing.txt").exists());
+    assert!(!root.join("deleted.txt").exists());
+}
+
+#[test]
+fn staging_skips_filter_probe_when_no_leaf_will_be_staged() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(
+        root.join(".gitattributes"),
+        "missing.txt filter=selected\ndeleted.txt filter=selected\n",
+    )
+    .expect("write attributes");
+    std::fs::write(root.join("deleted.txt"), "old\n").expect("write deleted fixture");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.selected.clean",
+                "codex-definitely-missing-filter-command",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::remove_file(root.join("deleted.txt")).expect("delete tracked file");
+    let before = git_index_bytes(root);
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    stage_effective_paths(
+        &git,
+        root,
+        &["missing.txt".to_string(), "deleted.txt".to_string()],
+        &safe_git_config_parts(),
+    )
+    .expect("skip staging when every effective leaf is absent");
+
+    assert_eq!(git_index_bytes(root), before);
 }
