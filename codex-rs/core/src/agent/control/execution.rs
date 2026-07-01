@@ -2,6 +2,7 @@ use super::AgentControl;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -32,9 +33,29 @@ impl AgentControl {
         thread_id: ThreadId,
         op: &Op,
     ) -> CodexResult<()> {
-        if !op_starts_turn(op) {
+        if let Op::InterAgentCommunication { communication } = op {
+            return self
+                .ensure_execution_capacity_for_communication(thread_id, communication)
+                .await;
+        }
+        if !matches!(op, Op::UserInput { .. }) {
             return Ok(());
         }
+        self.ensure_execution_capacity_for_thread(thread_id).await
+    }
+
+    pub(crate) async fn ensure_execution_capacity_for_communication(
+        &self,
+        thread_id: ThreadId,
+        communication: &InterAgentCommunication,
+    ) -> CodexResult<()> {
+        if !communication.trigger_turn {
+            return Ok(());
+        }
+        self.ensure_execution_capacity_for_thread(thread_id).await
+    }
+
+    async fn ensure_execution_capacity_for_thread(&self, thread_id: ThreadId) -> CodexResult<()> {
         let state = self.upgrade()?;
         let thread = state.get_thread(thread_id).await?;
         if thread.codex.session.active_turn.lock().await.is_some() {
@@ -90,11 +111,6 @@ impl AgentExecutionLimiter {
         self.active.fetch_add(1, Ordering::AcqRel);
         AgentExecutionGuard { limiter: self }
     }
-}
-
-fn op_starts_turn(op: &Op) -> bool {
-    matches!(op, Op::UserInput { .. })
-        || matches!(op, Op::InterAgentCommunication { communication } if communication.trigger_turn)
 }
 
 fn is_execution_limited(
