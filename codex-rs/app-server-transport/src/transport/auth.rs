@@ -29,6 +29,7 @@ const DEFAULT_MAX_CLOCK_SKEW_SECONDS: u64 = 30;
 const GENERATED_QUERY_TOKEN_BYTES: usize = 32;
 const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
+const REMOTE_WS_TOKEN_ENV_VAR: &str = "CODEX_REMOTE_WS_TOKEN";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
 pub struct AppServerWebsocketAuthArgs {
@@ -373,6 +374,17 @@ impl WebsocketAuthPolicy {
 }
 
 fn generate_query_token() -> io::Result<String> {
+    match std::env::var(REMOTE_WS_TOKEN_ENV_VAR) {
+        Ok(token) => return Ok(token),
+        Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{REMOTE_WS_TOKEN_ENV_VAR} must contain valid Unicode"),
+            ));
+        }
+    }
+
     let mut bytes = [0_u8; GENERATED_QUERY_TOKEN_BYTES];
     let mut rng = OsRng;
     rng.try_fill_bytes(&mut bytes)
