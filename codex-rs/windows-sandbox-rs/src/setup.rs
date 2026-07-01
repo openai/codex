@@ -1368,6 +1368,40 @@ mod tests {
     }
 
     #[test]
+    fn setup_exe_lookup_follows_canonicalized_launcher_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let release_dir = codex_home
+            .join("packages")
+            .join("standalone")
+            .join("releases")
+            .join("0.142.5-x86_64-pc-windows-msvc");
+        let bin_dir = release_dir.join(BIN_DIRNAME);
+        let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+        let launcher_dir = tmp
+            .path()
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("OpenAI")
+            .join("Codex")
+            .join(BIN_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create package bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        fs::create_dir_all(&launcher_dir).expect("create launcher dir");
+        let canonical_exe = bin_dir.join("codex.exe");
+        let launcher_exe = launcher_dir.join("codex.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&canonical_exe, b"codex").expect("write canonical exe");
+        fs::write(&setup_exe, b"setup").expect("write setup exe");
+        symlink_file(&canonical_exe, &launcher_exe);
+
+        let resolved = find_setup_exe_for_current_exe(&launcher_exe).expect("setup exe");
+
+        assert_eq!(resolved, setup_exe);
+    }
+
+    #[test]
     fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
         assert_eq!(
             loopback_proxy_port_from_url("http://example.com:3128"),
@@ -1395,6 +1429,16 @@ mod tests {
         );
 
         assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+    }
+
+    #[cfg(unix)]
+    fn symlink_file(original: &Path, link: &Path) {
+        std::os::unix::fs::symlink(original, link).expect("create symlink");
+    }
+
+    #[cfg(windows)]
+    fn symlink_file(original: &Path, link: &Path) {
+        std::os::windows::fs::symlink_file(original, link).expect("create symlink");
     }
 
     #[test]

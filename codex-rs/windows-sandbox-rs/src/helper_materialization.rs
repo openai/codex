@@ -409,37 +409,10 @@ mod tests {
     use super::helper_version_suffix;
     use super::materialized_file_name;
     use pretty_assertions::assert_eq;
-    use std::ffi::OsString;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
-            let original = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.original {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
 
     #[test]
     fn copy_from_source_if_needed_copies_missing_destination() {
@@ -634,7 +607,6 @@ mod tests {
         fs::write(&canonical_exe, b"codex").expect("write canonical exe");
         fs::write(&helper, b"runner").expect("write helper");
         symlink_file(&canonical_exe, &launcher_exe);
-        let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.as_os_str());
 
         let resolved = bundled_executable_path_for_exe(&launcher_exe, "codex-command-runner.exe")
             .expect("helper path");
