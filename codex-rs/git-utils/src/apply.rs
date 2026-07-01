@@ -15,7 +15,7 @@ use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::merge_driver::ensure_no_selected_merge_drivers;
 use crate::patch_paths::extract_effective_paths_from_patch;
-use crate::patch_paths::stage_effective_paths;
+use crate::patch_paths::stage_effective_paths_for_reverse;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ensure_no_selected_executable_git_filters;
 #[cfg(test)]
@@ -114,12 +114,17 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         guard
     } else {
         args.push("--index".to_string());
+        // Direct applications otherwise succeed silently, which leaves the
+        // caller unable to report which files were changed. `--verbose`
+        // emits the same parser-compatible "Applied patch ... cleanly"
+        // records that the three-way path already provides.
+        args.push("--verbose".to_string());
         None
     };
     if req.revert {
         // Stage only after the worktree-only applicability decision. The
         // guarded config is shared with the final Git command.
-        stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
+        stage_effective_paths_for_reverse(&git, &git_root, &patch_paths, &cfg_parts)?;
     }
     if req.revert {
         args.push("-R".to_string());
@@ -435,6 +440,7 @@ mod tests {
         };
         let r = apply_git_patch(&req).expect("run apply");
         assert_eq!(r.exit_code, 0, "exit code 0");
+        assert_eq!(r.applied_paths, vec!["hello.txt"]);
         // File exists now
         assert!(root.join("hello.txt").exists());
     }

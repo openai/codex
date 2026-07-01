@@ -11,6 +11,7 @@ use std::time::Instant;
 
 const OLD_DRIVER_COMMAND: &str = "git config codex.oldmergeran true && false";
 const NEW_DRIVER_COMMAND: &str = "git config codex.newmergeran true && false";
+const TRACE_MUTATION_MARKER: &str = "CODEX_MERGE_DRIVER_TEST_MUTATION";
 
 fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
     let mut command = std::process::Command::new("git");
@@ -139,6 +140,29 @@ fn wait_for_merge_attribute_probe(trace: &Path) -> bool {
     false
 }
 
+fn record_trace_mutation(trace: &Path) {
+    let mut trace = OpenOptions::new()
+        .append(true)
+        .open(trace)
+        .expect("open trace for mutation marker");
+    writeln!(trace, "{TRACE_MUTATION_MARKER}").expect("record mutation marker");
+}
+
+fn assert_mutation_happened_between_probe_and_three_way(trace: &Path) {
+    let contents = std::fs::read_to_string(trace).expect("read completed trace");
+    let probe_start = contents.find("check-attr").expect("merge attribute probe");
+    let probe_exit = probe_start
+        + contents[probe_start..]
+            .find("\"event\":\"exit\"")
+            .expect("merge attribute probe exit");
+    let mutation = contents
+        .find(TRACE_MUTATION_MARKER)
+        .expect("mutation trace marker");
+    let three_way = contents.find("--3way").expect("final three-way apply");
+    assert!(probe_exit < mutation, "mutation preceded probe exit");
+    assert!(mutation < three_way, "final Git started before mutation");
+}
+
 fn append_driver_config(root: &Path, driver: &str, command: &str) {
     let mut config = OpenOptions::new()
         .append(true)
@@ -164,6 +188,7 @@ fn clean_reverse_checks_worktree_before_staging_and_skips_merge_driver() {
         .expect("clean reverse apply");
 
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert_eq!(result.applied_paths, vec!["file.txt"]);
     assert!(result.cmd_for_log.contains("--index"));
     assert!(!result.cmd_for_log.contains("--3way"));
     assert_eq!(
@@ -172,6 +197,65 @@ fn clean_reverse_checks_worktree_before_staging_and_skips_merge_driver() {
     );
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
     assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReverseTopology {
+    Delete,
+    Rename,
+}
+
+#[test]
+fn clean_reverse_stages_missing_delete_and_rename_endpoints() {
+    for topology in [ReverseTopology::Delete, ReverseTopology::Rename] {
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join(".gitattributes"), "*.txt merge=demo\n")
+            .expect("write attributes");
+        std::fs::write(root.join("old.txt"), "old\n").expect("write old file");
+        run_success(root, &["add", ".gitattributes", "old.txt"]);
+        run_success(root, &["commit", "-m", "base"]);
+        configure_driver(root, "demo", OLD_DRIVER_COMMAND);
+
+        match topology {
+            ReverseTopology::Delete => {
+                run_success(root, &["rm", "old.txt"]);
+            }
+            ReverseTopology::Rename => {
+                run_success(root, &["mv", "old.txt", "new.txt"]);
+            }
+        }
+        let patch = run_success(root, &["diff", "--cached", "--full-index", "--binary"]);
+        run_success(root, &["reset", "--hard", "HEAD"]);
+        match topology {
+            ReverseTopology::Delete => {
+                std::fs::remove_file(root.join("old.txt")).expect("delete worktree file");
+            }
+            ReverseTopology::Rename => {
+                std::fs::rename(root.join("old.txt"), root.join("new.txt"))
+                    .expect("rename worktree file");
+            }
+        }
+
+        let result = apply_git_patch(&request(root, patch, /*revert*/ true))
+            .expect("clean topology reverse");
+
+        assert_eq!(result.exit_code, 0, "{topology:?}: {}", result.stderr);
+        assert_eq!(result.applied_paths.len(), 1, "{topology:?}");
+        assert!(result.cmd_for_log.contains("--index"), "{topology:?}");
+        assert!(!result.cmd_for_log.contains("--3way"), "{topology:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("old.txt")).expect("restored old file"),
+            "old\n",
+            "{topology:?}"
+        );
+        assert!(!root.join("new.txt").exists(), "{topology:?}");
+        assert!(!configured_marker_exists(root, "codex.oldmergeran"));
+        assert!(
+            run_success(root, &["status", "--porcelain"]).is_empty(),
+            "{topology:?}"
+        );
+    }
 }
 
 #[test]
@@ -218,12 +302,14 @@ fn post_probe_attribute_change_cannot_run_empty_named_driver() {
     configure_driver(root, "", OLD_DRIVER_COMMAND);
     let trace = trace_path();
     std::fs::write(&trace, "").expect("clear fixture trace");
+    let watcher_trace = trace.clone();
     let attributes = root.join(".gitattributes");
     let watcher = thread::spawn(move || {
-        let observed = wait_for_merge_attribute_probe(&trace);
+        let observed = wait_for_merge_attribute_probe(&watcher_trace);
         if observed {
             std::fs::write(attributes, "target.txt merge=\n")
                 .expect("select empty-name merge driver");
+            record_trace_mutation(&watcher_trace);
         }
         observed
     });
@@ -232,6 +318,7 @@ fn post_probe_attribute_change_cannot_run_empty_named_driver() {
         .expect("neutralized three-way apply");
     assert!(watcher.join().expect("attribute watcher"));
 
+    assert_mutation_happened_between_probe_and_three_way(&trace);
     assert_ne!(result.exit_code, 0);
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
 }
@@ -251,9 +338,10 @@ fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
     configure_driver(root, "x=y", OLD_DRIVER_COMMAND);
     let trace = trace_path();
     std::fs::write(&trace, "").expect("clear fixture trace");
+    let watcher_trace = trace.clone();
     let watcher_root = root.to_path_buf();
     let watcher = thread::spawn(move || {
-        let observed = wait_for_merge_attribute_probe(&trace);
+        let observed = wait_for_merge_attribute_probe(&watcher_trace);
         if observed {
             append_driver_config(&watcher_root, "x=y", NEW_DRIVER_COMMAND);
             std::fs::write(
@@ -261,6 +349,7 @@ fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
                 "target.txt merge=x=y\n",
             )
             .expect("select replacement merge driver");
+            record_trace_mutation(&watcher_trace);
         }
         observed
     });
@@ -269,6 +358,7 @@ fn post_probe_attribute_and_same_driver_command_change_stays_neutralized() {
         .expect("neutralized three-way apply");
     assert!(watcher.join().expect("config watcher"));
 
+    assert_mutation_happened_between_probe_and_three_way(&trace);
     assert_ne!(result.exit_code, 0);
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
     assert!(!configured_marker_exists(root, "codex.newmergeran"));
