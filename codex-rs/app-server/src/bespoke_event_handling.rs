@@ -769,6 +769,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 server_name: request.server_name.clone(),
                 request: request_body,
             };
+            let pause_incremented =
+                match conversation.increment_out_of_band_elicitation_count().await {
+                    Ok(_) => true,
+                    Err(err) => {
+                        error!("failed to pause timeout accounting for MCP elicitation: {err}");
+                        false
+                    }
+                };
             let (pending_request_id, rx) = outgoing
                 .send_request(ServerRequestPayload::McpServerElicitationRequest(params))
                 .await;
@@ -781,6 +789,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     conversation,
                     thread_state,
                     permission_guard,
+                    pause_incremented,
                 )
                 .await;
             });
@@ -1772,8 +1781,14 @@ async fn on_mcp_server_elicitation_response(
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
     permission_guard: ThreadWatchActiveGuard,
+    pause_incremented: bool,
 ) {
     let response = receiver.await;
+    if pause_incremented
+        && let Err(err) = conversation.decrement_out_of_band_elicitation_count().await
+    {
+        error!("failed to resume timeout accounting after MCP elicitation: {err}");
+    }
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let response = mcp_server_elicitation_response_from_client_result(response);

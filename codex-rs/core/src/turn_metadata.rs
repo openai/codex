@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
@@ -99,7 +100,19 @@ pub(crate) struct TurnMetadataState {
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<BTreeMap<String, String>>>,
     user_input_requested_during_turn: Arc<AtomicBool>,
+    pending_mcp_elicitations: Arc<AtomicUsize>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+}
+
+pub(crate) struct PendingMcpElicitationGuard {
+    count: Arc<AtomicUsize>,
+}
+
+impl Drop for PendingMcpElicitationGuard {
+    fn drop(&mut self) {
+        let previous = self.count.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "pending MCP elicitation count underflowed");
+    }
 }
 
 impl TurnMetadataState {
@@ -142,6 +155,7 @@ impl TurnMetadataState {
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(BTreeMap::new())),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
+            pending_mcp_elicitations: Arc::new(AtomicUsize::new(0)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
@@ -201,6 +215,17 @@ impl TurnMetadataState {
     pub(crate) fn mark_user_input_requested_during_turn(&self) {
         self.user_input_requested_during_turn
             .store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn track_pending_mcp_elicitation(&self) -> PendingMcpElicitationGuard {
+        self.pending_mcp_elicitations.fetch_add(1, Ordering::AcqRel);
+        PendingMcpElicitationGuard {
+            count: Arc::clone(&self.pending_mcp_elicitations),
+        }
+    }
+
+    pub(crate) fn has_pending_mcp_elicitation(&self) -> bool {
+        self.pending_mcp_elicitations.load(Ordering::Acquire) > 0
     }
 
     pub(crate) fn set_responsesapi_client_metadata(
