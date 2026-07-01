@@ -49,10 +49,15 @@ pub enum GitReadError {
     #[error("no trusted Git executable is available")]
     NoTrustedGit,
     #[error("{path:?} is not a Git repository")]
-    NotRepository { path: PathBuf },
+    NotRepository {
+        #[serde(with = "lossy_path")]
+        path: PathBuf,
+    },
     #[error("Git resolved {reported_root:?} instead of expected root {expected_root:?}")]
     RepositoryRootMismatch {
+        #[serde(with = "lossy_path")]
         expected_root: PathBuf,
+        #[serde(with = "lossy_path")]
         reported_root: PathBuf,
     },
     #[error("Git operation {operation:?} timed out")]
@@ -66,4 +71,30 @@ pub enum GitReadError {
     InvalidOutput { operation: String },
     #[error("executable filter {driver:?} is selected for {path:?}")]
     SelectedExecutableFilter { driver: String, path: String },
+}
+
+/// Path fields in caller-visible diagnostic metadata use a deliberately lossy
+/// UTF-8 wire representation. The Rust API remains `PathBuf`; deserialization
+/// reconstructs the serialized path, not any replaced platform-native bytes.
+mod lossy_path {
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub(super) fn serialize<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&path.to_string_lossy())
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(PathBuf::from)
+    }
 }

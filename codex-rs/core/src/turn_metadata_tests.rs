@@ -69,6 +69,64 @@ fn workspace_metadata_serializes_structured_has_changes_refusal() {
     );
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn turn_metadata_keeps_workspace_failure_with_non_utf8_repository_path() {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt;
+
+    let temp_dir = TempDir::new().expect("temp dir");
+    #[cfg(unix)]
+    let path = std::path::PathBuf::from(OsString::from_vec(b"/repo/\xff".to_vec()));
+    #[cfg(windows)]
+    let path = std::path::PathBuf::from(OsString::from_wide(&[
+        b'C' as u16,
+        b':' as u16,
+        b'\\' as u16,
+        0xd800,
+    ]));
+    let lossy = path.to_string_lossy().into_owned();
+    let (has_changes, has_changes_unavailable_reason) =
+        split_has_changes(Err(codex_git_utils::GitReadError::NotRepository { path }));
+    let workspace = WorkspaceGitMetadata {
+        associated_remote_urls: None,
+        latest_git_commit_hash: None,
+        has_changes,
+        has_changes_unavailable_reason,
+    }
+    .into();
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        temp_dir.path().abs(),
+        &PermissionProfile::read_only(),
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+    *state.enriched_workspaces.write().expect("workspace lock") =
+        Some(BTreeMap::from([("/repo".to_string(), workspace)]));
+
+    let metadata: Value = serde_json::from_str(&test_turn_metadata_header(&state))
+        .expect("full turn metadata remains serializable");
+    assert_eq!(
+        metadata["workspaces"]["/repo"],
+        serde_json::json!({
+            "has_changes_unavailable_reason": {
+                "reason": "notRepository",
+                "path": lossy,
+            }
+        })
+    );
+}
+
 fn test_responses_metadata_json(
     state: &TurnMetadataState,
     window_id: &str,
