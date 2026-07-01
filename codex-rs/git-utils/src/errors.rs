@@ -33,3 +33,11 @@ pub enum GitToolingError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub(crate) enum GitReadError {
+    #[error("no trusted Git executable is available")]
+    NoTrustedGit,
+    #[error("{path:?} is not a Git repository")]
+    NotRepository { path: PathBuf },
+}

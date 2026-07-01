@@ -13,6 +13,12 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::FsmonitorOverride;
+use crate::git_command::GitRunner;
+use crate::safe_git::DISABLED_HOOKS_PATH;
+#[cfg(test)]
+use crate::safe_git::isolate_git_command_environment;
+
 /// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
 pub struct ApplyGitRequest {
@@ -39,7 +45,9 @@ pub struct ApplyGitResult {
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
-    let git_root = resolve_git_root(&req.cwd)?;
+    let git = GitRunner::for_cwd_io(&req.cwd)?;
+    let mut cfg_parts = configured_git_config_parts();
+    let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
@@ -57,18 +65,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         args.push("-R".into());
     }
 
-    // Optional: additional git config via env knob (defaults OFF)
-    let mut cfg_parts: Vec<String> = Vec::new();
-    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
-        for pair in cfg.split(',') {
-            let p = pair.trim();
-            if p.is_empty() || !p.contains('=') {
-                continue;
-            }
-            cfg_parts.push("-c".into());
-            cfg_parts.push(p.to_string());
-        }
-    }
+    cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
 
@@ -80,7 +77,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         }
         check_args.push(patch_path.to_string_lossy().to_string());
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
-        let (c_code, c_out, c_err) = run_git(&git_root, &cfg_parts, &check_args)?;
+        let (c_code, c_out, c_err) = run_git(&git, &git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -101,7 +98,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     }
 
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
-    let (code, stdout, stderr) = run_git(&git_root, &cfg_parts, &args)?;
+    let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);
@@ -123,12 +120,19 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     })
 }
 
-fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
-    let out = local_git_command()
+fn resolve_git_root(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+) -> io::Result<PathBuf> {
+    let requested_cwd = std::fs::canonicalize(cwd)?;
+    let mut command = git.command();
+    command
+        .args(git_config_args)
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .current_dir(cwd)
-        .output()?;
+        .current_dir(&requested_cwd);
+    let out = git.output(command)?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         return Err(io::Error::other(format!(
@@ -137,8 +141,47 @@ fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(PathBuf::from(root))
+    let reported_root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let root = std::fs::canonicalize(&reported_root)?;
+    let expected_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to apply a patch because Git resolved worktree {} without a .git marker above requested cwd {}",
+                    root.display(),
+                    requested_cwd.display()
+                ),
+            )
+        })
+        .and_then(std::fs::canonicalize)?;
+    if root != expected_root {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to apply a patch because Git resolved worktree {} instead of expected worktree {} for requested cwd {}",
+                root.display(),
+                expected_root.display(),
+                requested_cwd.display()
+            ),
+        ));
+    }
+    Ok(root)
+}
+
+fn configured_git_config_parts() -> Vec<String> {
+    let mut cfg_parts = Vec::new();
+    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
+        for pair in cfg.split(',') {
+            let pair = pair.trim();
+            if pair.is_empty() || !pair.contains('=') {
+                continue;
+            }
+            cfg_parts.push("-c".to_string());
+            cfg_parts.push(pair.to_string());
+        }
+    }
+    cfg_parts
 }
 
 fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
@@ -148,25 +191,34 @@ fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
     Ok((dir, path))
 }
 
-fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, String, String)> {
-    let mut cmd = local_git_command();
+fn run_git(
+    git: &GitRunner,
+    cwd: &Path,
+    git_cfg: &[String],
+    args: &[String],
+) -> io::Result<(i32, String, String)> {
+    let mut cmd = git.command();
     for p in git_cfg {
         cmd.arg(p);
     }
     for a in args {
         cmd.arg(a);
     }
-    let out = cmd.current_dir(cwd).output()?;
+    cmd.current_dir(cwd);
+    let out = git.output(cmd)?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     Ok((code, stdout, stderr))
 }
 
-fn local_git_command() -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    command.envs(crate::local_only_git_env());
-    command
+fn safe_git_config_parts() -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
+        "-c".to_string(),
+        FsmonitorOverride::Disabled.git_config_arg().to_string(),
+    ]
 }
 
 fn quote_shell(s: &str) -> String {
@@ -324,6 +376,7 @@ fn unescape_c_string(input: &str) -> String {
 
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
+    let git = GitRunner::for_cwd_io(git_root)?;
     let paths = extract_paths_from_patch(diff);
     let mut existing: Vec<String> = Vec::new();
     for p in paths {
@@ -335,13 +388,15 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     if existing.is_empty() {
         return Ok(());
     }
-    let mut cmd = local_git_command();
+    let mut cmd = git.command();
+    cmd.args(safe_git_config_parts());
     cmd.arg("add");
     cmd.arg("--");
     for p in &existing {
         cmd.arg(OsStr::new(p));
     }
-    let out = cmd.current_dir(git_root).output()?;
+    cmd.current_dir(git_root);
+    let out = git.output(cmd)?;
     let _code = out.status.code().unwrap_or(-1);
     // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
     Ok(())
@@ -605,6 +660,7 @@ mod transport_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
     use std::path::Path;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -615,7 +671,9 @@ mod tests {
     }
 
     fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
-        let out = std::process::Command::new(args[0])
+        let mut command = std::process::Command::new(args[0]);
+        isolate_git_command_environment(&mut command);
+        let out = command
             .args(&args[1..])
             .current_dir(cwd)
             .output()
@@ -625,6 +683,27 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
+    }
+
+    fn run_isolated_test(test_name: &str, env: &[(&str, &OsStr)]) {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        isolate_git_command_environment(&mut command);
+        command
+            .arg(test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("CODEX_GIT_UTILS_APPLY_ENV_CHILD", "1")
+            .env("RUST_TEST_THREADS", "1");
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("run isolated test process");
+        assert!(
+            output.status.success(),
+            "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn init_repo() -> tempfile::TempDir {
@@ -641,6 +720,13 @@ mod tests {
         std::fs::read_to_string(path)
             .expect("read file")
             .replace("\r\n", "\n")
+    }
+
+    #[cfg(unix)]
+    fn trusted_git_directory() -> PathBuf {
+        std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
+            .find(|directory| directory.is_absolute() && directory.join("git").is_file())
+            .expect("trusted Git directory")
     }
 
     #[test]
@@ -678,10 +764,12 @@ mod tests {
         let _g = env_lock().lock().unwrap();
         let repo = init_repo();
         let root = repo.path();
+        let nested_cwd = root.join("nested");
+        std::fs::create_dir(&nested_cwd).expect("nested cwd");
 
         let diff = "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1,2 @@\n+hello\n+world\n";
         let req = ApplyGitRequest {
-            cwd: root.to_path_buf(),
+            cwd: nested_cwd,
             diff: diff.to_string(),
             revert: false,
             preflight: false,
@@ -690,6 +778,129 @@ mod tests {
         assert_eq!(r.exit_code, 0, "exit code 0");
         // File exists now
         assert!(root.join("hello.txt").exists());
+    }
+
+    #[test]
+    fn apply_uses_cwd_repo_despite_inherited_repository_selectors() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            let alternate = init_repo();
+            let alternate_root = alternate.path();
+            std::fs::write(alternate_root.join("sentinel.txt"), "alternate\n")
+                .expect("write alternate sentinel");
+            let (add_code, _, add_err) = run(alternate_root, &["git", "add", "sentinel.txt"]);
+            assert_eq!(add_code, 0, "add alternate sentinel: {add_err}");
+            let (commit_code, _, commit_err) =
+                run(alternate_root, &["git", "commit", "-m", "alternate"]);
+            assert_eq!(commit_code, 0, "commit alternate sentinel: {commit_err}");
+
+            let alternate_git_dir = alternate_root.join(".git");
+            let alternate_index = alternate_git_dir.join("index");
+            run_isolated_test(
+                "apply::tests::apply_uses_cwd_repo_despite_inherited_repository_selectors",
+                &[
+                    ("GIT_DIR", alternate_git_dir.as_os_str()),
+                    ("GIT_WORK_TREE", alternate_root.as_os_str()),
+                    ("GIT_COMMON_DIR", alternate_git_dir.as_os_str()),
+                    ("GIT_INDEX_FILE", alternate_index.as_os_str()),
+                    ("GIT_PREFIX", OsStr::new("elsewhere/")),
+                ],
+            );
+            assert_eq!(
+                read_file_normalized(&alternate_root.join("sentinel.txt")),
+                "alternate\n"
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "old\n").expect("write target file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add target file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "target"]);
+        assert_eq!(commit_code, 0, "commit target file: {commit_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply in cwd-selected repository");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "new\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_uses_logical_process_cwd_to_reject_enclosing_git() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_CHILD").is_none() {
+            let fixture = tempfile::tempdir().expect("fixture");
+            let outer = fixture.path().join("outer");
+            let physical_nested = fixture.path().join("physical-nested");
+            let lexical_nested = outer.join("nested");
+            let outer_bin = outer.join("bin");
+            let outer_git = outer_bin.join("git");
+            let marker = outer_bin.join("git.ran");
+            std::fs::create_dir_all(&outer_bin).expect("outer Git directory");
+            std::fs::create_dir_all(&physical_nested).expect("physical nested repository");
+            let (outer_init, _, outer_err) = run(&outer, &["git", "init", "-q"]);
+            assert_eq!(outer_init, 0, "init outer repository: {outer_err}");
+            let (nested_init, _, nested_err) = run(&physical_nested, &["git", "init", "-q"]);
+            assert_eq!(nested_init, 0, "init nested repository: {nested_err}");
+            std::os::unix::fs::symlink(&physical_nested, &lexical_nested)
+                .expect("symlink nested repository");
+            std::fs::write(&outer_git, "#!/bin/sh\nprintf ran >\"$0.ran\"\nexit 1\n")
+                .expect("outer Git shim");
+            let mut permissions = std::fs::metadata(&outer_git)
+                .expect("outer Git metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&outer_git, permissions).expect("executable outer Git");
+            let path = std::env::join_paths([outer_bin, trusted_git_directory()]).expect("PATH");
+
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test binary"));
+            isolate_git_command_environment(&mut command);
+            let output = command
+                .arg("apply::tests::apply_uses_logical_process_cwd_to_reject_enclosing_git")
+                .arg("--exact")
+                .arg("--nocapture")
+                .current_dir(&lexical_nested)
+                .env("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_CHILD", "1")
+                .env("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_MARKER", &marker)
+                .env("PWD", &lexical_nested)
+                .env("PATH", path)
+                .env("RUST_TEST_THREADS", "1")
+                .output()
+                .expect("run isolated logical-cwd test");
+            assert!(
+                output.status.success(),
+                "isolated logical-cwd test failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!marker.exists(), "enclosing Git shim must not run");
+            return;
+        }
+
+        let cwd = std::env::current_dir().expect("physical process cwd");
+        let marker = PathBuf::from(
+            std::env::var_os("CODEX_GIT_UTILS_APPLY_LOGICAL_CWD_MARKER").expect("marker path"),
+        );
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd,
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: true,
+        })
+        .expect("preflight through trusted Git");
+        assert_eq!(result.exit_code, 0, "preflight should succeed");
+        assert!(!marker.exists(), "enclosing Git shim must not run");
     }
 
     #[test]
@@ -853,5 +1064,31 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
+    }
+
+    #[test]
+    fn resolve_git_root_rejects_core_worktree_redirection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attacker = temp.path().join("attacker");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&attacker).expect("attacker");
+        std::fs::create_dir_all(&victim).expect("victim");
+        let (init_code, _, init_err) = run(&attacker, &["git", "init"]);
+        assert_eq!(init_code, 0, "init attacker repo: {init_err}");
+
+        for redirected_worktree in [&victim, temp.path()] {
+            let redirected_worktree = redirected_worktree.to_string_lossy();
+            let (config_code, _, config_err) = run(
+                &attacker,
+                &["git", "config", "core.worktree", &redirected_worktree],
+            );
+            assert_eq!(config_code, 0, "configure core.worktree: {config_err}");
+
+            let git = GitRunner::for_cwd_io(&attacker).expect("trusted Git");
+            let error =
+                resolve_git_root(&git, &attacker, &[]).expect_err("reject redirected worktree");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains("instead of expected worktree"));
+        }
     }
 }
