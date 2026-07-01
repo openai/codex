@@ -21,7 +21,7 @@ curl -fsSL https://chatgpt.com/codex/install.sh | sh
 
 Run the following on Windows to install Codex CLI:
 
-```
+```shell
 powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
 ```
 
