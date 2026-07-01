@@ -11,6 +11,9 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -86,6 +89,17 @@ fn archive_file_entries(archive_bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
             Some((path, contents))
         })
         .collect()
+}
+
+fn fail_once_then_succeed_json(body: serde_json::Value) -> impl wiremock::Respond {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    move |_request: &wiremock::Request| {
+        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            ResponseTemplate::new(503).set_body_string("temporary failure")
+        } else {
+            ResponseTemplate::new(200).set_body_json(body.clone())
+        }
+    }
 }
 
 fn remote_plugin_json(plugin_id: &str) -> serde_json::Value {
@@ -694,6 +708,37 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
             }
         ]
     );
+}
+
+#[tokio::test]
+async fn list_remote_plugin_shares_retries_transient_created_workspace_plugins_failure() {
+    let codex_home = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    let config = test_config(&server);
+    let auth = test_auth();
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/workspace/created"))
+        .and(header("authorization", "Bearer Access Token"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(query_param(
+            "limit",
+            REMOTE_PLUGIN_LIST_PAGE_LIMIT.to_string(),
+        ))
+        .and(query_param_is_missing("pageToken"))
+        .respond_with(fail_once_then_succeed_json(json!({
+            "plugins": [],
+            "pagination": empty_pagination_json(),
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let result = list_remote_plugin_shares(&config, Some(&auth), codex_home.path())
+        .await
+        .unwrap();
+
+    assert_eq!(result, Vec::new());
 }
 
 #[tokio::test]
