@@ -32,9 +32,25 @@ pub fn item_event_to_server_notification(
     thread_id: &str,
     turn_id: &str,
 ) -> ServerNotification {
+    let Some(notification) = try_item_event_to_server_notification(msg, thread_id, turn_id) else {
+        unreachable!("unsupported item event");
+    };
+    notification
+}
+
+/// Build a v2 notification when a core event has a stateless item-event projection.
+///
+/// Unlike [`item_event_to_server_notification`], this accepts any event so callers that inspect
+/// mixed event streams can share the exact live item conversion without maintaining a second
+/// event-variant allowlist.
+pub fn try_item_event_to_server_notification(
+    msg: EventMsg,
+    thread_id: &str,
+    turn_id: &str,
+) -> Option<ServerNotification> {
     let thread_id = thread_id.to_string();
     let turn_id = turn_id.to_string();
-    match msg {
+    let notification = match msg {
         EventMsg::DynamicToolCallResponse(response) => {
             let status = if response.success {
                 DynamicToolCallStatus::Completed
@@ -228,7 +244,9 @@ pub fn item_event_to_server_notification(
             } else {
                 CollabAgentToolCallStatus::Completed
             };
-            let receiver_thread_ids = end_event.statuses.keys().map(ToString::to_string).collect();
+            let mut receiver_thread_ids: Vec<String> =
+                end_event.statuses.keys().map(ToString::to_string).collect();
+            receiver_thread_ids.sort();
             let agents_states = end_event
                 .statuses
                 .iter()
@@ -459,18 +477,23 @@ pub fn item_event_to_server_notification(
                 completed_at_ms: exec_command_end_event.completed_at_ms,
             })
         }
-        _ => unreachable!("unsupported item event"),
-    }
+        _ => return None,
+    };
+    Some(notification)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::thread_history::ThreadHistoryBuilder;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
     use codex_protocol::protocol::CollabResumeEndEvent;
+    use codex_protocol::protocol::CollabWaitingEndEvent;
     use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
     use codex_protocol::protocol::ExecOutputStream;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
 
     fn assert_item_started_server_notification(
@@ -584,6 +607,43 @@ mod tests {
                 },
             },
         );
+    }
+
+    #[test]
+    fn collab_wait_completion_matches_sorted_history_projection() {
+        let receiver_a = ThreadId::new();
+        let receiver_b = ThreadId::new();
+        let mut statuses = HashMap::new();
+        statuses.insert(receiver_b, AgentStatus::Completed(None));
+        statuses.insert(receiver_a, AgentStatus::Running);
+        let event = CollabWaitingEndEvent {
+            sender_thread_id: ThreadId::new(),
+            call_id: "wait-1".to_string(),
+            completed_at_ms: 456,
+            agent_statuses: Vec::new(),
+            statuses,
+        };
+
+        let notification = item_event_to_server_notification(
+            EventMsg::CollabWaitingEnd(event.clone()),
+            "thread-1",
+            "turn-1",
+        );
+        let ServerNotification::ItemCompleted(notification) = notification else {
+            panic!("expected item completion");
+        };
+
+        let mut history = ThreadHistoryBuilder::new();
+        history.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            trace_id: None,
+            started_at: Some(1),
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        history.handle_event(&EventMsg::CollabWaitingEnd(event));
+        let snapshot = history.active_turn_snapshot().expect("active turn");
+        assert_eq!(snapshot.items, vec![notification.item]);
     }
 
     #[test]

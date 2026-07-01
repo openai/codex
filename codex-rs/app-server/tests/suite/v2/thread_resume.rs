@@ -22,6 +22,7 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::PatchApplyStatus;
@@ -33,6 +34,7 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
@@ -42,6 +44,8 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -147,6 +151,18 @@ async fn wait_for_responses_request_count(
     })
     .await??;
     Ok(())
+}
+
+async fn read_next_response(mcp: &mut TestAppServer) -> Result<JSONRPCResponse> {
+    loop {
+        match mcp.read_next_message().await? {
+            JSONRPCMessage::Response(response) => return Ok(response),
+            JSONRPCMessage::Error(error) => {
+                anyhow::bail!("unexpected app-server error response: {error:?}")
+            }
+            _ => {}
+        }
+    }
 }
 
 #[tokio::test]
@@ -681,6 +697,7 @@ async fn thread_resume_running_thread_tracks_thread_originator_in_analytics() ->
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed.thread_source, Some(ThreadSource::User));
 
     let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
         event["event_type"] == "codex_thread_initialized"
@@ -3211,6 +3228,15 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
     )
     .await??;
     pretty_assertions::assert_eq!(replayed_request, original_request);
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            primary.read_stream_until_request_message(),
+        )
+        .await
+        .is_err(),
+        "thread/resume must replay each pending approval request ID exactly once"
+    );
 
     let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = replayed_request else {
         panic!("expected CommandExecutionRequestApproval request");
@@ -3725,6 +3751,549 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     assert_eq!(resumed.preview, history_text);
     assert_eq!(resumed.status, ThreadStatus::Idle);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("primary-response"),
+                responses::ev_assistant_message("primary-message", "primary complete"),
+                responses::ev_completed("primary-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("secondary-response"),
+                responses::ev_assistant_message("secondary-message", "secondary complete"),
+                responses::ev_completed("secondary-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("final-response"),
+                responses::ev_assistant_message("final-message", "final complete"),
+                responses::ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+    let start_id = primary
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "primary seed".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
+    let secondary_resume_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(secondary_resume_id)),
+    )
+    .await??;
+
+    let secondary_turn_id = secondary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "secondary external turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(secondary_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let metadata_update_id = secondary
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("secondary/external-update".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(metadata_update_id)),
+    )
+    .await??;
+    let secondary_read_id = secondary
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let secondary_read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(secondary_read_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: authoritative_thread,
+    } = to_response::<ThreadReadResponse>(secondary_read_resp)?;
+    let primary_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            exclude_turns: true,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: Some(5),
+                sort_direction: None,
+                items_view: Some(TurnItemsView::Full),
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let primary_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(primary_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        initial_turns_page,
+        ..
+    } = to_response::<ThreadResumeResponse>(primary_resume_resp)?;
+    assert!(resumed_thread.turns.is_empty());
+    assert_eq!(resumed_thread.git_info, authoritative_thread.git_info);
+    assert_eq!(resumed_thread.updated_at, authoritative_thread.updated_at);
+    assert_eq!(resumed_thread.recency_at, authoritative_thread.recency_at);
+    assert_eq!(resumed_thread.preview, authoritative_thread.preview);
+    let initial_turns_page = initial_turns_page.expect("Desktop-style initial turns page");
+    assert!(
+        initial_turns_page
+            .data
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .any(|item| matches!(
+                item,
+                ThreadItem::UserMessage { content, .. }
+                    if content.iter().any(|input| matches!(
+                        input,
+                        UserInput::Text { text, .. } if text == "secondary external turn"
+                    ))
+            )),
+        "primary resume response should include the externally appended turn"
+    );
+
+    let final_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "primary final turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(final_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3, "expected one model call per turn");
+    let final_request = requests.last().expect("final primary model request");
+    let final_input = final_request.body_json()["input"].to_string();
+    assert_eq!(
+        final_input.matches("secondary external turn").count(),
+        1,
+        "the externally appended turn must appear exactly once in the resumed model context: {final_input}"
+    );
+    assert_eq!(
+        final_input.matches("secondary complete").count(),
+        1,
+        "the external assistant response must appear exactly once in the resumed model context: {final_input}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let sleep_command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 10".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    let sleep_command = vec!["sleep".to_string(), "10".to_string()];
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_shell_command_sse_response(
+            sleep_command,
+            /*workdir*/ None,
+            Some(10_000),
+            "interrupted-command",
+        )?,
+        create_final_assistant_message_sse_response("external complete")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+    let start_id = primary
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+
+    let interrupted_request_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "primary interrupted turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let interrupted_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(interrupted_request_id)),
+    )
+    .await??;
+    let TurnStartResponse {
+        turn: interrupted_turn,
+    } = to_response(interrupted_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = primary
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(notification.params.expect("item/started params"))?;
+            if matches!(started.item, ThreadItem::CommandExecution { .. }) {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
+    primary
+        .interrupt_turn_and_wait_for_aborted(
+            thread.id.clone(),
+            interrupted_turn.id.clone(),
+            DEFAULT_READ_TIMEOUT,
+        )
+        .await?;
+
+    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
+    let secondary_resume_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(secondary_resume_id)),
+    )
+    .await??;
+    let external_turn_request_id = secondary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "secondary external turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let external_turn_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_response_message(RequestId::Integer(external_turn_request_id)),
+    )
+    .await??;
+    let TurnStartResponse {
+        turn: external_turn,
+    } = to_response(external_turn_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        secondary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let primary_resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let primary_resume_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(primary_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response(primary_resume_response)?;
+
+    assert_eq!(resumed_thread.turns.len(), 2);
+    assert_eq!(resumed_thread.turns[0].id, interrupted_turn.id);
+    assert_eq!(resumed_thread.turns[0].status, TurnStatus::Interrupted);
+    assert_eq!(resumed_thread.turns[1].id, external_turn.id);
+    assert_eq!(resumed_thread.turns[1].status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn running_thread_resume_serializes_with_following_history_injection() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("seed-response"),
+                responses::ev_assistant_message("seed-message", "seed complete"),
+                responses::ev_completed("seed-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("final-response"),
+                responses::ev_assistant_message("final-message", "final complete"),
+                responses::ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+    let seed_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(seed_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let injected_text = "injected after queued resume";
+    let injected_item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: injected_text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let inject_id = mcp
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
+            thread_id: thread.id.clone(),
+            items: vec![serde_json::to_value(injected_item)?],
+        })
+        .await?;
+
+    let first_response = timeout(DEFAULT_READ_TIMEOUT, read_next_response(&mut mcp)).await??;
+    assert_eq!(first_response.id, RequestId::Integer(resume_id));
+    let second_response = timeout(DEFAULT_READ_TIMEOUT, read_next_response(&mut mcp)).await??;
+    assert_eq!(second_response.id, RequestId::Integer(inject_id));
+
+    let final_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "final turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(final_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    let final_input =
+        requests.last().expect("final model request").body_json()["input"].to_string();
+    assert_eq!(
+        final_input.matches(injected_text).count(),
+        1,
+        "{final_input}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn running_thread_resume_waits_for_preceding_rollback() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+    for prompt in ["first turn", "second turn"] {
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+    mcp.clear_message_buffer();
+
+    let rollback_id = mcp
+        .send_thread_rollback_request(ThreadRollbackParams {
+            thread_id: thread.id.clone(),
+            num_turns: 1,
+        })
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+
+    let rollback_response = timeout(DEFAULT_READ_TIMEOUT, read_next_response(&mut mcp)).await??;
+    assert_eq!(rollback_response.id, RequestId::Integer(rollback_id));
+    let rollback: ThreadRollbackResponse = to_response(rollback_response)?;
+    assert_eq!(rollback.thread.turns.len(), 1);
+    let resume_response = timeout(DEFAULT_READ_TIMEOUT, read_next_response(&mut mcp)).await??;
+    assert_eq!(resume_response.id, RequestId::Integer(resume_id));
+    let resumed: ThreadResumeResponse = to_response(resume_response)?;
+    assert_eq!(resumed.thread.turns.len(), 1);
     Ok(())
 }
 

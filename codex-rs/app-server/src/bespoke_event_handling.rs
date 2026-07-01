@@ -147,6 +147,35 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_list_state_permit: Arc<tokio::sync::Semaphore>,
     fallback_model_provider: String,
 ) {
+    apply_bespoke_event_handling_with_item_lifecycle_outgoing(
+        event,
+        conversation_id,
+        conversation,
+        thread_manager,
+        outgoing,
+        thread_state,
+        thread_watch_manager,
+        thread_list_state_permit,
+        fallback_model_provider,
+        /*item_lifecycle_outgoing*/ None,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_bespoke_event_handling_with_item_lifecycle_outgoing(
+    event: Event,
+    conversation_id: ThreadId,
+    conversation: Arc<CodexThread>,
+    thread_manager: Arc<ThreadManager>,
+    outgoing: ThreadScopedOutgoingMessageSender,
+    thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
+    thread_watch_manager: ThreadWatchManager,
+    thread_list_state_permit: Arc<tokio::sync::Semaphore>,
+    fallback_model_provider: String,
+    item_lifecycle_outgoing: Option<ThreadScopedOutgoingMessageSender>,
+) {
+    let item_lifecycle_outgoing = item_lifecycle_outgoing.as_ref().unwrap_or(&outgoing);
     let Event {
         id: event_turn_id,
         msg,
@@ -282,7 +311,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     completion_item.cwd.clone(),
                     completion_item.command_actions.clone(),
                     CommandExecutionSource::Agent,
-                    &outgoing,
+                    item_lifecycle_outgoing,
                     &thread_state,
                 )
                 .await;
@@ -317,7 +346,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionSource::Agent,
                     completion_item.command_actions,
                     completion_status,
-                    &outgoing,
+                    item_lifecycle_outgoing,
                     &thread_state,
                 )
                 .await;
@@ -844,7 +873,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 started_at_ms: request.started_at_ms,
                 item,
             };
-            outgoing
+            item_lifecycle_outgoing
                 .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
             let params = DynamicToolCallParams {
@@ -1190,7 +1219,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.pending_rollbacks.take()
             };
 
-            if let Some(request_id) = pending {
+            if let Some(pending) = pending {
+                let request_id = pending.request_id.clone();
                 let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
                     Ok(permit) => permit,
                     Err(err) => {
@@ -1202,6 +1232,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 )),
                             )
                             .await;
+                        pending.complete();
                         return;
                     }
                 };
@@ -1222,6 +1253,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 )),
                             )
                             .await;
+                        pending.complete();
                         return;
                     }
                 };
@@ -1240,11 +1272,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                         outgoing
                             .send_error(request_id.clone(), internal_error(err))
                             .await;
+                        pending.complete();
                         return;
                     }
                 };
 
                 outgoing.send_response(request_id, response).await;
+                pending.complete();
             }
         }
         EventMsg::ThreadGoalUpdated(thread_goal_event) => {
@@ -1460,7 +1494,7 @@ async fn complete_command_execution_item(
         .await;
 }
 
-async fn maybe_emit_raw_response_item_completed(
+pub(crate) async fn maybe_emit_raw_response_item_completed(
     conversation_id: ThreadId,
     turn_id: &str,
     item: codex_protocol::models::ResponseItem,
@@ -1482,18 +1516,7 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
     item: &codex_protocol::models::ResponseItem,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
-    let codex_protocol::models::ResponseItem::Message {
-        role, content, id, ..
-    } = item
-    else {
-        return;
-    };
-
-    if role != "user" {
-        return;
-    }
-
-    let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+    let Some(item) = hook_prompt_thread_item(item) else {
         return;
     };
 
@@ -1501,18 +1524,37 @@ pub(crate) async fn maybe_emit_hook_prompt_item_completed(
         thread_id: conversation_id.to_string(),
         turn_id: turn_id.to_string(),
         completed_at_ms: now_unix_timestamp_ms(),
-        item: ThreadItem::HookPrompt {
-            id: hook_prompt.id,
-            fragments: hook_prompt
-                .fragments
-                .into_iter()
-                .map(codex_app_server_protocol::HookPromptFragment::from)
-                .collect(),
-        },
+        item,
     };
     outgoing
         .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
+}
+
+pub(crate) fn hook_prompt_thread_item(
+    item: &codex_protocol::models::ResponseItem,
+) -> Option<ThreadItem> {
+    let codex_protocol::models::ResponseItem::Message {
+        role, content, id, ..
+    } = item
+    else {
+        return None;
+    };
+
+    if role != "user" {
+        return None;
+    }
+
+    let hook_prompt = parse_hook_prompt_message(id.as_ref(), content)?;
+
+    Some(ThreadItem::HookPrompt {
+        id: hook_prompt.id,
+        fragments: hook_prompt
+            .fragments
+            .into_iter()
+            .map(codex_app_server_protocol::HookPromptFragment::from)
+            .collect(),
+    })
 }
 
 async fn find_and_remove_turn_summary(
@@ -1584,10 +1626,14 @@ async fn handle_thread_rollback_failed(
 ) {
     let pending_rollback = thread_state.lock().await.pending_rollbacks.take();
 
-    if let Some(request_id) = pending_rollback {
+    if let Some(pending_rollback) = pending_rollback {
         outgoing
-            .send_error(request_id, invalid_request(message))
+            .send_error(
+                pending_rollback.request_id.clone(),
+                invalid_request(message),
+            )
             .await;
+        pending_rollback.complete();
     }
 }
 

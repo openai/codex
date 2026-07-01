@@ -369,7 +369,10 @@ pub(crate) struct ThreadRequestProcessor {
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
 enum RunningThreadResumeResult {
     /// The request was delegated to the loaded thread.
-    Handled,
+    Pending {
+        completion_rx: oneshot::Receiver<()>,
+        thread_id: ThreadId,
+    },
     /// No loaded thread handled the request.
     ///
     /// The optional stored thread contains the history-bearing probe that cold
@@ -769,7 +772,7 @@ impl ThreadRequestProcessor {
             })
     }
 
-    async fn set_app_server_client_info(
+    pub(super) async fn set_app_server_client_info(
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -1731,16 +1734,46 @@ impl ThreadRequestProcessor {
         }
 
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        let (thread_state, _listener_lease) = match self
+            .thread_state_manager
+            .acquire_point_operation_lease(
+                &self.pending_thread_unloads,
+                thread_id,
+                request_id.connection_id,
+            )
+            .await
+        {
+            ThreadPointOperationLeaseAcquireResult::Acquired {
+                thread_state,
+                lease,
+            } => (thread_state, lease),
+            ThreadPointOperationLeaseAcquireResult::ConnectionClosed => {
+                return Err(invalid_request(
+                    "cannot roll back a thread for a closed connection",
+                ));
+            }
+            ThreadPointOperationLeaseAcquireResult::ThreadClosing => {
+                return Err(invalid_request(format!(
+                    "thread {thread_id} is closing; retry after the thread is closed"
+                )));
+            }
+        };
+        // Rollback is a point request, not a subscription API. It still needs the listener to
+        // serialize and complete the response, but must preserve an explicit unsubscribe.
+        self.ensure_listener_task_running(thread_id, thread.clone(), thread_state.clone())
+            .await?;
 
         let request = request_id.clone();
+        let (completion_tx, completion_rx) = oneshot::channel();
 
         let rollback_already_in_progress = {
-            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             let mut thread_state = thread_state.lock().await;
             if thread_state.pending_rollbacks.is_some() {
                 true
             } else {
-                thread_state.pending_rollbacks = Some(request.clone());
+                thread_state.pending_rollbacks = Some(
+                    crate::thread_state::PendingThreadRollback::new(request.clone(), completion_tx),
+                );
                 false
             }
         };
@@ -1760,10 +1793,14 @@ impl ThreadRequestProcessor {
         {
             // No ThreadRollback event will arrive if an error occurs.
             // Clean up and reply immediately.
-            let thread_state = self.thread_state_manager.thread_state(thread_id).await;
             thread_state.lock().await.pending_rollbacks = None;
 
             return Err(internal_error(format!("failed to start rollback: {err}")));
+        }
+        if completion_rx.await.is_err() {
+            return Err(internal_error(format!(
+                "failed to complete rollback for thread {thread_id}: thread listener stopped"
+            )));
         }
         Ok(())
     }
@@ -2650,7 +2687,7 @@ impl ThreadRequestProcessor {
         let redact_resume_payloads =
             should_redact_thread_resume_payloads(app_server_client_name.as_deref());
 
-        let _thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
+        let thread_list_state_permit = match self.acquire_thread_list_state_permit().await {
             Ok(permit) => permit,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2666,7 +2703,23 @@ impl ThreadRequestProcessor {
             )
             .await
         {
-            Ok(RunningThreadResumeResult::Handled) => return Ok(()),
+            Ok(RunningThreadResumeResult::Pending {
+                completion_rx,
+                thread_id,
+            }) => {
+                drop(thread_list_state_permit);
+                if completion_rx.await.is_err() {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            internal_error(format!(
+                                "failed to complete running thread resume for thread {thread_id}: thread listener stopped"
+                            )),
+                        )
+                        .await;
+                }
+                return Ok(());
+            }
             Ok(RunningThreadResumeResult::NotRunning(stored_thread)) => stored_thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2977,7 +3030,7 @@ impl ThreadRequestProcessor {
                 .read_stored_thread_for_resume(
                     &params.thread_id,
                     /*path*/ None,
-                    /*include_history*/ true,
+                    /*include_history*/ false,
                 )
                 .await?;
             Some((existing_thread_id, existing_thread, source_thread))
@@ -3000,7 +3053,7 @@ impl ThreadRequestProcessor {
             }
         };
 
-        if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+        if let Some((existing_thread_id, existing_thread, source_thread)) = running_thread {
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3013,6 +3066,41 @@ impl ThreadRequestProcessor {
                     requested_path.display(),
                     active_path.display()
                 )));
+            }
+            let (thread_state, resume_lease) = match self
+                .thread_state_manager
+                .acquire_point_operation_lease(
+                    &self.pending_thread_unloads,
+                    existing_thread_id,
+                    request_id.connection_id,
+                )
+                .await
+            {
+                ThreadPointOperationLeaseAcquireResult::Acquired {
+                    thread_state,
+                    lease,
+                } => (thread_state, lease),
+                ThreadPointOperationLeaseAcquireResult::ConnectionClosed => {
+                    return Err(invalid_request(
+                        "cannot resume a thread for a closed connection",
+                    ));
+                }
+                ThreadPointOperationLeaseAcquireResult::ThreadClosing => {
+                    return Err(invalid_request(format!(
+                        "thread {existing_thread_id} is closing; retry after the thread is closed"
+                    )));
+                }
+            };
+            // The initial running-thread probe precedes lease acquisition. If an unload completed
+            // during that store read, do not resurrect the stale Arc after its closing marker was
+            // removed; fall back to a fresh stored-thread read instead.
+            if !self
+                .thread_manager
+                .get_thread(existing_thread_id)
+                .await
+                .is_ok_and(|current| Arc::ptr_eq(&current, &existing_thread))
+            {
+                return Ok(RunningThreadResumeResult::NotRunning(None));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
@@ -3060,39 +3148,12 @@ impl ThreadRequestProcessor {
             }
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
-            let history_items = source_thread
-                .history
-                .take()
-                .map(|history| history.items)
-                .ok_or_else(|| {
-                    internal_error(format!(
-                        "thread {existing_thread_id} did not include persisted history"
-                    ))
-                })?;
-
-            let thread_state = self
-                .thread_state_manager
-                .thread_state(existing_thread_id)
-                .await;
             self.ensure_listener_task_running(
                 existing_thread_id,
                 existing_thread.clone(),
                 thread_state.clone(),
             )
             .await?;
-            Self::set_app_server_client_info(
-                existing_thread.as_ref(),
-                app_server_client_name,
-                app_server_client_version,
-            )
-            .await?;
-
-            let mut thread_summary = self.stored_thread_to_api_thread(
-                source_thread,
-                config_snapshot.model_provider_id.as_str(),
-                /*include_turns*/ false,
-            );
-            thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
             let instruction_sources = existing_thread.legacy_instruction_sources().await;
 
             let listener_command_tx = {
@@ -3110,26 +3171,32 @@ impl ThreadRequestProcessor {
                 .pending_resume_goal_state(existing_thread.as_ref())
                 .await;
 
-            let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                Box::new(crate::thread_state::PendingThreadResumeRequest {
+            let (completion_tx, completion_rx) = oneshot::channel();
+            let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse {
+                request: Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    history_items,
+                    app_server_client_name,
+                    app_server_client_version,
                     config_snapshot,
                     instruction_sources,
-                    thread_summary,
                     emit_thread_goal_update,
                     thread_goal_state_db,
                     include_turns: !params.exclude_turns,
                     initial_turns_page: params.initial_turns_page.clone(),
                     redact_resume_payloads,
+                    _resume_lease: resume_lease,
                 }),
-            );
+                completion_tx,
+            };
             if listener_command_tx.send(command).is_err() {
                 return Err(internal_error(format!(
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            return Ok(RunningThreadResumeResult::Handled);
+            return Ok(RunningThreadResumeResult::Pending {
+                completion_rx,
+                thread_id: existing_thread_id,
+            });
         }
         Ok(RunningThreadResumeResult::NotRunning(None))
     }
@@ -4107,7 +4174,7 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
+pub(super) fn thread_store_resume_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => invalid_request(message),
         ThreadStoreError::Unsupported { operation } => {

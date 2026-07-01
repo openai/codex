@@ -225,6 +225,7 @@ impl ThreadHistoryChangeAccumulator {
     }
 }
 
+#[derive(Clone)]
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
@@ -1479,6 +1480,7 @@ fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) -> &ThreadIte
     &items[inserted_item_index]
 }
 
+#[derive(Clone)]
 struct PendingTurn {
     id: String,
     items: Vec<ThreadItem>,
