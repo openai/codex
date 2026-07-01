@@ -1,7 +1,11 @@
 use std::ffi::OsStr;
 use std::io;
+#[cfg(windows)]
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::path::Prefix;
 use std::process::Command;
 
 use crate::errors::GitReadError;
@@ -46,6 +50,13 @@ impl GitRunner {
     ) -> Result<Self, GitReadError> {
         for directory in std::env::split_paths(search_path) {
             if !directory.is_absolute() {
+                continue;
+            }
+            // Check the PATH spelling before appending `git`. On Windows,
+            // PathBuf::push resolves `..` when its base uses a verbatim prefix,
+            // which would otherwise erase repository traversal before the
+            // first containment check.
+            if search_directory_is_untrusted(&directory, untrusted) {
                 continue;
             }
             let candidate = directory.join(git_executable_name());
@@ -194,6 +205,73 @@ fn path_is_untrusted(path: &Path, locations: &UntrustedGitLocations) -> bool {
         .common_dirs
         .iter()
         .any(|common_dir| path_is_in_worktree_for_common_dir(path, common_dir))
+}
+
+fn search_directory_is_untrusted(directory: &Path, locations: &UntrustedGitLocations) -> bool {
+    #[cfg(windows)]
+    if windows_path_requires_fail_closed(directory)
+        || windows_path_has_untrusted_canonical_ancestor(directory, locations)
+    {
+        return true;
+    }
+    path_is_untrusted(directory, locations)
+}
+
+#[cfg(windows)]
+fn windows_path_requires_fail_closed(path: &Path) -> bool {
+    let mut components = path.components();
+    let supported_namespace = match components.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(_)
+            | Prefix::VerbatimDisk(_)
+            | Prefix::UNC(_, _)
+            | Prefix::VerbatimUNC(_, _) => true,
+            Prefix::DeviceNS(device) => windows_device_namespace_is_filesystem(device),
+            Prefix::Verbatim(namespace) => namespace
+                .to_str()
+                .is_some_and(|namespace| namespace.eq_ignore_ascii_case("UNC")),
+        },
+        _ => false,
+    };
+    !supported_namespace || components.any(|component| matches!(component, Component::ParentDir))
+}
+
+#[cfg(windows)]
+fn windows_device_namespace_is_filesystem(device: &OsStr) -> bool {
+    let bytes = device.as_encoded_bytes();
+    bytes.eq_ignore_ascii_case(b"UNC")
+        || matches!(bytes, [drive, b':'] if drive.is_ascii_alphabetic())
+}
+
+#[cfg(windows)]
+fn windows_path_has_untrusted_canonical_ancestor(
+    path: &Path,
+    locations: &UntrustedGitLocations,
+) -> bool {
+    let Ok(canonical_path) = std::fs::canonicalize(path) else {
+        return true;
+    };
+    if path_is_untrusted(&canonical_path, locations) {
+        return true;
+    }
+    for ancestor in path.ancestors().skip(1) {
+        let canonical_ancestor = match std::fs::canonicalize(ancestor) {
+            Ok(canonical_ancestor) => canonical_ancestor,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+                ) =>
+            {
+                continue;
+            }
+            Err(_) => return true,
+        };
+        if path_is_untrusted(&canonical_ancestor, locations) {
+            return true;
+        }
+    }
+    false
 }
 
 fn path_is_in_worktree_for_common_dir(path: &Path, expected_common_dir: &Path) -> bool {
