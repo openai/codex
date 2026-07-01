@@ -382,6 +382,44 @@ unknown_key = true"#;
 }
 
 #[tokio::test]
+async fn strict_config_accepts_partial_user_mcp_server_completed_by_cloud_config() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[mcp_servers.docs]
+enabled = true
+"#,
+    )
+    .expect("write partial user config");
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .strict_config(/*strict_config*/ true)
+        .cloud_config_bundle(CloudConfigBundleFixture::loader_with_enterprise_config(
+            r#"[mcp_servers.docs]
+command = "cloud-docs-server"
+enabled = false
+"#,
+        ))
+        .build()
+        .await
+        .expect("partial user MCP server should be completed by cloud config");
+
+    let server = config
+        .mcp_servers
+        .get()
+        .get("docs")
+        .expect("merged MCP server");
+    assert!(server.enabled);
+    let codex_config::McpServerTransportConfig::Stdio { command, .. } = &server.transport else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(command, "cloud-docs-server");
+}
+
+#[tokio::test]
 async fn strict_config_rejects_unknown_cli_override_key() {
     let tmp = tempdir().expect("tempdir");
 
@@ -3204,7 +3242,7 @@ enabled = false
 }
 
 #[tokio::test]
-async fn cli_override_for_disabled_project_local_mcp_server_returns_invalid_transport()
+async fn cli_override_for_disabled_project_local_mcp_server_returns_missing_transport_error()
 -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -3237,7 +3275,9 @@ enabled = false
         .expect_err("untrusted project layer should not provide MCP transport");
 
     assert!(
-        err.to_string().contains("invalid transport")
+        err.to_string().contains(
+            "MCP server configuration is incomplete: set `command` for stdio or `url` for streamable HTTP"
+        )
             && err.to_string().contains("mcp_servers.sentry"),
         "unexpected error: {err}"
     );

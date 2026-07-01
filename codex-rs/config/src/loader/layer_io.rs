@@ -2,11 +2,10 @@
 use super::macos::ManagedAdminConfigLayer;
 #[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
-use crate::config_toml::ConfigToml;
 use crate::diagnostics::config_error_from_toml;
 use crate::diagnostics::io_error_from_config_error;
 use crate::state::LoaderOverrides;
-use crate::strict_config::config_error_from_ignored_toml_value_fields;
+use crate::strict_config::config_error_from_config_toml_layer;
 use codex_file_system::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -153,11 +152,9 @@ fn validate_config_toml_strictly(
         ));
     };
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(config_error) = config_error_from_ignored_toml_value_fields::<ConfigToml>(
-        path.as_path(),
-        contents,
-        value.clone(),
-    ) {
+    if let Some(config_error) =
+        config_error_from_config_toml_layer(path.as_path(), contents, value.clone())
+    {
         return Err(io_error_from_config_error(
             io::ErrorKind::InvalidData,
             config_error,

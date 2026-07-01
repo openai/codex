@@ -1331,7 +1331,7 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = match merged_toml.try_into() {
             Ok(config_toml) => config_toml,
             Err(err) => {
-                if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
+                if let Some(config_error) = codex_config::first_layer_config_error(
                     &config_layer_stack,
                     codex_config::CONFIG_TOML_FILE,
                 )

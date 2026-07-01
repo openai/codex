@@ -15,9 +15,9 @@ use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
 use crate::config_toml::ConfigToml;
 use crate::config_toml::ProjectConfig;
-use crate::diagnostics::ConfigError;
+use crate::config_toml_layer::split_config_toml_layer;
 use crate::diagnostics::config_error_from_toml;
-use crate::diagnostics::first_layer_config_error_from_entries as typed_first_layer_config_error_from_entries;
+use crate::diagnostics::first_layer_config_error_from_entries;
 use crate::diagnostics::io_error_from_config_error;
 use crate::merge::merge_toml_values;
 use crate::overrides::build_cli_overrides_layer;
@@ -27,7 +27,7 @@ use crate::state::ConfigLayerEntry;
 use crate::state::ConfigLayerStack;
 use crate::state::ConfigLoadOptions;
 use crate::state::LoaderOverrides;
-use crate::strict_config::config_error_from_ignored_toml_value_fields;
+use crate::strict_config::config_error_from_config_toml_layer;
 use crate::strict_config::ignored_toml_value_field;
 use crate::strict_config::unknown_feature_toml_value_field;
 use crate::thread_config::ThreadConfigContext;
@@ -72,10 +72,6 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "experimental_realtime_ws_base_url",
     "otel",
 ];
-
-async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> Option<ConfigError> {
-    typed_first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE).await
-}
 
 /// To build up the set of admin-enforced constraints, requirements layers are
 /// collected in ascending precedence order, matching config layers, and then
@@ -301,7 +297,9 @@ pub async fn load_config_layers_state(
         let project_root_markers = match project_root_markers_from_config(&merged_so_far) {
             Ok(markers) => markers.unwrap_or_else(default_project_root_markers),
             Err(err) => {
-                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                if let Some(config_error) =
+                    first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE).await
+                {
                     return Err(io_error_from_config_error(
                         io::ErrorKind::InvalidData,
                         config_error,
@@ -327,7 +325,9 @@ pub async fn load_config_layers_state(
                     .get_ref()
                     .and_then(|err| err.downcast_ref::<toml::de::Error>())
                     .cloned();
-                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                if let Some(config_error) =
+                    first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE).await
+                {
                     return Err(io_error_from_config_error(
                         io::ErrorKind::InvalidData,
                         config_error,
@@ -525,11 +525,9 @@ fn validate_config_toml_strictly(
     base_dir: &Path,
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(config_error) = config_error_from_ignored_toml_value_fields::<ConfigToml>(
-        toml_file,
-        contents,
-        value.clone(),
-    ) {
+    if let Some(config_error) =
+        config_error_from_config_toml_layer(toml_file, contents, value.clone())
+    {
         Err(io_error_from_config_error(
             io::ErrorKind::InvalidData,
             config_error,
@@ -1082,10 +1080,10 @@ pub fn resolve_relative_paths_in_config_toml(
     value_from_config_toml: TomlValue,
     base_dir: &Path,
 ) -> io::Result<TomlValue> {
-    // Use the serialize/deserialize round-trip to convert the
-    // `toml::Value` into a `ConfigToml` with `AbsolutePath
+    let parts = split_config_toml_layer(value_from_config_toml.clone());
+
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+    let Ok(resolved) = parts.self_contained.try_into::<ConfigToml>() else {
         return Ok(value_from_config_toml);
     };
     drop(_guard);

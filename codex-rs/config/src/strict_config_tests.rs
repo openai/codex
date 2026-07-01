@@ -13,12 +13,8 @@ model = "gpt-5"
 unknown_key = true"#;
 
     let value = toml::from_str::<TomlValue>(contents).expect("valid TOML");
-    let error = config_error_from_ignored_toml_value_fields_for_source_name::<ConfigToml>(
-        source_name,
-        contents,
-        value,
-    )
-    .expect("unknown field error");
+    let error = config_error_from_config_toml_layer_for_source_name(source_name, contents, value)
+        .expect("unknown field error");
 
     assert_eq!(
         error,
@@ -124,4 +120,57 @@ collapsed = true"#;
     let error = config_error_from_ignored_toml_fields::<ConfigToml>(path, contents);
 
     assert_eq!(error, None);
+}
+
+#[test]
+fn strict_config_layer_accepts_partial_mcp_server() {
+    let path = Path::new("/tmp/config.toml");
+    let contents = r#"
+[mcp_servers.docs]
+enabled = true
+
+[mcp_servers.docs.env]
+DOCS_TOKEN = "local-token""#;
+    let value = toml::from_str::<TomlValue>(contents).expect("valid TOML");
+
+    let error = config_error_from_config_toml_layer(path, contents, value);
+
+    assert_eq!(error, None);
+}
+
+#[test]
+fn strict_config_layer_rejects_unknown_partial_mcp_server_field() {
+    let path = Path::new("/tmp/config.toml");
+    let contents = r#"
+[mcp_servers.docs]
+enabled = true
+unknown_key = true"#;
+    let value = toml::from_str::<TomlValue>(contents).expect("valid TOML");
+
+    let error = config_error_from_config_toml_layer(path, contents, value)
+        .expect("unknown MCP field error");
+
+    assert_eq!(
+        error.message,
+        "unknown configuration field `mcp_servers.docs.unknown_key`"
+    );
+}
+
+#[test]
+fn strict_config_layer_rejects_invalid_partial_mcp_server_field_type() {
+    let path = Path::new("/tmp/config.toml");
+    let contents = r#"
+[mcp_servers.docs]
+enabled = "yes""#;
+    let value = toml::from_str::<TomlValue>(contents).expect("valid TOML");
+
+    let error =
+        config_error_from_config_toml_layer(path, contents, value).expect("invalid MCP field type");
+
+    assert!(
+        error.message.contains("invalid type: string \"yes\"")
+            && error.message.contains("expected a boolean"),
+        "{}",
+        error.message
+    );
 }

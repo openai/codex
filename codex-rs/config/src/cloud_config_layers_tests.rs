@@ -80,6 +80,82 @@ fn strict_layers_reject_unknown_config_fields() {
 }
 
 #[test]
+fn strict_layers_allow_partial_mcp_server_fragments() {
+    let base_dir = base_dir();
+    let layers = cloud_config_layers_from_fragments_strict(
+        vec![
+            fragment(
+                "high",
+                "Enable docs",
+                r#"[mcp_servers.docs]
+enabled = true
+"#,
+            ),
+            fragment(
+                "low",
+                "Define docs",
+                r#"[mcp_servers.docs]
+command = "cloud-docs-server"
+enabled = false
+"#,
+            ),
+        ],
+        &base_dir,
+    )
+    .expect("partial cloud MCP fragments should be structurally valid");
+
+    let stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("cloud config layers should compose");
+    let config: ConfigToml = stack
+        .effective_config()
+        .try_into()
+        .expect("merged MCP server should be complete");
+    let server = config.mcp_servers.get("docs").expect("merged MCP server");
+
+    assert!(server.enabled);
+    let crate::McpServerTransportConfig::Stdio { command, .. } = &server.transport else {
+        panic!("expected stdio MCP server");
+    };
+    assert_eq!(command, "cloud-docs-server");
+}
+
+#[test]
+fn strict_partial_mcp_layer_still_resolves_relative_paths() {
+    let base_dir = base_dir();
+    let layers = cloud_config_layers_from_fragments_strict(
+        vec![fragment(
+            "partial",
+            "Partial MCP",
+            r#"model_instructions_file = "instructions.md"
+
+[mcp_servers.docs]
+enabled = true
+"#,
+        )],
+        &base_dir,
+    )
+    .expect("partial MCP layer should preserve path resolution");
+
+    let expected_path =
+        AbsolutePathBuf::resolve_path_against_base("instructions.md", base_dir.as_path());
+    let mut expected = toml(
+        r#"[mcp_servers.docs]
+enabled = true
+"#,
+    );
+    expected.as_table_mut().expect("config table").insert(
+        "model_instructions_file".to_string(),
+        TomlValue::String(expected_path.to_string_lossy().into_owned()),
+    );
+
+    assert_eq!(layers[0].config, expected);
+}
+
+#[test]
 fn enterprise_layers_precede_user_and_override_system() {
     let base_dir = base_dir();
     let mut layers = vec![ConfigLayerEntry::new(
@@ -208,16 +284,23 @@ fn home_relative_path_fields_are_allowed_and_resolved() {
 async fn raw_toml_diagnostics_use_enterprise_layer_name() {
     let base_dir = base_dir();
     let layers = cloud_config_layers_from_fragments(
-        vec![fragment(
-            "cfg_123",
-            "Base policy",
-            "model_instructions_file = \"instructions.md\"\nmodel = 1",
-        )],
+        vec![
+            fragment(
+                "cfg_123",
+                "Base policy",
+                "model_instructions_file = \"instructions.md\"\nmodel = 1",
+            ),
+            fragment(
+                "cfg_partial",
+                "Partial MCP",
+                "[mcp_servers.docs]\nenabled = true",
+            ),
+        ],
         &base_dir,
     )
     .expect("cloud config layers should parse");
 
-    let error = first_layer_config_error_from_entries::<ConfigToml>(&layers, CONFIG_TOML_FILE)
+    let error = first_layer_config_error_from_entries(&layers, CONFIG_TOML_FILE)
         .await
         .expect("invalid raw TOML should produce a layer diagnostic");
 

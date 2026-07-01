@@ -1,5 +1,8 @@
 //! Strict config validation built on top of serde's ignored-field tracking.
 
+use crate::config_toml::ConfigToml;
+use crate::config_toml_layer::ConfigTomlComposableSections;
+use crate::config_toml_layer::split_config_toml_layer;
 use crate::diagnostics::ConfigDiagnosticSource;
 use crate::diagnostics::ConfigError;
 use crate::diagnostics::config_error_from_toml_for_source;
@@ -25,27 +28,49 @@ pub fn config_error_from_ignored_toml_fields<T: DeserializeOwned>(
     }
 }
 
-pub(crate) fn config_error_from_ignored_toml_value_fields<T: DeserializeOwned>(
+pub(crate) fn config_error_from_config_toml_layer(
     path: impl AsRef<Path>,
     contents: &str,
     value: TomlValue,
 ) -> Option<ConfigError> {
-    config_error_from_ignored_toml_value_fields_for_source::<T>(
+    config_error_from_config_toml_layer_for_source(
         ConfigDiagnosticSource::Path(path.as_ref()),
         contents,
         value,
     )
 }
 
-pub(crate) fn config_error_from_ignored_toml_value_fields_for_source_name<T: DeserializeOwned>(
+pub(crate) fn config_error_from_config_toml_layer_for_source_name(
     source_name: &str,
     contents: &str,
     value: TomlValue,
 ) -> Option<ConfigError> {
-    config_error_from_ignored_toml_value_fields_for_source::<T>(
+    config_error_from_config_toml_layer_for_source(
         ConfigDiagnosticSource::DisplayName(source_name),
         contents,
         value,
+    )
+}
+
+pub(crate) fn config_error_from_config_toml_layer_for_source(
+    source: ConfigDiagnosticSource<'_>,
+    contents: &str,
+    value: TomlValue,
+) -> Option<ConfigError> {
+    let parts = split_config_toml_layer(value);
+
+    if let Some(error) = config_error_from_ignored_toml_value_fields_for_source::<ConfigToml>(
+        source,
+        contents,
+        parts.self_contained,
+    ) {
+        return Some(error);
+    }
+
+    config_error_from_ignored_toml_value_fields_for_source::<ConfigTomlComposableSections>(
+        source,
+        contents,
+        parts.composable,
     )
 }
 

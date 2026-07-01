@@ -6,6 +6,7 @@ use crate::ConfigLayerSource;
 use crate::ConfigLayerStack;
 use crate::ConfigLayerStackOrdering;
 use crate::format_config_layer_source;
+use crate::strict_config::config_error_from_config_toml_layer_for_source;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
 use serde_path_to_error::Path as SerdePath;
@@ -15,6 +16,7 @@ use std::fmt::Write;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use toml::Value as TomlValue;
 use toml_edit::Document;
 use toml_edit::Item;
 use toml_edit::Table;
@@ -168,14 +170,14 @@ fn config_error_from_typed_toml_for_source<T: DeserializeOwned>(
     }
 }
 
-pub async fn first_layer_config_error<T: DeserializeOwned>(
+pub async fn first_layer_config_error(
     layers: &ConfigLayerStack,
     config_toml_file: &str,
 ) -> Option<ConfigError> {
     // When the merged config fails schema validation, we surface the first concrete
     // per-file error to point users at a specific file and range rather than an
     // opaque merged-layer failure.
-    first_layer_config_error_for_entries::<T, _>(
+    first_layer_config_error_for_entries(
         layers.get_layers(
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
@@ -185,14 +187,14 @@ pub async fn first_layer_config_error<T: DeserializeOwned>(
     .await
 }
 
-pub async fn first_layer_config_error_from_entries<T: DeserializeOwned>(
+pub async fn first_layer_config_error_from_entries(
     layers: &[ConfigLayerEntry],
     config_toml_file: &str,
 ) -> Option<ConfigError> {
-    first_layer_config_error_for_entries::<T, _>(layers.iter(), config_toml_file).await
+    first_layer_config_error_for_entries(layers.iter(), config_toml_file).await
 }
 
-async fn first_layer_config_error_for_entries<'a, T: DeserializeOwned, I>(
+async fn first_layer_config_error_for_entries<'a, I>(
     layers: I,
     config_toml_file: &str,
 ) -> Option<ConfigError>
@@ -212,7 +214,7 @@ where
             // parsed into the runtime layer so diagnostics resolve relative
             // path fields with the same semantics.
             let _absolute_path_base = AbsolutePathBufGuard::new(base_dir.as_path());
-            if let Some(error) = config_error_from_typed_toml_for_source::<T>(
+            if let Some(error) = config_error_from_config_toml_layer_contents(
                 ConfigDiagnosticSource::DisplayName(&source_name),
                 contents,
             ) {
@@ -238,12 +240,25 @@ where
             continue;
         };
         let _guard = AbsolutePathBufGuard::new(parent);
-        if let Some(error) = config_error_from_typed_toml::<T>(&path, &contents) {
+        if let Some(error) = config_error_from_config_toml_layer_contents(
+            ConfigDiagnosticSource::Path(&path),
+            &contents,
+        ) {
             return Some(error);
         }
     }
 
     None
+}
+
+fn config_error_from_config_toml_layer_contents(
+    source: ConfigDiagnosticSource<'_>,
+    contents: &str,
+) -> Option<ConfigError> {
+    match toml::from_str::<TomlValue>(contents) {
+        Ok(value) => config_error_from_config_toml_layer_for_source(source, contents, value),
+        Err(err) => Some(config_error_from_toml_for_source(source, contents, err)),
+    }
 }
 
 fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Option<PathBuf> {
