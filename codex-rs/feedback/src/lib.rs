@@ -18,6 +18,7 @@ use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
 use tracing_subscriber::Layer;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
@@ -204,7 +205,11 @@ impl CodexFeedback {
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
             // full trace when the user uploads a report.
-            .with_filter(Targets::new().with_default(Level::TRACE))
+            .with_filter(
+                Targets::new()
+                    .with_default(Level::TRACE)
+                    .with_target("codex_core::agent_communication", LevelFilter::OFF),
+            )
     }
 
     /// Returns a [`tracing_subscriber`] layer that collects structured metadata for feedback.
@@ -721,6 +726,28 @@ mod tests {
         let snap = fb.snapshot(/*session_id*/ None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn logger_layer_excludes_agent_communication_content() {
+        let fb = CodexFeedback::new();
+        let _guard = tracing_subscriber::registry()
+            .with(fb.logger_layer())
+            .set_default();
+
+        tracing::info!(target: "codex_core", "retained-log");
+        tracing::trace!(
+            target: "codex_core::agent_communication",
+            content = "secret",
+            "dropped-log"
+        );
+
+        let logs = std::str::from_utf8(fb.snapshot(/*session_id*/ None).as_bytes())
+            .expect("feedback logs should be UTF-8")
+            .to_string();
+        assert!(logs.contains("retained-log"));
+        assert!(!logs.contains("secret"));
+        assert!(!logs.contains("dropped-log"));
     }
 
     #[test]
