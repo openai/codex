@@ -273,15 +273,13 @@ impl RequestUserInputOverlay {
     }
 
     fn snooze_auto_resolution(&mut self) {
-        if self.request.auto_resolution_ms.is_some() {
+        if !self.request.is_blocking {
             self.auto_resolution_snoozed = true;
         }
     }
 
     fn auto_resolution_timing_at(&self, now: Instant) -> AutoResolutionTiming {
-        // The TUI currently treats autoResolutionMs as an enable signal. The
-        // model-provided duration value is reserved for future runtime policy.
-        if self.request.auto_resolution_ms.is_none() || self.auto_resolution_snoozed {
+        if self.request.is_blocking || self.auto_resolution_snoozed {
             return AutoResolutionTiming::Disabled;
         }
 
@@ -1694,16 +1692,16 @@ mod tests {
             item_id: "call-1".to_string(),
             turn_id: turn_id.to_string(),
             questions,
-            auto_resolution_ms: None,
+            is_blocking: true,
         }
     }
 
-    fn request_event_with_auto_resolution(
+    fn non_blocking_request_event(
         turn_id: &str,
         questions: Vec<ToolRequestUserInputQuestion>,
     ) -> ToolRequestUserInputParams {
         let mut request = request_event(turn_id, questions);
-        request.auto_resolution_ms = Some(60_000);
+        request.is_blocking = false;
         request
     }
 
@@ -1770,14 +1768,14 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-2".to_string(),
             questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
+            is_blocking: true,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
             thread_id: "thread-1".to_string(),
             item_id: "call-3".to_string(),
             turn_id: "turn-3".to_string(),
             questions: vec![question_with_options("q3", "Third")],
-            auto_resolution_ms: None,
+            is_blocking: true,
         });
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -1787,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolution_absent_has_no_timer() {
+    fn blocking_request_has_no_timer() {
         let (tx, _rx) = test_sender();
         let overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "First")]),
@@ -1810,10 +1808,7 @@ mod tests {
     fn auto_resolution_hides_timer_during_grace_period() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
@@ -1841,7 +1836,7 @@ mod tests {
     fn auto_resolution_visible_countdown_snapshot() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
+            non_blocking_request_event(
                 "turn-1",
                 vec![
                     question_with_options("q1", "First"),
@@ -1867,10 +1862,7 @@ mod tests {
     fn auto_resolution_visible_countdown_is_red() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
@@ -1907,10 +1899,7 @@ mod tests {
     fn auto_resolution_expiry_emits_empty_answer() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
@@ -1941,10 +1930,7 @@ mod tests {
     fn auto_resolution_key_interaction_snoozes_timer() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
@@ -1968,10 +1954,7 @@ mod tests {
     fn auto_resolution_paste_interaction_snoozes_timer() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
@@ -1995,16 +1978,13 @@ mod tests {
     fn auto_resolution_resets_for_queued_request() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event_with_auto_resolution(
-                "turn-1",
-                vec![question_with_options("q1", "First")],
-            ),
+            non_blocking_request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(request_event_with_auto_resolution(
+        overlay.try_consume_user_input_request(non_blocking_request_event(
             "turn-2",
             vec![question_with_options("q2", "Second")],
         ));
@@ -2035,7 +2015,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
-                auto_resolution_ms: None,
+                is_blocking: true,
             },
             tx,
             /*has_input_focus*/ true,
@@ -2064,7 +2044,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
-                auto_resolution_ms: None,
+                is_blocking: true,
             },
             tx,
             /*has_input_focus*/ true,
@@ -2076,7 +2056,7 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
+            is_blocking: true,
         });
 
         assert!(
@@ -2104,7 +2084,7 @@ mod tests {
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
-                auto_resolution_ms: None,
+                is_blocking: true,
             },
             tx,
             /*has_input_focus*/ true,
@@ -2116,14 +2096,14 @@ mod tests {
             item_id: "call-2".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
+            is_blocking: true,
         });
         overlay.try_consume_user_input_request(ToolRequestUserInputParams {
             thread_id: "thread-1".to_string(),
             item_id: "call-3".to_string(),
             turn_id: "turn-1".to_string(),
             questions: vec![question_with_options("q3", "Third")],
-            auto_resolution_ms: None,
+            is_blocking: true,
         });
 
         assert!(

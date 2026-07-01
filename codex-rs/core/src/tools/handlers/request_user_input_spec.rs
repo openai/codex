@@ -6,8 +6,6 @@ use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
 pub const REQUEST_USER_INPUT_TOOL_NAME: &str = "request_user_input";
-pub const MIN_AUTO_RESOLUTION_MS: u64 = 60_000;
-pub const MAX_AUTO_RESOLUTION_MS: u64 = 240_000;
 
 pub fn create_request_user_input_tool(description: String) -> ToolSpec {
     let option_props = BTreeMap::from([
@@ -68,13 +66,13 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
         Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
     );
 
-    let auto_resolution_ms_schema = JsonSchema::number(Some(format!(
-        "Optional auto-resolution window in milliseconds, from {MIN_AUTO_RESOLUTION_MS} to {MAX_AUTO_RESOLUTION_MS}. Include this only when the question is useful but non-blocking and continuing with best judgment is acceptable if the user does not answer; omit it when explicit user input is required before continuing. Use {MIN_AUTO_RESOLUTION_MS} for lightly helpful context and up to {MAX_AUTO_RESOLUTION_MS} when the answer would materially unblock better work."
-    )));
+    let is_blocking_schema = JsonSchema::boolean(Some(
+        "Whether the request requires explicit user input before continuing.".to_string(),
+    ));
 
     let properties = BTreeMap::from([
         ("questions".to_string(), questions_schema),
-        ("autoResolutionMs".to_string(), auto_resolution_ms_schema),
+        ("isBlocking".to_string(), is_blocking_schema),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
@@ -84,7 +82,7 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["questions".to_string()]),
+            Some(vec!["questions".to_string(), "isBlocking".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,
@@ -120,26 +118,20 @@ pub fn normalize_request_user_input_args(
         question.is_other = true;
     }
 
-    if let Some(auto_resolution_ms) = args.auto_resolution_ms {
-        let clamped_auto_resolution_ms =
-            auto_resolution_ms.clamp(MIN_AUTO_RESOLUTION_MS, MAX_AUTO_RESOLUTION_MS);
-        if clamped_auto_resolution_ms != auto_resolution_ms {
-            tracing::warn!(
-                auto_resolution_ms,
-                clamped_auto_resolution_ms,
-                "clamped request_user_input autoResolutionMs to supported range"
-            );
-            args.auto_resolution_ms = Some(clamped_auto_resolution_ms);
-        }
-    }
-
     Ok(args)
 }
 
 pub fn request_user_input_tool_description(available_modes: &[ModeKind]) -> String {
     let allowed_modes = format_allowed_modes(available_modes);
+    let blocking_policy = if available_modes == [ModeKind::Plan] {
+        "Set isBlocking to true when explicit user input is required before continuing."
+    } else if available_modes.contains(&ModeKind::Plan) {
+        "Set isBlocking to true only in Plan mode when explicit user input is required before continuing. In non-Plan modes, always set isBlocking to false."
+    } else {
+        "Set isBlocking to false."
+    };
     format!(
-        "Request user input for one to three short questions and wait for the response. Set autoResolutionMs, from {MIN_AUTO_RESOLUTION_MS} to {MAX_AUTO_RESOLUTION_MS} milliseconds, only when the question is useful but non-blocking and continuing with best judgment is acceptable if the user does not answer; omit it when explicit user input is required. This tool is only available in {allowed_modes}."
+        "Request user input for one to three short questions and wait for the response. {blocking_policy} This tool is only available in {allowed_modes}."
     )
 }
 

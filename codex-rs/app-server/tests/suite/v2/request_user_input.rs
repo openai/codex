@@ -23,10 +23,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn create_request_user_input_sse_response_with_auto_resolution(
-    call_id: &str,
-    auto_resolution_ms: u64,
-) -> anyhow::Result<String> {
+fn create_non_blocking_request_user_input_sse_response(call_id: &str) -> anyhow::Result<String> {
     let tool_call_arguments = serde_json::to_string(&json!({
         "questions": [{
             "id": "confirm_path",
@@ -40,7 +37,7 @@ fn create_request_user_input_sse_response_with_auto_resolution(
                 "description": "Stop and revisit the approach."
             }]
         }],
-        "autoResolutionMs": auto_resolution_ms
+        "isBlocking": false
     }))?;
 
     Ok(responses::sse(vec![
@@ -54,9 +51,7 @@ fn create_request_user_input_sse_response_with_auto_resolution(
 async fn request_user_input_round_trip() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
-        create_request_user_input_sse_response_with_auto_resolution(
-            "call1", /*auto_resolution_ms*/ 60_000,
-        )?,
+        create_non_blocking_request_user_input_sse_response("call1")?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -119,7 +114,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.questions.len(), 1);
-    assert_eq!(params.auto_resolution_ms, Some(60_000));
+    assert!(!params.is_blocking);
     let resolved_request_id = request_id.clone();
 
     mcp.send_response(
