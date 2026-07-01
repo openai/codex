@@ -2831,6 +2831,7 @@ impl Session {
     /// This may refresh filesystem-derived state. Normal turns should call it only from
     /// `run_turn` and pass the result down; standalone request or history boundaries may capture
     /// their own step.
+    #[tracing::instrument(name = "step_context.capture", level = "info", skip_all)]
     pub(crate) async fn capture_step_context(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
