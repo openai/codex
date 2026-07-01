@@ -209,6 +209,44 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
 }
 
 #[tokio::test]
+async fn child_does_not_use_parent_exec_policy_when_config_toml_rules_differ() -> anyhow::Result<()>
+{
+    let (_home, parent_config) = test_config().await;
+    let mut child_config = parent_config.clone();
+    let mut layers: Vec<_> = child_config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    layers.push(ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::from_str::<TomlValue>(
+            r#"
+            [rules]
+            prefix_rules = [
+                { pattern = [{ token = "echo" }], decision = "allow" },
+            ]
+            "#,
+        )?,
+    ));
+    child_config.config_layer_stack = ConfigLayerStack::new(
+        layers,
+        child_config.config_layer_stack.requirements().clone(),
+        child_config.config_layer_stack.requirements_toml().clone(),
+    )?;
+
+    assert!(!child_uses_parent_exec_policy(
+        &parent_config,
+        &child_config
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_empty_policy_when_no_policy_files_exist() {
     let temp_dir = tempdir().expect("create temp dir");
     let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
@@ -453,6 +491,87 @@ async fn ignores_policies_outside_policy_dir() {
 }
 
 #[tokio::test]
+async fn loads_config_toml_rules_with_starlark_rules() -> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir)?;
+    fs::write(
+        policy_dir.join("deny.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+    let dot_codex_folder =
+        AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute dot_codex_folder");
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        toml::from_str::<TomlValue>(
+            r#"
+            [rules]
+            prefix_rules = [
+                { pattern = [{ token = "echo" }], decision = "allow" },
+            ]
+            "#,
+        )?,
+    );
+    let config_stack = ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+
+    assert_eq!(
+        policy
+            .check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+            .decision,
+        Decision::Forbidden
+    );
+    assert_eq!(
+        policy
+            .check_multiple(
+                [vec!["echo".to_string(), "hello".to_string()]].iter(),
+                &|_| { Decision::Forbidden }
+            )
+            .decision,
+        Decision::Allow
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn loads_config_toml_rules_from_user_config_file() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+        [rules]
+        prefix_rules = [
+            { pattern = [{ token = "echo" }], decision = "allow" },
+        ]
+        "#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    let policy = load_exec_policy(&config.config_layer_stack).await?;
+
+    assert_eq!(
+        policy
+            .check_multiple(
+                [vec!["echo".to_string(), "hello".to_string()]].iter(),
+                &|_| { Decision::Forbidden }
+            )
+            .decision,
+        Decision::Allow
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn ignores_policy_files_when_config_stack_disables_exec_policy_rules() {
     let temp_dir = tempdir().expect("create temp dir");
     let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
@@ -477,6 +596,42 @@ async fn ignores_policy_files_when_config_stack_disables_exec_policy_rules() {
             .decision,
         Decision::Forbidden,
     );
+}
+
+#[tokio::test]
+async fn ignores_config_toml_rules_when_config_stack_disables_exec_policy_rules()
+-> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        toml::from_str::<TomlValue>(
+            r#"
+            [rules]
+            prefix_rules = [
+                { pattern = [{ token = "curl" }], decision = "allow" },
+            ]
+            "#,
+        )?,
+    );
+    let config_stack = ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?
+    .with_user_and_project_exec_policy_rules_ignored(
+        /*ignore_user_and_project_exec_policy_rules*/ true,
+    );
+
+    let policy = load_exec_policy(&config_stack).await?;
+
+    assert_eq!(
+        policy
+            .check_multiple([vec!["curl".to_string()]].iter(), &|_| Decision::Forbidden)
+            .decision,
+        Decision::Forbidden,
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1335,6 +1490,7 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
                 mcp_elicitations: true,
             }),
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
@@ -1372,6 +1528,7 @@ async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled(
                 mcp_elicitations: true,
             }),
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
@@ -1396,6 +1553,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1412,6 +1570,55 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
 }
 
 #[tokio::test]
+async fn exec_approval_requirement_honors_permissions_scoped_rule() {
+    let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt", permissions="strict")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let command = vec!["git".to_string(), "status".to_string()];
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+
+    let scoped_requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: Some("strict".to_string()),
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+    assert_eq!(
+        scoped_requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some("`git status` requires approval by policy".to_string()),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+
+    let unscoped_requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+    assert_eq!(
+        unscoped_requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
 async fn empty_bash_lc_script_falls_back_to_original_command() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
 
@@ -1421,6 +1628,7 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1450,6 +1658,7 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1479,6 +1688,7 @@ async fn request_rule_uses_prefix_rule() {
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
@@ -1511,6 +1721,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::Disabled,
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
@@ -1550,6 +1761,7 @@ async fn heuristics_apply_when_other_commands_match_policy() {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 permission_profile: PermissionProfile::Disabled,
+                active_permission_profile: None,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
@@ -2031,6 +2243,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &sneaky_command,
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: PermissionProfile::read_only(),
+                active_permission_profile: None,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2055,6 +2268,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &dangerous_command,
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: PermissionProfile::read_only(),
+                active_permission_profile: None,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2075,6 +2289,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &dangerous_command,
                 approval_policy: AskForApproval::Never,
                 permission_profile: PermissionProfile::read_only(),
+                active_permission_profile: None,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2170,6 +2385,7 @@ async fn exec_approval_requirement_for_command(
             command: &command,
             approval_policy,
             permission_profile,
+            active_permission_profile: None,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
             sandbox_permissions,
             prefix_rule,
