@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_install_context::InstallContext;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -51,9 +52,7 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = bundled_executable_path_for_exe(&exe, kind.file_name())
-    {
+    if let Some(candidate) = bundled_executable_path(kind.file_name()) {
         return candidate;
     }
     PathBuf::from(kind.file_name())
@@ -183,32 +182,69 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    bundled_executable_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+    bundled_executable_path(kind.file_name()).ok_or_else(|| {
         anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
+            "helper not found next to current executable, canonical executable, or under {RESOURCES_DIRNAME}: {}",
             exe.display()
         )
     })
 }
 
-pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
-    let dir = exe.parent()?;
-    let direct_candidate = dir.join(file_name);
-    if direct_candidate.is_file() {
-        return Some(direct_candidate);
+pub(crate) fn bundled_executable_path(file_name: &str) -> Option<PathBuf> {
+    if let Some(resource) = InstallContext::current().bundled_resource(file_name) {
+        return Some(resource.into_path_buf());
     }
+
+    let exe = std::env::current_exe().ok()?;
+    bundled_executable_path_for_exe(&exe, file_name)
+}
+
+pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
+    bundled_executable_candidates_for_exe(exe, file_name)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+fn bundled_executable_candidates_for_exe(exe: &Path, file_name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    append_bundled_executable_candidates(&mut candidates, exe, file_name);
+
+    if let Ok(canonical_exe) = fs::canonicalize(exe)
+        && canonical_exe != exe
+    {
+        append_bundled_executable_candidates(&mut candidates, &canonical_exe, file_name);
+    }
+
+    candidates
+}
+
+fn append_bundled_executable_candidates(
+    candidates: &mut Vec<PathBuf>,
+    exe: &Path,
+    file_name: &str,
+) {
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+
+    push_candidate(candidates, dir.join(file_name));
 
     if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
         && let Some(package_dir) = dir.parent()
     {
-        let package_resource_candidate = package_dir.join(RESOURCES_DIRNAME).join(file_name);
-        if package_resource_candidate.is_file() {
-            return Some(package_resource_candidate);
-        }
+        push_candidate(
+            candidates,
+            package_dir.join(RESOURCES_DIRNAME).join(file_name),
+        );
     }
 
-    let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
-    resource_candidate.is_file().then_some(resource_candidate)
+    push_candidate(candidates, dir.join(RESOURCES_DIRNAME).join(file_name));
+}
+
+fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !candidates.iter().any(|existing| existing == &candidate) {
+        candidates.push(candidate);
+    }
 }
 
 fn helper_destination_for_source(
@@ -373,10 +409,37 @@ mod tests {
     use super::helper_version_suffix;
     use super::materialized_file_name;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn copy_from_source_if_needed_copies_missing_destination() {
@@ -544,6 +607,42 @@ mod tests {
     }
 
     #[test]
+    fn helper_source_lookup_follows_canonicalized_launcher_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let release_dir = codex_home
+            .join("packages")
+            .join("standalone")
+            .join("releases")
+            .join("0.142.5-x86_64-pc-windows-msvc");
+        let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+        let bin_dir = release_dir.join(BIN_DIRNAME);
+        let launcher_dir = tmp
+            .path()
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("OpenAI")
+            .join("Codex")
+            .join(BIN_DIRNAME);
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        fs::create_dir_all(&launcher_dir).expect("create launcher dir");
+        fs::create_dir_all(&bin_dir).expect("create package bin dir");
+        let canonical_exe = bin_dir.join("codex.exe");
+        let launcher_exe = launcher_dir.join("codex.exe");
+        let helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&canonical_exe, b"codex").expect("write canonical exe");
+        fs::write(&helper, b"runner").expect("write helper");
+        symlink_file(&canonical_exe, &launcher_exe);
+        let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.as_os_str());
+
+        let resolved = bundled_executable_path_for_exe(&launcher_exe, "codex-command-runner.exe")
+            .expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+
+    #[test]
     fn helper_version_suffix_uses_cli_version_or_dev_build_metadata() {
         let tmp = TempDir::new().expect("tempdir");
         let source = tmp.path().join("source.exe");
@@ -562,5 +661,15 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[cfg(unix)]
+    fn symlink_file(original: &Path, link: &Path) {
+        std::os::unix::fs::symlink(original, link).expect("create symlink");
+    }
+
+    #[cfg(windows)]
+    fn symlink_file(original: &Path, link: &Path) {
+        std::os::windows::fs::symlink_file(original, link).expect("create symlink");
     }
 }

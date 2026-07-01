@@ -12,6 +12,7 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::bundled_executable_path;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::identity::sandbox_setup_is_complete;
@@ -684,9 +685,7 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
+    if let Some(setup_exe) = bundled_executable_path(SETUP_EXE_FILENAME) {
         return setup_exe;
     }
     PathBuf::from(SETUP_EXE_FILENAME)

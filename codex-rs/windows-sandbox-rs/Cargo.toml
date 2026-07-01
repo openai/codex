@@ -28,6 +28,7 @@ chrono = { version = "0.4.42", default-features = false, features = [
     "clock",
     "std",
 ] }
+codex-install-context = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
