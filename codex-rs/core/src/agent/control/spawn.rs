@@ -94,7 +94,7 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let spawned_agent = Box::pin(self.spawn_agent_internal(
             config,
-            initial_operation,
+            AgentSubmission::op(initial_operation),
             session_source,
             SpawnAgentOptions::default(),
         ))
@@ -106,11 +106,11 @@ impl AgentControl {
     pub(crate) async fn spawn_agent_with_metadata(
         &self,
         config: Config,
-        initial_operation: Op,
+        initial_submission: AgentSubmission,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions, // TODO(jif) drop with new fork.
     ) -> CodexResult<LiveAgent> {
-        Box::pin(self.spawn_agent_internal(config, initial_operation, session_source, options))
+        Box::pin(self.spawn_agent_internal(config, initial_submission, session_source, options))
             .await
     }
 
@@ -197,7 +197,7 @@ impl AgentControl {
     async fn spawn_agent_internal(
         &self,
         config: Config,
-        initial_operation: Op,
+        initial_submission: AgentSubmission,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
@@ -356,7 +356,7 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
+        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_submission)
             .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata

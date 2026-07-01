@@ -1,4 +1,5 @@
 use super::AgentControl;
+use super::AgentSubmission;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -32,7 +33,25 @@ impl AgentControl {
         thread_id: ThreadId,
         op: &Op,
     ) -> CodexResult<()> {
-        if !op_starts_turn(op) {
+        self.ensure_execution_capacity_for_turn_start(thread_id, op_starts_turn(op))
+            .await
+    }
+
+    pub(crate) async fn ensure_execution_capacity_for_submission(
+        &self,
+        thread_id: ThreadId,
+        submission: &AgentSubmission,
+    ) -> CodexResult<()> {
+        self.ensure_execution_capacity_for_turn_start(thread_id, submission_starts_turn(submission))
+            .await
+    }
+
+    async fn ensure_execution_capacity_for_turn_start(
+        &self,
+        thread_id: ThreadId,
+        starts_turn: bool,
+    ) -> CodexResult<()> {
+        if !starts_turn {
             return Ok(());
         }
         let state = self.upgrade()?;
@@ -89,6 +108,15 @@ impl AgentExecutionLimiter {
     fn guard(self: Arc<Self>) -> AgentExecutionGuard {
         self.active.fetch_add(1, Ordering::AcqRel);
         AgentExecutionGuard { limiter: self }
+    }
+}
+
+fn submission_starts_turn(submission: &AgentSubmission) -> bool {
+    match submission {
+        AgentSubmission::Op(op) => op_starts_turn(op),
+        AgentSubmission::InterAgentCommunication { communication, .. } => {
+            communication.trigger_turn
+        }
     }
 }
 

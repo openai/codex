@@ -54,6 +54,7 @@ pub fn default_filter() -> Targets {
     Targets::new()
         .with_default(LevelFilter::TRACE)
         .with_target("log", LevelFilter::OFF)
+        .with_target("codex_core::agent_communication", LevelFilter::OFF)
         .with_target("codex_otel.log_only", LevelFilter::OFF)
         .with_target("codex_otel.trace_safe", LevelFilter::OFF)
 }

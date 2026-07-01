@@ -4,6 +4,8 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
@@ -59,6 +61,21 @@ mod spawn;
 pub(crate) enum SpawnAgentForkMode {
     FullHistory,
     LastNTurns(usize),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum AgentSubmission {
+    Op(Box<Op>),
+    InterAgentCommunication {
+        communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
+    },
+}
+
+impl AgentSubmission {
+    pub(crate) fn op(op: Op) -> Self {
+        Self::Op(Box::new(op))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -142,9 +159,10 @@ impl AgentControl {
         initial_operation: Op,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
+        let submission = AgentSubmission::op(initial_operation);
+        self.ensure_execution_capacity_for_submission(agent_id, &submission)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, initial_operation)
+        self.send_input_after_capacity_check(agent_id, &state, submission)
             .await
     }
 
@@ -152,13 +170,19 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
-        initial_operation: Op,
+        submission: AgentSubmission,
     ) -> CodexResult<String> {
-        if let Op::InterAgentCommunication { communication } = initial_operation {
-            return self
-                .submit_inter_agent_communication(agent_id, state, communication)
-                .await;
-        }
+        let initial_operation = match submission {
+            AgentSubmission::InterAgentCommunication {
+                communication,
+                context,
+            } => {
+                return self
+                    .submit_inter_agent_communication(agent_id, state, communication, context)
+                    .await;
+            }
+            AgentSubmission::Op(initial_operation) => *initial_operation,
+        };
 
         let last_task_message = non_empty_task_message(render_input_preview(&initial_operation));
         let result = self
@@ -183,8 +207,16 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
     ) -> CodexResult<String> {
-        self.send_input(agent_id, Op::InterAgentCommunication { communication })
+        let state = self.upgrade()?;
+        let submission = AgentSubmission::InterAgentCommunication {
+            communication,
+            context: agent_communication_context,
+        };
+        self.ensure_execution_capacity_for_submission(agent_id, &submission)
+            .await?;
+        self.send_input_after_capacity_check(agent_id, &state, submission)
             .await
     }
 
@@ -193,8 +225,27 @@ impl AgentControl {
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
         communication: InterAgentCommunication,
+        context: AgentCommunicationContext,
     ) -> CodexResult<String> {
         let last_task_message = last_task_message_from_communication(&communication);
+        let send_log = if crate::agent_communication::logging_enabled() {
+            let clock_thread = match state.get_thread(context.sender_thread_id).await {
+                Ok(thread) => Some(thread),
+                Err(_) => state.get_thread(agent_id).await.ok(),
+            };
+            clock_thread.map(|thread| {
+                let services = &thread.codex.session.services;
+                let runtime_handle = services.runtime_handle.clone();
+                let simclock_time =
+                    runtime_handle.spawn(crate::agent_communication::read_simclock_time(
+                        Arc::clone(&services.simclock_time_provider),
+                        context.sender_thread_id,
+                    ));
+                (runtime_handle, simclock_time, communication.clone())
+            })
+        } else {
+            None
+        };
         let result = self
             .handle_thread_request_result(
                 agent_id,
@@ -204,6 +255,24 @@ impl AgentControl {
                     .await,
             )
             .await;
+        if let Some((runtime_handle, simclock_time, communication)) = send_log {
+            match result.as_ref() {
+                Ok(communication_id) => {
+                    let communication_id = communication_id.clone();
+                    runtime_handle.spawn(async move {
+                        let simclock_time = simclock_time.await.ok().flatten();
+                        crate::agent_communication::emit_agent_communication_send(
+                            &communication_id,
+                            &context,
+                            &communication,
+                            agent_id,
+                            simclock_time,
+                        );
+                    });
+                }
+                Err(_) => simclock_time.abort(),
+            }
+        }
         if result.is_ok() {
             match last_task_message {
                 Some(last_task_message) => self
@@ -494,8 +563,10 @@ impl AgentControl {
                     message,
                     /*trigger_turn*/ false,
                 );
+                let context =
+                    AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication)
+                    .send_inter_agent_communication(parent_thread_id, communication, context)
                     .await;
                 return;
             }

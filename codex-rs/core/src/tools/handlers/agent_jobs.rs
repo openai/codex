@@ -1,3 +1,4 @@
+use crate::agent::control::AgentSubmission;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::status::is_final;
 use crate::config::Config;
@@ -203,7 +204,7 @@ async fn run_agent_job_loop(
                     .agent_control
                     .spawn_agent_with_metadata(
                         options.spawn_config.clone(),
-                        items.into(),
+                        AgentSubmission::op(items.into()),
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),

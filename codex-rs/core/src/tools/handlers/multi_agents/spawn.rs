@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::control::AgentSubmission;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
@@ -119,7 +120,7 @@ async fn handle_spawn_agent(
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
-        input_items,
+        AgentSubmission::op(input_items),
         Some(thread_spawn_source(
             session.thread_id,
             &turn.session_source,

@@ -3,6 +3,8 @@ use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -531,7 +533,11 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     let submission_id = harness
         .control
-        .send_inter_agent_communication(thread_id, communication.clone())
+        .send_inter_agent_communication(
+            thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
     assert!(!submission_id.is_empty());
@@ -591,7 +597,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("hello child"),
+            AgentSubmission::op(text_input("hello child")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -656,7 +662,11 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication.clone())
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed after reload");
     let expected = (
@@ -770,7 +780,7 @@ async fn encrypted_inter_agent_communication_clears_existing_last_task_message()
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("old plaintext task"),
+            AgentSubmission::op(text_input("old plaintext task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -803,7 +813,11 @@ async fn encrypted_inter_agent_communication_clears_existing_last_task_message()
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication)
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication,
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
 
@@ -996,7 +1010,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .control
         .spawn_agent_with_metadata(
             child_config,
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1057,7 +1071,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .control
         .spawn_agent_with_metadata(
             no_hint_child_config,
-            text_input("child task without hints"),
+            AgentSubmission::op(text_input("child task without hints")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1197,7 +1211,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
         .control
         .spawn_agent_with_metadata(
             child_config,
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1267,7 +1281,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1384,7 +1398,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1524,7 +1538,7 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -1643,7 +1657,7 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
         .control
         .spawn_agent_with_metadata(
             child_config,
-            text_input("child task"),
+            AgentSubmission::op(text_input("child task")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
@@ -2297,7 +2311,7 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
         .control
         .spawn_agent_with_metadata(
             harness.config.clone(),
-            text_input("hello forked child"),
+            AgentSubmission::op(text_input("hello forked child")),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: parent.thread_id,
                 depth: 1,

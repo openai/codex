@@ -1,5 +1,6 @@
 use super::*;
 use crate::ThreadManager;
+use crate::agent::control::AgentSubmission;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
@@ -1374,11 +1375,13 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         .agent_control
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
-            vec![UserInput::Text {
-                text: "inspect this repo".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "inspect this repo".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1451,11 +1454,13 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         .agent_control
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
-            vec![UserInput::Text {
-                text: "inspect this repo".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "inspect this repo".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1623,11 +1628,13 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
         .agent_control
         .spawn_agent_with_metadata(
             config.clone(),
-            vec![UserInput::Text {
-                text: "research".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "research".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -1644,11 +1651,13 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
         .agent_control
         .spawn_agent_with_metadata(
             config,
-            vec![UserInput::Text {
-                text: "build".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "build".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 2,
@@ -4094,11 +4103,13 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
         .agent_control
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
-            vec![UserInput::Text {
-                text: "inspect this repo".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "inspect this repo".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
@@ -4162,11 +4173,13 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
         .agent_control
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
-            vec![UserInput::Text {
-                text: "inspect this repo".to_string(),
-                text_elements: Vec::new(),
-            }]
-            .into(),
+            AgentSubmission::op(
+                vec![UserInput::Text {
+                    text: "inspect this repo".to_string(),
+                    text_elements: Vec::new(),
+                }]
+                .into(),
+            ),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
