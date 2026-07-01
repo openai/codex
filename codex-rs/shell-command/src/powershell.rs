@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::command_safety::TrustedPowerShellFlavor;
 use crate::command_safety::try_parse_powershell_ast_commands;
+use crate::command_safety::try_parse_powershell_ast_commands_with_trusted_flavor;
 use crate::shell_detect::ShellType;
 use crate::shell_detect::detect_shell_type;
 
@@ -82,6 +84,28 @@ pub fn parse_powershell_command_into_plain_commands(
     try_parse_powershell_ast_commands(executable, script)
 }
 
+/// Selects which protected machine-wide PowerShell installation parses a script.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PowerShellFlavor {
+    WindowsPowerShell,
+    PowerShell7,
+}
+
+/// Parses a PowerShell script without using the runtime wrapper as the parser executable.
+///
+/// The selected parser comes from the authoritative Windows System or Program Files known folder.
+/// On unsupported hosts, or when the protected parser is unavailable, this fails closed.
+pub fn parse_powershell_script_with_trusted_parser(
+    flavor: PowerShellFlavor,
+    script: &str,
+) -> Option<Vec<Vec<String>>> {
+    let trusted_flavor = match flavor {
+        PowerShellFlavor::WindowsPowerShell => TrustedPowerShellFlavor::WindowsPowerShell,
+        PowerShellFlavor::PowerShell7 => TrustedPowerShellFlavor::PowerShell7,
+    };
+    try_parse_powershell_ast_commands_with_trusted_flavor(trusted_flavor, script)
+}
+
 /// This function attempts to find a powershell.exe executable on the system.
 pub fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["powershell.exe"])
@@ -152,10 +176,14 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::PowerShellFlavor;
     use super::UTF8_OUTPUT_PREFIX;
     use super::extract_powershell_command;
     #[cfg(windows)]
     use super::parse_powershell_command_into_plain_commands;
+    #[cfg(windows)]
+    use super::parse_powershell_script_with_trusted_parser;
     use super::prefix_powershell_script_with_utf8;
 
     #[cfg(windows)]
@@ -276,5 +304,30 @@ mod tests {
                 vec!["Measure-Object".to_string()],
             ]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_with_authoritative_parser_selected_independently_of_runtime_wrapper() {
+        assert_eq!(
+            parse_powershell_script_with_trusted_parser(
+                PowerShellFlavor::WindowsPowerShell,
+                "Write-Output windows",
+            ),
+            Some(vec![vec![
+                "Write-Output".to_string(),
+                "windows".to_string(),
+            ]]),
+        );
+
+        if crate::command_safety::trusted_standard_pwsh_invocation_path().is_some() {
+            assert_eq!(
+                parse_powershell_script_with_trusted_parser(
+                    PowerShellFlavor::PowerShell7,
+                    "Write-Output core",
+                ),
+                Some(vec![vec!["Write-Output".to_string(), "core".to_string(),]]),
+            );
+        }
     }
 }

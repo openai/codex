@@ -55,6 +55,46 @@ pub(crate) fn try_parse_powershell_ast_commands(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedPowerShellFlavor {
+    WindowsPowerShell,
+    PowerShell7,
+}
+
+/// Parses a script with the authoritative machine-wide parser for the requested flavor.
+///
+/// Unlike [`try_parse_powershell_ast_commands`], parser selection here is independent of a
+/// runtime command's executable spelling. This lets callers inspect an untrusted runtime wrapper
+/// without ever spawning that wrapper before approval.
+pub(crate) fn try_parse_powershell_ast_commands_with_trusted_flavor(
+    flavor: TrustedPowerShellFlavor,
+    script: &str,
+) -> Option<Vec<Vec<String>>> {
+    #[cfg(windows)]
+    {
+        let parser_executable = match flavor {
+            TrustedPowerShellFlavor::WindowsPowerShell => trusted_powershell_invocation_path(
+                TrustedPowerShellRoot::System,
+                WINDOWS_POWERSHELL_SUFFIX,
+            ),
+            TrustedPowerShellFlavor::PowerShell7 => trusted_powershell_invocation_path(
+                TrustedPowerShellRoot::ProgramFiles,
+                WINDOWS_PWSH_SUFFIX,
+            ),
+        }?;
+        match parse_with_powershell_ast(&parser_executable, script) {
+            PowershellParseOutcome::Commands(commands) => Some(commands),
+            PowershellParseOutcome::Unsupported | PowershellParseOutcome::Failed => None,
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (flavor, script);
+        None
+    }
+}
+
 /// Selects the host-side parser only when the command itself names that same trusted binary.
 ///
 /// The parser runs before the command approval and sandbox boundaries. Bare executable names and
@@ -94,7 +134,7 @@ pub(crate) fn trusted_standard_pwsh_invocation_path() -> Option<PathBuf> {
     trusted_powershell_invocation_path(TrustedPowerShellRoot::ProgramFiles, WINDOWS_PWSH_SUFFIX)
 }
 
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 fn trusted_powershell_invocation_path(
     root_kind: TrustedPowerShellRoot,
     suffix: &str,
@@ -102,8 +142,7 @@ fn trusted_powershell_invocation_path(
     let root = trusted_windows_root(root_kind).ok()?;
     let invocation_path = join_windows_path(&root, suffix);
     let invocation_path_str = invocation_path.to_str()?;
-    trusted_powershell_parser_executable(invocation_path_str)?;
-    Some(invocation_path)
+    trusted_powershell_parser_executable(invocation_path_str)
 }
 
 #[cfg(any(test, windows))]
