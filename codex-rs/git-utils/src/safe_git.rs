@@ -13,8 +13,7 @@ use crate::git_config::parse_effective_config;
 use crate::git_config::parse_effective_config_with_origins;
 
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str =
-    r"^filter\..*\.(clean|smudge|process|required)$";
+pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str = r"^filter\..*\.(clean|smudge|process)$";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FilterAttributeValue {
@@ -126,7 +125,7 @@ fn ensure_no_selected_executable_git_filters_for(
         }
         let refused = neutralized_drivers.contains(driver)
             || matches!(execution, FilterExecution::GitAdd)
-                && git_filter_required(git, cwd, &entries, driver)?;
+                && git_filter_required(git, cwd, driver, git_config_args)?;
         if refused {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -531,31 +530,25 @@ fn effective_filter_value<'a>(
 fn git_filter_required(
     git: &GitRunner,
     cwd: &Path,
-    entries: &BTreeMap<String, GitConfigEntry>,
     driver: &str,
+    git_config_args: &[String],
 ) -> io::Result<bool> {
-    let Some(value) = effective_filter_value(entries, driver, "required") else {
-        return Ok(false);
-    };
-    let config = format!("codex.required={value}");
     let mut command = git.command();
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .args([
-            "-c",
-            &config,
-            "config",
-            "--type=bool",
-            "--get",
-            "codex.required",
-        ])
+        .args(git_config_args)
+        .args(["config", "--type=bool", "--get"])
+        .arg(format!("filter.{driver}.required"))
         .current_dir(cwd);
     let output = git.output(command)?;
+    if output.status.code() == Some(1) && output.stderr.is_empty() {
+        return Ok(false);
+    }
     if !output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             format!(
-                "refusing selected Git filter {driver:?} with malformed required value {value:?}: {}",
+                "refusing selected Git filter {driver:?} with malformed required value: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             ),
         ));

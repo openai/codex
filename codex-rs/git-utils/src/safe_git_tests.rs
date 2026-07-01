@@ -92,43 +92,16 @@ fn git_add_filter_policy_rejects_clean_and_process_but_allows_smudge_only() {
 }
 
 #[test]
-fn filter_snapshot_retains_required_without_treating_it_as_executable() {
-    let mut entries = filter_entries(
-        GitConfigScope::Local,
-        Path::new("config"),
-        "filter.demo.smudge",
-        "smudge-command",
-    );
-    entries.extend(filter_entries(
+fn required_config_is_not_treated_as_an_executable_command() {
+    let entries = filter_entries(
         GitConfigScope::Command,
         Path::new("command line:"),
         "filter.demo.required",
         "true",
-    ));
+    );
     assert_eq!(
         executable_filter_drivers(&entries).expect("executable drivers"),
-        BTreeSet::from(["demo".to_string()])
-    );
-    let neutralization = GitFilterNeutralization {
-        git_config_args: Vec::new(),
-        _config_dir: None,
-        filter_config: entries,
-    };
-    assert_eq!(
-        neutralization.filter_value("demo", "required"),
-        Some("true")
-    );
-
-    let required_only = filter_entries(
-        GitConfigScope::Local,
-        Path::new("config"),
-        "filter.demo.required",
-        "true",
-    );
-    assert!(
-        executable_filter_drivers(&required_only)
-            .expect("required-only config")
-            .is_empty()
+        BTreeSet::new()
     );
 }
 

@@ -1017,17 +1017,46 @@ fn staging_allows_selected_symlink_while_neutralizing_off_path_filters() {
 #[cfg(unix)]
 #[test]
 fn staging_allows_optional_smudge_only_but_refuses_required_or_malformed_smudge() {
-    for (required, accepted) in [("false", true), ("yes", false), ("not-a-bool", false)] {
+    use std::io::Write as _;
+
+    for (required, accepted) in [
+        ("absent", true),
+        ("empty", true),
+        ("false", true),
+        ("yes", false),
+        ("implicit", false),
+        ("not-a-bool", false),
+    ] {
         let fixture = init_racy_filter_fixture("selected", "smudge");
         let root = fixture.repo.path();
-        assert_eq!(
-            run(
-                root,
-                &["git", "config", "filter.selected.required", required],
-            )
-            .0,
-            0
-        );
+        if matches!(required, "absent" | "implicit") {
+            assert_eq!(
+                run(
+                    root,
+                    &["git", "config", "--unset-all", "filter.selected.required"],
+                )
+                .0,
+                0
+            );
+        }
+        match required {
+            "absent" => {}
+            "implicit" => {
+                let mut config = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(root.join(".git/config"))
+                    .expect("open repository config");
+                writeln!(config, "[filter \"selected\"]\n\trequired")
+                    .expect("write implicit true required value");
+            }
+            value => {
+                let value = if value == "empty" { "" } else { value };
+                assert_eq!(
+                    run(root, &["git", "config", "filter.selected.required", value],).0,
+                    0
+                );
+            }
+        }
         std::fs::write(root.join("selected.txt"), "new selected\n")
             .expect("modify selected target");
         let before = git_index_bytes(root);
