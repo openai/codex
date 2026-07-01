@@ -566,6 +566,15 @@ mod tests {
     }
 
     #[test]
+    fn shell_escaped_find_exec_is_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            r#"find /app -maxdepth 0 -e\xec sh -c '/usr/bin/su\do -n id' sh \;"#,
+        ])));
+    }
+
+    #[test]
     fn base64_output_options_are_unsafe() {
         for args in [
             vec_str(&["base64", "-o", "out.bin"]),

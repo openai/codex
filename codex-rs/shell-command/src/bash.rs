@@ -156,10 +156,10 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 if word_node.kind() != "word" {
                     return None;
                 }
-                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(decode_unquoted_shell_word(word_node, src)?);
             }
             "word" | "number" => {
-                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
+                words.push(decode_unquoted_shell_word(child, src)?);
             }
             "string" => {
                 let parsed = parse_double_quoted_string(child, src)?;
@@ -176,8 +176,7 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 for part in child.named_children(&mut concat_cursor) {
                     match part.kind() {
                         "word" | "number" => {
-                            concatenated
-                                .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
+                            concatenated.push_str(&decode_unquoted_shell_word(part, src)?);
                         }
                         "string" => {
                             let parsed = parse_double_quoted_string(part, src)?;
@@ -199,6 +198,23 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
         }
     }
     Some(words)
+}
+
+fn decode_unquoted_shell_word(node: Node, src: &str) -> Option<String> {
+    let raw = node.utf8_text(src.as_bytes()).ok()?;
+    let mut decoded = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let next = chars.next()?;
+            if next != '\n' {
+                decoded.push(next);
+            }
+        } else {
+            decoded.push(ch);
+        }
+    }
+    Some(decoded)
 }
 
 fn parse_heredoc_command_words(cmd: Node<'_>, src: &str) -> Option<Vec<String>> {
@@ -485,6 +501,26 @@ mod tests {
                 "-n".to_string(),
                 "pattern".to_string(),
                 "-g*.txt".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn decodes_backslash_escapes_in_unquoted_words() {
+        let cmds = parse_seq(r#"find /app -maxdepth 0 -e\xec sh -c 'echo ok' sh \;"#).unwrap();
+        assert_eq!(
+            cmds,
+            vec![vec![
+                "find".to_string(),
+                "/app".to_string(),
+                "-maxdepth".to_string(),
+                "0".to_string(),
+                "-exec".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo ok".to_string(),
+                "sh".to_string(),
+                ";".to_string(),
             ]]
         );
     }
