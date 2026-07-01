@@ -15,6 +15,7 @@ use pretty_assertions::assert_eq;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
@@ -912,4 +913,194 @@ fn otel_export_routing_policy_routes_websocket_request_transport_observability()
         request_trace_attrs.get("auth.task_id").map(String::as_str),
         Some("task-run-ws-request")
     );
+}
+
+#[test]
+fn otel_export_routing_policy_routes_correlated_websocket_timing_breakdown() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::Chatgpt),
+            "codex_exec".to_string(),
+            /*log_user_prompts*/ true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        let response: std::result::Result<
+            Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
+            codex_api::ApiError,
+        > = Ok(Some(Ok(Message::Text(
+            r#"{
+                "type":"responsesapi.websocket_timing",
+                "request_ordinal":2,
+                "timing_metrics":{
+                    "response_id":"resp-correlated",
+                    "pre_inference_ms":120.5,
+                    "engine_queue_max_ms":87.25,
+                    "engine_iapi_ttft_total_ms":310,
+                    "engine_service_ttft_total_ms":340,
+                    "taas_request_to_provider_start_total_ms":41.5,
+                    "taas_provider_start_to_first_token_total_ms":201.75,
+                    "engine_ids":"engine-a,engine-b",
+                    "latest_engine_id":"engine-b",
+                    "latest_inference_request_id":"req-route",
+                    "latest_engine_provider":"provider-a",
+                    "latest_engine_cluster":"cluster-a",
+                    "latest_engine_region":"westus",
+                    "latest_engine_geography":"us",
+                    "latest_pipereplica_id":"pipe-7",
+                    "latest_pipereplica_snapshot_id":"snapshot-8",
+                    "latest_pipereplica_image_tag":"image-9",
+                    "latest_load_balancer_image_tag":"lb-image-10",
+                    "latest_inference_lb_routing_ms":2.5,
+                    "latest_inference_engine_routing_ms":8.5,
+                    "latest_cross_cluster_network_overhead_ms":11.5,
+                    "inference_routing_timing_semantics":"nested_non_additive:engine_iapi_ttft_includes_engine_routing_and_engine_batcher_ttft;engine_routing_includes_pipereplica_lb_routing;engine_queue_is_iapi_ttft_minus_batcher_ttft_and_overlaps_engine_routing;cross_cluster_network_overhead_is_outside_engine_iapi_ttft",
+                    "inference_route_diagnostics":[{"engine_call_id":"call-1","engine_provider":"provider-a"}],
+                    "num_engine_calls":2,
+                    "responses_duration_excl_engine_and_client_tool_time_ms":98.5
+                }
+            }"#
+            .into(),
+        ))));
+        manager.record_websocket_event(&response, std::time::Duration::from_millis(3));
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let timing_log = find_log_by_event_name(&logs, "codex.responses_websocket_timing");
+    let timing_log_attrs = log_attributes(&timing_log.record);
+    assert_eq!(
+        timing_log_attrs
+            .get("model.request_ordinal")
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        timing_log_attrs
+            .get("inference.engine_queue_max_ms")
+            .map(String::as_str),
+        Some("87.25")
+    );
+    assert_eq!(
+        timing_log_attrs
+            .get("inference.routing_timing_semantics")
+            .map(String::as_str),
+        Some("nested_non_additive_v1")
+    );
+    for forbidden_attribute in [
+        "model.response_id",
+        "inference.engine_ids",
+        "inference.latest_request_id",
+        "inference.latest_engine_id",
+        "inference.latest_engine_provider",
+        "inference.latest_engine_cluster",
+        "inference.latest_engine_region",
+        "inference.latest_engine_geography",
+        "inference.latest_pipereplica_id",
+        "inference.latest_pipereplica_snapshot_id",
+        "inference.latest_pipereplica_image_tag",
+        "inference.latest_load_balancer_image_tag",
+        "inference.route_diagnostics_json",
+    ] {
+        assert!(
+            !timing_log_attrs.contains_key(forbidden_attribute),
+            "log exported forbidden high-cardinality attribute {forbidden_attribute}"
+        );
+    }
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let timing_span = spans
+        .iter()
+        .find(|span| span.name == "codex.responses_websocket_timing")
+        .expect("timing child span should exist");
+    let timing_trace_attrs = timing_span
+        .attributes
+        .iter()
+        .map(|KeyValue { key, value, .. }| (key.as_str().to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        timing_trace_attrs
+            .get("model.request_ordinal")
+            .map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        timing_trace_attrs
+            .get("inference.taas_request_to_provider_start_total_ms")
+            .map(String::as_str),
+        Some("41.5")
+    );
+    assert_eq!(
+        timing_trace_attrs
+            .get("responsesapi.duration_excl_engine_and_client_tool_time_ms")
+            .map(String::as_str),
+        Some("98.5")
+    );
+    assert_eq!(
+        timing_trace_attrs
+            .get("inference.latest_engine_routing_ms")
+            .map(String::as_str),
+        Some("8.5")
+    );
+    assert_eq!(
+        timing_trace_attrs
+            .get("inference.routing_timing_semantics")
+            .map(String::as_str),
+        Some("nested_non_additive_v1")
+    );
+    for forbidden_attribute in [
+        "conversation.id",
+        "slug",
+        "model.response_id",
+        "inference.engine_ids",
+        "inference.latest_request_id",
+        "inference.latest_engine_id",
+        "inference.latest_engine_provider",
+        "inference.latest_engine_cluster",
+        "inference.latest_engine_region",
+        "inference.latest_engine_geography",
+        "inference.latest_pipereplica_id",
+        "inference.latest_pipereplica_snapshot_id",
+        "inference.latest_pipereplica_image_tag",
+        "inference.latest_load_balancer_image_tag",
+        "inference.route_diagnostics_json",
+    ] {
+        assert!(
+            !timing_trace_attrs.contains_key(forbidden_attribute),
+            "span exported forbidden high-cardinality attribute {forbidden_attribute}"
+        );
+    }
 }
