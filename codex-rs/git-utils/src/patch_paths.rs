@@ -9,6 +9,7 @@ use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
+use crate::safe_git::ensure_no_selected_executable_git_filters;
 
 pub(crate) fn extract_effective_paths_from_patch(
     git: &GitRunner,
@@ -238,6 +239,7 @@ pub(crate) fn stage_effective_paths(
     git_root: &Path,
     paths: &[String],
 ) -> io::Result<()> {
+    ensure_no_selected_executable_git_filters(git, git_root, paths, &[])?;
     let confined = confine_patch_paths(git, git_root, paths)?;
     let mut existing = Vec::new();
     for path in confined.into_exact_leaves()? {

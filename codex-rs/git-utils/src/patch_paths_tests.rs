@@ -717,3 +717,73 @@ fn containment_metadata_queries_ignore_inherited_git_selection_environment() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn staging_rejects_global_lfs_filter_without_running_it() {
+    let _g = env_lock().lock().unwrap();
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_some() {
+        let root = PathBuf::from(
+            std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
+        );
+        let git = GitRunner::for_cwd_io(&root).expect("trusted Git");
+        let error = stage_effective_paths(&git, &root, &["file.txt".to_string()])
+            .expect_err("reject global Git LFS filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=lfs\n").expect("write attributes");
+    std::fs::write(root.join("file.txt"), "old\n").expect("write file");
+    let (add_code, _, add_err) = run(root, &["git", "add", "."]);
+    assert_eq!(add_code, 0, "add base files: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "base"]);
+    assert_eq!(commit_code, 0, "commit base files: {commit_err}");
+    std::fs::write(root.join("file.txt"), "new\n").expect("modify file");
+
+    let config_dir = tempfile::tempdir().expect("config tempdir");
+    let global_config = config_dir.path().join("global.gitconfig");
+    let system_config = config_dir.path().join("system.gitconfig");
+    let filter_marker = config_dir.path().join("repo-lfs-ran");
+    let repo_git_lfs = root.join("git-lfs");
+    std::fs::write(
+        &repo_git_lfs,
+        "#!/bin/sh\n: > \"$CODEX_GIT_UTILS_LFS_MARKER\"\ncat\n",
+    )
+    .expect("write repository git-lfs");
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&repo_git_lfs)
+            .expect("repository git-lfs metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&repo_git_lfs, permissions)
+            .expect("make repository git-lfs executable");
+    }
+    std::fs::write(
+        &global_config,
+        "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n",
+    )
+    .expect("write global config");
+    std::fs::write(&system_config, "").expect("write system config");
+    run_isolated_test(
+        "patch_paths::tests::staging_rejects_global_lfs_filter_without_running_it",
+        &[
+            ("CODEX_GIT_UTILS_TARGET_REPO", root.as_os_str()),
+            ("CODEX_GIT_UTILS_LFS_MARKER", filter_marker.as_os_str()),
+            ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+            ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+            ("GIT_EXEC_PATH", root.as_os_str()),
+            ("GIT_GLOB_PATHSPECS", OsStr::new("1")),
+            ("GIT_ICASE_PATHSPECS", OsStr::new("1")),
+        ],
+    );
+
+    assert!(!filter_marker.exists(), "Git LFS filter must not run");
+    let (diff_code, staged, diff_err) = run(root, &["git", "diff", "--cached", "--name-only"]);
+    assert_eq!(diff_code, 0, "read staged paths: {diff_err}");
+    assert!(staged.is_empty(), "staging changed the index: {staged}");
+}
