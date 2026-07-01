@@ -240,7 +240,7 @@ pub(crate) fn stage_effective_paths(
 ) -> io::Result<()> {
     let confined = confine_patch_paths(git, git_root, paths)?;
     let mut existing = Vec::new();
-    for path in confined.into_exact_leaves() {
+    for path in confined.into_exact_leaves()? {
         let joined = git_root.join(&path);
         if let Ok(metadata) = std::fs::symlink_metadata(&joined) {
             if leaf_is_traversable_directory(metadata.file_type()) {
@@ -324,10 +324,28 @@ pub(crate) struct ConfinedPatchPaths {
 }
 
 impl ConfinedPatchPaths {
-    fn into_exact_leaves(self) -> Vec<String> {
+    fn into_exact_leaves(self) -> io::Result<Vec<String>> {
         self.entries
             .into_iter()
-            .map(|entry| entry.exact_leaf)
+            .map(|entry| {
+                let expected_depth = entry.exact_leaf.split('/').count();
+                entry
+                    .candidates
+                    .into_iter()
+                    .find(|candidate| {
+                        candidate.origin == ConfinedPathOrigin::Raw
+                            && candidate.role == ConfinedPathRole::Leaf
+                            && candidate.depth == expected_depth
+                            && candidate.path == entry.exact_leaf
+                    })
+                    .map(|candidate| candidate.path)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "confined patch path is missing its exact raw leaf",
+                        )
+                    })
+            })
             .collect()
     }
 }

@@ -475,13 +475,15 @@ fn assert_longest_existing_alias_prefix_carries_unresolved_suffix() {
     assert_eq!(
         confine_patch_paths(&git, root, &paths)
             .expect("confine exact leaves")
-            .into_exact_leaves(),
+            .into_exact_leaves()
+            .expect("extract exact leaves"),
         paths
     );
     assert!(
         confine_patch_paths(&git, root, &[])
             .unwrap()
             .into_exact_leaves()
+            .expect("extract no exact leaves")
             .is_empty()
     );
     use ConfinedPathOrigin::*;
