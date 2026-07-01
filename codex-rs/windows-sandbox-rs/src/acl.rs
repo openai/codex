@@ -211,7 +211,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
         let sid_ptr =
             (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
         let eq = EqualSid(sid_ptr, psid);
-        if eq != 0 && (mask & FILE_GENERIC_WRITE) != 0 {
+        if eq != 0 && write_allow_mask_is_satisfied(mask) {
             return true;
         }
     }
@@ -303,6 +303,10 @@ pub unsafe fn dacl_has_read_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) ->
 
 const WRITE_ALLOW_MASK: u32 =
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+
+fn write_allow_mask_is_satisfied(mask: u32) -> bool {
+    (mask & WRITE_ALLOW_MASK) == WRITE_ALLOW_MASK
+}
 
 unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     path: &Path,
@@ -416,7 +420,7 @@ pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Resu
     ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
 }
 
-/// Adds an allow ACE granting read/write/execute to the given SID on the target path.
+/// Adds an allow ACE granting read/write/execute/delete to the given SID on the target path.
 ///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
@@ -453,7 +457,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         ptstrName: psid as *mut u16,
     };
     let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-    explicit.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+    explicit.grfAccessPermissions = WRITE_ALLOW_MASK;
     explicit.grfAccessMode = 2; // SET_ACCESS
     explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
     explicit.Trustee = trustee;
@@ -707,6 +711,31 @@ pub unsafe fn allow_null_device(psid: *mut c_void) {
         LocalFree(p_sd as HLOCAL);
     }
     CloseHandle(h);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WRITE_ALLOW_MASK;
+    use super::write_allow_mask_is_satisfied;
+    use windows_sys::Win32::Storage::FileSystem::DELETE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+
+    #[test]
+    fn write_allow_mask_requires_delete_bits() {
+        assert!(write_allow_mask_is_satisfied(WRITE_ALLOW_MASK));
+        assert!(!write_allow_mask_is_satisfied(
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE
+        ));
+        assert!(!write_allow_mask_is_satisfied(
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE
+        ));
+        assert!(!write_allow_mask_is_satisfied(
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | FILE_DELETE_CHILD
+        ));
+    }
 }
 const CONTAINER_INHERIT_ACE: u32 = 0x2;
 const OBJECT_INHERIT_ACE: u32 = 0x1;
