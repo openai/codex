@@ -52,10 +52,10 @@ impl GitRunner {
             if !directory.is_absolute() {
                 continue;
             }
-            // Check the PATH spelling before appending `git`. On Windows,
-            // PathBuf::push resolves `..` when its base uses a verbatim prefix,
-            // which would otherwise erase repository traversal before the
-            // first containment check.
+            // Check the raw PATH spelling before canonicalization. A search
+            // directory can traverse through an untrusted repository and
+            // resolve outside it; checking only the resolved parent or
+            // candidate would lose that provenance.
             if search_directory_is_untrusted(&directory, untrusted) {
                 continue;
             }
