@@ -61,6 +61,22 @@ fn write_git_candidate(directory: &Path) {
     std::fs::write(candidate, b"git fixture").expect("write executable fixture");
 }
 
+#[cfg(windows)]
+fn create_junction(path: &Path, target: &Path) {
+    let output = Command::new("cmd.exe")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(path)
+        .arg(target)
+        .output()
+        .expect("create junction");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "mklink failed: stdout={stdout} stderr={stderr}"
+    );
+}
+
 fn locations_for_root(root: &Path) -> UntrustedGitLocations {
     let mut roots = vec![root.to_path_buf()];
     push_unique(
@@ -71,6 +87,16 @@ fn locations_for_root(root: &Path) -> UntrustedGitLocations {
         roots,
         common_dirs: Vec::new(),
     }
+}
+
+fn raw_parent_traversal(root: &Path, sibling: &str) -> PathBuf {
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    let mut path = root.as_os_str().to_os_string();
+    path.push(&separator);
+    path.push("..");
+    path.push(&separator);
+    path.push(sibling);
+    path.into()
 }
 
 fn path_text(path: &Path) -> &str {
@@ -335,14 +361,126 @@ fn resolver_rejects_parent_traversal_spelled_through_repository() {
 
     let locations = locations_for_root(&repo);
     for root in &locations.roots {
-        let traversing_path = root.join("../trusted-bin");
-        let search_path = std::env::join_paths([traversing_path]).expect("PATH");
+        // Append without PathBuf::push: it resolves `..` when `root` has a
+        // verbatim Windows prefix, before the resolver can inspect the PATH
+        // spelling.
+        let traversing_path = raw_parent_traversal(root, "trusted-bin");
+        let search_path = std::env::join_paths([&traversing_path]).expect("PATH");
+        let split_paths = std::env::split_paths(&search_path).collect::<Vec<_>>();
+        assert_eq!(split_paths, vec![traversing_path.clone()]);
+        assert!(
+            search_directory_is_untrusted(&split_paths[0], &locations),
+            "raw PATH traversal was not rejected from {root:?}"
+        );
+
+        #[cfg(windows)]
+        if matches!(
+            root.components().next(),
+            Some(Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+        ) {
+            assert_eq!(
+                split_paths[0].join(git_executable_name()),
+                std::fs::canonicalize(&trusted_bin)
+                    .expect("canonical trusted bin")
+                    .join(git_executable_name())
+            );
+        }
+
         assert!(
             matches!(
                 GitRunner::from_search_path(&locations, &search_path),
                 Err(GitReadError::NoTrustedGit)
             ),
             "resolver accepted parent traversal from {root:?}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn resolver_rejects_parent_traversal_across_windows_namespaces() {
+    let traversing = [
+        r"C:\Repo\..\outside",
+        r"\\?\C:\Repo\..\outside",
+        r"\\Server\Share\Repo\..\outside",
+        r"\\?\UNC\Server\Share\Repo\..\outside",
+        r"\\?\unc\Server\Share\Repo\..\outside",
+        r"\\.\C:\Repo\..\outside",
+        r"\\.\UNC\Server\Share\Repo\..\outside",
+        r"\\?\C:\RÉPO\..\outside",
+    ];
+    for path in traversing {
+        assert!(
+            windows_path_requires_fail_closed(Path::new(path)),
+            "parent traversal was accepted: {path:?}"
+        );
+    }
+
+    let normalized_external = [
+        r"C:\outside",
+        r"\\?\C:\outside",
+        r"\\Server\Share\outside",
+        r"\\?\UNC\Server\Share\outside",
+        r"\\?\unc\Server\Share\outside",
+        r"\\.\C:\outside",
+        r"\\.\UNC\Server\Share\outside",
+    ];
+    for path in normalized_external {
+        assert!(
+            !windows_path_requires_fail_closed(Path::new(path)),
+            "normalized filesystem path was rejected: {path:?}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn resolver_rejects_unicode_case_alias_through_repository_junction() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let repo = fixture.path().join("Répo");
+    let outside = fixture.path().join("outside");
+    let junction = repo.join("git-bin");
+    std::fs::create_dir_all(&repo).expect("create repository");
+    write_git_candidate(&outside);
+    create_junction(&junction, &outside);
+
+    let case_alias = fixture.path().join("RÉPO").join("git-bin");
+    let verbatim_case_alias = PathBuf::from(format!(r"\\?\{}", case_alias.display()));
+    assert_eq!(
+        std::fs::canonicalize(&verbatim_case_alias).expect("canonical alias"),
+        std::fs::canonicalize(&outside).expect("canonical outside")
+    );
+
+    let locations = locations_for_root(&repo);
+    assert!(
+        !path_is_untrusted(&verbatim_case_alias, &locations),
+        "fixture must exercise the Unicode alias before canonical ancestry"
+    );
+    assert!(search_directory_is_untrusted(
+        &verbatim_case_alias,
+        &locations
+    ));
+    let search_path = std::env::join_paths([verbatim_case_alias]).expect("PATH");
+    assert!(matches!(
+        GitRunner::from_search_path(&locations, &search_path),
+        Err(GitReadError::NoTrustedGit)
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn resolver_fails_closed_for_unsupported_windows_device_namespaces() {
+    let unsupported = [
+        r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\git.exe",
+        r"\\?\Volume{11111111-1111-1111-1111-111111111111}\git.exe",
+        r"\\.\PhysicalDrive0",
+        r"\\.\pipe\codex-git",
+    ];
+
+    for path in unsupported {
+        assert!(
+            windows_path_requires_fail_closed(Path::new(path)),
+            "unsupported namespace was trusted: {path:?}"
         );
     }
 }
