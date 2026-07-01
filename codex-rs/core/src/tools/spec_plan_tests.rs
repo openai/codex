@@ -883,7 +883,7 @@ async fn namespace_tools_disabled_rejects_flat_alias_collision_with_plain_tool()
         },
         ToolPlanInputs {
             dynamic_tools: vec![dynamic_tool(
-                None,
+                /*namespace*/ None,
                 "agents__spawn_agent",
                 // This plain runtime is not discoverable with search disabled,
                 // but its exact registry name would still steal the alias.
