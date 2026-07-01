@@ -1,13 +1,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::RolloutPersistenceTelemetry;
 use codex_rollout::measure_and_filter_rollout_items;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
+use tracing::Instrument;
 use tracing::warn;
 
 use crate::AppendThreadItemsParams;
@@ -20,8 +24,10 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
+use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
+use crate::thread_metadata_sync::PendingThreadMetadataPatch;
 use crate::thread_metadata_sync::ThreadMetadataSync;
 
 /// Handle for an active thread's persistence lifecycle.
@@ -33,8 +39,52 @@ use crate::thread_metadata_sync::ThreadMetadataSync;
 pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
-    metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
+    metadata_worker: Arc<MetadataUpdateWorker>,
     persistence_telemetry: RolloutPersistenceTelemetry,
+}
+
+struct MetadataUpdateWorker {
+    thread_id: ThreadId,
+    thread_store: Arc<dyn ThreadStore>,
+    state: Mutex<MetadataUpdateWorkerState>,
+}
+
+struct MetadataUpdateWorkerState {
+    metadata_sync: ThreadMetadataSync,
+    applied_generation: u64,
+    running: bool,
+    in_flight_generation: Option<u64>,
+    queued_update: Option<QueuedMetadataUpdate>,
+    barriers: Vec<MetadataBarrier>,
+    discarding: bool,
+    idle_waiters: Vec<oneshot::Sender<()>>,
+}
+
+struct QueuedMetadataUpdate {
+    update: PendingThreadMetadataPatch,
+    enqueued_at: Instant,
+    trace_context: Option<W3cTraceContext>,
+}
+
+impl QueuedMetadataUpdate {
+    fn new(update: PendingThreadMetadataPatch) -> Self {
+        Self {
+            update,
+            enqueued_at: Instant::now(),
+            trace_context: codex_otel::current_span_w3c_trace_context(),
+        }
+    }
+}
+
+struct MetadataBarrier {
+    target_generation: u64,
+    sender: oneshot::Sender<ThreadStoreResult<()>>,
+}
+
+#[derive(Clone, Copy)]
+enum MetadataBarrierKind {
+    All,
+    ExistingHistory,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -94,12 +144,7 @@ impl LiveThread {
         let thread_id = params.thread_id;
         let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
-        Ok(Self {
-            thread_id,
-            thread_store,
-            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
-            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
-        })
+        Ok(Self::new(thread_id, thread_store, metadata_sync))
     }
 
     pub async fn resume(
@@ -130,12 +175,34 @@ impl LiveThread {
                 }
             }
         }
-        Ok(Self {
+        Ok(Self::new(thread_id, thread_store, metadata_sync))
+    }
+
+    fn new(
+        thread_id: ThreadId,
+        thread_store: Arc<dyn ThreadStore>,
+        metadata_sync: ThreadMetadataSync,
+    ) -> Self {
+        let metadata_worker = Arc::new(MetadataUpdateWorker {
+            thread_id,
+            thread_store: Arc::clone(&thread_store),
+            state: Mutex::new(MetadataUpdateWorkerState {
+                metadata_sync,
+                applied_generation: 0,
+                running: false,
+                in_flight_generation: None,
+                queued_update: None,
+                barriers: Vec::new(),
+                discarding: false,
+                idle_waiters: Vec::new(),
+            }),
+        });
+        Self {
             thread_id,
             thread_store,
-            metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            metadata_worker,
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
-        })
+        }
     }
 
     #[tracing::instrument(
@@ -148,17 +215,27 @@ impl LiveThread {
         if items.is_empty() {
             return Ok(());
         }
-        let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
-            let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
-            (canonical_items, Some(measurement))
-        } else {
-            (persisted_rollout_items(items), None)
-        };
+        let (canonical_items, measurement) = tracing::info_span!(
+            "thread_store.live_append.filter_items",
+            item_count = items.len(),
+        )
+        .in_scope(|| {
+            if self.persistence_telemetry.is_enabled() {
+                let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
+                (canonical_items, Some(measurement))
+            } else {
+                (persisted_rollout_items(items), None)
+            }
+        });
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
                 items: items.to_vec(),
             })
+            .instrument(tracing::info_span!(
+                "thread_store.live_append.store_append",
+                item_count = items.len(),
+            ))
             .await?;
         if let Some(measurement) = measurement.as_ref() {
             self.persistence_telemetry.record_batch(items, measurement);
@@ -166,45 +243,37 @@ impl LiveThread {
         if canonical_items.is_empty() {
             return Ok(());
         }
-        let update = self
-            .metadata_sync
-            .lock()
-            .await
-            .observe_appended_items(canonical_items.as_slice());
-        if let Some(update) = update {
-            self.thread_store
-                .update_thread_metadata(UpdateThreadMetadataParams {
-                    thread_id: self.thread_id,
-                    patch: update.patch.clone(),
-                    include_archived: true,
-                })
-                .await?;
-            self.metadata_sync
-                .lock()
-                .await
-                .mark_pending_update_applied(&update);
-        }
+        self.metadata_worker
+            .observe_appended_items(canonical_items.as_slice())
+            .instrument(tracing::info_span!(
+                "thread_store.live_append.observe_metadata",
+                item_count = canonical_items.len(),
+            ))
+            .await;
         Ok(())
     }
 
     pub async fn persist(&self) -> ThreadStoreResult<()> {
         self.thread_store.persist_thread(self.thread_id).await?;
-        self.flush_pending_metadata_update().await
+        self.metadata_worker.barrier(MetadataBarrierKind::All).await
     }
 
     pub async fn flush(&self) -> ThreadStoreResult<()> {
         self.thread_store.flush_thread(self.thread_id).await?;
-        self.flush_pending_metadata_update_for_existing_history()
+        self.metadata_worker
+            .barrier(MetadataBarrierKind::ExistingHistory)
             .await
     }
 
     pub async fn shutdown(&self) -> ThreadStoreResult<()> {
-        self.flush_pending_metadata_update_for_existing_history()
+        self.metadata_worker
+            .barrier(MetadataBarrierKind::ExistingHistory)
             .await?;
         self.thread_store.shutdown_thread(self.thread_id).await
     }
 
     pub async fn discard(&self) -> ThreadStoreResult<()> {
+        self.metadata_worker.discard_pending_and_wait().await?;
         self.thread_store.discard_thread(self.thread_id).await
     }
 
@@ -239,7 +308,9 @@ impl LiveThread {
         mode: ThreadMemoryMode,
         include_archived: bool,
     ) -> ThreadStoreResult<()> {
-        self.flush_pending_metadata_update().await?;
+        self.metadata_worker
+            .barrier(MetadataBarrierKind::All)
+            .await?;
         self.thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
@@ -258,7 +329,9 @@ impl LiveThread {
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
-        self.flush_pending_metadata_update().await?;
+        self.metadata_worker
+            .barrier(MetadataBarrierKind::All)
+            .await?;
         self.thread_store
             .update_thread_metadata(UpdateThreadMetadataParams {
                 thread_id: self.thread_id,
@@ -284,39 +357,246 @@ impl LiveThread {
             .await
             .map(Some)
     }
+}
 
-    async fn flush_pending_metadata_update(&self) -> ThreadStoreResult<()> {
-        let update = self.metadata_sync.lock().await.take_pending_update();
-        self.apply_pending_metadata_update(update).await
-    }
-
-    async fn flush_pending_metadata_update_for_existing_history(&self) -> ThreadStoreResult<()> {
-        let update = self
-            .metadata_sync
-            .lock()
-            .await
-            .take_pending_update_for_existing_history();
-        self.apply_pending_metadata_update(update).await
-    }
-
-    async fn apply_pending_metadata_update(
-        &self,
-        update: Option<crate::thread_metadata_sync::PendingThreadMetadataPatch>,
-    ) -> ThreadStoreResult<()> {
-        let Some(update) = update else {
-            return Ok(());
+impl MetadataUpdateWorker {
+    async fn observe_appended_items(self: &Arc<Self>, items: &[RolloutItem]) {
+        let should_spawn = {
+            let mut state = self.state.lock().await;
+            if state.discarding {
+                return;
+            }
+            let update = state.metadata_sync.observe_appended_items(items);
+            if let Some(update) = update {
+                state.queued_update = Some(QueuedMetadataUpdate::new(update));
+            }
+            Self::start_if_needed(&mut state)
         };
-        self.thread_store
-            .update_thread_metadata(UpdateThreadMetadataParams {
-                thread_id: self.thread_id,
-                patch: update.patch.clone(),
-                include_archived: true,
+        if should_spawn {
+            self.spawn();
+        }
+    }
+
+    async fn barrier(self: &Arc<Self>, kind: MetadataBarrierKind) -> ThreadStoreResult<()> {
+        let (receiver, should_spawn) = {
+            let mut state = self.state.lock().await;
+            if state.discarding {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: "thread metadata update worker is being discarded".to_string(),
+                });
+            }
+            let update = match kind {
+                MetadataBarrierKind::All => state.metadata_sync.take_pending_update(),
+                MetadataBarrierKind::ExistingHistory => state
+                    .metadata_sync
+                    .take_pending_update_for_existing_history(),
+            };
+            let Some(update) = update else {
+                return Ok(());
+            };
+            let target_generation = update.generation();
+            if target_generation <= state.applied_generation {
+                return Ok(());
+            }
+            let generation_is_covered = state.in_flight_generation == Some(target_generation)
+                || state
+                    .queued_update
+                    .as_ref()
+                    .is_some_and(|queued| queued.update.generation() >= target_generation);
+            if !generation_is_covered {
+                state.queued_update = Some(QueuedMetadataUpdate::new(update));
+            }
+            let (sender, receiver) = oneshot::channel();
+            state.barriers.push(MetadataBarrier {
+                target_generation,
+                sender,
+            });
+            let should_spawn = Self::start_if_needed(&mut state);
+            (receiver, should_spawn)
+        };
+        if should_spawn {
+            self.spawn();
+        }
+        receiver.await.unwrap_or_else(|err| {
+            Err(ThreadStoreError::Internal {
+                message: format!("thread metadata update worker stopped before barrier: {err}"),
             })
-            .await?;
-        self.metadata_sync
-            .lock()
-            .await
-            .mark_pending_update_applied(&update);
+        })
+    }
+
+    async fn discard_pending_and_wait(&self) -> ThreadStoreResult<()> {
+        let (receiver, barriers) = {
+            let mut state = self.state.lock().await;
+            state.discarding = true;
+            state.queued_update = None;
+            let barriers = std::mem::take(&mut state.barriers);
+            let receiver = if state.running {
+                let (sender, receiver) = oneshot::channel();
+                state.idle_waiters.push(sender);
+                Some(receiver)
+            } else {
+                None
+            };
+            (receiver, barriers)
+        };
+        for barrier in barriers {
+            let _ = barrier.sender.send(Err(ThreadStoreError::InvalidRequest {
+                message: "thread metadata update worker was discarded".to_string(),
+            }));
+        }
+        if let Some(receiver) = receiver {
+            receiver.await.map_err(|err| ThreadStoreError::Internal {
+                message: format!("thread metadata update worker stopped before discard: {err}"),
+            })?;
+        }
         Ok(())
     }
+
+    fn start_if_needed(state: &mut MetadataUpdateWorkerState) -> bool {
+        if state.discarding || state.running || state.queued_update.is_none() {
+            return false;
+        }
+        state.running = true;
+        true
+    }
+
+    fn spawn(self: &Arc<Self>) {
+        tokio::spawn(
+            Arc::clone(self)
+                .run()
+                .instrument(tracing::info_span!("thread_store.metadata_update_worker")),
+        );
+    }
+
+    async fn run(self: Arc<Self>) {
+        loop {
+            let queued = {
+                let mut state = self.state.lock().await;
+                let Some(queued) = state.queued_update.take() else {
+                    state.running = false;
+                    let barriers = std::mem::take(&mut state.barriers);
+                    let idle_waiters = std::mem::take(&mut state.idle_waiters);
+                    let applied_generation = state.applied_generation;
+                    drop(state);
+                    for barrier in barriers {
+                        let result = if barrier.target_generation <= applied_generation {
+                            Ok(())
+                        } else {
+                            Err(ThreadStoreError::Internal {
+                                message:
+                                    "metadata worker became idle before its barrier generation"
+                                        .to_string(),
+                            })
+                        };
+                        let _ = barrier.sender.send(result);
+                    }
+                    for waiter in idle_waiters {
+                        let _ = waiter.send(());
+                    }
+                    return;
+                };
+                state.in_flight_generation = Some(queued.update.generation());
+                queued
+            };
+
+            let generation = queued.update.generation();
+            let apply_span = tracing::info_span!(
+                "thread_store.metadata_update.apply",
+                generation,
+                queue_age_ms = queued.enqueued_at.elapsed().as_secs_f64() * 1_000.0,
+            );
+            if let Some(trace_context) = queued.trace_context.as_ref() {
+                let _ = codex_otel::set_parent_from_w3c_trace_context(&apply_span, trace_context);
+            }
+            let result = async {
+                self.thread_store
+                    .update_thread_metadata(UpdateThreadMetadataParams {
+                        thread_id: self.thread_id,
+                        patch: queued.update.patch.clone(),
+                        include_archived: true,
+                    })
+                    .instrument(tracing::info_span!(
+                        "thread_store.metadata_update.update_thread_metadata"
+                    ))
+                    .await
+            }
+            .instrument(apply_span)
+            .await;
+            match result {
+                Ok(_) => {
+                    let mut state = self.state.lock().await;
+                    state
+                        .metadata_sync
+                        .mark_pending_update_applied(&queued.update);
+                    state.applied_generation =
+                        state.applied_generation.max(queued.update.generation());
+                    state.in_flight_generation = None;
+                    let applied_generation = state.applied_generation;
+                    let mut pending_barriers = Vec::new();
+                    let mut satisfied_barriers = Vec::new();
+                    for barrier in std::mem::take(&mut state.barriers) {
+                        if barrier.target_generation <= applied_generation {
+                            satisfied_barriers.push(barrier);
+                        } else {
+                            pending_barriers.push(barrier);
+                        }
+                    }
+                    state.barriers = pending_barriers;
+                    drop(state);
+                    for barrier in satisfied_barriers {
+                        let _ = barrier.sender.send(Ok(()));
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        thread_id = %self.thread_id,
+                        error = %err,
+                        "failed to asynchronously update thread metadata"
+                    );
+                    let (failed_barriers, idle_waiters, should_retry) = {
+                        let mut state = self.state.lock().await;
+                        state.in_flight_generation = None;
+                        let retry_generation = if state.discarding {
+                            None
+                        } else {
+                            state
+                                .queued_update
+                                .as_ref()
+                                .map(|queued| queued.update.generation())
+                        };
+                        let should_retry = retry_generation.is_some();
+                        let (pending_barriers, failed_barriers) =
+                            std::mem::take(&mut state.barriers)
+                                .into_iter()
+                                .partition(|barrier| {
+                                    retry_generation.is_some_and(|generation| {
+                                        barrier.target_generation <= generation
+                                    })
+                                });
+                        state.barriers = pending_barriers;
+                        state.running = should_retry;
+                        let idle_waiters = if should_retry {
+                            Vec::new()
+                        } else {
+                            std::mem::take(&mut state.idle_waiters)
+                        };
+                        (failed_barriers, idle_waiters, should_retry)
+                    };
+                    for barrier in failed_barriers {
+                        let _ = barrier.sender.send(Err(err.clone()));
+                    }
+                    for waiter in idle_waiters {
+                        let _ = waiter.send(());
+                    }
+                    if !should_retry {
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "live_thread_tests.rs"]
+mod tests;

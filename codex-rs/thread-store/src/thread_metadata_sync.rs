@@ -50,6 +50,12 @@ pub(crate) struct PendingThreadMetadataPatch {
     generation: u64,
 }
 
+impl PendingThreadMetadataPatch {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
 impl ThreadMetadataSync {
     pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
         let created_at = Utc::now();

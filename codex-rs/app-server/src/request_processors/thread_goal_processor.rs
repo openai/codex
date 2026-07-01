@@ -141,7 +141,7 @@ impl ThreadGoalRequestProcessor {
                 // Live goal-first threads can be listed before any user turn is written.
                 // Use the live path so JSONL and SQLite preview metadata stay in sync.
                 thread
-                    .append_rollout_items(&[outcome.thread_goal_updated_item()])
+                    .append_rollout_items_and_flush_metadata(&[outcome.thread_goal_updated_item()])
                     .await
             }
             Err(_) => Ok(()),
