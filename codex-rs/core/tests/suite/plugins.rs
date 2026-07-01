@@ -29,6 +29,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
@@ -39,6 +40,9 @@ const SAMPLE_PLUGIN_APP_NAMESPACE: &str = "mcp__codex_apps__google_calendar";
 const SAMPLE_PLUGIN_MCP_NAMESPACE: &str = "mcp__sample";
 const PLUGIN_APP_SEARCH_CALL_ID: &str = "plugin-app-search";
 const PLUGIN_MCP_SEARCH_CALL_ID: &str = "plugin-mcp-search";
+const PLUGIN_AGENT_SEARCH_CALL_ID: &str = "plugin-agent-search";
+const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
+const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
 fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
@@ -74,6 +78,33 @@ fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
     )
     .expect("write plugin skill");
     skill_dir.join("SKILL.md")
+}
+
+fn write_plugin_agent_plugin(home: &TempDir) {
+    let plugin_root = write_sample_plugin_manifest_and_config(home);
+    let agents_dir = plugin_root.join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("create plugin agents dir");
+    std::fs::write(
+        agents_dir.join("researcher.toml"),
+        r#"name = "researcher"
+description = "Research sample data"
+developer_instructions = "Research the sample data carefully"
+"#,
+    )
+    .expect("write plugin agent role");
+}
+
+fn write_personal_agent_role(home: &TempDir) {
+    let agents_dir = home.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("create personal agents dir");
+    std::fs::write(
+        agents_dir.join("personal.toml"),
+        r#"name = "personal"
+description = "Inspect personal data"
+developer_instructions = "Inspect personal data carefully"
+"#,
+    )
+    .expect("write personal agent role");
 }
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
@@ -204,6 +235,15 @@ fn searched_plugin_tools(
     )
 }
 
+fn tool_parameter_description(tool: &Value, parameter_name: &str) -> Option<String> {
+    tool.get("parameters")
+        .and_then(|parameters| parameters.get("properties"))
+        .and_then(|properties| properties.get(parameter_name))
+        .and_then(|parameter| parameter.get("description"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capability_sections_render_in_developer_message_in_order() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -269,6 +309,64 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     assert!(
         developer_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_agent_roles_are_available_to_spawn_agent() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_tool_search_call(
+                    PLUGIN_AGENT_SEARCH_CALL_ID,
+                    &serde_json::json!({"query": "spawn agent"}),
+                ),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_plugin_agent_plugin(codex_home.as_ref());
+    write_personal_agent_role(codex_home.as_ref());
+    let mut builder = test_codex().with_home(codex_home).with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config.multi_agent_v2.hide_spawn_agent_metadata = false;
+    });
+    let test_codex = builder.build(&server).await?;
+
+    test_codex.submit_turn("hello").await?;
+
+    let request = resp_mock
+        .last_request()
+        .expect("tool search follow-up request");
+    let tool_search_output = request.tool_search_output(PLUGIN_AGENT_SEARCH_CALL_ID);
+    let spawn_agent = namespace_child_tool(
+        &tool_search_output,
+        MULTI_AGENT_V1_NAMESPACE,
+        SPAWN_AGENT_TOOL_NAME,
+    )
+    .expect("spawn_agent should be available");
+    let agent_type_description = tool_parameter_description(spawn_agent, "agent_type")
+        .expect("spawn_agent agent_type description");
+    assert!(
+        agent_type_description.contains("sample:researcher: {\nResearch sample data\n}"),
+        "expected plugin agent role in spawn_agent description: {agent_type_description:?}"
+    );
+    assert!(
+        agent_type_description.contains("personal: {\nInspect personal data\n}"),
+        "expected personal agent role in spawn_agent description: {agent_type_description:?}"
     );
 
     Ok(())

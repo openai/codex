@@ -2,6 +2,7 @@ use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_exec_server::LOCAL_FS;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -684,7 +685,7 @@ impl Session {
             .as_ref()
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
+        let mut per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         {
             let mcp_runtime = self.services.latest_mcp_runtime();
             let mcp_connection_manager = mcp_runtime.manager();
@@ -720,6 +721,26 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&plugins_input)
             .await;
+        let mut plugin_agent_role_warnings = Vec::new();
+        match crate::config::agent_roles::load_agent_roles_with_plugins(
+            LOCAL_FS.as_ref(),
+            per_turn_config.agent_roles.clone(),
+            plugin_outcome.effective_plugin_agent_roots(),
+            &mut plugin_agent_role_warnings,
+        )
+        .await
+        {
+            Ok(agent_roles) => {
+                per_turn_config.agent_roles = agent_roles;
+            }
+            Err(err) => {
+                plugin_agent_role_warnings
+                    .push(format!("Failed to load plugin agent roles: {err}"));
+            }
+        }
+        per_turn_config
+            .startup_warnings
+            .extend(plugin_agent_role_warnings);
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
         let plugin_skill_snapshots = self
             .services

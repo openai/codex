@@ -33,6 +33,8 @@ struct RawPluginManifest {
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
+    agents: Option<RawPluginManifestPaths>,
+    #[serde(default)]
     skills: Option<RawPluginManifestPaths>,
     #[serde(default)]
     mcp_servers: Option<RawPluginManifestMcpServers>,
@@ -162,6 +164,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         version,
         description,
         keywords,
+        agents,
         skills,
         mcp_servers,
         apps,
@@ -258,6 +261,7 @@ pub(crate) fn parse_plugin_manifest_uri(
         description,
         keywords,
         paths: codex_plugin::manifest::PluginManifestPaths {
+            agents: resolve_manifest_paths(plugin_root, "agents", agents.as_ref()),
             skills: resolve_manifest_paths(plugin_root, "skills", skills.as_ref()),
             mcp_servers: resolve_manifest_mcp_servers(plugin_root, mcp_servers),
             apps: resolve_manifest_path(plugin_root, "apps", apps.as_deref()),
@@ -854,6 +858,7 @@ mod tests {
                 description: None,
                 keywords: Vec::new(),
                 paths: PluginManifestPaths {
+                    agents: Vec::new(),
                     skills: vec![plugin_root.join("skills").expect("skills URI")],
                     mcp_servers: Some(PluginManifestMcpServers::Path(
                         plugin_root.join(".mcp.json").expect("MCP URI"),

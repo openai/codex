@@ -862,6 +862,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             ),
             root: AbsolutePathBuf::try_from(plugin_root.clone()).unwrap(),
             enabled: true,
+            agent_roots: Vec::new(),
             skill_roots: vec![plugin_root.join("skills").abs()],
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: true,
@@ -1905,6 +1906,7 @@ async fn load_plugin_skills_dedupes_overlapping_manifest_roots() {
         description: None,
         keywords: Vec::new(),
         paths: crate::manifest::PluginManifestPaths {
+            agents: Vec::new(),
             skills: vec![
                 plugin_root.join("skills"),
                 plugin_root.join("skills/abc"),
@@ -2143,6 +2145,7 @@ async fn load_plugins_preserves_disabled_plugins_without_effective_contributions
             manifest_description: None,
             root: AbsolutePathBuf::try_from(plugin_root).unwrap(),
             enabled: false,
+            agent_roots: Vec::new(),
             skill_roots: Vec::new(),
             disabled_skill_paths: HashSet::new(),
             has_enabled_skills: false,
@@ -2318,6 +2321,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         manifest_description: None,
         root: AbsolutePathBuf::try_from(codex_home.path().join(dir_name)).unwrap(),
         enabled: true,
+        agent_roots: Vec::new(),
         skill_roots: Vec::new(),
         disabled_skill_paths: HashSet::new(),
         has_enabled_skills: false,
