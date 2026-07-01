@@ -461,6 +461,7 @@ fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
     Ok(path.into())
 }
 
+#[cfg(test)]
 fn selected_executable_filter_for(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<Vec<u8>, String>,
@@ -470,6 +471,7 @@ fn selected_executable_filter_for(
     Ok(selected_filter(&executable_drivers, attributes))
 }
 
+#[cfg(test)]
 fn selected_filter(
     drivers: &BTreeSet<String>,
     attributes: &BTreeMap<Vec<u8>, String>,
@@ -565,6 +567,7 @@ fn git_filter_required(
     }
 }
 
+#[cfg(test)]
 fn filter_driver_name(key: &str) -> io::Result<String> {
     filter_driver_and_command(key).map(|(driver, _command)| driver)
 }
