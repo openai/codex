@@ -1928,6 +1928,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut streamed_items = HashMap::<String, TurnItem>::new();
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -1991,13 +1992,23 @@ async fn try_run_sampling_request(
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
+                let completed_item_id = item.id().map(str::to_owned);
+                let previously_streamed_item = if let Some(item_id) = completed_item_id.as_deref() {
+                    streamed_items.remove(item_id)
                 } else {
-                    None
+                    active_item
+                        .as_ref()
+                        .and_then(|active| streamed_items.remove(&active.id()))
                 };
-                active_item_is_streaming_to_client = false;
+                let completes_active_item = match (&completed_item_id, active_item.as_ref()) {
+                    (Some(completed_item_id), Some(active)) => completed_item_id == &active.id(),
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                if completes_active_item {
+                    active_item = None;
+                    active_item_is_streaming_to_client = false;
+                }
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2152,6 +2163,7 @@ async fn try_run_sampling_request(
                             )
                             .await;
                         }
+                        streamed_items.insert(turn_item.id(), turn_item.clone());
                     }
                     active_item = Some(turn_item);
                     active_item_is_streaming_to_client = stream_item_to_client;
@@ -2288,39 +2300,47 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
+                item_id,
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
-                        continue;
-                    }
+                if defer_streamed_turn_items_for_contributors {
+                    continue;
+                }
+                if streamed_items.contains_key(&item_id) {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id,
                         delta,
                         summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic(format!(
+                        "ReasoningSummaryDelta without streamed item {item_id}"
+                    ));
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
-                        continue;
-                    }
+            ResponseEvent::ReasoningSummaryPartAdded {
+                item_id,
+                summary_index,
+            } => {
+                if defer_streamed_turn_items_for_contributors {
+                    continue;
+                }
+                if streamed_items.contains_key(&item_id) {
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id,
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    error_or_panic(format!(
+                        "ReasoningSummaryPartAdded without streamed item {item_id}"
+                    ));
                 }
             }
             ResponseEvent::ReasoningContentDelta {
