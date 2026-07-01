@@ -64,7 +64,20 @@ enabled = true
         .args(["--listen", "off"])
         .output()?;
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("Invalid configuration; using defaults."),
+        "expected invalid config warning in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("The network proxy requires the elevated Windows sandbox backend"),
+        "expected Windows sandbox compatibility warning in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("no transport configured; use --listen or enable remote control"),
+        "expected app server to reach transport validation after falling back, got: {stderr}"
+    );
 
     Ok(())
 }
