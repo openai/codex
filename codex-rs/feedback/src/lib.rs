@@ -838,7 +838,7 @@ mod tests {
                         attachment_filename_override: None,
                     },
                 ],
-                None,
+                /*logs_override*/ None,
             );
 
         fs::remove_file(gzip_path).expect("gzip attachment should be removed");
