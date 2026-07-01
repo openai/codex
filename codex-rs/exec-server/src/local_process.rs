@@ -33,6 +33,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::StartedExecProcess;
+use crate::bash_env_cache::BashEnvCache;
 use crate::process::ExecProcessEventLog;
 use crate::process_sandbox::prepare_exec_request;
 use crate::protocol::EXEC_CLOSED_METHOD;
@@ -140,6 +141,7 @@ enum ProcessEntry {
 struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    bash_env_cache: BashEnvCache,
     telemetry: ExecServerTelemetry,
 }
 
@@ -195,6 +197,7 @@ impl LocalProcess {
             inner: Arc::new(Inner {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 processes: Mutex::new(HashMap::new()),
+                bash_env_cache: BashEnvCache::default(),
                 telemetry,
             }),
             runtime_paths,
@@ -234,8 +237,12 @@ impl LocalProcess {
         params: ExecParams,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
         let process_id = params.process_id.clone();
-        let prepared =
-            prepare_exec_request(&params, child_env(&params), self.runtime_paths.as_ref())?;
+        let environment = self
+            .inner
+            .bash_env_cache
+            .environment_for_launch(&params, child_env(&params), self.runtime_paths.as_ref())
+            .await;
+        let prepared = prepare_exec_request(&params, environment, self.runtime_paths.as_ref())?;
         let (program, args) = prepared
             .command
             .split_first()
@@ -1107,6 +1114,7 @@ mod tests {
             exclude: Vec::new(),
             r#set: HashMap::from([("POLICY_SET".to_string(), "policy".to_string())]),
             include_only: Vec::new(),
+            bash_env_cache_scope: None,
         });
 
         let mut expected = HashMap::from([

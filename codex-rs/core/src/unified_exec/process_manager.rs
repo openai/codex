@@ -21,6 +21,7 @@ use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
+use crate::shell::ShellType;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -56,6 +57,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
@@ -129,6 +131,7 @@ fn exec_env_policy_from_shell_policy(
             .iter()
             .map(std::string::ToString::to_string)
             .collect(),
+        bash_env_cache_scope: None,
     }
 }
 
@@ -1122,10 +1125,19 @@ impl UnifiedExecProcessManager {
         let active_permission_profile = context.turn.config.permissions.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
+        let mut exec_server_policy = exec_env_policy_from_shell_policy(
+            &context.turn.config.permissions.shell_environment_policy,
+        );
+        if context.turn.config.features.enabled(Feature::ShellSnapshot)
+            && request.turn_environment.environment.is_remote()
+            && request.shell_type == ShellType::Bash
+            && !request.tty
+            && matches!(request.command.as_slice(), [_, option, _] if option == "-c")
+        {
+            exec_server_policy.bash_env_cache_scope = Some(request.turn_environment.cwd().clone());
+        }
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(
-                &context.turn.config.permissions.shell_environment_policy,
-            ),
+            policy: exec_server_policy,
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();

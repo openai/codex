@@ -154,6 +154,10 @@ pub struct ExecEnvPolicy {
     pub exclude: Vec<String>,
     pub r#set: HashMap<String, String>,
     pub include_only: Vec<String>,
+    /// Optional workspace scope for caching exports produced by Bash's `BASH_ENV`.
+    /// Older exec-server peers ignore this field, so reuse is opportunistic.
+    #[serde(default)]
+    pub bash_env_cache_scope: Option<PathUri>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -566,6 +570,7 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::EnvironmentInfo;
+    use super::ExecEnvPolicy;
     use super::ExecExitedNotification;
     use super::ExecParams;
     use super::FsReadFileParams;
@@ -574,21 +579,29 @@ mod tests {
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
     use codex_network_proxy::ManagedNetworkSandboxContext;
+    use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
     #[test]
-    fn exec_params_managed_network_context_round_trips_and_defaults_for_legacy_peers() {
+    fn exec_params_optional_context_round_trips_and_defaults_for_legacy_peers() {
         let cwd =
             PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
                 .expect("cwd URI");
         let params = ExecParams {
             process_id: ProcessId::from("managed-network"),
             argv: vec!["true".to_string()],
-            cwd,
-            env_policy: None,
+            cwd: cwd.clone(),
+            env_policy: Some(ExecEnvPolicy {
+                inherit: ShellEnvironmentPolicyInherit::Core,
+                ignore_default_excludes: false,
+                exclude: Vec::new(),
+                r#set: HashMap::new(),
+                include_only: Vec::new(),
+                bash_env_cache_scope: Some(cwd.clone()),
+            }),
             env: HashMap::new(),
             tty: false,
             pipe_stdin: false,
@@ -609,6 +622,10 @@ mod tests {
                 "allowLocalBinding": false,
             })
         );
+        assert_eq!(
+            serialized["envPolicy"]["bashEnvCacheScope"],
+            serde_json::to_value(cwd).expect("serialize cwd")
+        );
         let round_trip: ExecParams =
             serde_json::from_value(serialized.clone()).expect("deserialize exec params");
         assert_eq!(round_trip, params);
@@ -617,10 +634,18 @@ mod tests {
             .as_object_mut()
             .expect("exec params object")
             .remove("managedNetwork");
+        serialized["envPolicy"]
+            .as_object_mut()
+            .expect("env policy object")
+            .remove("bashEnvCacheScope");
         let legacy: ExecParams =
             serde_json::from_value(serialized).expect("deserialize legacy exec params");
         assert!(legacy.enforce_managed_network);
         assert_eq!(legacy.managed_network, None);
+        assert_eq!(
+            legacy.env_policy.expect("env policy").bash_env_cache_scope,
+            None
+        );
     }
 
     #[test]
