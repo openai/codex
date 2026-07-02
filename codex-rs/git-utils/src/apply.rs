@@ -6,12 +6,22 @@
 //! mode via [`ApplyGitRequest::preflight`] and inspect the resulting paths to
 //! learn what would change before applying for real.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
-use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+
+use crate::FsmonitorOverride;
+use crate::apply_output::parse_git_apply_output;
+use crate::git_command::GitRunner;
+use crate::merge_driver::ensure_no_selected_merge_drivers;
+use crate::patch_paths::classify_patch_paths;
+use crate::patch_paths::extract_effective_paths_from_patch;
+use crate::patch_paths::stage_effective_paths;
+use crate::patch_paths::validate_gitlink_updates;
+use crate::safe_git::DISABLED_HOOKS_PATH;
+use crate::safe_git::ensure_no_selected_executable_git_filters;
+#[cfg(test)]
+use crate::safe_git::isolate_git_command_environment;
 
 /// Parameters for invoking [`apply_git_patch`].
 #[derive(Debug, Clone)]
@@ -21,7 +31,6 @@ pub struct ApplyGitRequest {
     pub revert: bool,
     pub preflight: bool,
 }
-
 /// Result of running [`apply_git_patch`], including paths gleaned from stdout/stderr.
 #[derive(Debug, Clone)]
 pub struct ApplyGitResult {
@@ -39,48 +48,43 @@ pub struct ApplyGitResult {
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
-    let git_root = resolve_git_root(&req.cwd)?;
+    let git = GitRunner::for_cwd_io(&req.cwd)?;
+    let mut cfg_parts = configured_git_config_parts();
+    let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
+    let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
+    ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+    let guarded_paths = classify_patch_paths(&git, &git_root, &patch_paths)?;
+    validate_gitlink_updates(
+        &git,
+        &git_root,
+        &patch_paths,
+        &patch_path,
+        &req.diff,
+        req.revert,
+        &guarded_paths,
+    )?;
+    let index_only_gitlink_patch = guarded_paths.exact_gitlinks.len() == patch_paths.len();
 
-    if req.revert && !req.preflight {
-        // Stage WT paths first to avoid index mismatch on revert.
-        stage_paths(&git_root, &req.diff)?;
-    }
-
-    // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
-    if req.revert {
-        args.push("-R".into());
-    }
-
-    // Optional: additional git config via env knob (defaults OFF)
-    let mut cfg_parts: Vec<String> = Vec::new();
-    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
-        for pair in cfg.split(',') {
-            let p = pair.trim();
-            if p.is_empty() || !p.contains('=') {
-                continue;
-            }
-            cfg_parts.push("-c".into());
-            cfg_parts.push(p.to_string());
-        }
-    }
-
-    args.push(patch_path.to_string_lossy().to_string());
+    cfg_parts.extend(safe_git_config_parts());
+    let patch_arg = patch_path.to_string_lossy().to_string();
 
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
         let mut check_args = vec!["apply".to_string(), "--check".to_string()];
+        if index_only_gitlink_patch {
+            check_args.push("--cached".to_string());
+        }
         if req.revert {
             check_args.push("-R".to_string());
         }
-        check_args.push(patch_path.to_string_lossy().to_string());
+        check_args.push(patch_arg);
         let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
-        let (c_code, c_out, c_err) = run_git(&git_root, &cfg_parts, &check_args)?;
+        let (c_code, c_out, c_err) = run_git(&git, &git_root, &cfg_parts, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -100,8 +104,54 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         });
     }
 
+    // Avoid three-way machinery entirely when the patch applies cleanly.
+    // A selected merge driver is relevant only to the three-way fallback.
+    let mut plain_check_args = vec!["apply".to_string(), "--check".to_string()];
+    plain_check_args.push(
+        if index_only_gitlink_patch {
+            "--cached"
+        } else {
+            "--index"
+        }
+        .to_string(),
+    );
+    if req.revert {
+        plain_check_args.push("-R".to_string());
+    }
+    plain_check_args.push(patch_arg.clone());
+    let (plain_check_code, _, _) = run_git(&git, &git_root, &cfg_parts, &plain_check_args)?;
+
+    let mut args = vec!["apply".to_string()];
+    if plain_check_code != 0 {
+        ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
+        if req.revert {
+            if !guarded_paths.exact_gitlinks.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "refusing to stage an exact gitlink for a reverse three-way apply",
+                ));
+            }
+            // Stage WT paths first to avoid index mismatch on three-way revert.
+            stage_effective_paths(&git, &git_root, &patch_paths)?;
+        }
+        args.push("--3way".to_string());
+    } else {
+        args.push(
+            if index_only_gitlink_patch {
+                "--cached"
+            } else {
+                "--index"
+            }
+            .to_string(),
+        );
+    }
+    if req.revert {
+        args.push("-R".to_string());
+    }
+    args.push(patch_arg);
+
     let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
-    let (code, stdout, stderr) = run_git(&git_root, &cfg_parts, &args)?;
+    let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);
@@ -123,12 +173,19 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     })
 }
 
-fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
-    let out = local_git_command()
+fn resolve_git_root(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+) -> io::Result<PathBuf> {
+    let requested_cwd = std::fs::canonicalize(cwd)?;
+    let mut command = git.command();
+    command
+        .args(git_config_args)
         .arg("rev-parse")
         .arg("--show-toplevel")
-        .current_dir(cwd)
-        .output()?;
+        .current_dir(&requested_cwd);
+    let out = git.output(command)?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         return Err(io::Error::other(format!(
@@ -137,36 +194,84 @@ fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(PathBuf::from(root))
+    let reported_root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let root = std::fs::canonicalize(&reported_root)?;
+    let expected_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to apply a patch because Git resolved worktree {} without a .git marker above requested cwd {}",
+                    root.display(),
+                    requested_cwd.display()
+                ),
+            )
+        })
+        .and_then(std::fs::canonicalize)?;
+    if root != expected_root {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to apply a patch because Git resolved worktree {} instead of expected worktree {} for requested cwd {}",
+                root.display(),
+                expected_root.display(),
+                requested_cwd.display()
+            ),
+        ));
+    }
+    Ok(root)
 }
 
-fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
+fn configured_git_config_parts() -> Vec<String> {
+    let mut cfg_parts = Vec::new();
+    if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
+        for pair in cfg.split(',') {
+            let pair = pair.trim();
+            if pair.is_empty() || !pair.contains('=') {
+                continue;
+            }
+            cfg_parts.push("-c".to_string());
+            cfg_parts.push(pair.to_string());
+        }
+    }
+    cfg_parts
+}
+
+pub(crate) fn write_temp_patch(diff: &str) -> io::Result<(tempfile::TempDir, PathBuf)> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("patch.diff");
     std::fs::write(&path, diff)?;
     Ok((dir, path))
 }
 
-fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, String, String)> {
-    let mut cmd = local_git_command();
+pub(crate) fn run_git(
+    git: &GitRunner,
+    cwd: &Path,
+    git_cfg: &[String],
+    args: &[String],
+) -> io::Result<(i32, String, String)> {
+    let mut cmd = git.command();
     for p in git_cfg {
         cmd.arg(p);
     }
     for a in args {
         cmd.arg(a);
     }
-    let out = cmd.current_dir(cwd).output()?;
+    cmd.current_dir(cwd);
+    let out = git.output(cmd)?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     Ok((code, stdout, stderr))
 }
 
-fn local_git_command() -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    command.envs(crate::local_only_git_env());
-    command
+pub(crate) fn safe_git_config_parts() -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
+        "-c".to_string(),
+        FsmonitorOverride::Disabled.git_config_arg().to_string(),
+    ]
 }
 
 fn quote_shell(s: &str) -> String {
@@ -196,408 +301,6 @@ fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> St
     )
 }
 
-/// Collect every path referenced by the diff headers inside `diff --git` sections.
-pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
-    let mut set = std::collections::BTreeSet::new();
-    for raw_line in diff_text.lines() {
-        let line = raw_line.trim();
-        let Some(rest) = line.strip_prefix("diff --git ") else {
-            continue;
-        };
-        let Some((a, b)) = parse_diff_git_paths(rest) else {
-            continue;
-        };
-        if let Some(a) = normalize_diff_path(&a, "a/") {
-            set.insert(a);
-        }
-        if let Some(b) = normalize_diff_path(&b, "b/") {
-            set.insert(b);
-        }
-    }
-    set.into_iter().collect()
-}
-
-fn parse_diff_git_paths(line: &str) -> Option<(String, String)> {
-    let mut chars = line.chars().peekable();
-    let first = read_diff_git_token(&mut chars)?;
-    let second = read_diff_git_token(&mut chars)?;
-    Some((first, second))
-}
-
-fn read_diff_git_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
-        chars.next();
-    }
-    let quote = match chars.peek().copied() {
-        Some('"') | Some('\'') => chars.next(),
-        _ => None,
-    };
-    let mut out = String::new();
-    while let Some(c) = chars.next() {
-        if let Some(q) = quote {
-            if c == q {
-                break;
-            }
-            if c == '\\' {
-                out.push('\\');
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
-                continue;
-            }
-        } else if c.is_whitespace() {
-            break;
-        }
-        out.push(c);
-    }
-    if out.is_empty() && quote.is_none() {
-        None
-    } else {
-        Some(match quote {
-            Some(_) => unescape_c_string(&out),
-            None => out,
-        })
-    }
-}
-
-fn normalize_diff_path(raw: &str, prefix: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed == "/dev/null" || trimmed == format!("{prefix}dev/null") {
-        return None;
-    }
-    let trimmed = trimmed.strip_prefix(prefix).unwrap_or(trimmed);
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-fn unescape_c_string(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        let Some(next) = chars.next() else {
-            out.push('\\');
-            break;
-        };
-        match next {
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            'b' => out.push('\u{0008}'),
-            'f' => out.push('\u{000C}'),
-            'a' => out.push('\u{0007}'),
-            'v' => out.push('\u{000B}'),
-            '\\' => out.push('\\'),
-            '"' => out.push('"'),
-            '\'' => out.push('\''),
-            '0'..='7' => {
-                let mut value = next.to_digit(8).unwrap_or(0);
-                for _ in 0..2 {
-                    match chars.peek() {
-                        Some('0'..='7') => {
-                            if let Some(digit) = chars.next() {
-                                value = value * 8 + digit.to_digit(8).unwrap_or(0);
-                            } else {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-                if let Some(ch) = std::char::from_u32(value) {
-                    out.push(ch);
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Stage only the files that actually exist on disk for the given diff.
-pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
-    let paths = extract_paths_from_patch(diff);
-    let mut existing: Vec<String> = Vec::new();
-    for p in paths {
-        let joined = git_root.join(&p);
-        if std::fs::symlink_metadata(&joined).is_ok() {
-            existing.push(p);
-        }
-    }
-    if existing.is_empty() {
-        return Ok(());
-    }
-    let mut cmd = local_git_command();
-    cmd.arg("add");
-    cmd.arg("--");
-    for p in &existing {
-        cmd.arg(OsStr::new(p));
-    }
-    let out = cmd.current_dir(git_root).output()?;
-    let _code = out.status.code().unwrap_or(-1);
-    // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
-    Ok(())
-}
-
-// ============ Parser ported from VS Code (TS) ============
-
-/// Parse `git apply` output into applied/skipped/conflicted path groupings.
-pub fn parse_git_apply_output(
-    stdout: &str,
-    stderr: &str,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let combined = [stdout, stderr]
-        .iter()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .collect::<Vec<&str>>()
-        .join("\n");
-
-    let mut applied = std::collections::BTreeSet::new();
-    let mut skipped = std::collections::BTreeSet::new();
-    let mut conflicted = std::collections::BTreeSet::new();
-    let mut last_seen_path: Option<String> = None;
-
-    fn add(set: &mut std::collections::BTreeSet<String>, raw: &str) {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        let first = trimmed.chars().next().unwrap_or('\0');
-        let last = trimmed.chars().last().unwrap_or('\0');
-        let unquoted = if (first == '"' || first == '\'') && last == first && trimmed.len() >= 2 {
-            unescape_c_string(&trimmed[1..trimmed.len() - 1])
-        } else {
-            trimmed.to_string()
-        };
-        if !unquoted.is_empty() {
-            set.insert(unquoted);
-        }
-    }
-
-    static APPLIED_CLEAN: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Applied patch(?: to)?\\s+(?P<path>.+?)\\s+cleanly\\.?$"));
-    static APPLIED_CONFLICTS: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Applied patch(?: to)?\\s+(?P<path>.+?)\\s+with conflicts\\.?$"));
-    static APPLYING_WITH_REJECTS: Lazy<Regex> = Lazy::new(|| {
-        regex_ci("^Applying patch\\s+(?P<path>.+?)\\s+with\\s+\\d+\\s+rejects?\\.{0,3}$")
-    });
-    static CHECKING_PATCH: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Checking patch\\s+(?P<path>.+?)\\.\\.\\.$"));
-    static UNMERGED_LINE: Lazy<Regex> = Lazy::new(|| regex_ci("^U\\s+(?P<path>.+)$"));
-    static PATCH_FAILED: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+patch failed:\\s+(?P<path>.+?)(?::\\d+)?(?:\\s|$)"));
-    static DOES_NOT_APPLY: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+(?P<path>.+?):\\s+patch does not apply$"));
-    static THREE_WAY_START: Lazy<Regex> = Lazy::new(|| {
-        regex_ci("^(?:Performing three-way merge|Falling back to three-way merge)\\.\\.\\.$")
-    });
-    static THREE_WAY_FAILED: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Failed to perform three-way merge\\.\\.\\.$"));
-    static FALLBACK_DIRECT: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Falling back to direct application\\.\\.\\.$"));
-    static LACKS_BLOB: Lazy<Regex> = Lazy::new(|| {
-        regex_ci(
-            "^(?:error: )?repository lacks the necessary blob to (?:perform|fall back on) 3-?way merge\\.?$",
-        )
-    });
-    static INDEX_MISMATCH: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+(?P<path>.+?):\\s+does not match index\\b"));
-    static NOT_IN_INDEX: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+(?P<path>.+?):\\s+does not exist in index\\b"));
-    static ALREADY_EXISTS_WT: Lazy<Regex> = Lazy::new(|| {
-        regex_ci("^error:\\s+(?P<path>.+?)\\s+already exists in (?:the )?working directory\\b")
-    });
-    static FILE_EXISTS: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+patch failed:\\s+(?P<path>.+?)\\s+File exists"));
-    static RENAMED_DELETED: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^error:\\s+path\\s+(?P<path>.+?)\\s+has been renamed\\/deleted"));
-    static CANNOT_APPLY_BINARY: Lazy<Regex> = Lazy::new(|| {
-        regex_ci(
-            "^error:\\s+cannot apply binary patch to\\s+['\\\"]?(?P<path>.+?)['\\\"]?\\s+without full index line$",
-        )
-    });
-    static BINARY_DOES_NOT_APPLY: Lazy<Regex> = Lazy::new(|| {
-        regex_ci("^error:\\s+binary patch does not apply to\\s+['\\\"]?(?P<path>.+?)['\\\"]?$")
-    });
-    static BINARY_INCORRECT_RESULT: Lazy<Regex> = Lazy::new(|| {
-        regex_ci(
-            "^error:\\s+binary patch to\\s+['\\\"]?(?P<path>.+?)['\\\"]?\\s+creates incorrect result\\b",
-        )
-    });
-    static CANNOT_READ_CURRENT: Lazy<Regex> = Lazy::new(|| {
-        regex_ci("^error:\\s+cannot read the current contents of\\s+['\\\"]?(?P<path>.+?)['\\\"]?$")
-    });
-    static SKIPPED_PATCH: Lazy<Regex> =
-        Lazy::new(|| regex_ci("^Skipped patch\\s+['\\\"]?(?P<path>.+?)['\\\"]\\.$"));
-    static CANNOT_MERGE_BINARY_WARN: Lazy<Regex> = Lazy::new(|| {
-        regex_ci(
-            "^warning:\\s*Cannot merge binary files:\\s+(?P<path>.+?)\\s+\\(ours\\s+vs\\.\\s+theirs\\)",
-        )
-    });
-
-    for raw_line in combined.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // === "Checking patch <path>..." tracking ===
-        if let Some(c) = CHECKING_PATCH.captures(line) {
-            if let Some(m) = c.name("path") {
-                last_seen_path = Some(m.as_str().to_string());
-            }
-            continue;
-        }
-
-        // === Status lines ===
-        if let Some(c) = APPLIED_CLEAN.captures(line) {
-            if let Some(m) = c.name("path") {
-                add(&mut applied, m.as_str());
-                let p = applied.iter().next_back().cloned();
-                if let Some(p) = p {
-                    conflicted.remove(&p);
-                    skipped.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-        if let Some(c) = APPLIED_CONFLICTS.captures(line) {
-            if let Some(m) = c.name("path") {
-                add(&mut conflicted, m.as_str());
-                let p = conflicted.iter().next_back().cloned();
-                if let Some(p) = p {
-                    applied.remove(&p);
-                    skipped.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-        if let Some(c) = APPLYING_WITH_REJECTS.captures(line) {
-            if let Some(m) = c.name("path") {
-                add(&mut conflicted, m.as_str());
-                let p = conflicted.iter().next_back().cloned();
-                if let Some(p) = p {
-                    applied.remove(&p);
-                    skipped.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-
-        // === “U <path>” after conflicts ===
-        if let Some(c) = UNMERGED_LINE.captures(line) {
-            if let Some(m) = c.name("path") {
-                add(&mut conflicted, m.as_str());
-                let p = conflicted.iter().next_back().cloned();
-                if let Some(p) = p {
-                    applied.remove(&p);
-                    skipped.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-
-        // === Early hints ===
-        if PATCH_FAILED.is_match(line) || DOES_NOT_APPLY.is_match(line) {
-            if let Some(c) = PATCH_FAILED
-                .captures(line)
-                .or_else(|| DOES_NOT_APPLY.captures(line))
-                && let Some(m) = c.name("path")
-            {
-                add(&mut skipped, m.as_str());
-                last_seen_path = Some(m.as_str().to_string());
-            }
-            continue;
-        }
-
-        // === Ignore narration ===
-        if THREE_WAY_START.is_match(line) || FALLBACK_DIRECT.is_match(line) {
-            continue;
-        }
-
-        // === 3-way failed entirely; attribute to last_seen_path ===
-        if THREE_WAY_FAILED.is_match(line) || LACKS_BLOB.is_match(line) {
-            if let Some(p) = last_seen_path.clone() {
-                add(&mut skipped, &p);
-                applied.remove(&p);
-                conflicted.remove(&p);
-            }
-            continue;
-        }
-
-        // === Skips / I/O problems ===
-        if let Some(c) = INDEX_MISMATCH
-            .captures(line)
-            .or_else(|| NOT_IN_INDEX.captures(line))
-            .or_else(|| ALREADY_EXISTS_WT.captures(line))
-            .or_else(|| FILE_EXISTS.captures(line))
-            .or_else(|| RENAMED_DELETED.captures(line))
-            .or_else(|| CANNOT_APPLY_BINARY.captures(line))
-            .or_else(|| BINARY_DOES_NOT_APPLY.captures(line))
-            .or_else(|| BINARY_INCORRECT_RESULT.captures(line))
-            .or_else(|| CANNOT_READ_CURRENT.captures(line))
-            .or_else(|| SKIPPED_PATCH.captures(line))
-        {
-            if let Some(m) = c.name("path") {
-                add(&mut skipped, m.as_str());
-                let p_now = skipped.iter().next_back().cloned();
-                if let Some(p) = p_now {
-                    applied.remove(&p);
-                    conflicted.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-
-        // === Warnings that imply conflicts ===
-        if let Some(c) = CANNOT_MERGE_BINARY_WARN.captures(line) {
-            if let Some(m) = c.name("path") {
-                add(&mut conflicted, m.as_str());
-                let p = conflicted.iter().next_back().cloned();
-                if let Some(p) = p {
-                    applied.remove(&p);
-                    skipped.remove(&p);
-                    last_seen_path = Some(p);
-                }
-            }
-            continue;
-        }
-    }
-
-    // Final precedence: conflicts > applied > skipped
-    for p in conflicted.iter() {
-        applied.remove(p);
-        skipped.remove(p);
-    }
-    for p in applied.iter() {
-        skipped.remove(p);
-    }
-
-    (
-        applied.into_iter().collect(),
-        skipped.into_iter().collect(),
-        conflicted.into_iter().collect(),
-    )
-}
-
-fn regex_ci(pat: &str) -> Regex {
-    Regex::new(&format!("(?i){pat}")).unwrap_or_else(|e| panic!("invalid regex: {e}"))
-}
-
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
@@ -605,6 +308,8 @@ mod transport_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::patch_paths::stage_paths;
+    use std::ffi::OsStr;
     use std::path::Path;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -615,7 +320,9 @@ mod tests {
     }
 
     fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
-        let out = std::process::Command::new(args[0])
+        let mut command = std::process::Command::new(args[0]);
+        isolate_git_command_environment(&mut command);
+        let out = command
             .args(&args[1..])
             .current_dir(cwd)
             .output()
@@ -625,6 +332,27 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
+    }
+
+    fn run_isolated_test(test_name: &str, env: &[(&str, &OsStr)]) {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        isolate_git_command_environment(&mut command);
+        command
+            .arg(test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("CODEX_GIT_UTILS_APPLY_ENV_CHILD", "1")
+            .env("RUST_TEST_THREADS", "1");
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("run isolated test process");
+        assert!(
+            output.status.success(),
+            "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn init_repo() -> tempfile::TempDir {
@@ -643,25 +371,55 @@ mod tests {
             .replace("\r\n", "\n")
     }
 
-    #[test]
-    fn extract_paths_handles_quoted_headers() {
-        let diff = "diff --git \"a/hello world.txt\" \"b/hello world.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello world.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["hello world.txt".to_string()]);
+    fn commit_filter_attributes(root: &Path, tracked_path: &str) {
+        std::fs::write(
+            root.join(".gitattributes"),
+            format!("{tracked_path} filter=x=y\n"),
+        )
+        .expect("write attributes");
+        let (add_code, _, add_err) = run(root, &["git", "add", ".gitattributes"]);
+        assert_eq!(add_code, 0, "add attributes: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "attributes"]);
+        assert_eq!(commit_code, 0, "commit attributes: {commit_err}");
     }
 
-    #[test]
-    fn extract_paths_ignores_dev_null_header() {
-        let diff = "diff --git a/dev/null b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["ok.txt".to_string()]);
+    fn configure_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure filter: {config_err}");
     }
 
-    #[test]
-    fn extract_paths_unescapes_c_style_in_quoted_headers() {
-        let diff = "diff --git \"a/hello\\tworld.txt\" \"b/hello\\tworld.txt\"\nnew file mode 100644\n--- /dev/null\n+++ b/hello\tworld.txt\n@@ -0,0 +1 @@\n+hi\n";
-        let paths = extract_paths_from_patch(diff);
-        assert_eq!(paths, vec!["hello\tworld.txt".to_string()]);
+    fn configure_worktree_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
+        let (extension_code, _, extension_err) = run(
+            root,
+            &["git", "config", "extensions.worktreeConfig", "true"],
+        );
+        assert_eq!(extension_code, 0, "enable worktree config: {extension_err}");
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "--worktree",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure worktree filter: {config_err}");
+    }
+
+    fn configured_filter_ran(root: &Path) -> bool {
+        let (code, _, _) = run(root, &["git", "config", "--get", "codex.filterran"]);
+        code == 0
     }
 
     #[test]
@@ -678,10 +436,12 @@ mod tests {
         let _g = env_lock().lock().unwrap();
         let repo = init_repo();
         let root = repo.path();
+        let nested_cwd = root.join("nested");
+        std::fs::create_dir(&nested_cwd).expect("nested cwd");
 
         let diff = "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1,2 @@\n+hello\n+world\n";
         let req = ApplyGitRequest {
-            cwd: root.to_path_buf(),
+            cwd: nested_cwd,
             diff: diff.to_string(),
             revert: false,
             preflight: false,
@@ -690,6 +450,58 @@ mod tests {
         assert_eq!(r.exit_code, 0, "exit code 0");
         // File exists now
         assert!(root.join("hello.txt").exists());
+    }
+
+    #[test]
+    fn apply_uses_cwd_repo_despite_inherited_repository_selectors() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            let alternate = init_repo();
+            let alternate_root = alternate.path();
+            std::fs::write(alternate_root.join("sentinel.txt"), "alternate\n")
+                .expect("write alternate sentinel");
+            let (add_code, _, add_err) = run(alternate_root, &["git", "add", "sentinel.txt"]);
+            assert_eq!(add_code, 0, "add alternate sentinel: {add_err}");
+            let (commit_code, _, commit_err) =
+                run(alternate_root, &["git", "commit", "-m", "alternate"]);
+            assert_eq!(commit_code, 0, "commit alternate sentinel: {commit_err}");
+
+            let alternate_git_dir = alternate_root.join(".git");
+            let alternate_index = alternate_git_dir.join("index");
+            run_isolated_test(
+                "apply::tests::apply_uses_cwd_repo_despite_inherited_repository_selectors",
+                &[
+                    ("GIT_DIR", alternate_git_dir.as_os_str()),
+                    ("GIT_WORK_TREE", alternate_root.as_os_str()),
+                    ("GIT_COMMON_DIR", alternate_git_dir.as_os_str()),
+                    ("GIT_INDEX_FILE", alternate_index.as_os_str()),
+                    ("GIT_PREFIX", OsStr::new("elsewhere/")),
+                ],
+            );
+            assert_eq!(
+                read_file_normalized(&alternate_root.join("sentinel.txt")),
+                "alternate\n"
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "old\n").expect("write target file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add target file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "target"]);
+        assert_eq!(commit_code, 0, "commit target file: {commit_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply in cwd-selected repository");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "new\n");
     }
 
     #[test]
@@ -853,5 +665,185 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
+    }
+
+    #[test]
+    fn apply_rejects_configured_clean_filter_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_clean_filter(root, "file.txt");
+
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n";
+        let preflight_req = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.to_string(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&preflight_req).expect_err("reject configured filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+
+        let stage_error = stage_paths(root, diff).expect_err("reject configured filter");
+        assert_eq!(stage_error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+    }
+
+    #[test]
+    fn apply_rejects_global_merge_driver_before_three_way() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            let config_dir = tempfile::tempdir().expect("config tempdir");
+            let global_config = config_dir.path().join("global.gitconfig");
+            let system_config = config_dir.path().join("system.gitconfig");
+            std::fs::write(
+                &global_config,
+                "[merge \"codex-test\"]\n\tdriver = git config codex.mergeran true && false\n",
+            )
+            .expect("write global config");
+            std::fs::write(&system_config, "").expect("write system config");
+            run_isolated_test(
+                "apply::tests::apply_rejects_global_merge_driver_before_three_way",
+                &[
+                    ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+                    ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+                ],
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join(".gitattributes"), "file.txt merge=codex-test\n")
+            .expect("write attributes");
+        std::fs::write(root.join("file.txt"), "base\n").expect("write base");
+        let (add_code, _, add_err) = run(root, &["git", "add", "."]);
+        assert_eq!(add_code, 0, "add base: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "base"]);
+        assert_eq!(commit_code, 0, "commit base: {commit_err}");
+        let (base_code, base, base_err) = run(root, &["git", "rev-parse", "HEAD"]);
+        assert_eq!(base_code, 0, "resolve base: {base_err}");
+
+        std::fs::write(root.join("file.txt"), "theirs\n").expect("write theirs");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add theirs: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "theirs"]);
+        assert_eq!(commit_code, 0, "commit theirs: {commit_err}");
+        let (diff_code, diff, diff_err) = run(
+            root,
+            &[
+                "git",
+                "diff",
+                "--full-index",
+                base.trim(),
+                "HEAD",
+                "--",
+                "file.txt",
+            ],
+        );
+        assert_eq!(diff_code, 0, "create full-index patch: {diff_err}");
+
+        let (checkout_code, _, checkout_err) =
+            run(root, &["git", "checkout", "-b", "ours", base.trim()]);
+        assert_eq!(checkout_code, 0, "checkout base: {checkout_err}");
+        std::fs::write(root.join("file.txt"), "ours\n").expect("write ours");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-am", "ours"]);
+        assert_eq!(commit_code, 0, "commit ours: {commit_err}");
+
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff,
+            revert: false,
+            preflight: false,
+        };
+        let error = apply_git_patch(&request).expect_err("reject global merge driver");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
+        assert_ne!(marker_code, 0, "merge driver must not run");
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "ours\n");
+        let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+        assert_eq!(status_code, 0, "status: {status_err}");
+        assert!(status.is_empty(), "worktree/index changed: {status}");
+    }
+
+    #[test]
+    fn apply_rejects_worktree_scoped_clean_filter_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_worktree_clean_filter(root, "file.txt");
+
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&request).expect_err("reject worktree filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+    }
+
+    #[test]
+    fn apply_probe_rejects_command_scoped_clean_filter() {
+        let repo = init_repo();
+        let config_args = vec![
+            "-c".to_string(),
+            "filter.codex-test.clean=git hash-object --stdin".to_string(),
+        ];
+
+        std::fs::write(
+            repo.path().join(".gitattributes"),
+            "test.txt filter=codex-test\n",
+        )
+        .expect("attributes");
+        let git = GitRunner::for_cwd_io(repo.path()).expect("trusted Git");
+        let error = ensure_no_selected_executable_git_filters(
+            &git,
+            repo.path(),
+            &["test.txt".to_string()],
+            &config_args,
+        )
+        .expect_err("reject command-scoped filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn resolve_git_root_rejects_core_worktree_redirection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attacker = temp.path().join("attacker");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&attacker).expect("attacker");
+        std::fs::create_dir_all(&victim).expect("victim");
+        let (init_code, _, init_err) = run(&attacker, &["git", "init"]);
+        assert_eq!(init_code, 0, "init attacker repo: {init_err}");
+
+        for redirected_worktree in [&victim, temp.path()] {
+            let redirected_worktree = redirected_worktree.to_string_lossy();
+            let (config_code, _, config_err) = run(
+                &attacker,
+                &["git", "config", "core.worktree", &redirected_worktree],
+            );
+            assert_eq!(config_code, 0, "configure core.worktree: {config_err}");
+
+            let git = GitRunner::for_cwd_io(&attacker).expect("trusted Git");
+            let error =
+                resolve_git_root(&git, &attacker, &[]).expect_err("reject redirected worktree");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains("instead of expected worktree"));
+        }
     }
 }

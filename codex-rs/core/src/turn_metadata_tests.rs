@@ -31,6 +31,44 @@ fn test_mcp_turn_metadata_context() -> McpTurnMetadataContext<'static> {
     }
 }
 
+#[test]
+fn workspace_metadata_serializes_structured_has_changes_refusal() {
+    let workspace = TurnMetadataWorkspace {
+        associated_remote_urls: None,
+        latest_git_commit_hash: None,
+        has_changes: None,
+        has_changes_unavailable_reason: Some(
+            codex_git_utils::GitReadError::SelectedExecutableFilter {
+                driver: "lfs".to_string(),
+                path: "asset.bin".to_string(),
+            },
+        ),
+    };
+
+    assert_eq!(
+        serde_json::to_value(workspace).expect("serialize workspace"),
+        serde_json::json!({
+            "has_changes_unavailable_reason": {
+                "reason": "selectedExecutableFilter",
+                "driver": "lfs",
+                "path": "asset.bin",
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::CommandFailed {
+            operation: "status".to_string(),
+            exit_code: Some(128),
+        })
+        .expect("serialize command failure"),
+        serde_json::json!({
+            "reason": "commandFailed",
+            "operation": "status",
+            "exitCode": 128,
+        })
+    );
+}
+
 fn test_responses_metadata_json(
     state: &TurnMetadataState,
     window_id: &str,

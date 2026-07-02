@@ -3137,6 +3137,7 @@ dependencies = [
  "once_cell",
  "pretty_assertions",
  "regex",
+ "same-file",
  "schemars 0.8.22",
  "serde",
  "similar",

@@ -382,6 +382,7 @@ rustls = { version = "0.23", default-features = false, features = [
 rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
+same-file = "1.0"
 seccompiler = "0.5.0"
 semver = "1.0"
 sentry = "0.46.0"

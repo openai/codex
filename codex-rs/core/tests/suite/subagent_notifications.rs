@@ -352,6 +352,26 @@ async fn wait_for_requests(
     }
 }
 
+async fn wait_for_request_with_input_type(
+    mock: &core_test_support::responses::ResponseMock,
+    ty: &str,
+) -> Result<ResponsesRequest> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(request) = mock
+            .requests()
+            .into_iter()
+            .find(|request| !request.inputs_of_type(ty).is_empty())
+        {
+            return Ok(request);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("expected a captured request with input type {ty:?}");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn setup_turn_one_with_spawned_child(
     server: &MockServer,
     child_response_delay: Option<Duration>,
@@ -1120,10 +1140,8 @@ async fn encrypted_multi_agent_v2_spawn_sends_agent_message_to_child() -> Result
 
     test.submit_turn(TURN_1_PROMPT).await?;
 
-    let child_request = wait_for_requests(&child_request_log)
-        .await?
-        .pop()
-        .expect("child request");
+    let child_request =
+        wait_for_request_with_input_type(&child_request_log, "agent_message").await?;
     assert_eq!(
         strip_metadata_from_json(Value::Array(child_request.inputs_of_type("agent_message"))),
         Value::Array(vec![json!({

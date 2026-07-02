@@ -550,7 +550,10 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     let request_log = responses::mount_response_sequence(
         &server,
         vec![
-            responses::sse_response(first_response),
+            // Git enrichment is intentionally asynchronous. Keep the first
+            // response open long enough for the follow-up request to observe
+            // the enriched metadata, even on slower CI hosts.
+            responses::sse_response(first_response).set_delay(std::time::Duration::from_secs(2)),
             responses::sse_response(follow_up_response),
         ],
     )
