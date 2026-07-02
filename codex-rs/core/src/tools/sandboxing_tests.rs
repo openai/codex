@@ -145,10 +145,12 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 }
 
 #[test]
-fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
+fn deny_read_is_preserved_during_explicit_escalation_and_policy_bypass() {
+    let cwd = std::env::current_dir().expect("current directory");
+    let denied_path = cwd.join("secret.env");
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::GlobPattern {
-            pattern: "**/*.env".to_string(),
+        path: FileSystemPath::Path {
+            path: AbsolutePathBuf::try_from(denied_path.clone()).expect("absolute denied path"),
         },
         access: FileSystemAccessMode::Deny,
     }]);
@@ -162,8 +164,8 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::NoOverride,
-        "explicit escalation would drop deny-read filesystem policy, so keep the first attempt sandboxed",
+        SandboxOverride::EscalatedSandboxWithDenyRead,
+        "explicit escalation must keep the first attempt sandboxed to preserve deny-read restrictions",
     );
     assert!(!unsandboxed_execution_allowed(&file_system_policy));
     assert_eq!(
@@ -196,8 +198,54 @@ fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::NoOverride,
-        "exec-policy allow rules would drop deny-read filesystem policy, so keep the first attempt sandboxed",
+        SandboxOverride::EscalatedSandboxWithDenyRead,
+        "exec-policy allow rules must keep the first attempt sandboxed to preserve deny-read restrictions",
+    );
+
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let escalated = escalation_profile_preserving_deny_read(
+        SandboxOverride::EscalatedSandboxWithDenyRead,
+        &permission_profile,
+    )
+    .expect("escalation profile");
+    assert_eq!(escalated.enforcement(), permission_profile.enforcement());
+    let mut expected_file_system_policy = FileSystemSandboxPolicy::unrestricted();
+    expected_file_system_policy.preserve_deny_read_restrictions_from(&file_system_policy);
+    assert_eq!(
+        escalated.file_system_sandbox_policy(),
+        expected_file_system_policy
+    );
+    let allowed_path = cwd.join("allowed.txt");
+    assert!(!file_system_policy.can_write_path_with_cwd(&allowed_path, &cwd));
+    assert!(
+        escalated
+            .file_system_sandbox_policy()
+            .can_write_path_with_cwd(&allowed_path, &cwd),
+        "escalation should grant ordinary filesystem writes",
+    );
+    assert!(
+        !escalated
+            .file_system_sandbox_policy()
+            .can_read_path_with_cwd(&denied_path, &cwd),
+        "escalation must retain deny-read restrictions",
+    );
+    assert_eq!(
+        escalated.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    assert!(SandboxManager::new().should_sandbox(
+        &escalated.file_system_sandbox_policy(),
+        escalated.network_sandbox_policy(),
+        SandboxablePreference::Auto,
+        /*has_managed_network_requirements*/ false,
+    ));
+    assert_eq!(
+        escalation_profile_preserving_deny_read(SandboxOverride::NoOverride, &permission_profile,),
+        None,
+        "ordinary sandboxed attempts keep their original profile",
     );
 }
 

@@ -27,6 +27,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::escalation_profile_preserving_deny_read;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_hooks::PermissionRequestDecision;
@@ -152,7 +153,6 @@ impl ToolOrchestrator {
         let mut already_approved = false;
 
         let file_system_sandbox_policy = turn_ctx.file_system_sandbox_policy();
-        let network_sandbox_policy = turn_ctx.network_sandbox_policy();
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
@@ -227,20 +227,29 @@ impl ToolOrchestrator {
             &file_system_sandbox_policy,
         );
         let managed_network_active = turn_ctx.network.is_some();
+        let escalation_profile =
+            escalation_profile_preserving_deny_read(sandbox_override, &turn_ctx.permission_profile);
+        let attempt_permissions = escalation_profile
+            .as_ref()
+            .unwrap_or(&turn_ctx.permission_profile);
+        let attempt_file_system_sandbox_policy = attempt_permissions.file_system_sandbox_policy();
+        let attempt_network_sandbox_policy = attempt_permissions.network_sandbox_policy();
         let sandbox_preference = tool.sandbox_preference();
         let sandbox_requested = match sandbox_override {
             SandboxOverride::BypassSandboxFirstAttempt => false,
-            SandboxOverride::NoOverride => self.sandbox.should_sandbox(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-                sandbox_preference,
-                managed_network_active,
-            ),
+            SandboxOverride::NoOverride | SandboxOverride::EscalatedSandboxWithDenyRead => {
+                self.sandbox.should_sandbox(
+                    &attempt_file_system_sandbox_policy,
+                    attempt_network_sandbox_policy,
+                    sandbox_preference,
+                    managed_network_active,
+                )
+            }
         };
         let initial_sandbox = if sandbox_requested {
             self.sandbox.select_initial(
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
+                &attempt_file_system_sandbox_policy,
+                attempt_network_sandbox_policy,
                 sandbox_preference,
                 turn_ctx.windows_sandbox_level,
                 managed_network_active,
@@ -260,7 +269,7 @@ impl ToolOrchestrator {
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             sandbox_requested,
-            permissions: &turn_ctx.permission_profile,
+            permissions: attempt_permissions,
             exec_server_permissions: turn_ctx.config.permissions.permission_profile(),
             enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
@@ -418,15 +427,15 @@ impl ToolOrchestrator {
 
                 let retry_sandbox_requested = !unsandboxed_allowed
                     && self.sandbox.should_sandbox(
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
+                        &attempt_file_system_sandbox_policy,
+                        attempt_network_sandbox_policy,
                         sandbox_preference,
                         managed_network_active,
                     );
                 let retry_sandbox = if retry_sandbox_requested {
                     self.sandbox.select_initial(
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
+                        &attempt_file_system_sandbox_policy,
+                        attempt_network_sandbox_policy,
                         sandbox_preference,
                         turn_ctx.windows_sandbox_level,
                         managed_network_active,
@@ -442,7 +451,7 @@ impl ToolOrchestrator {
                 let retry_attempt = SandboxAttempt {
                     sandbox: retry_sandbox,
                     sandbox_requested: retry_sandbox_requested,
-                    permissions: &turn_ctx.permission_profile,
+                    permissions: attempt_permissions,
                     exec_server_permissions: turn_ctx.config.permissions.permission_profile(),
                     enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,

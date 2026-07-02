@@ -417,8 +417,12 @@ fn gather_full_read_roots_for_permissions(
             .iter()
             .map(PathBuf::from),
     );
-    if let Ok(up) = std::env::var("USERPROFILE") {
-        roots.extend(profile_read_roots(Path::new(&up)));
+    if let Some(user_profile) = env_map
+        .get("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+    {
+        roots.extend(profile_read_roots(&user_profile));
     }
     roots.push(command_cwd.to_path_buf());
     roots.extend(
@@ -436,7 +440,7 @@ pub(crate) fn gather_read_roots(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Vec<PathBuf> {
-    if permissions.has_full_disk_read_access() {
+    if permissions.has_root_read_access_for_cwd(command_cwd) {
         return gather_full_read_roots_for_permissions(
             command_cwd,
             permissions,
@@ -1151,6 +1155,11 @@ mod tests {
     use crate::setup_error::extract_failure;
     use crate::setup_error::write_setup_error_report;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1658,6 +1667,45 @@ mod tests {
         let roots = gather_read_roots(&command_cwd, &permissions, &HashMap::new(), &codex_home);
         let expected =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+
+        assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn gather_read_roots_preserves_profile_access_with_deny_read() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let user_profile = tmp.path().join("user-profile");
+        let documents = user_profile.join("Documents");
+        let command_cwd = documents.join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: FileSystemAccessMode::Deny,
+            },
+        ]);
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        );
+        let workspace_roots = workspace_roots_for(command_cwd.as_path());
+        let permissions = permissions_for(&permission_profile, workspace_roots.as_slice());
+        let env_map = HashMap::from([(
+            "USERPROFILE".to_string(),
+            user_profile.display().to_string(),
+        )]);
+
+        let roots = gather_read_roots(&command_cwd, &permissions, &env_map, &codex_home);
+        let expected = dunce::canonicalize(&documents).expect("canonical documents");
 
         assert!(roots.contains(&expected));
     }
