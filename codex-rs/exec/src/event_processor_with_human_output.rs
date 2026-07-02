@@ -217,6 +217,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         eprintln!("OpenAI Codex v{VERSION}\n--------");
         for (key, value) in config_summary_entries(config, session_configured_event) {
+            let value = sanitize_config_summary_value(&value);
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
@@ -414,6 +415,55 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             );
         }
     }
+}
+
+/// Converts a config-summary value into printable single-line terminal text.
+fn sanitize_config_summary_value(value: &str) -> String {
+    let mut sanitized = String::new();
+    let mut pending_space = false;
+
+    for ch in value.chars() {
+        if ch.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+
+        if is_disallowed_config_summary_char(ch) {
+            continue;
+        }
+
+        if pending_space {
+            sanitized.push(' ');
+            pending_space = false;
+        }
+
+        sanitized.push(ch);
+    }
+
+    sanitized
+}
+
+/// Returns whether `ch` should be dropped from config-summary output.
+fn is_disallowed_config_summary_char(ch: char) -> bool {
+    if ch.is_control() {
+        return true;
+    }
+
+    matches!(
+        ch,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{E0100}'..='\u{E01EF}'
+    )
 }
 
 fn config_summary_entries(
