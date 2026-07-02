@@ -130,12 +130,11 @@ fn resolve_git_root(
     git_config_args: &[String],
 ) -> io::Result<PathBuf> {
     let requested_cwd = std::fs::canonicalize(cwd)?;
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(&requested_cwd)?;
     command
         .args(git_config_args)
         .arg("rev-parse")
-        .arg("--show-toplevel")
-        .current_dir(&requested_cwd);
+        .arg("--show-toplevel");
     let out = git.output(command)?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
@@ -201,14 +200,13 @@ pub(crate) fn run_git(
     git_cfg: &[String],
     args: &[String],
 ) -> io::Result<(i32, String, String)> {
-    let mut cmd = git.command();
+    let mut cmd = git.command_for_cwd(cwd)?;
     for p in git_cfg {
         cmd.arg(p);
     }
     for a in args {
         cmd.arg(a);
     }
-    cmd.current_dir(cwd);
     let out = git.output(cmd)?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -812,5 +810,32 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
             assert!(error.to_string().contains("instead of expected worktree"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_propagates_unsafe_repository_metadata_before_git_launch() {
+        use std::os::unix::fs::symlink;
+
+        let repo = init_repo();
+        let root = repo.path();
+        let external = tempfile::tempdir().expect("external metadata parent");
+        let admin = external.path().join("admin");
+        std::fs::rename(root.join(".git"), &admin).expect("move metadata external");
+        symlink(&admin, root.join("switch")).expect("worktree metadata switch");
+        std::fs::write(root.join(".git"), "gitdir: switch\n").expect("write gitdir marker");
+        let (code, _, stderr) = run(root, &["git", "rev-parse", "--absolute-git-dir"]);
+        assert_eq!(code, 0, "native Git fixture: {stderr}");
+
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: String::new(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&request).expect_err("unsafe metadata route");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("Git metadata route crosses"));
+        assert!(!error.to_string().contains("PATH"));
     }
 }

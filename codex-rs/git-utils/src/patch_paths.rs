@@ -63,14 +63,13 @@ fn git_apply_numstat_paths(
     patch_path: &Path,
     revert: bool,
 ) -> io::Result<Vec<String>> {
-    let mut cmd = git.command();
+    let command_cwd = patch_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut cmd = git.command_for_cwd(command_cwd)?;
     cmd.args(["apply", "--numstat", "-z"]);
     if revert {
         cmd.arg("-R");
     }
-    cmd.arg("--")
-        .arg(patch_path)
-        .current_dir(patch_path.parent().unwrap_or_else(|| Path::new(".")));
+    cmd.arg("--").arg(patch_path);
     let out = git.output(cmd)?;
     if !out.status.success() {
         return Err(io::Error::new(

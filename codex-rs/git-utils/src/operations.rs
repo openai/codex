@@ -110,8 +110,7 @@ where
     }
     let command_string = build_command_string(&args_vec);
     let git = GitRunner::for_cwd_io(dir)?;
-    let mut command = git.command();
-    command.current_dir(dir);
+    let mut command = git.command_for_cwd(dir)?;
     if let Some(envs) = env {
         for (key, value) in envs {
             command.env(key, value);
