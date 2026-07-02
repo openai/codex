@@ -2,10 +2,11 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::GitToolingError;
+use crate::git_command::GitRunner;
 use crate::operations::ensure_git_repository;
 use crate::operations::resolve_head;
 use crate::operations::resolve_repository_root;
-use crate::operations::run_git_for_stdout;
+use crate::operations::run_git_for_stdout_with_runner;
 
 /// Returns the merge-base commit between `HEAD` and the latest version between local
 /// and remote of the provided branch, if both exist.
@@ -16,25 +17,28 @@ pub fn merge_base_with_head(
     repo_path: &Path,
     branch: &str,
 ) -> Result<Option<String>, GitToolingError> {
-    ensure_git_repository(repo_path)?;
-    let repo_root = resolve_repository_root(repo_path)?;
-    let head = match resolve_head(repo_root.as_path())? {
+    let git = GitRunner::for_cwd_io(repo_path)?;
+    ensure_git_repository(&git, repo_path)?;
+    let repo_root = resolve_repository_root(&git, repo_path)?;
+    let head = match resolve_head(&git, repo_root.as_path())? {
         Some(head) => head,
         None => return Ok(None),
     };
 
-    let Some(branch_ref) = resolve_branch_ref(repo_root.as_path(), branch)? else {
+    let Some(branch_ref) = resolve_branch_ref(&git, repo_root.as_path(), branch)? else {
         return Ok(None);
     };
 
-    let preferred_ref =
-        if let Some(upstream) = resolve_upstream_if_remote_ahead(repo_root.as_path(), branch)? {
-            resolve_branch_ref(repo_root.as_path(), &upstream)?.unwrap_or(branch_ref)
-        } else {
-            branch_ref
-        };
+    let preferred_ref = if let Some(upstream) =
+        resolve_upstream_if_remote_ahead(&git, repo_root.as_path(), branch)?
+    {
+        resolve_branch_ref(&git, repo_root.as_path(), &upstream)?.unwrap_or(branch_ref)
+    } else {
+        branch_ref
+    };
 
-    let merge_base = run_git_for_stdout(
+    let merge_base = run_git_for_stdout_with_runner(
+        &git,
         repo_root.as_path(),
         vec![
             OsString::from("merge-base"),
@@ -47,8 +51,13 @@ pub fn merge_base_with_head(
     Ok(Some(merge_base))
 }
 
-fn resolve_branch_ref(repo_root: &Path, branch: &str) -> Result<Option<String>, GitToolingError> {
-    let rev = run_git_for_stdout(
+fn resolve_branch_ref(
+    git: &GitRunner,
+    repo_root: &Path,
+    branch: &str,
+) -> Result<Option<String>, GitToolingError> {
+    let rev = run_git_for_stdout_with_runner(
+        git,
         repo_root,
         vec![
             OsString::from("rev-parse"),
@@ -66,10 +75,12 @@ fn resolve_branch_ref(repo_root: &Path, branch: &str) -> Result<Option<String>, 
 }
 
 fn resolve_upstream_if_remote_ahead(
+    git: &GitRunner,
     repo_root: &Path,
     branch: &str,
 ) -> Result<Option<String>, GitToolingError> {
-    let upstream = match run_git_for_stdout(
+    let upstream = match run_git_for_stdout_with_runner(
+        git,
         repo_root,
         vec![
             OsString::from("rev-parse"),
@@ -90,7 +101,8 @@ fn resolve_upstream_if_remote_ahead(
         Err(other) => return Err(other),
     };
 
-    let counts = match run_git_for_stdout(
+    let counts = match run_git_for_stdout_with_runner(
+        git,
         repo_root,
         vec![
             OsString::from("rev-list"),
@@ -120,7 +132,17 @@ fn resolve_upstream_if_remote_ahead(
 mod tests {
     use super::merge_base_with_head;
     use crate::GitToolingError;
+    #[cfg(unix)]
+    use crate::git_command::GitRunner;
+    use crate::git_command::git_runner_construction_count;
+    use crate::git_command::reset_git_runner_construction_count;
+    #[cfg(unix)]
+    use crate::operations::ensure_git_repository;
+    #[cfg(unix)]
+    use crate::operations::resolve_repository_root;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::io;
     use std::path::Path;
     use std::process::Command;
     use tempfile::tempdir;
@@ -187,8 +209,14 @@ mod tests {
         run_git_in(repo, &["checkout", "feature"]);
 
         let expected = run_git_stdout(repo, &["merge-base", "HEAD", "main"]);
+        reset_git_runner_construction_count();
         let merge_base = merge_base_with_head(repo, "main")?;
         assert_eq!(merge_base, Some(expected));
+        assert_eq!(
+            git_runner_construction_count(),
+            1,
+            "one high-level merge-base call must retain one Git runner"
+        );
 
         Ok(())
     }
@@ -252,5 +280,68 @@ mod tests {
         assert_eq!(merge_base, None);
 
         Ok(())
+    }
+
+    #[test]
+    fn merge_base_returns_none_when_head_is_unborn() -> Result<(), GitToolingError> {
+        let temp = tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        let merge_base = merge_base_with_head(repo, "main")?;
+        assert_eq!(merge_base, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merge_base_reports_non_repository() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path();
+
+        let error = merge_base_with_head(path, "main").expect_err("non-repository must fail");
+        let GitToolingError::NotAGitRepository { path: error_path } = error else {
+            panic!("expected non-repository error, got {error:?}");
+        };
+        assert_eq!(error_path, path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_runner_refuses_gitdir_retarget_between_subcommands() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempdir().expect("fixture");
+        let repo = fixture.path().join("repo");
+        let admin = fixture.path().join("external-admin");
+        std::fs::create_dir_all(&repo).expect("create repository");
+        run_git_in(
+            fixture.path(),
+            &[
+                "init",
+                "--separate-git-dir",
+                admin.to_str().expect("UTF-8 admin path"),
+                repo.to_str().expect("UTF-8 repository path"),
+            ],
+        );
+
+        reset_git_runner_construction_count();
+        let git = GitRunner::for_cwd(&repo).expect("operation-scoped Git runner");
+        ensure_git_repository(&git, &repo).expect("first merge-base subcommand");
+
+        symlink(&admin, repo.join("switch")).expect("Git-dir route switch");
+        std::fs::write(repo.join(".git"), "gitdir: switch\n").expect("retarget Git-dir marker");
+
+        let error = resolve_repository_root(&git, &repo)
+            .expect_err("retained authority must refuse the second subcommand");
+        let GitToolingError::Io(error) = error else {
+            panic!("expected metadata revalidation error, got {error:?}");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert_eq!(
+            git_runner_construction_count(),
+            1,
+            "subcommands must not rediscover authority after metadata retargeting"
+        );
     }
 }
