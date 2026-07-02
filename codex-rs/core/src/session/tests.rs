@@ -131,8 +131,6 @@ use codex_protocol::protocol::RealtimeConversationListVoicesResponseEvent;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -10388,24 +10386,14 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        ReviewTask::new(ReviewRequest {
-            target: ReviewTarget::Custom {
-                instructions: "review".to_string(),
-            },
-            user_facing_hint: None,
-        }),
-    )
-    .await;
+    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+        .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-    // Aborting a review task should enter and exit review mode before surfacing the abort.
+    // Aborting a review task should exit review mode before surfacing the abort to the client.
     // We scan for these events (rather than relying on fixed ordering) since unrelated events
     // may interleave.
-    let mut entered_review_mode_idx = None;
     let mut exited_review_mode_idx = None;
     let mut turn_aborted_idx = None;
     let mut idx = 0usize;
@@ -10419,12 +10407,6 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let event_idx = idx;
         idx = idx.saturating_add(1);
         match evt.msg {
-            EventMsg::EnteredReviewMode(_) => {
-                assert!(
-                    entered_review_mode_idx.replace(event_idx).is_none(),
-                    "expected exactly one EnteredReviewMode"
-                );
-            }
             EventMsg::ExitedReviewMode(ev) => {
                 assert!(ev.review_output.is_none());
                 exited_review_mode_idx = Some(event_idx);
@@ -10438,20 +10420,12 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         }
     }
     assert!(
-        entered_review_mode_idx.is_some(),
-        "expected EnteredReviewMode before abort"
-    );
-    assert!(
         exited_review_mode_idx.is_some(),
         "expected ExitedReviewMode after abort"
     );
     assert!(
         turn_aborted_idx.is_some(),
         "expected TurnAborted after abort"
-    );
-    assert!(
-        entered_review_mode_idx.unwrap() < exited_review_mode_idx.unwrap(),
-        "expected EnteredReviewMode before ExitedReviewMode"
     );
     assert!(
         exited_review_mode_idx.unwrap() < turn_aborted_idx.unwrap(),
