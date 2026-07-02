@@ -811,6 +811,33 @@ fn command_scoped_include_paths_follow_the_same_boundary() {
     );
 }
 
+#[tokio::test]
+async fn blocking_and_async_source_authorization_share_the_same_include_policy() {
+    let repo = init_repo();
+    let root = repo.path();
+    let git = GitRunner::for_cwd_io(root).expect("Git runner");
+
+    ensure_no_worktree_config_sources(&git, root, &[]).expect("blocking safe source graph");
+    ensure_no_worktree_config_sources_async(&git, root, &[])
+        .await
+        .expect("async safe source graph");
+
+    let worktree_include = root.join("attacker.gitconfig");
+    std::fs::write(&worktree_include, "[codex]\n\tvalue = attacker\n").expect("worktree include");
+    add_include(
+        root,
+        "include.path",
+        worktree_include.to_str().expect("UTF-8 fixture path"),
+    );
+    let blocking = ensure_no_worktree_config_sources(&git, root, &[])
+        .expect_err("blocking authorization must reject worktree include");
+    let asynchronous = ensure_no_worktree_config_sources_async(&git, root, &[])
+        .await
+        .expect_err("async authorization must reject worktree include");
+    assert_eq!(blocking.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(asynchronous.kind(), blocking.kind());
+}
+
 #[test]
 fn rejects_every_duplicate_and_nested_include_target() {
     for unsafe_first in [true, false] {
@@ -1494,6 +1521,72 @@ fn include_path_expansion_supports_git_prefix() {
     let prefix =
         expand_git_config_path(&git, root, "%(prefix)/etc/gitconfig").expect("expand Git prefix");
     assert!(prefix.is_absolute());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn async_include_budget_stops_before_over_limit_expansion_launch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = init_repo();
+    let external = tempfile::tempdir().expect("external include fixture");
+    let fake_git = external.path().join("git");
+    std::fs::write(
+        &fake_git,
+        "#!/bin/sh\n\
+         printf 'launch\\n' >>\"$0.log\"\n\
+         value=\n\
+         for arg in \"$@\"; do\n\
+           case \"$arg\" in\n\
+             codex.config-source.path=*) value=${arg#codex.config-source.path=} ;;\n\
+           esac\n\
+         done\n\
+         printf '%s\\0' \"$value\"\n",
+    )
+    .expect("write fake Git");
+    let mut permissions = std::fs::metadata(&fake_git)
+        .expect("stat fake Git")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&fake_git, permissions).expect("make fake Git executable");
+
+    let git = GitRunner::from_executable_for_test(repo.path(), fake_git.clone())
+        .expect("authority-bound fake Git");
+    let entries = (0..3)
+        .map(|index| GitConfigEntry {
+            scope: crate::git_config::GitConfigScope::Command,
+            origin: crate::git_config::GitConfigOrigin::CommandLine,
+            key: "include.path".to_string(),
+            value: external
+                .path()
+                .join(format!("include-{index}.gitconfig"))
+                .to_string_lossy()
+                .into_owned(),
+        })
+        .collect();
+    let mut pending = Vec::new();
+    let mut budget = IncludeGraphBudget::with_limit(/*limit*/ 2);
+
+    let error = validate_include_entries_async(
+        &git,
+        repo.path(),
+        entries,
+        /*depth*/ 1,
+        &mut pending,
+        &mut budget,
+    )
+    .await
+    .expect_err("third include must exceed the traversal budget");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    assert!(
+        error.to_string().contains("too many Git config includes"),
+        "{error}"
+    );
+    assert_eq!(pending.len(), 2);
+    let launches =
+        std::fs::read_to_string(fake_git.with_extension("log")).expect("read fake Git launch log");
+    assert_eq!(launches.lines().count(), 2, "{launches}");
 }
 
 #[cfg(not(windows))]

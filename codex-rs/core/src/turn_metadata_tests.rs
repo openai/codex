@@ -31,6 +31,122 @@ fn test_mcp_turn_metadata_context() -> McpTurnMetadataContext<'static> {
     }
 }
 
+#[test]
+fn workspace_metadata_serializes_structured_has_changes_refusal() {
+    let workspace = TurnMetadataWorkspace {
+        associated_remote_urls: None,
+        latest_git_commit_hash: None,
+        has_changes: None,
+        has_changes_unavailable_reason: Some(
+            codex_git_utils::GitReadError::SelectedExecutableFilter {
+                driver: "lfs".to_string(),
+                path: "asset.bin".to_string(),
+            },
+        ),
+    };
+
+    assert_eq!(
+        serde_json::to_value(workspace).expect("serialize workspace"),
+        serde_json::json!({
+            "has_changes_unavailable_reason": {
+                "reason": "selectedExecutableFilter",
+                "driver": "lfs",
+                "path": "asset.bin",
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::CommandFailed {
+            operation: "status".to_string(),
+            exit_code: Some(128),
+        })
+        .expect("serialize command failure"),
+        serde_json::json!({
+            "reason": "commandFailed",
+            "operation": "status",
+            "exitCode": 128,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::AuthorityRefused {
+            operation: "status".to_string(),
+        })
+        .expect("serialize authority refusal"),
+        serde_json::json!({
+            "reason": "authorityRefused",
+            "operation": "status",
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::InvalidConfigEnvironment {
+            reason: "malformed GIT_CONFIG_COUNT".to_string(),
+        })
+        .expect("serialize invalid config environment"),
+        serde_json::json!({
+            "reason": "invalidConfigEnvironment",
+            "details": "malformed GIT_CONFIG_COUNT",
+        })
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn turn_metadata_keeps_workspace_failure_with_non_utf8_repository_path() {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt;
+
+    let temp_dir = TempDir::new().expect("temp dir");
+    #[cfg(unix)]
+    let path = std::path::PathBuf::from(OsString::from_vec(b"/repo/\xff".to_vec()));
+    #[cfg(windows)]
+    let path = std::path::PathBuf::from(OsString::from_wide(&[
+        b'C' as u16,
+        b':' as u16,
+        b'\\' as u16,
+        0xd800,
+    ]));
+    let lossy = path.to_string_lossy().into_owned();
+    let (has_changes, has_changes_unavailable_reason) =
+        split_has_changes(Err(codex_git_utils::GitReadError::NotRepository { path }));
+    let workspace = WorkspaceGitMetadata {
+        associated_remote_urls: None,
+        latest_git_commit_hash: None,
+        has_changes,
+        has_changes_unavailable_reason,
+    }
+    .into();
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        temp_dir.path().abs(),
+        &PermissionProfile::read_only(),
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+    *state.enriched_workspaces.write().expect("workspace lock") =
+        Some(BTreeMap::from([("/repo".to_string(), workspace)]));
+
+    let metadata: Value = serde_json::from_str(&test_turn_metadata_header(&state))
+        .expect("full turn metadata remains serializable");
+    assert_eq!(
+        metadata["workspaces"]["/repo"],
+        serde_json::json!({
+            "has_changes_unavailable_reason": {
+                "reason": "notRepository",
+                "path": lossy,
+            }
+        })
+    );
+}
+
 fn test_responses_metadata_json(
     state: &TurnMetadataState,
     window_id: &str,
@@ -767,22 +883,26 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
 
     state.spawn_git_enrichment_task();
 
-    let json = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let header = test_turn_metadata_header(&state);
-            let json: Value = serde_json::from_str(&header).expect("json");
-            if json
-                .get("workspaces")
-                .and_then(Value::as_object)
-                .is_some_and(|workspaces| !workspaces.is_empty())
-            {
-                return json;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("git enrichment should complete");
+    let enrichment_task = state
+        .enrichment_task
+        .lock()
+        .expect("enrichment task lock")
+        .take()
+        .expect("git enrichment task");
+    // Status enrichment has its own five-second bounded Git deadline. Give the
+    // outer test enough headroom to observe its result on a contended host.
+    tokio::time::timeout(Duration::from_secs(10), enrichment_task)
+        .await
+        .expect("git enrichment should complete")
+        .expect("git enrichment task should not panic");
+
+    let header = test_turn_metadata_header(&state);
+    let json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        json.get("workspaces")
+            .and_then(Value::as_object)
+            .is_some_and(|workspaces| !workspaces.is_empty())
+    );
 
     assert_eq!(
         json["forked_from_thread_id"].as_str(),

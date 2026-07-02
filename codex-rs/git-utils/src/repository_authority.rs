@@ -16,6 +16,36 @@ pub(crate) use authority::RepositoryAuthority;
 pub(crate) use plain_config::CommonConfigAuthority;
 pub(crate) use plain_config::inspect_plain_common_config_authority;
 
+#[derive(Debug)]
+struct RepositoryAuthorityRefusal {
+    message: String,
+}
+
+impl std::fmt::Display for RepositoryAuthorityRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RepositoryAuthorityRefusal {}
+
+/// Preserve the provenance of an explicit repository-authority policy
+/// refusal while retaining `io::Error` at the Git runner boundary.
+pub(crate) fn authority_refusal(message: impl Into<String>) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        RepositoryAuthorityRefusal {
+            message: message.into(),
+        },
+    )
+}
+
+pub(crate) fn is_authority_refusal(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<RepositoryAuthorityRefusal>)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RepositoryMetadataKind {
     StandardPrimary,

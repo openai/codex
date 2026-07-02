@@ -8,6 +8,7 @@ use crate::git_config::path_is_within;
 
 use super::super::RepositoryMetadataRouteKind;
 use super::super::ResolvedRepositoryMetadata;
+use super::super::authority_refusal;
 use super::super::directories_refer_to_same_location;
 use super::super::helpers::canonical_existing_ancestors;
 use super::super::helpers::invalid_metadata;
@@ -24,13 +25,10 @@ impl RepositoryAuthority {
             None => false,
         };
         if crosses_worktree && crosses_related_worktree {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "refusing repository root route that crosses a worktree boundary: {}",
-                    root.display()
-                ),
-            ));
+            return Err(authority_refusal(format!(
+                "refusing repository root route that crosses a worktree boundary: {}",
+                root.display()
+            )));
         }
         Ok(())
     }
@@ -56,13 +54,10 @@ impl RepositoryAuthority {
         if (inspection.touches_worktree || inspection.crosses_worktree)
             && !path_is_within(&canonical, &self.active_worktree_root)
         {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "refusing Git command cwd that no longer resolves within the selected worktree: {}",
-                    cwd.display()
-                ),
-            ));
+            return Err(authority_refusal(format!(
+                "refusing Git command cwd that no longer resolves within the selected worktree: {}",
+                cwd.display()
+            )));
         }
         Ok(canonical)
     }
@@ -204,11 +199,8 @@ impl RepositoryAuthority {
 }
 
 fn worktree_controlled_config_source(path: &Path, description: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!(
-            "refusing to use worktree-controlled {description}: {}",
-            path.display()
-        ),
-    )
+    authority_refusal(format!(
+        "refusing to use worktree-controlled {description}: {}",
+        path.display()
+    ))
 }

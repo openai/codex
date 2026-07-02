@@ -1,11 +1,16 @@
 use super::*;
+use crate::GitReadError;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
+use crate::get_has_changes;
 use crate::git_command::GitRunner;
 use crate::git_config::GitConfigScope;
 use crate::guarded_config::GuardedGitConfig;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
+#[cfg(unix)]
+use crate::status_guard::prepare_status_config;
+use crate::try_get_has_changes;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -20,6 +25,20 @@ use tokio::process::Command as TokioCommand;
 const FILTER_MARKER_KEY: &str = "codex.sentinelprobe-ran";
 const FILTER_MARKER_COMMAND: &str =
     "git config codex.sentinelprobe-ran true && git hash-object --stdin";
+
+#[test]
+fn status_filter_driver_limit_is_exact() {
+    let at_limit = (0..MAX_EXECUTABLE_FILTER_DRIVERS)
+        .map(|index| format!("driver-{index}"))
+        .collect::<BTreeSet<_>>();
+    assert!(validate_executable_driver_count(&ExecutableFilterDrivers(at_limit.clone())).is_ok());
+
+    let mut over_limit = at_limit;
+    over_limit.insert("one-too-many".to_string());
+    let error = validate_executable_driver_count(&ExecutableFilterDrivers(over_limit))
+        .expect_err("driver after exact limit must be refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
 
 fn run_git(cwd: &Path, args: &[&str]) -> Output {
     let mut command = std::process::Command::new("git");
@@ -139,6 +158,29 @@ fn git_add_filter_policy_rejects_clean_and_process_but_allows_smudge_only() {
                 .is_some(),
             rejected,
             "{key}"
+        );
+    }
+}
+
+#[test]
+fn selected_filter_checkin_policy_table_is_canonical() {
+    for (command, required, expected) in [
+        ("clean", None, SelectedFilterPolicy::Refused),
+        ("process", None, SelectedFilterPolicy::Refused),
+        ("smudge", None, SelectedFilterPolicy::NeedsRequiredValue),
+        ("smudge", Some(false), SelectedFilterPolicy::Allowed),
+        ("smudge", Some(true), SelectedFilterPolicy::Refused),
+    ] {
+        let entries = filter_entries(
+            GitConfigScope::Local,
+            Path::new(".git/config"),
+            &format!("filter.demo.{command}"),
+            "helper-command",
+        );
+        assert_eq!(
+            classify_selected_filter(&entries, "demo", required),
+            expected,
+            "{command} required={required:?}"
         );
     }
 }
@@ -535,6 +577,434 @@ async fn ordinary_apply_allows_an_unselected_executable_filter() {
         matches!(contents.as_str(), "new\n" | "new\r\n"),
         "expected the patched contents with a platform line ending, got {contents:?}"
     );
+}
+
+async fn configure_clean_filter(repo_path: &Path, tracked_path: &str) {
+    std::fs::write(
+        repo_path.join(".gitattributes"),
+        format!("{tracked_path} filter=x=y\n"),
+    )
+    .expect("write attributes");
+    run_git_async(repo_path, &["add", ".gitattributes"]).await;
+    run_git_async(repo_path, &["commit", "-m", "attributes"]).await;
+    run_git_async(
+        repo_path,
+        &[
+            "config",
+            "filter.x=y.clean",
+            "git config codex.filterran true && git hash-object --stdin",
+        ],
+    )
+    .await;
+
+    let tracked_file = repo_path.join(tracked_path);
+    let contents = std::fs::read_to_string(&tracked_file).expect("read tracked file");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::fs::write(tracked_file, contents).expect("refresh tracked file");
+}
+
+async fn configured_filter_ran(repo_path: &Path) -> bool {
+    let output = TokioCommand::new("git")
+        .args(["config", "--get", "codex.filterran"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .expect("read filter marker");
+    output.status.success()
+}
+
+async fn add_submodule_with_clean_filter(parent: &Path) {
+    let source = tempfile::tempdir().expect("submodule source");
+    let source_path = source.path();
+    run_git_async(source_path, &["init"]).await;
+    run_git_async(source_path, &["config", "user.name", "Test User"]).await;
+    run_git_async(source_path, &["config", "user.email", "test@example.com"]).await;
+    std::fs::write(source_path.join("nested.txt"), "original\n").expect("nested file");
+    std::fs::write(
+        source_path.join(".gitattributes"),
+        "nested.txt filter=codex-test\n",
+    )
+    .expect("nested attributes");
+    run_git_async(source_path, &["add", "."]).await;
+    run_git_async(source_path, &["commit", "-m", "seed"]).await;
+
+    run_git_async(
+        parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source_path.to_str().expect("source path"),
+            "nested",
+        ],
+    )
+    .await;
+    run_git_async(parent, &["commit", "-m", "add submodule"]).await;
+    let nested = parent.join("nested");
+    run_git_async(
+        &nested,
+        &[
+            "config",
+            "filter.codex-test.clean",
+            "git config codex.filterran true && git hash-object --stdin",
+        ],
+    )
+    .await;
+    std::fs::write(nested.join("nested.txt"), "modified\n").expect("dirty nested file");
+}
+
+#[tokio::test]
+async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    configure_clean_filter(&repo_path, "test.txt").await;
+
+    assert_eq!(get_has_changes(&repo_path).await, None);
+    assert_eq!(
+        try_get_has_changes(&repo_path).await,
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "x=y".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
+    assert!(!configured_filter_ran(&repo_path).await);
+}
+
+#[tokio::test]
+async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_names() {
+    for (driver, sentinel_attribute) in
+        [("set", "filter"), ("unset", "-filter"), ("unspecified", "")]
+    {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        let clean_key = format!("filter.{driver}.clean");
+        run_git_async(
+            &repo_path,
+            &[
+                "config",
+                &clean_key,
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        )
+        .await;
+
+        let sentinel = if sentinel_attribute.is_empty() {
+            String::new()
+        } else {
+            format!("test.txt {sentinel_attribute}\n")
+        };
+        std::fs::write(repo_path.join(".gitattributes"), sentinel)
+            .expect("write sentinel attribute");
+        run_git_async(&repo_path, &["add", ".gitattributes"]).await;
+        run_git_async(&repo_path, &["commit", "-m", "sentinel attribute"]).await;
+
+        assert_eq!(try_get_has_changes(&repo_path).await, Ok(false), "{driver}");
+        assert!(!configured_filter_ran(&repo_path).await, "{driver}");
+
+        std::fs::write(
+            repo_path.join(".gitattributes"),
+            format!("test.txt filter={driver}\n"),
+        )
+        .expect("write literal sentinel-named driver");
+        assert_eq!(
+            try_get_has_changes(&repo_path).await,
+            Err(GitReadError::SelectedExecutableFilter {
+                driver: driver.to_string(),
+                path: "test.txt".to_string(),
+            }),
+            "{driver}"
+        );
+        assert!(!configured_filter_ran(&repo_path).await, "{driver}");
+    }
+}
+
+#[tokio::test]
+async fn checked_has_changes_distinguishes_non_repository() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    assert_eq!(
+        try_get_has_changes(temp_dir.path()).await,
+        Err(GitReadError::NotRepository {
+            path: std::fs::canonicalize(temp_dir.path()).expect("canonical temp dir"),
+        })
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn checked_has_changes_accepts_non_utf8_repository_root() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = temp_dir
+        .path()
+        .join(OsString::from_vec(b"repo-\xff".to_vec()));
+    std::fs::create_dir(&repo_path).expect("create non-UTF-8 repository directory");
+    run_git_async(&repo_path, &["init"]).await;
+
+    assert_eq!(try_get_has_changes(&repo_path).await, Ok(false));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn checked_has_changes_preserves_lexical_repository_ancestry_for_git_selection() {
+    if std::env::var_os("CODEX_GIT_UTILS_SAFE_GIT_ENV_CHILD").is_none() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let outer = fixture.path().join("outer");
+        let physical_nested = fixture.path().join("physical-nested");
+        let lexical_nested = outer.join("nested");
+        let outer_bin = outer.join("bin");
+        std::fs::create_dir_all(&outer_bin).expect("create outer repository bin");
+        std::fs::create_dir_all(&physical_nested).expect("create nested repository");
+        run_git_async(&outer, &["init", "-q"]).await;
+        run_git_async(&physical_nested, &["init", "-q"]).await;
+        std::os::unix::fs::symlink(&physical_nested, &lexical_nested)
+            .expect("symlink nested repository");
+
+        let native_false = std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
+            .find_map(|directory| {
+                let candidate = std::fs::canonicalize(directory.join("false")).ok()?;
+                crate::git_executable::is_native_executable_file(&candidate).then_some(candidate)
+            })
+            .expect("native false executable");
+        let outer_git = outer_bin.join("git");
+        std::fs::copy(native_false, &outer_git).expect("copy native false as outer Git");
+        assert!(
+            crate::git_executable::is_native_executable_file(&outer_git),
+            "decoy Git must pass production native-executable selection"
+        );
+
+        let search_path =
+            std::env::join_paths([outer_bin.as_path()]).expect("construct single-candidate PATH");
+        run_isolated_test(
+            "safe_git::tests::checked_has_changes_preserves_lexical_repository_ancestry_for_git_selection",
+            &[
+                ("CODEX_GIT_UTILS_TARGET_REPO", lexical_nested.as_os_str()),
+                ("CODEX_GIT_UTILS_PHYSICAL_REPO", physical_nested.as_os_str()),
+                ("PATH", search_path.as_os_str()),
+            ],
+        );
+        return;
+    }
+
+    let physical_nested = PathBuf::from(
+        std::env::var_os("CODEX_GIT_UTILS_PHYSICAL_REPO").expect("physical repository"),
+    );
+    assert_eq!(
+        try_get_has_changes(&physical_nested).await,
+        Err(GitReadError::CommandFailed {
+            operation: "statusFilterPreparation".to_string(),
+            exit_code: None,
+        }),
+        "the canonical spelling must select and fail on the first eligible native decoy"
+    );
+    let lexical_nested =
+        PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"));
+    assert_eq!(
+        try_get_has_changes(&lexical_nested).await,
+        Err(GitReadError::NoTrustedGit),
+        "the lexical spelling must exclude the enclosing repository's native Git decoy"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn root_probe_distinguishes_repository_command_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let failing_git = temp_dir.path().join("failing-git");
+    let resolved_git = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve real Git");
+    assert!(resolved_git.status.success(), "resolve real Git");
+    let real_git = format!(
+        "'{}'",
+        String::from_utf8(resolved_git.stdout)
+            .expect("Git path UTF-8")
+            .trim()
+            .replace('\'', "'\\''")
+    );
+    std::fs::write(
+        &failing_git,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" rev-parse --show-toplevel \"*) exit 42 ;; esac\nexec {real_git} \"$@\"\n"
+        ),
+    )
+    .expect("write failing Git");
+    let mut permissions = std::fs::metadata(&failing_git)
+        .expect("read failing Git metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&failing_git, permissions).expect("mark failing Git executable");
+
+    let git = GitRunner::from_executable_for_test(&repo_path, failing_git)
+        .expect("authority-bound failing Git");
+    assert_eq!(
+        prepare_status_config(&git, &repo_path).await.map(|_| ()),
+        Err(GitReadError::CommandFailed {
+            operation: "resolveGitRoot".to_string(),
+            exit_code: Some(42),
+        })
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn legacy_git_without_show_scope_uses_origin_fallback() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    std::fs::write(repo_path.join(".gitattributes"), "test.txt filter=legacy\n")
+        .expect("attributes");
+    run_git_async(&repo_path, &["add", ".gitattributes"]).await;
+    run_git_async(&repo_path, &["commit", "-m", "attributes"]).await;
+    run_git_async(
+        &repo_path,
+        &["config", "filter.legacy.clean", "git hash-object --stdin"],
+    )
+    .await;
+
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve fixture Git");
+    assert!(output.status.success(), "resolve fixture Git");
+    let real_git = String::from_utf8(output.stdout)
+        .expect("Git path UTF-8")
+        .trim()
+        .to_string();
+    let wrapper = temp_dir.path().join("legacy-git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = --show-scope ]; then\n    exit 129\n  fi\ndone\nexec '{}' \"$@\"\n",
+            real_git.replace('\'', "'\\''")
+        ),
+    )
+    .expect("legacy Git wrapper");
+    let mut permissions = std::fs::metadata(&wrapper)
+        .expect("legacy Git metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).expect("legacy Git executable");
+
+    let git = GitRunner::from_executable_for_test(&repo_path, wrapper)
+        .expect("authority-bound legacy Git");
+    assert_eq!(
+        prepare_status_config(&git, &repo_path).await.map(|_| ()),
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "legacy".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn get_has_changes_rejects_core_worktree_redirection_before_running_filter() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    let redirected = temp_dir.path().join("redirected");
+    std::fs::create_dir(&redirected).expect("redirected worktree");
+    std::fs::write(redirected.join(".gitattributes"), "test.txt filter=x=y\n").expect("attributes");
+    std::fs::write(redirected.join("test.txt"), "redirected content\n").expect("redirected file");
+    run_git_async(
+        &repo_path,
+        &[
+            "config",
+            "core.worktree",
+            redirected.to_str().expect("redirected path"),
+        ],
+    )
+    .await;
+    run_git_async(
+        &repo_path,
+        &[
+            "config",
+            "filter.x=y.clean",
+            "git config codex.filterran true && git hash-object --stdin",
+        ],
+    )
+    .await;
+
+    assert_eq!(get_has_changes(&repo_path).await, None);
+    assert_eq!(
+        try_get_has_changes(&repo_path).await,
+        Err(GitReadError::RepositoryRootMismatch {
+            expected_root: std::fs::canonicalize(&repo_path).expect("canonical repository"),
+            reported_root: std::fs::canonicalize(&redirected).expect("canonical redirection"),
+        })
+    );
+    assert!(!configured_filter_ran(&repo_path).await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn legacy_git_config_cannot_hide_a_selected_local_filter_from_probe() {
+    if std::env::var_os("CODEX_GIT_UTILS_SAFE_GIT_ENV_CHILD").is_none() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        std::fs::write(repo_path.join(".gitattributes"), "test.txt filter=evil\n")
+            .expect("attributes");
+        run_git_async(&repo_path, &["add", ".gitattributes"]).await;
+        run_git_async(&repo_path, &["commit", "-m", "attributes"]).await;
+
+        let marker = temp_dir.path().join("filter-ran");
+        let filter = repo_path.join("clean.sh");
+        std::fs::write(
+            &filter,
+            format!("#!/bin/sh\n: > '{}'\ncat\n", marker.display()),
+        )
+        .expect("filter script");
+        let mut permissions = std::fs::metadata(&filter)
+            .expect("filter metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&filter, permissions).expect("filter executable");
+        run_git_async(
+            &repo_path,
+            &[
+                "config",
+                "--local",
+                "filter.evil.clean",
+                filter.to_str().expect("filter path"),
+            ],
+        )
+        .await;
+        std::fs::write(repo_path.join("test.txt"), "changed\n").expect("modify tracked file");
+
+        let safe_config = temp_dir.path().join("safe.gitconfig");
+        std::fs::write(&safe_config, "").expect("safe config");
+        run_isolated_test(
+            "safe_git::tests::legacy_git_config_cannot_hide_a_selected_local_filter_from_probe",
+            &[
+                ("CODEX_GIT_UTILS_TARGET_REPO", repo_path.as_os_str()),
+                ("GIT_CONFIG", safe_config.as_os_str()),
+            ],
+        );
+        assert!(!marker.exists(), "selected local filter must not run");
+        return;
+    }
+
+    let repo_path =
+        PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"));
+    assert_eq!(get_has_changes(&repo_path).await, None);
+}
+
+#[tokio::test]
+async fn get_has_changes_does_not_enter_dirty_submodules() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    add_submodule_with_clean_filter(&repo_path).await;
+
+    assert_eq!(get_has_changes(&repo_path).await, Some(false));
+    assert!(!configured_filter_ran(&repo_path.join("nested")).await);
 }
 
 #[cfg(unix)]

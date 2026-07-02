@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
@@ -14,11 +16,17 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
-use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
 use ts_rs::TS;
 
+use crate::GitReadError;
 use crate::GitSha;
+use crate::git_command::GitRunner;
+use crate::safe_git::DISABLED_HOOKS_PATH;
+use crate::safe_git::GIT_COMMAND_TIMEOUT;
+use crate::status_guard::detect_status_fsmonitor;
+use crate::status_guard::prepare_status_config;
+use crate::status_guard::read_status;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -64,10 +72,6 @@ pub async fn get_git_repo_root_with_fs(
     .await
     .ok()?
 }
-
-/// Timeout for git commands to prevent freezing on large repositories
-const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -289,15 +293,71 @@ fn trim_git_suffix(value: &str) -> &str {
 }
 
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
-    let git = Path::new("git");
-    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
-    let output =
-        run_git_command_with_timeout_from(git, &["status", "--porcelain"], cwd, fsmonitor).await?;
-    if !output.status.success() {
-        return None;
+    try_get_has_changes(cwd).await.ok()
+}
+
+pub async fn try_get_has_changes(cwd: &Path) -> Result<bool, GitReadError> {
+    // One deadline covers preparation, fsmonitor detection, and final status.
+    // It cancels active Git children through the runner's kill-on-drop handle;
+    // synchronous filesystem authority checks are not preemptible mid-call.
+    let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+    match timeout(
+        GIT_COMMAND_TIMEOUT,
+        Box::pin(try_get_has_changes_within_deadline(cwd, &phase)),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(GitReadError::CommandTimedOut {
+            operation: StatusReadPhase::from_u8(phase.load(Ordering::Relaxed))
+                .operation()
+                .to_string(),
+        }),
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum StatusReadPhase {
+    Preparation,
+    Fsmonitor,
+    Status,
+}
+
+impl StatusReadPhase {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            value if value == Self::Fsmonitor as u8 => Self::Fsmonitor,
+            value if value == Self::Status as u8 => Self::Status,
+            _ => Self::Preparation,
+        }
     }
 
-    Some(!output.stdout.is_empty())
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Preparation => "statusFilterPreparation",
+            Self::Fsmonitor => "statusFsmonitor",
+            Self::Status => "status",
+        }
+    }
+}
+
+async fn try_get_has_changes_within_deadline(
+    cwd: &Path,
+    phase: &AtomicU8,
+) -> Result<bool, GitReadError> {
+    // Preserve the caller's lexical spelling for authority discovery. A
+    // repository-controlled symlink prefix can disappear under
+    // canonicalization, but it must still constrain primary Git selection.
+    let requested_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
+        path: cwd.to_path_buf(),
+    })?;
+    let git = GitRunner::for_cwd(cwd)?;
+    let mut config = Box::pin(prepare_status_config(&git, &requested_cwd)).await?;
+    phase.store(StatusReadPhase::Fsmonitor as u8, Ordering::Relaxed);
+    detect_status_fsmonitor(&mut config).await;
+    phase.store(StatusReadPhase::Status as u8, Ordering::Relaxed);
+    read_status(&config).await
 }
 
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
@@ -458,11 +518,9 @@ async fn run_git_command_with_timeout_from(
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
-
-    match result {
+    match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
         Ok(Ok(output)) => Some(output),
-        _ => None, // Timeout or error
+        _ => None,
     }
 }
 
@@ -909,6 +967,7 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -1068,11 +1127,18 @@ mod tests {
     #[tokio::test]
     async fn fsmonitor_override_rejects_configured_helper() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let init_status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(temp_dir.path())
+            .status()
+            .expect("initialize test repository");
+        assert_eq!(init_status.code(), Some(0), "initialize test repository");
         let git = temp_dir.path().join("git");
         let log = temp_dir.path().join("git.log");
         std::fs::write(
             &git,
             "#!/bin/sh\n\
+             if [ \"$1\" = -C ]; then shift 2; fi\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
              case \"$1\" in\n\
              config) printf '/tmp/fsmonitor-helper\\000' ;;\n\
@@ -1086,9 +1152,6 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
 
-        // The config response mirrors:
-        // git -c core.fsmonitor=/tmp/fsmonitor-helper \
-        //   config --null --get core.fsmonitor
         let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
         let output = run_git_command_with_timeout_from(
             &git,

@@ -3,26 +3,116 @@ use std::io;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::mpsc::Receiver;
+#[cfg(test)]
+use std::sync::mpsc::SyncSender;
+#[cfg(test)]
+use std::sync::mpsc::sync_channel;
 
 use crate::git_command::GitRunner;
 use crate::git_config::read_config_entries_without_includes;
+use crate::git_config::read_config_entries_without_includes_async;
 
 mod include_graph;
 mod path_safety;
 mod primary_sources;
 
+use include_graph::IncludeGraphBudget;
 use include_graph::validate_include_entries;
+use include_graph::validate_include_entries_async;
 use path_safety::normalize_absolute_path;
 use path_safety::resolve_literal_path;
 use primary_sources::default_system_config_source_candidates;
+use primary_sources::default_system_config_source_candidates_async;
 use primary_sources::is_disabled_primary_config_path;
 use primary_sources::legacy_primary_config_source_candidates;
 use primary_sources::selected_git_home_config_candidates;
+use primary_sources::selected_git_home_config_candidates_async;
 use primary_sources::selected_git_prefix_system_candidate;
+use primary_sources::selected_git_prefix_system_candidate_async;
 
 const INCLUDE_CONFIG_PATTERN: &str = r"^include(\.path|if\..*\.path)$";
 const MAX_CONFIG_INCLUDE_DEPTH: usize = 10;
 const MAX_CONFIG_INCLUDE_FILES: usize = 1024;
+
+#[cfg(test)]
+struct BlockingNoIncludesQuerySignal {
+    reached: SyncSender<()>,
+    resume: Receiver<()>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BLOCKING_NO_INCLUDES_QUERY_SIGNAL: std::cell::RefCell<
+        Option<BlockingNoIncludesQuerySignal>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only rendezvous at the blocking config-source policy boundary.
+///
+/// The production build does not compile this hook. Unit tests can use it to
+/// mutate a config source after the no-includes query has completed and before
+/// the returned include entries are validated, without relying on trace-file
+/// polling or scheduler timing.
+#[cfg(test)]
+pub(crate) struct BlockingNoIncludesQueryPhase {
+    reached: Receiver<()>,
+    resume: SyncSender<()>,
+}
+
+#[cfg(test)]
+impl BlockingNoIncludesQueryPhase {
+    pub(crate) fn run(self, action: impl FnOnce()) -> bool {
+        if self.reached.recv().is_err() {
+            return false;
+        }
+        action();
+        self.resume.send(()).is_ok()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_blocking_no_includes_query_phase() -> BlockingNoIncludesQueryPhase {
+    let (reached, reached_receiver) = sync_channel(/*bound*/ 0);
+    let (resume, resume_receiver) = sync_channel(/*bound*/ 0);
+    BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "blocking no-includes query phase already installed on this thread"
+        );
+        *slot.borrow_mut() = Some(BlockingNoIncludesQuerySignal {
+            reached,
+            resume: resume_receiver,
+        });
+    });
+    BlockingNoIncludesQueryPhase {
+        reached: reached_receiver,
+        resume,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_blocking_no_includes_query_phase() {
+    BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| {
+        slot.borrow_mut().take();
+    });
+}
+
+#[cfg(test)]
+fn signal_blocking_no_includes_query_phase() {
+    let signal = BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| slot.borrow_mut().take());
+    if let Some(signal) = signal {
+        signal
+            .reached
+            .send(())
+            .expect("blocking no-includes query phase receiver");
+        signal
+            .resume
+            .recv()
+            .expect("blocking no-includes query phase release");
+    }
+}
 
 /// Reject configuration that an untrusted worktree writer can change between
 /// a policy probe and the Git command it guards.
@@ -31,20 +121,131 @@ pub(crate) fn ensure_no_worktree_config_sources(
     git_root: &Path,
     git_config_args: &[String],
 ) -> io::Result<()> {
+    futures::executor::block_on(ensure_no_worktree_config_sources_impl(
+        SourceExecution::Blocking(git),
+        git_root,
+        git_config_args,
+    ))
+}
+
+/// Async counterpart to [`ensure_no_worktree_config_sources`] for bounded
+/// status reads. It uses the same source classification and include-graph
+/// policy while spawning every selected-Git query through the authority-bound
+/// Tokio runner.
+pub(crate) async fn ensure_no_worktree_config_sources_async(
+    git: &GitRunner,
+    git_root: &Path,
+    git_config_args: &[String],
+) -> io::Result<()> {
+    ensure_no_worktree_config_sources_impl(SourceExecution::Async(git), git_root, git_config_args)
+        .await
+}
+
+#[derive(Clone, Copy)]
+enum SourceExecution<'a> {
+    Blocking(&'a GitRunner),
+    Async(&'a GitRunner),
+}
+
+impl<'a> SourceExecution<'a> {
+    fn git(self) -> &'a GitRunner {
+        match self {
+            Self::Blocking(git) | Self::Async(git) => git,
+        }
+    }
+
+    async fn selected_home_candidates(self, cwd: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+        match self {
+            Self::Blocking(git) => selected_git_home_config_candidates(git, cwd),
+            Self::Async(git) => selected_git_home_config_candidates_async(git, cwd).await,
+        }
+    }
+
+    async fn selected_prefix_candidate(self, cwd: &Path) -> io::Result<Option<std::path::PathBuf>> {
+        match self {
+            Self::Blocking(git) => selected_git_prefix_system_candidate(git, cwd),
+            Self::Async(git) => selected_git_prefix_system_candidate_async(git, cwd).await,
+        }
+    }
+
+    async fn read_include_entries(
+        self,
+        cwd: &Path,
+        git_config_args: &[String],
+        config_file: Option<&Path>,
+    ) -> io::Result<Vec<crate::git_config::GitConfigEntry>> {
+        match self {
+            Self::Blocking(git) => read_config_entries_without_includes(
+                git,
+                cwd,
+                git_config_args,
+                INCLUDE_CONFIG_PATTERN,
+                "include",
+                config_file,
+            ),
+            Self::Async(git) => {
+                read_config_entries_without_includes_async(
+                    git,
+                    cwd,
+                    git_config_args,
+                    INCLUDE_CONFIG_PATTERN,
+                    "include",
+                    config_file,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn validate_entries(
+        self,
+        git_root: &Path,
+        entries: Vec<crate::git_config::GitConfigEntry>,
+        depth: usize,
+        pending: &mut Vec<(std::path::PathBuf, usize)>,
+        budget: &mut IncludeGraphBudget,
+    ) -> io::Result<()> {
+        match self {
+            Self::Blocking(git) => {
+                validate_include_entries(git, git_root, entries, depth, pending, budget)
+            }
+            Self::Async(git) => {
+                validate_include_entries_async(git, git_root, entries, depth, pending, budget).await
+            }
+        }
+    }
+
+    async fn default_system_candidates(
+        self,
+        cwd: &Path,
+    ) -> io::Result<Vec<(&'static str, std::path::PathBuf)>> {
+        match self {
+            Self::Blocking(git) => default_system_config_source_candidates(git, cwd),
+            Self::Async(git) => default_system_config_source_candidates_async(git, cwd).await,
+        }
+    }
+}
+
+async fn ensure_no_worktree_config_sources_impl(
+    execution: SourceExecution<'_>,
+    git_root: &Path,
+    git_config_args: &[String],
+) -> io::Result<()> {
     let git_root = normalize_absolute_path(std::fs::canonicalize(git_root)?)?;
+    let git = execution.git();
 
     // Environment, HOME, and XDG paths are attacker-controlled byte strings.
-    // Classify their exact OsString spelling before `git var` can open or
+    // Classify their exact OsString spelling before selected Git can open or
     // newline-delimit one of them.
     for (description, candidate) in legacy_primary_config_source_candidates(git)? {
         if !is_disabled_primary_config_path(&candidate) {
             reject_source(git, &git_root, &candidate, description)?;
         }
     }
-    for candidate in selected_git_home_config_candidates(git, &git_root)? {
+    for candidate in execution.selected_home_candidates(&git_root).await? {
         reject_source(git, &git_root, &candidate, "selected Git HOME config")?;
     }
-    if let Some(candidate) = selected_git_prefix_system_candidate(git, &git_root)? {
+    if let Some(candidate) = execution.selected_prefix_candidate(&git_root).await? {
         reject_source(
             git,
             &git_root,
@@ -52,16 +253,24 @@ pub(crate) fn ensure_no_worktree_config_sources(
             "selected Git prefix system config",
         )?;
     }
-    let entries = read_config_entries_without_includes(
-        git,
-        &git_root,
-        git_config_args,
-        INCLUDE_CONFIG_PATTERN,
-        "include",
-        /*config_file*/ None,
-    )?;
+    let entries = execution
+        .read_include_entries(&git_root, git_config_args, /*config_file*/ None)
+        .await?;
+    #[cfg(test)]
+    if matches!(execution, SourceExecution::Blocking(_)) {
+        signal_blocking_no_includes_query_phase();
+    }
     let mut pending = Vec::new();
-    validate_include_entries(git, &git_root, entries, /*depth*/ 1, &mut pending)?;
+    let mut include_budget = IncludeGraphBudget::default();
+    execution
+        .validate_entries(
+            &git_root,
+            entries,
+            /*depth*/ 1,
+            &mut pending,
+            &mut include_budget,
+        )
+        .await?;
     let mut visited = BTreeSet::new();
     while let Some((config_path, depth)) = pending.pop() {
         if depth > MAX_CONFIG_INCLUDE_DEPTH {
@@ -81,9 +290,6 @@ pub(crate) fn ensure_no_worktree_config_sources(
             }
             Err(error) => return Err(error),
         }
-        // The same file reached through two spellings can resolve a relative
-        // child include differently. Deduplicate only the exact source
-        // spelling, not its canonical target.
         if !visited.insert(config_path.clone()) {
             continue;
         }
@@ -92,21 +298,26 @@ pub(crate) fn ensure_no_worktree_config_sources(
                 "too many Git config include files",
             ));
         }
-        let entries = read_config_entries_without_includes(
-            git,
-            &git_root,
-            &[],
-            INCLUDE_CONFIG_PATTERN,
-            "include",
-            Some(&config_path),
-        )?;
-        validate_include_entries(git, &git_root, entries, depth + 1, &mut pending)?;
+        // The same file reached through two spellings can resolve a relative
+        // child include differently. Deduplicate only the exact source
+        // spelling, not its canonical target.
+        let entries = execution
+            .read_include_entries(&git_root, &[], Some(&config_path))
+            .await?;
+        execution
+            .validate_entries(
+                &git_root,
+                entries,
+                depth + 1,
+                &mut pending,
+                &mut include_budget,
+            )
+            .await?;
     }
     // `git var` loads repository config before reporting modern default-system
     // paths. Delay that supplemental probe until the complete no-includes
-    // source graph above has been classified, so it cannot be tricked into
-    // opening an untrusted include or FIFO first.
-    for (description, candidate) in default_system_config_source_candidates(git, &git_root)? {
+    // source graph above has been classified.
+    for (description, candidate) in execution.default_system_candidates(&git_root).await? {
         if !is_disabled_primary_config_path(&candidate) {
             reject_source(git, &git_root, &candidate, description)?;
         }

@@ -5,6 +5,7 @@ use std::io::Seek;
 use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
+use tokio::time::Duration;
 
 use crate::git_config::GitConfigEntry;
 use crate::guarded_config::GuardedGitConfig;
@@ -20,7 +21,9 @@ pub(crate) use filter_sentinel::sentinel_filter_probe_config_args;
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str =
     r"^filter\..*\.(clean|smudge|process|required)$";
-
+pub(crate) const MAX_EXECUTABLE_FILTER_DRIVERS: usize = 256;
+/// Timeout for internal Git commands to prevent freezing on large repositories.
+pub(crate) const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FilterAttributeValue {
     Driver(String),
@@ -37,12 +40,16 @@ impl ExecutableFilterDrivers {
         self.0.iter()
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    fn contains(&self, driver: &str) -> bool {
+    pub(crate) fn contains(&self, driver: &str) -> bool {
         self.0.contains(driver)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -74,6 +81,29 @@ impl FilterPolicySnapshot {
     pub(crate) fn checked_paths(&self) -> Vec<String> {
         self.checked_paths.iter().cloned().collect()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectedFilterPolicy {
+    Refused,
+    NeedsRequiredValue,
+    Allowed,
+}
+
+pub(crate) fn validate_executable_driver_count(
+    executable_drivers: &ExecutableFilterDrivers,
+) -> io::Result<()> {
+    if executable_drivers.len() > MAX_EXECUTABLE_FILTER_DRIVERS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Git filter driver count {} exceeds the status guard limit {}",
+                executable_drivers.len(),
+                MAX_EXECUTABLE_FILTER_DRIVERS
+            ),
+        ));
+    }
+    Ok(())
 }
 
 const ISOLATED_GIT_ENVIRONMENT: [&str; 11] = [
@@ -175,13 +205,11 @@ fn git_add_filter_is_refused(
     driver: &str,
     required_cache: &mut BTreeMap<String, bool>,
 ) -> io::Result<bool> {
-    if ["clean", "process"].into_iter().any(|name| {
-        effective_filter_value(entries, driver, name).is_some_and(|value| !value.is_empty())
-    }) {
-        return Ok(true);
-    }
-    if let Some(required) = required_cache.get(driver) {
-        return Ok(*required);
+    let required = required_cache.get(driver).copied();
+    match classify_selected_filter(entries, driver, required) {
+        SelectedFilterPolicy::Refused => return Ok(true),
+        SelectedFilterPolicy::Allowed => return Ok(false),
+        SelectedFilterPolicy::NeedsRequiredValue => {}
     }
     let required = config
         .read_bool(&format!("filter.{driver}.required"))
@@ -195,7 +223,10 @@ fn git_add_filter_is_refused(
         })?
         .unwrap_or(false);
     required_cache.insert(driver.to_string(), required);
-    Ok(required)
+    Ok(matches!(
+        classify_selected_filter(entries, driver, Some(required)),
+        SelectedFilterPolicy::Refused
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -356,14 +387,14 @@ impl SentinelSelectionProbe<'_> {
 }
 
 #[cfg(unix)]
-fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
+pub(crate) fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
     use std::os::unix::ffi::OsStringExt;
 
     Ok(std::ffi::OsString::from_vec(path.to_vec()))
 }
 
 #[cfg(not(unix))]
-fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
+pub(crate) fn git_path_argument(path: &[u8]) -> io::Result<std::ffi::OsString> {
     let path = std::str::from_utf8(path)
         .map_err(|_| invalid_filter_output("non-UTF-8 Git filter attribute path"))?;
     Ok(path.into())
@@ -422,7 +453,7 @@ fn selected_executable_filter(
     selected_executable_filter_for(entries, attributes, FilterExecution::AnyWorktreeOperation)
 }
 
-fn executable_filter_drivers(
+pub(crate) fn executable_filter_drivers(
     entries: &BTreeMap<String, GitConfigEntry>,
 ) -> io::Result<ExecutableFilterDrivers> {
     let mut executable_drivers = BTreeSet::new();
@@ -448,6 +479,22 @@ fn effective_filter_value<'a>(
         .map(|entry| entry.value.as_str())
 }
 
+pub(crate) fn classify_selected_filter(
+    entries: &BTreeMap<String, GitConfigEntry>,
+    driver: &str,
+    required: Option<bool>,
+) -> SelectedFilterPolicy {
+    if ["clean", "process"].into_iter().any(|name| {
+        effective_filter_value(entries, driver, name).is_some_and(|value| !value.is_empty())
+    }) {
+        return SelectedFilterPolicy::Refused;
+    }
+    match required {
+        None => SelectedFilterPolicy::NeedsRequiredValue,
+        Some(true) => SelectedFilterPolicy::Refused,
+        Some(false) => SelectedFilterPolicy::Allowed,
+    }
+}
 #[cfg(test)]
 fn filter_driver_name(key: &str) -> io::Result<String> {
     filter_driver_and_command(key).map(|(driver, _command)| driver)
@@ -472,7 +519,24 @@ fn filter_driver_and_command(key: &str) -> io::Result<(String, FilterCommand)> {
     Ok((driver.to_string(), command))
 }
 
-fn write_nul_paths(input: &mut std::fs::File, paths: &[Vec<u8>]) -> io::Result<()> {
+pub(crate) fn parse_nul_paths(output: &[u8]) -> io::Result<Vec<Vec<u8>>> {
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(body) = output.strip_suffix(&[0]) else {
+        return Err(invalid_filter_output("unterminated Git path output"));
+    };
+    let mut paths = Vec::new();
+    for path in body.split(|byte| *byte == 0) {
+        if path.is_empty() {
+            return Err(invalid_filter_output("empty Git path"));
+        }
+        paths.push(path.to_vec());
+    }
+    Ok(paths)
+}
+
+pub(crate) fn write_nul_paths(input: &mut std::fs::File, paths: &[Vec<u8>]) -> io::Result<()> {
     let mut unique = BTreeSet::new();
     for path in paths {
         if path.is_empty() || path.contains(&0) {

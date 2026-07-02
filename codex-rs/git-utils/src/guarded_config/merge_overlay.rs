@@ -7,7 +7,6 @@ use std::sync::Arc;
 use super::BoundSubcommand;
 use super::CapabilityIdentity;
 use super::GuardedGitConfig;
-use crate::git_command::GitCommand;
 use crate::git_config::GitConfigEntry;
 
 const MERGE_CONFIG_PATTERN: &str = r"^(merge\.default|merge\..*\.driver)$";
@@ -71,16 +70,6 @@ pub(super) struct SealedMergeConfigOverride {
 }
 
 impl SealedMergeConfigOverride {
-    pub(super) fn append_to(
-        &self,
-        owner: &Arc<CapabilityIdentity>,
-        command: &mut GitCommand,
-    ) -> io::Result<()> {
-        self.ensure_owner(owner)?;
-        command.args(["-c", &self.include_arg]);
-        Ok(())
-    }
-
     pub(super) fn append_rendered_args(
         &self,
         owner: &Arc<CapabilityIdentity>,

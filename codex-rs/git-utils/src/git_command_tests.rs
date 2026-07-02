@@ -33,6 +33,48 @@ fn run_git(cwd: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
+#[tokio::test]
+async fn bounded_async_output_rejects_the_first_byte_over_limit() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut writer, reader) = tokio::io::duplex(16);
+    let write = tokio::spawn(async move {
+        writer.write_all(b"12345").await.expect("write fixture");
+    });
+    let error = read_bounded_output(reader, /*max_bytes*/ 4)
+        .await
+        .expect_err("fifth byte must exceed limit");
+    write.await.expect("join fixture writer");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bounded_async_output_closes_an_unowned_piped_stdin() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let repo = fixture.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("create repository");
+    run_git(&repo, &["init", "-q"]);
+    let fake_git = fixture.path().join("git");
+    write_executable(&fake_git, "#!/bin/sh\nexec /bin/cat\n");
+    let git = GitRunner::from_executable_for_test(&repo, fake_git).expect("test Git runner");
+    let mut command = git
+        .async_command_for_cwd(&repo)
+        .expect("authorized async command");
+    command.stdin(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        git.output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES),
+    )
+    .await
+    .expect("unowned pipe must close before the child waits for EOF")
+    .expect("run fake Git");
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
 fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
     let mut command = Command::new("git");
     isolate_git_command_environment(&mut command);
@@ -52,8 +94,8 @@ fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
-#[test]
-fn runner_binds_config_environment_across_ambient_mutation() {
+#[tokio::test]
+async fn runner_binds_config_environment_across_ambient_mutation() {
     const CHILD: &str = "CODEX_GIT_CONFIG_BINDING_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let fixture = tempfile::tempdir().expect("fixture");
@@ -135,6 +177,21 @@ fn runner_binds_config_environment_across_ambient_mutation() {
         assert!(
             output.status.success(),
             "{key}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+
+        let mut command = runner
+            .async_command_for_cwd(&root)
+            .expect("bound async command");
+        command.args(["config", "--get", key]);
+        let output = runner
+            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+            .await
+            .expect("bound async config read");
+        assert!(
+            output.status.success(),
+            "async {key}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
@@ -599,6 +656,49 @@ fn git_read_error_io_kind_table_is_exhaustive() {
                 reason: "malformed GIT_CONFIG_COUNT".to_string(),
             },
             io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::RepositoryRootMismatch {
+                expected_root: PathBuf::from("expected"),
+                reported_root: PathBuf::from("reported"),
+            },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::CommandTimedOut {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::TimedOut,
+        ),
+        (
+            GitReadError::CommandFailed {
+                operation: "status".to_string(),
+                exit_code: Some(1),
+            },
+            io::ErrorKind::Other,
+        ),
+        (
+            GitReadError::InvalidOutput {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::AuthorityRefused {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::FilterSelectionProbeLimitExceeded { max_probes: 16 },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::SelectedExecutableFilter {
+                driver: "demo".to_string(),
+                path: "file.txt".to_string(),
+            },
+            io::ErrorKind::PermissionDenied,
         ),
     ] {
         assert_eq!(error.io_kind(), expected, "{error}");
@@ -1459,6 +1559,65 @@ fn active_gitdir_route_is_revalidated_before_every_child() {
     assert!(
         !sentinel.exists(),
         "Git child executed after gitdir retarget"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn async_child_revalidates_active_gitdir_route_before_spawn() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    let admin = fixture.path().join("external-admin");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(
+        fixture.path(),
+        &[
+            "init",
+            "--separate-git-dir",
+            path_text(&admin),
+            path_text(&root),
+        ],
+    );
+    let runner = GitRunner::for_cwd(&root).expect("runner for direct external gitdir");
+    let mut first = runner
+        .async_command_for_cwd(&root)
+        .expect("first async Git command");
+    first.args(["rev-parse", "--absolute-git-dir"]);
+    assert!(
+        runner
+            .output_async(first)
+            .await
+            .expect("first async Git child")
+            .status
+            .success()
+    );
+
+    symlink(&admin, root.join("switch")).expect("worktree gitdir switch");
+    std::fs::write(root.join(".git"), "gitdir: switch\n").expect("retarget gitdir marker");
+    let sentinel = fixture.path().join("async-git-child-ran");
+    let mut second = runner
+        .async_command_for_cwd(&root)
+        .expect("second async Git command");
+    second
+        .args(["config", "--file"])
+        .arg(&sentinel)
+        .args(["probe.value", "ran"]);
+    let error = runner
+        .output_async(second)
+        .await
+        .expect_err("retargeted gitdir must block async child");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert_eq!(
+        crate::status_guard::map_io_error("status", error),
+        GitReadError::AuthorityRefused {
+            operation: "status".to_string(),
+        }
+    );
+    assert!(
+        !sentinel.exists(),
+        "async Git child executed after gitdir retarget"
     );
 }
 

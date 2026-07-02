@@ -351,3 +351,154 @@ fn sealed_filter_override_cannot_cross_operation_capabilities() {
         };
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
+
+#[tokio::test]
+async fn zero_driver_status_occupies_its_slot_and_excludes_every_mutation_policy() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::zero_driver_status_occupies_its_slot_and_excludes_every_mutation_policy",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    reset_config_source_authorization_count();
+    crate::git_command::reset_git_runner_construction_count();
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config = GuardedGitConfig::authorize_status_async(&git)
+        .await
+        .expect("authorized status capability");
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(crate::git_command::git_runner_construction_count(), 1);
+    config
+        .verify_status_root_async(repo.path())
+        .await
+        .expect("matching selected-Git root");
+    let error = config
+        .status_output_async()
+        .await
+        .expect_err("status sink requires an installed policy");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    config
+        .install_status_policy_async()
+        .await
+        .expect("zero-driver status policy");
+    assert_eq!(status_filter_policy_read_count(), 1);
+    let status = config.status.as_ref().expect("occupied status slot");
+    assert!(status.neutralizer.is_none());
+    assert_eq!(status.fsmonitor, None);
+
+    let error = config
+        .install_status_policy_async()
+        .await
+        .expect_err("second status installation must fail");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(status_filter_policy_read_count(), 1);
+    let error = config
+        .authorize_filter_paths(&[])
+        .expect_err("status plus Apply must fail");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let error = config
+        .authorize_git_add_filter_paths(&[])
+        .expect_err("status plus GitAdd must fail");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let error = config
+        .install_three_way_merge_policy()
+        .expect_err("status plus merge must fail");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let error = config
+        .status_output_async()
+        .await
+        .expect_err("status sink requires a retained fsmonitor decision");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    let first = config.detect_status_fsmonitor_async().await;
+    let second = config.detect_status_fsmonitor_async().await;
+    assert_eq!(first, second);
+    let output = config
+        .status_output_async()
+        .await
+        .expect("closed status sink");
+    assert!(output.status.success());
+
+    let mut mutation =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("mutation capability");
+    mutation
+        .authorize_filter_paths(&[])
+        .expect("Apply filter policy");
+    let reads_before = status_filter_policy_read_count();
+    let error = mutation
+        .install_status_policy_async()
+        .await
+        .expect_err("Apply plus status must fail before a status read");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(status_filter_policy_read_count(), reads_before);
+}
+
+#[tokio::test]
+async fn status_uses_the_shared_four_entry_overlay_and_retains_it_through_the_sink() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::status_uses_the_shared_four_entry_overlay_and_retains_it_through_the_sink",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    std::fs::write(repo.path().join("file.txt"), "contents\n").expect("tracked file");
+    std::fs::write(repo.path().join(".gitattributes"), "file.txt filter=demo\n")
+        .expect("attributes");
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["config", "filter.demo.smudge", "cat"]);
+
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config = GuardedGitConfig::authorize_status_async(&git)
+        .await
+        .expect("authorized status capability");
+    config
+        .verify_status_root_async(repo.path())
+        .await
+        .expect("matching root");
+    config
+        .install_status_policy_async()
+        .await
+        .expect("optional smudge policy");
+    let neutralizer = config
+        .status
+        .as_ref()
+        .and_then(|status| status.neutralizer.as_ref())
+        .expect("status neutralizer");
+    let overlay = PathBuf::from(
+        neutralizer
+            .include_arg
+            .strip_prefix("include.path=")
+            .expect("sealed include path"),
+    );
+    assert!(overlay.is_file());
+    let mut actual = Vec::new();
+    for (name, expected) in FILTER_NEUTRALIZATION_PLAN {
+        let output = std::process::Command::new("git")
+            .args(["config", "--file"])
+            .arg(&overlay)
+            .args(["--get", &format!("filter.demo.{name}")])
+            .output()
+            .expect("read neutralization entry");
+        assert!(output.status.success(), "read {name}");
+        actual.push((
+            name,
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
+        assert_eq!(actual.last().map(|entry| entry.1.as_str()), Some(expected));
+    }
+    assert_eq!(actual.len(), FILTER_NEUTRALIZATION_PLAN.len());
+
+    config.detect_status_fsmonitor_async().await;
+    let output = config.status_output_async().await.expect("guarded status");
+    assert!(output.status.success());
+    assert!(overlay.is_file(), "overlay must outlive the final child");
+    drop(config);
+    assert!(
+        !overlay.exists(),
+        "overlay must be removed with the capability"
+    );
+}

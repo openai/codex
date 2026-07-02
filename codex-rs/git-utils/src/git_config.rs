@@ -4,6 +4,7 @@ use std::path::Component;
 use std::path::Path;
 
 use crate::git_command::GitRunner;
+use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GitConfigScope {
@@ -167,6 +168,26 @@ pub(crate) fn read_config_entries_without_includes(
     )
 }
 
+pub(crate) async fn read_config_entries_without_includes_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigEntry>> {
+    read_config_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ false,
+        config_file,
+    )
+    .await
+}
+
 fn read_config_entries_with_fallback(
     git: &GitRunner,
     cwd: &Path,
@@ -216,6 +237,57 @@ fn read_config_entries_with_fallback(
     parse_config_entries_with_origins(&legacy.stdout)
 }
 
+async fn read_config_entries_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<Vec<GitConfigEntry>> {
+    let scoped = run_effective_config_query_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        /*show_scope*/ true,
+        follow_includes,
+        config_file,
+    )
+    .await?;
+    if scoped
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return parse_config_entries(&scoped.stdout);
+    }
+
+    let legacy = run_effective_config_query_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        /*show_scope*/ false,
+        follow_includes,
+        config_file,
+    )
+    .await?;
+    if !legacy
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return Err(io::Error::other(format!(
+            "git {probe} config probe failed with status {}: {}",
+            legacy.status,
+            String::from_utf8_lossy(&legacy.stderr).trim()
+        )));
+    }
+    parse_config_entries_with_origins(&legacy.stdout)
+}
+
 pub(crate) fn read_effective_config_with_fallback(
     git: &GitRunner,
     cwd: &Path,
@@ -229,6 +301,28 @@ pub(crate) fn read_effective_config_with_fallback(
             .map(|entry| (entry.key.clone(), entry))
             .collect(),
     )
+}
+
+pub(crate) async fn read_effective_config_with_fallback_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    probe: &str,
+) -> io::Result<BTreeMap<String, GitConfigEntry>> {
+    Ok(read_config_entries_with_fallback_async(
+        git,
+        cwd,
+        git_config_args,
+        pattern,
+        probe,
+        /*follow_includes*/ true,
+        /*config_file*/ None,
+    )
+    .await?
+    .into_iter()
+    .map(|entry| (entry.key.clone(), entry))
+    .collect())
 }
 
 fn run_effective_config_query(
@@ -263,6 +357,41 @@ fn run_effective_config_query(
         pattern,
     ]);
     git.output(command)
+}
+
+async fn run_effective_config_query_async(
+    git: &GitRunner,
+    cwd: &Path,
+    git_config_args: &[String],
+    pattern: &str,
+    show_scope: bool,
+    follow_includes: bool,
+    config_file: Option<&Path>,
+) -> io::Result<std::process::Output> {
+    let mut command = git.async_command_for_cwd(cwd)?;
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(git_config_args)
+        .arg("config");
+    if let Some(config_file) = config_file {
+        command.arg("--file").arg(config_file);
+    }
+    command.arg("--null");
+    if show_scope {
+        command.arg("--show-scope");
+    }
+    command.args([
+        "--show-origin",
+        if follow_includes {
+            "--includes"
+        } else {
+            "--no-includes"
+        },
+        "--get-regexp",
+        pattern,
+    ]);
+    git.output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+        .await
 }
 
 pub(crate) fn path_is_within(path: &Path, root: &Path) -> bool {

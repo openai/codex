@@ -18,8 +18,8 @@ use crate::responses_metadata::subagent_metadata_kind;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
-use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
+use codex_git_utils::try_get_has_changes;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -43,6 +43,7 @@ struct WorkspaceGitMetadata {
     associated_remote_urls: Option<BTreeMap<String, String>>,
     latest_git_commit_hash: Option<String>,
     has_changes: Option<bool>,
+    has_changes_unavailable_reason: Option<codex_git_utils::GitReadError>,
 }
 
 impl WorkspaceGitMetadata {
@@ -50,6 +51,7 @@ impl WorkspaceGitMetadata {
         self.associated_remote_urls.is_none()
             && self.latest_git_commit_hash.is_none()
             && self.has_changes.is_none()
+            && self.has_changes_unavailable_reason.is_none()
     }
 }
 
@@ -59,6 +61,7 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
             associated_remote_urls: value.associated_remote_urls,
             latest_git_commit_hash: value.latest_git_commit_hash,
             has_changes: value.has_changes,
+            has_changes_unavailable_reason: value.has_changes_unavailable_reason,
         }
     }
 }
@@ -313,32 +316,36 @@ impl TurnMetadataState {
     }
 
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
-        let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        let (head_commit_hash, associated_remote_urls, has_changes_result) = tokio::join!(
             get_head_commit_hash(&self.cwd),
             get_git_remote_urls_assume_git_repo(&self.cwd),
-            get_has_changes(&self.cwd),
+            Box::pin(try_get_has_changes(&self.cwd)),
         );
         let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
+        let (has_changes, has_changes_unavailable_reason) = split_has_changes(has_changes_result);
 
         WorkspaceGitMetadata {
             associated_remote_urls,
             latest_git_commit_hash,
             has_changes,
+            has_changes_unavailable_reason,
         }
     }
 }
 
 async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+    let (head_commit_hash, associated_remote_urls, has_changes_result) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd),
-        get_has_changes(cwd),
+        Box::pin(try_get_has_changes(cwd)),
     );
+    let (has_changes, has_changes_unavailable_reason) = split_has_changes(has_changes_result);
     let workspace_git_metadata = WorkspaceGitMetadata {
         associated_remote_urls,
         latest_git_commit_hash: head_commit_hash.map(|sha| sha.0),
         has_changes,
+        has_changes_unavailable_reason,
     };
     let mut workspaces = BTreeMap::new();
     if let Some(repo_root) = repo_root
@@ -347,6 +354,15 @@ async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetada
         workspaces.insert(repo_root, workspace_git_metadata.into());
     }
     workspaces
+}
+
+fn split_has_changes(
+    result: Result<bool, codex_git_utils::GitReadError>,
+) -> (Option<bool>, Option<codex_git_utils::GitReadError>) {
+    match result {
+        Ok(has_changes) => (Some(has_changes), None),
+        Err(reason) => (None, Some(reason)),
+    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,6 @@ pub(crate) struct SentinelFilterProbeBudget {
 }
 
 impl SentinelFilterProbeBudget {
-    #[cfg(test)]
     pub(crate) const fn max_probes() -> usize {
         MAX_SENTINEL_FILTER_CHILD_PROBES
     }
