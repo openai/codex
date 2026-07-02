@@ -537,6 +537,38 @@ fn command_scoped_offpath_filter_is_neutralized_after_local_config() {
 }
 
 #[test]
+fn filter_override_rejects_process_temp_directory_inside_worktree() {
+    let root_name = "CODEX_GIT_UTILS_WORKTREE_TMP_ROOT";
+    if let Some(root) = std::env::var_os(root_name) {
+        let root = std::path::PathBuf::from(root);
+        let error = apply_git_patch(&request(
+            &root, /*revert*/ false, /*preflight*/ true,
+        ))
+        .expect_err("reject worktree-owned filter override");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!configured_filter_ran(&root));
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    configure_filter(root, "demo");
+    let worktree_temp = root.join("process-temp");
+    std::fs::create_dir(&worktree_temp).expect("worktree temp directory");
+    run_isolated_test(
+        "apply::filter_tests::filter_override_rejects_process_temp_directory_inside_worktree",
+        &[
+            (root_name, root.as_os_str()),
+            ("TMPDIR", worktree_temp.as_os_str()),
+            #[cfg(windows)]
+            ("TEMP", worktree_temp.as_os_str()),
+            #[cfg(windows)]
+            ("TMP", worktree_temp.as_os_str()),
+        ],
+    );
+}
+
+#[test]
 fn apply_neutralizes_filter_activated_for_racy_offpath_by_same_patch() {
     for (name, command) in [
         ("clean", FILTER_COMMAND),

@@ -95,6 +95,11 @@ pub enum GitReadError {
     FilterSelectionProbeLimitExceeded { max_probes: usize },
     #[error("executable filter {driver:?} is selected for {path:?}")]
     SelectedExecutableFilter { driver: String, path: String },
+    #[error("invalid Git configuration environment: {reason}")]
+    InvalidConfigEnvironment {
+        #[serde(rename = "details")]
+        reason: String,
+    },
 }
 
 /// Path fields in caller-visible diagnostic metadata use a deliberately lossy
@@ -133,9 +138,9 @@ impl GitReadError {
             | Self::AuthorityRefused { .. }
             | Self::FilterSelectionProbeLimitExceeded { .. }
             | Self::SelectedExecutableFilter { .. } => std::io::ErrorKind::PermissionDenied,
-            Self::InvalidRepositoryMetadata { .. } | Self::InvalidOutput { .. } => {
-                std::io::ErrorKind::InvalidData
-            }
+            Self::InvalidRepositoryMetadata { .. }
+            | Self::InvalidOutput { .. }
+            | Self::InvalidConfigEnvironment { .. } => std::io::ErrorKind::InvalidData,
             Self::CommandTimedOut { .. } => std::io::ErrorKind::TimedOut,
             Self::CommandFailed { .. } => std::io::ErrorKind::Other,
         }

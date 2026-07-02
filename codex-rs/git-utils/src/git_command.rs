@@ -9,6 +9,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 
 use crate::errors::GitReadError;
+use crate::git_config_environment::GitConfigEnvironmentSnapshot;
 #[cfg(test)]
 use crate::git_executable::git_executable_name;
 use crate::git_executable::harden_git_launch_environment;
@@ -36,6 +37,7 @@ pub(crate) struct GitRunner {
     argv0: PathBuf,
     safe_path: std::ffi::OsString,
     authority: RepositoryAuthority,
+    config_environment: GitConfigEnvironmentSnapshot,
 }
 
 /// A Git command that can only be spawned through [`GitRunner::output`],
@@ -117,6 +119,8 @@ impl GitAsyncCommand {
 
 impl GitRunner {
     pub(crate) fn for_cwd(cwd: &Path) -> Result<Self, GitReadError> {
+        #[cfg(test)]
+        GIT_RUNNER_CONSTRUCTION_COUNT.with(|count| count.set(count.get() + 1));
         let authority = repository_authority_for_cwd(cwd)?;
         let search_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
         Self::from_search_path(authority, &search_path)
@@ -138,6 +142,7 @@ impl GitRunner {
             command.current_dir(parent);
         }
         harden_git_launch_environment(&mut command, &self.safe_path);
+        self.config_environment.apply_to(&mut command);
         GitCommand { inner: command }
     }
 
@@ -178,6 +183,18 @@ impl GitRunner {
 
     pub(crate) fn active_worktree_root(&self) -> Option<&Path> {
         self.authority.active_worktree_root()
+    }
+
+    pub(crate) fn ensure_active_worktree_root(&self, root: &Path) -> io::Result<()> {
+        self.authority.ensure_active_worktree_root(root)
+    }
+
+    pub(crate) fn ensure_repository_root_route(&self, root: &Path) -> io::Result<()> {
+        self.authority.ensure_repository_root_route(root)
+    }
+
+    pub(crate) fn config_environment_value(&self, name: &str) -> Option<&OsStr> {
+        self.config_environment.value(name)
     }
 
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
@@ -259,12 +276,18 @@ impl GitRunner {
     ) -> Result<Self, GitReadError> {
         authority.ensure_primary_authority()?;
         let selected = select_git_executable(&authority, search_path)?;
+        let config_environment = GitConfigEnvironmentSnapshot::capture().map_err(|error| {
+            GitReadError::InvalidConfigEnvironment {
+                reason: error.to_string(),
+            }
+        })?;
         Ok(Self {
             executable: selected.executable,
             #[cfg(any(unix, test))]
             argv0: selected.argv0,
             safe_path: selected.safe_path,
             authority,
+            config_environment,
         })
     }
 
@@ -275,11 +298,17 @@ impl GitRunner {
     ) -> Result<Self, GitReadError> {
         let authority = repository_authority_for_cwd(cwd)?;
         let safe_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
+        let config_environment = GitConfigEnvironmentSnapshot::capture().map_err(|error| {
+            GitReadError::InvalidConfigEnvironment {
+                reason: error.to_string(),
+            }
+        })?;
         Ok(Self {
             argv0: executable.clone(),
             executable,
             safe_path,
             authority,
+            config_environment,
         })
     }
 }
@@ -303,6 +332,21 @@ async fn read_bounded_output(
         }
         output.extend_from_slice(&chunk[..read]);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GIT_RUNNER_CONSTRUCTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_git_runner_construction_count() {
+    GIT_RUNNER_CONSTRUCTION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn git_runner_construction_count() -> usize {
+    GIT_RUNNER_CONSTRUCTION_COUNT.with(std::cell::Cell::get)
 }
 
 pub(crate) fn repository_authority_for_cwd(

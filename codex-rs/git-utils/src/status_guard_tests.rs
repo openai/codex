@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use tokio::process::Command;
 
 use super::*;
+use crate::safe_git::SentinelFilterProbeBudget;
 
 async fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
     let output = Command::new("git")
@@ -124,8 +125,11 @@ async fn dropping_status_preparation_kills_the_active_git_child() {
     );
     let task_git = std::sync::Arc::clone(&git);
     let task_repo = repo.clone();
-    let task =
-        tokio::spawn(async move { prepare_status_filter_guard(&task_git, &task_repo).await });
+    let task = tokio::spawn(async move {
+        prepare_status_config(&task_git, &task_repo)
+            .await
+            .map(|_| ())
+    });
 
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while !pid_file.exists() {
@@ -193,23 +197,14 @@ async fn prepared_guard_neutralizes_filter_selected_after_the_probe() {
     .await;
 
     let git = GitRunner::for_cwd(&repo).expect("trusted Git");
-    let (root, guard) = prepare_status_filter_guard(&git, &repo)
+    let mut guard = prepare_status_config(&git, &repo)
         .await
         .expect("prepare status guard");
     std::fs::write(repo.join(".gitattributes"), "test.txt filter=race\n")
         .expect("select filter after probe");
 
-    let mut command = git
-        .async_command_for_cwd(&root)
-        .expect("authorized status cwd");
-    command
-        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
-        .args(["-c", "core.fsmonitor=false"])
-        .args(guard.git_config_args())
-        .args(["status", "--porcelain"]);
-    let output = git.output_async(command).await.expect("run guarded status");
-
-    assert!(output.status.success(), "guarded status succeeds");
+    detect_status_fsmonitor(&mut guard).await;
+    assert!(read_status(&guard).await.is_ok(), "guarded status succeeds");
     assert!(!filter_marker_is_set(&repo, "codex.race-ran").await);
 }
 
@@ -232,14 +227,14 @@ async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
     .await;
 
     let git = GitRunner::for_cwd(&repo).expect("trusted Git");
-    prepare_status_filter_guard(&git, &repo)
+    prepare_status_config(&git, &repo)
         .await
         .expect("allow optional smudge-only filter");
     assert!(!filter_marker_is_set(&repo, "codex.smudge-ran").await);
 
     run_git(&repo, &["config", "filter.smudge-only.required", "true"]).await;
     assert_eq!(
-        prepare_status_filter_guard(&git, &repo).await.map(|_| ()),
+        prepare_status_config(&git, &repo).await.map(|_| ()),
         Err(GitReadError::SelectedExecutableFilter {
             driver: "smudge-only".to_string(),
             path: "test.txt".to_string(),
@@ -281,7 +276,7 @@ async fn optional_smudge_required_value_is_queried_once_per_driver() {
     );
     let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
 
-    prepare_status_filter_guard(&git, &repo)
+    prepare_status_config(&git, &repo)
         .await
         .expect("allow optional smudge-only filter");
     let required_queries = std::fs::read_to_string(log)
@@ -324,7 +319,7 @@ async fn sentinel_probe_neutralizes_a_race_selected_known_driver() {
     );
     let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
 
-    prepare_status_filter_guard(&git, &repo)
+    prepare_status_config(&git, &repo)
         .await
         .expect("probe remains non-executing across attribute race");
     assert!(!filter_marker_is_set(&repo, "codex.probe-filter-ran").await);
@@ -359,7 +354,7 @@ async fn sentinel_probe_budget_fails_closed_at_the_exact_process_limit() {
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Box::pin(prepare_status_filter_guard_within_deadline(&git, &repo)),
+        Box::pin(prepare_status_config(&git, &repo)),
     )
     .await
     .expect("sentinel budget test should complete");
@@ -402,9 +397,11 @@ async fn ordinary_driver_uses_one_bulk_path_and_attribute_probe() {
     );
     let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
 
-    prepare_status_filter_guard(&git, &repo)
+    let mut config = prepare_status_config(&git, &repo)
         .await
         .expect("prepare ordinary-driver guard");
+    detect_status_fsmonitor(&mut config).await;
+    read_status(&config).await.expect("final guarded status");
     let lines = std::fs::read_to_string(log).expect("read wrapper log");
     assert_eq!(
         lines
@@ -427,5 +424,152 @@ async fn ordinary_driver_uses_one_bulk_path_and_attribute_probe() {
             .count(),
         0
     );
+    let status = lines
+        .lines()
+        .find(|line| line.contains(" status --porcelain --ignore-submodules=dirty"))
+        .expect("final status command");
+    let hooks = status
+        .find("core.hooksPath=")
+        .expect("hooks override before status");
+    let fsmonitor = status
+        .find("core.fsmonitor=")
+        .expect("fsmonitor override before status");
+    let filter = status
+        .find("include.path=")
+        .expect("sealed filter include before status");
+    let status_command = status
+        .find(" status --porcelain")
+        .expect("status subcommand");
+    assert!(hooks < fsmonitor && fsmonitor < filter && filter < status_command);
+    assert_eq!(status.matches("include.path=").count(), 1);
     assert!(!filter_marker_is_set(&repo, "codex.ordinary-filter-ran").await);
+}
+
+#[tokio::test]
+async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_order() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    run_git(&repo, &["config", "core.fsmonitor", "true"]).await;
+
+    let wrapper = temp_dir.path().join("git-wrapper");
+    let log = temp_dir.path().join("git-wrapper.log");
+    let real_git = shell_quote(&real_git());
+    write_wrapper(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>{}\ncase \" $* \" in *\" version --build-options \"*) printf 'feature: fsmonitor--daemon\\n'; exit 0 ;; esac\nexec {real_git} \"$@\"\n",
+            shell_quote(&log)
+        ),
+    );
+    let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
+    let mut config = prepare_status_config(&git, &repo)
+        .await
+        .expect("prepare status capability");
+    std::fs::write(&log, "").expect("clear preparation log");
+
+    assert_eq!(
+        detect_status_fsmonitor(&mut config).await,
+        FsmonitorOverride::BuiltIn
+    );
+    assert_eq!(
+        detect_status_fsmonitor(&mut config).await,
+        FsmonitorOverride::BuiltIn,
+        "the retained decision must avoid a second probe"
+    );
+    read_status(&config).await.expect("final status");
+
+    let lines = std::fs::read_to_string(&log)
+        .expect("read wrapper log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        3,
+        "one config probe, one feature probe, one status"
+    );
+    assert!(lines[0].ends_with("config --null --get core.fsmonitor"));
+    assert!(!lines[0].contains("core.fsmonitor=false"));
+    assert!(lines[1].ends_with("version --build-options"));
+    assert!(!lines[1].contains("core.fsmonitor=false"));
+    let hooks = format!("core.hooksPath={}", crate::safe_git::DISABLED_HOOKS_PATH);
+    let hooks_offset = lines[2].find(&hooks).expect("hooks override");
+    let fsmonitor_offset = lines[2]
+        .find("core.fsmonitor=true")
+        .expect("typed fsmonitor override");
+    let status_offset = lines[2].find("status --porcelain").expect("status command");
+    assert!(hooks_offset < fsmonitor_offset && fsmonitor_offset < status_offset);
+    assert!(lines[2].ends_with("status --porcelain --ignore-submodules=dirty"));
+}
+
+#[tokio::test]
+async fn zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes() {
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let wrapper = temp_dir.path().join("git-wrapper");
+    let log = temp_dir.path().join("git-wrapper.log");
+    let real_git = shell_quote(&real_git());
+    write_wrapper(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>{}\nexec {real_git} \"$@\"\n",
+            shell_quote(&log)
+        ),
+    );
+    let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
+
+    prepare_status_config(&git, &repo)
+        .await
+        .expect("zero-driver status capability");
+    let lines = std::fs::read_to_string(log).expect("read wrapper log");
+    assert!(!lines.contains(" ls-files -z --cached"), "{lines}");
+    assert!(!lines.contains(" check-attr --stdin -z filter"), "{lines}");
+    assert!(!lines.contains(" config --file "), "{lines}");
+}
+
+#[tokio::test]
+async fn status_driver_limit_fails_before_paths_or_overlay_writes() {
+    use std::io::Write;
+
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
+    let mut local_config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .expect("open local config");
+    for index in 0..=crate::safe_git::MAX_EXECUTABLE_FILTER_DRIVERS {
+        writeln!(local_config, "[filter \"driver-{index}\"]\n\tclean = cat")
+            .expect("append filter driver");
+    }
+    drop(local_config);
+
+    let wrapper = temp_dir.path().join("git-wrapper");
+    let log = temp_dir.path().join("git-wrapper.log");
+    let real_git = shell_quote(&real_git());
+    write_wrapper(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>{}\nexec {real_git} \"$@\"\n",
+            shell_quote(&log)
+        ),
+    );
+    let git = GitRunner::from_executable_for_test(&repo, wrapper).expect("test Git runner");
+    let mut config = GuardedGitConfig::authorize_status_async(&git)
+        .await
+        .expect("authorized status capability");
+    config
+        .verify_status_root_async(&repo)
+        .await
+        .expect("matching root");
+    std::fs::write(&log, "").expect("clear authorization log");
+
+    let error = config
+        .install_status_policy_async()
+        .await
+        .expect_err("257th driver must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    let lines = std::fs::read_to_string(log).expect("read wrapper log");
+    assert!(!lines.contains(" ls-files -z --cached"), "{lines}");
+    assert!(!lines.contains(" check-attr --stdin -z filter"), "{lines}");
+    assert!(!lines.contains(" config --file "), "{lines}");
 }

@@ -237,7 +237,7 @@ async fn ensure_no_worktree_config_sources_impl(
     // Environment, HOME, and XDG paths are attacker-controlled byte strings.
     // Classify their exact OsString spelling before selected Git can open or
     // newline-delimit one of them.
-    for (description, candidate) in legacy_primary_config_source_candidates()? {
+    for (description, candidate) in legacy_primary_config_source_candidates(git)? {
         if !is_disabled_primary_config_path(&candidate) {
             reject_source(git, &git_root, &candidate, description)?;
         }

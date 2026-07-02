@@ -811,6 +811,33 @@ fn command_scoped_include_paths_follow_the_same_boundary() {
     );
 }
 
+#[tokio::test]
+async fn blocking_and_async_source_authorization_share_the_same_include_policy() {
+    let repo = init_repo();
+    let root = repo.path();
+    let git = GitRunner::for_cwd_io(root).expect("Git runner");
+
+    ensure_no_worktree_config_sources(&git, root, &[]).expect("blocking safe source graph");
+    ensure_no_worktree_config_sources_async(&git, root, &[])
+        .await
+        .expect("async safe source graph");
+
+    let worktree_include = root.join("attacker.gitconfig");
+    std::fs::write(&worktree_include, "[codex]\n\tvalue = attacker\n").expect("worktree include");
+    add_include(
+        root,
+        "include.path",
+        worktree_include.to_str().expect("UTF-8 fixture path"),
+    );
+    let blocking = ensure_no_worktree_config_sources(&git, root, &[])
+        .expect_err("blocking authorization must reject worktree include");
+    let asynchronous = ensure_no_worktree_config_sources_async(&git, root, &[])
+        .await
+        .expect_err("async authorization must reject worktree include");
+    assert_eq!(blocking.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(asynchronous.kind(), blocking.kind());
+}
+
 #[test]
 fn rejects_every_duplicate_and_nested_include_target() {
     for unsafe_first in [true, false] {

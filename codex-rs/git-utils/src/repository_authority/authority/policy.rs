@@ -17,6 +17,37 @@ use super::super::repository_common_dir_for_candidate_root;
 use super::RepositoryAuthority;
 
 impl RepositoryAuthority {
+    pub(crate) fn ensure_repository_root_route(&self, root: &Path) -> io::Result<()> {
+        self.ensure_active_worktree_root(root)?;
+        let crosses_worktree = self.route_boundaries.inspect_route(root)?.crosses_worktree;
+        let crosses_related_worktree = match root.parent() {
+            Some(parent) => self.has_active_common_dir_ancestor(parent)?,
+            None => false,
+        };
+        if crosses_worktree && crosses_related_worktree {
+            return Err(authority_refusal(format!(
+                "refusing repository root route that crosses a worktree boundary: {}",
+                root.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn has_active_common_dir_ancestor(&self, path: &Path) -> io::Result<bool> {
+        let Some(active) = &self.active_metadata else {
+            return Ok(false);
+        };
+        for ancestor in path.ancestors() {
+            let Some(common_dir) = repository_common_dir_for_candidate_root(ancestor)? else {
+                continue;
+            };
+            if directories_refer_to_same_location(&common_dir, &active.common_dir)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn canonical_command_cwd(&self, cwd: &Path) -> io::Result<PathBuf> {
         let canonical = std::fs::canonicalize(cwd)?;
         let inspection = self.route_boundaries.inspect_route(cwd)?;

@@ -51,6 +51,7 @@ pub(crate) fn classify_sentinel_filter_probes(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn sentinel_filter_probe_config_args(
     neutralization_args: &[String],
     driver: &str,

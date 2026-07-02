@@ -94,6 +94,110 @@ fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
+#[tokio::test]
+async fn runner_binds_config_environment_across_ambient_mutation() {
+    const CHILD: &str = "CODEX_GIT_CONFIG_BINDING_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let repo = fixture.path().join("repo");
+        let safe_home = fixture.path().join("safe-home");
+        let malicious_home = repo.join("malicious-home");
+        std::fs::create_dir_all(&repo).expect("repo");
+        std::fs::create_dir_all(&safe_home).expect("safe home");
+        std::fs::create_dir_all(&malicious_home).expect("malicious home");
+        run_git(&repo, &["init", "-q"]);
+        std::fs::write(
+            safe_home.join(".gitconfig"),
+            "[codex]\n\tbound = safe-home\n",
+        )
+        .expect("safe home config");
+        let malicious_global = repo.join("malicious.gitconfig");
+        std::fs::write(&malicious_global, "[codex]\n\tbound = malicious\n")
+            .expect("malicious global config");
+        std::fs::write(
+            malicious_home.join(".gitconfig"),
+            "[codex]\n\tbound = malicious-home\n",
+        )
+        .expect("malicious home config");
+
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        isolate_git_command_environment(&mut command);
+        let output = command
+            .arg("git_command::tests::runner_binds_config_environment_across_ambient_mutation")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env("RUST_TEST_THREADS", "1")
+            .env("CODEX_GIT_CONFIG_BINDING_ROOT", &repo)
+            .env("CODEX_GIT_CONFIG_BINDING_MALICIOUS", &malicious_global)
+            .env("CODEX_GIT_CONFIG_BINDING_MALICIOUS_HOME", &malicious_home)
+            .env("HOME", &safe_home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "codex.count")
+            .env("GIT_CONFIG_VALUE_0", "safe-count")
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("GIT_CONFIG_SYSTEM")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .output()
+            .expect("isolated config binding test");
+        assert!(
+            output.status.success(),
+            "isolated config binding test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let root = PathBuf::from(std::env::var_os("CODEX_GIT_CONFIG_BINDING_ROOT").expect("root"));
+    let malicious =
+        std::env::var_os("CODEX_GIT_CONFIG_BINDING_MALICIOUS").expect("malicious config");
+    let malicious_home =
+        std::env::var_os("CODEX_GIT_CONFIG_BINDING_MALICIOUS_HOME").expect("malicious home");
+    let runner = GitRunner::for_cwd_io(&root).expect("runner with captured config environment");
+
+    // SAFETY: the parent starts an isolated test process that runs only this
+    // exact test with one harness thread. No other application thread reads or
+    // writes these variables, and the process exits after the assertions.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_GLOBAL", malicious);
+        std::env::set_var("HOME", malicious_home);
+        std::env::set_var("GIT_CONFIG_VALUE_0", "malicious-count");
+        std::env::set_var(
+            "GIT_CONFIG_PARAMETERS",
+            "'codex.count'='malicious-parameter'",
+        );
+    }
+
+    for (key, expected) in [("codex.bound", "safe-home"), ("codex.count", "safe-count")] {
+        let mut command = runner.command_for_cwd(&root).expect("bound command");
+        command.args(["config", "--get", key]);
+        let output = runner.output(command).expect("bound config read");
+        assert!(
+            output.status.success(),
+            "{key}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+
+        let mut command = runner
+            .async_command_for_cwd(&root)
+            .expect("bound async command");
+        command.args(["config", "--get", key]);
+        let output = runner
+            .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES)
+            .await
+            .expect("bound async config read");
+        assert!(
+            output.status.success(),
+            "async {key}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+}
+
 fn commit_all(cwd: &Path, message: &str) {
     run_git(
         cwd,
@@ -546,6 +650,55 @@ fn git_read_error_io_kind_table_is_exhaustive() {
                 reason: "malformed marker".to_string(),
             },
             io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::InvalidConfigEnvironment {
+                reason: "malformed GIT_CONFIG_COUNT".to_string(),
+            },
+            io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::RepositoryRootMismatch {
+                expected_root: PathBuf::from("expected"),
+                reported_root: PathBuf::from("reported"),
+            },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::CommandTimedOut {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::TimedOut,
+        ),
+        (
+            GitReadError::CommandFailed {
+                operation: "status".to_string(),
+                exit_code: Some(1),
+            },
+            io::ErrorKind::Other,
+        ),
+        (
+            GitReadError::InvalidOutput {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::AuthorityRefused {
+                operation: "status".to_string(),
+            },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::FilterSelectionProbeLimitExceeded { max_probes: 16 },
+            io::ErrorKind::PermissionDenied,
+        ),
+        (
+            GitReadError::SelectedExecutableFilter {
+                driver: "demo".to_string(),
+                path: "file.txt".to_string(),
+            },
+            io::ErrorKind::PermissionDenied,
         ),
     ] {
         assert_eq!(error.io_kind(), expected, "{error}");

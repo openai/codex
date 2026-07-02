@@ -3,6 +3,7 @@ use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
 use pretty_assertions::assert_eq;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;

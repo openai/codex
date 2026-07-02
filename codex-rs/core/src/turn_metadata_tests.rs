@@ -77,6 +77,16 @@ fn workspace_metadata_serializes_structured_has_changes_refusal() {
             "operation": "status",
         })
     );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::InvalidConfigEnvironment {
+            reason: "malformed GIT_CONFIG_COUNT".to_string(),
+        })
+        .expect("serialize invalid config environment"),
+        serde_json::json!({
+            "reason": "invalidConfigEnvironment",
+            "details": "malformed GIT_CONFIG_COUNT",
+        })
+    );
 }
 
 #[cfg(any(unix, windows))]

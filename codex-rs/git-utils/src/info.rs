@@ -15,17 +15,18 @@ use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::process::Command;
 use tokio::time::timeout;
 use ts_rs::TS;
 
 use crate::GitReadError;
 use crate::GitSha;
 use crate::git_command::GitRunner;
-use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
-use crate::repository_authority::is_authority_refusal;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::GIT_COMMAND_TIMEOUT;
-use crate::status_guard::prepare_status_filter_guard_within_deadline;
+use crate::status_guard::detect_status_fsmonitor;
+use crate::status_guard::prepare_status_config;
+use crate::status_guard::read_status;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -345,29 +346,15 @@ async fn try_get_has_changes_within_deadline(
     cwd: &Path,
     phase: &AtomicU8,
 ) -> Result<bool, GitReadError> {
-    let git = GitRunner::for_cwd(cwd)?;
-    let (git_root, filter_guard) =
-        Box::pin(prepare_status_filter_guard_within_deadline(&git, cwd)).await?;
+    let requested_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
+        path: cwd.to_path_buf(),
+    })?;
+    let git = GitRunner::for_cwd(&requested_cwd)?;
+    let mut config = Box::pin(prepare_status_config(&git, &requested_cwd)).await?;
     phase.store(StatusReadPhase::Fsmonitor as u8, Ordering::Relaxed);
-    let fsmonitor = detect_local_fsmonitor_override(&git, &git_root).await;
+    detect_status_fsmonitor(&mut config).await;
     phase.store(StatusReadPhase::Status as u8, Ordering::Relaxed);
-    let output = try_run_git_command_with_timeout_from(
-        &git,
-        &["status", "--porcelain", "--ignore-submodules=dirty"],
-        &git_root,
-        fsmonitor,
-        filter_guard.git_config_args(),
-        "status",
-    )
-    .await?;
-    if !output.status.success() {
-        return Err(GitReadError::CommandFailed {
-            operation: "status".to_string(),
-            exit_code: output.status.code(),
-        });
-    }
-
-    Ok(!output.stdout.is_empty())
+    read_status(&config).await
 }
 
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
@@ -475,12 +462,17 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     // These callers only inspect repository metadata. Worktree workflows probe
     // once and pass their override directly to the lower-level runner.
-    let git = GitRunner::for_cwd(cwd).ok()?;
-    run_git_command_with_timeout_from(&git, args, cwd, crate::FsmonitorOverride::Disabled).await
+    run_git_command_with_timeout_from(
+        Path::new("git"),
+        args,
+        cwd,
+        crate::FsmonitorOverride::Disabled,
+    )
+    .await
 }
 
 struct LocalFsmonitorProbeRunner<'a> {
-    git: &'a GitRunner,
+    git: &'a Path,
     cwd: &'a Path,
 }
 
@@ -488,94 +480,44 @@ impl crate::FsmonitorProbeRunner for LocalFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
         // Both probes are fast, bounded metadata queries that do not inspect the
         // worktree or index, so do not reduce the requested command's timeout.
-        let mut command = self.git.async_command_for_cwd(self.cwd).ok()?;
-        command.args(args);
-        match timeout(
-            GIT_COMMAND_TIMEOUT,
-            self.git
-                .output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES),
-        )
-        .await
-        {
+        let mut command = Command::new(self.git);
+        command
+            .envs(crate::local_only_git_env())
+            .args(args)
+            .current_dir(self.cwd)
+            .kill_on_drop(true);
+        match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
             Ok(Ok(output)) if output.status.success() => Some(output.stdout),
             _ => None,
         }
     }
 }
 
-async fn detect_local_fsmonitor_override(git: &GitRunner, cwd: &Path) -> crate::FsmonitorOverride {
+async fn detect_local_fsmonitor_override(git: &Path, cwd: &Path) -> crate::FsmonitorOverride {
     let mut runner = LocalFsmonitorProbeRunner { git, cwd };
     crate::detect_fsmonitor_override(&mut runner).await
 }
 
 async fn run_git_command_with_timeout_from(
-    git: &GitRunner,
+    git: &Path,
     args: &[&str],
     cwd: &Path,
     fsmonitor: crate::FsmonitorOverride,
 ) -> Option<std::process::Output> {
-    try_run_git_command_with_timeout_from(git, args, cwd, fsmonitor, &[], "gitMetadata")
-        .await
-        .ok()
-}
-
-async fn try_run_git_command_with_timeout_from(
-    git: &GitRunner,
-    args: &[&str],
-    cwd: &Path,
-    fsmonitor: crate::FsmonitorOverride,
-    extra_git_config_args: &[String],
-    operation: &str,
-) -> Result<std::process::Output, GitReadError> {
-    let disabled_hooks = format!("core.hooksPath={DISABLED_HOOKS_PATH}");
-    let mut command = git.async_command_for_cwd(cwd).map_err(|error| {
-        if is_authority_refusal(&error) {
-            return GitReadError::AuthorityRefused {
-                operation: operation.to_string(),
-            };
-        }
-        match error.kind() {
-            std::io::ErrorKind::InvalidData => GitReadError::InvalidOutput {
-                operation: operation.to_string(),
-            },
-            _ => GitReadError::CommandFailed {
-                operation: operation.to_string(),
-                exit_code: None,
-            },
-        }
-    })?;
+    let mut command = Command::new(git);
     command
+        .envs(crate::local_only_git_env())
         .env("GIT_OPTIONAL_LOCKS", "0")
         // Keep internal Git commands independent of repository-selected hooks
-        // while preserving built-in fsmonitor acceleration.
-        .args(["-c", &disabled_hooks])
+        // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
+        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
         .args(["-c", fsmonitor.git_config_arg()])
-        // Keep the owning guard alive in the caller and append its private
-        // include last so it wins inherited and repository filter config.
-        .args(extra_git_config_args)
-        .args(args);
-    match timeout(
-        GIT_COMMAND_TIMEOUT,
-        git.output_async_bounded(command, MAX_INTERNAL_GIT_OUTPUT_BYTES),
-    )
-    .await
-    {
-        Err(_) => Err(GitReadError::CommandTimedOut {
-            operation: operation.to_string(),
-        }),
-        Ok(Err(error)) if is_authority_refusal(&error) => Err(GitReadError::AuthorityRefused {
-            operation: operation.to_string(),
-        }),
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::InvalidData => {
-            Err(GitReadError::InvalidOutput {
-                operation: operation.to_string(),
-            })
-        }
-        Ok(Err(_)) => Err(GitReadError::CommandFailed {
-            operation: operation.to_string(),
-            exit_code: None,
-        }),
-        Ok(Ok(output)) => Ok(output),
+        .args(args)
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    match timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => Some(output),
+        _ => None,
     }
 }
 
@@ -856,10 +798,10 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 }
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
-    let git = GitRunner::for_cwd(cwd).ok()?;
-    let fsmonitor = detect_local_fsmonitor_override(&git, cwd).await;
+    let git = Path::new("git");
+    let fsmonitor = detect_local_fsmonitor_override(git, cwd).await;
     let output = run_git_command_with_timeout_from(
-        &git,
+        git,
         &["diff", "--no-textconv", "--no-ext-diff", &sha.0],
         cwd,
         fsmonitor,
@@ -874,7 +816,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let mut diff = String::from_utf8(output.stdout).ok()?;
 
     if let Some(untracked_output) = run_git_command_with_timeout_from(
-        &git,
+        git,
         &["ls-files", "--others", "--exclude-standard"],
         cwd,
         fsmonitor,
@@ -892,7 +834,6 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
         if !untracked.is_empty() {
             // Use platform-appropriate null device and guard paths with `--`.
             let null_device: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
-            let git = &git;
             let futures_iter = untracked.into_iter().map(|file| async move {
                 let file_owned = file;
                 let args_vec: Vec<&str> = vec![
@@ -1053,25 +994,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn resolved_git_executable() -> PathBuf {
-        let output = std::process::Command::new("/bin/sh")
-            .args(["-c", "command -v git"])
-            .output()
-            .expect("resolve real Git executable");
-        assert!(output.status.success(), "resolve real Git executable");
-        PathBuf::from(
-            String::from_utf8(output.stdout)
-                .expect("real Git path should be UTF-8")
-                .trim(),
-        )
-    }
-
-    #[cfg(unix)]
-    fn shell_quote_path(path: &Path) -> String {
-        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
-    }
-
-    #[cfg(unix)]
     fn commit_all(cwd: &Path, message: &str) {
         run_git(
             cwd,
@@ -1227,11 +1149,6 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&git, permissions).expect("mark fake Git executable");
 
-        // The config response mirrors:
-        // git -c core.fsmonitor=/tmp/fsmonitor-helper \
-        //   config --null --get core.fsmonitor
-        let git = GitRunner::from_executable_for_test(temp_dir.path(), git)
-            .expect("authority-bound fake Git");
         let fsmonitor = detect_local_fsmonitor_override(&git, temp_dir.path()).await;
         let output = run_git_command_with_timeout_from(
             &git,
@@ -1278,22 +1195,17 @@ mod tests {
         let git = temp_dir.path().join("git");
         let global_config = temp_dir.path().join("git.global");
         let log = temp_dir.path().join("git.log");
-        let real_git = shell_quote_path(&resolved_git_executable());
         std::fs::write(
             &git,
-            format!(
-                "#!/bin/sh\n\
-             cwd=.\n\
-             if [ \"$1\" = -C ]; then cwd=$2; shift 2; fi\n\
+            "#!/bin/sh\n\
              printf '%s\\n' \"$*\" >>\"$0.log\"\n\
              case \"$1\" in\n\
              config)\n\
-               GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=\"$0.global\" exec {real_git} -C \"$cwd\" \"$@\"\n\
+               GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=\"$0.global\" exec git \"$@\"\n\
                ;;\n\
              version) printf 'feature: fsmonitor--daemon\\n' ;;\n\
              *) printf 'worktree output\\n' ;;\n\
-             esac\n"
-            ),
+             esac\n",
         )
         .expect("write layered-config Git");
         let mut permissions = std::fs::metadata(&git)
@@ -1328,8 +1240,6 @@ mod tests {
             "write local built-in fsmonitor config"
         );
 
-        let git =
-            GitRunner::from_executable_for_test(&repo, git).expect("authority-bound layered Git");
         let fsmonitor = detect_local_fsmonitor_override(&git, repo.as_path()).await;
         let output = run_git_command_with_timeout_from(
             &git,

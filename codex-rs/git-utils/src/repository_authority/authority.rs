@@ -146,6 +146,20 @@ impl RepositoryAuthority {
         })
     }
 
+    pub(crate) fn ensure_active_worktree_root(&self, root: &Path) -> io::Result<()> {
+        let canonical_root = std::fs::canonicalize(root)?;
+        let same_root = canonical_root == self.active_worktree_root
+            || same_file::is_same_file(&canonical_root, &self.active_worktree_root)?;
+        if !same_root {
+            return Err(authority_refusal(format!(
+                "guarded Git repository root {} does not match runner repository {}",
+                canonical_root.display(),
+                self.active_worktree_root.display()
+            )));
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_locations(
         roots: Vec<PathBuf>,

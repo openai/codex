@@ -3,15 +3,13 @@ use crate::GitReadError;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
 use crate::get_has_changes;
+use crate::git_command::GitRunner;
 use crate::git_config::GitConfigScope;
+use crate::guarded_config::GuardedGitConfig;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
 #[cfg(unix)]
-use crate::status_guard::git_root_from_stdout;
-#[cfg(unix)]
-use crate::status_guard::prepare_status_filter_guard;
-#[cfg(unix)]
-use crate::status_guard::resolve_git_root_async;
+use crate::status_guard::prepare_status_config;
 use crate::try_get_has_changes;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -33,11 +31,11 @@ fn status_filter_driver_limit_is_exact() {
     let at_limit = (0..MAX_EXECUTABLE_FILTER_DRIVERS)
         .map(|index| format!("driver-{index}"))
         .collect::<BTreeSet<_>>();
-    assert!(validate_executable_driver_count(&at_limit).is_ok());
+    assert!(validate_executable_driver_count(&ExecutableFilterDrivers(at_limit.clone())).is_ok());
 
     let mut over_limit = at_limit;
     over_limit.insert("one-too-many".to_string());
-    let error = validate_executable_driver_count(&over_limit)
+    let error = validate_executable_driver_count(&ExecutableFilterDrivers(over_limit))
         .expect_err("driver after exact limit must be refused");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
@@ -187,40 +185,6 @@ fn selected_filter_checkin_policy_table_is_canonical() {
     }
 }
 
-#[tokio::test]
-async fn sync_and_async_filter_guards_share_the_neutralization_plan() {
-    let repo = init_filter_repo();
-    let root = repo.path();
-    let git = GitRunner::for_cwd_io(root).expect("Git runner");
-    let entries = filter_entries(
-        GitConfigScope::Local,
-        Path::new(".git/config"),
-        "filter.demo.smudge",
-        "helper-command",
-    );
-    let drivers = BTreeSet::from(["demo".to_string()]);
-
-    let sync_guard = executable_filter_guard(&git, root, entries.clone(), &drivers)
-        .expect("sync neutralization");
-    let async_guard = executable_filter_guard_async(&git, root, entries, &drivers)
-        .await
-        .expect("async neutralization");
-    let read_plan = |guard: &GitFilterNeutralization| {
-        read_filter_config(&git, root, guard.git_config_args())
-            .expect("read effective neutralization")
-            .into_iter()
-            .filter(|(key, _entry)| key.starts_with("filter.demo."))
-            .map(|(key, entry)| (key, entry.value))
-            .collect::<BTreeMap<_, _>>()
-    };
-    let expected = filter_neutralization_entries("demo")
-        .map(|(key, value)| (key, value.to_string()))
-        .collect::<BTreeMap<_, _>>();
-
-    assert_eq!(read_plan(&sync_guard), expected);
-    assert_eq!(read_plan(&async_guard), expected);
-}
-
 #[test]
 fn filter_snapshot_retains_required_without_treating_it_as_executable() {
     let mut entries = filter_entries(
@@ -236,7 +200,9 @@ fn filter_snapshot_retains_required_without_treating_it_as_executable() {
         "true",
     ));
     assert_eq!(
-        executable_filter_drivers(&entries).expect("executable drivers"),
+        executable_filter_drivers(&entries)
+            .expect("executable drivers")
+            .0,
         BTreeSet::from(["demo".to_string()])
     );
     let selected = BTreeMap::from([(b"file.txt".to_vec(), "demo".to_string())]);
@@ -245,13 +211,11 @@ fn filter_snapshot_retains_required_without_treating_it_as_executable() {
             .expect("Git add filter policy"),
         None
     );
-    let neutralization = GitFilterNeutralization {
-        config_override: None,
-        filter_config: entries,
-    };
     assert_eq!(
-        neutralization.filter_value("demo", "required"),
-        Some("true")
+        entries
+            .get("filter.demo.required")
+            .map(|entry| entry.value.as_str()),
+        Some("true"),
     );
 
     let required_only = filter_entries(
@@ -381,9 +345,12 @@ fn sentinel_special_states_and_literal_driver_names_remain_distinct() {
         let root = repo.path();
         configure_marker_filter(root, driver);
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+        let mut config =
+            GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
 
         std::fs::write(root.join(".gitattributes"), special_rule).expect("write special attribute");
-        ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[])
+        config
+            .authorize_filter_paths(&["file.txt".to_string()])
             .expect("allow special attribute state");
         assert!(!marker_filter_ran(root), "special {driver}");
 
@@ -392,8 +359,9 @@ fn sentinel_special_states_and_literal_driver_names_remain_distinct() {
             format!("file.txt filter={driver}\n"),
         )
         .expect("write literal attribute");
-        let result =
-            ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[]);
+        let mut literal_config = GuardedGitConfig::authorize(&git, root, Vec::new())
+            .expect("authorize literal-attribute operation");
+        let result = literal_config.authorize_filter_paths(&["file.txt".to_string()]);
         let error = match result {
             Ok(_) => panic!("accepted literal sentinel-named driver {driver}"),
             Err(error) => error,
@@ -414,9 +382,12 @@ fn sentinel_probe_neutralizes_every_known_driver_after_attribute_swap() {
             .expect("write initial attribute");
 
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        let entries = read_filter_config(&git, root, &[]).expect("filter config");
+        let config =
+            GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+        let entries = read_filter_config(&config).expect("filter config");
         let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-        let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+        let neutralization = config
+            .build_filter_override(&executable_drivers)
             .expect("filter neutralization");
         let output = run_git_success(root, &["check-attr", "-z", "filter", "--", "file.txt"]);
         let attributes = parse_filter_attributes(&output.stdout, &[b"file.txt".to_vec()])
@@ -428,10 +399,8 @@ fn sentinel_probe_neutralizes_every_known_driver_after_attribute_swap() {
         )
         .expect("swap attribute after snapshot");
         let resolved = resolve_filter_attribute_sentinels(
-            &git,
-            root,
+            &config,
             attributes,
-            &[],
             &executable_drivers,
             &neutralization,
         )
@@ -447,9 +416,12 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
     let root = repo.path();
     configure_marker_filter(root, "unspecified");
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+    let entries = read_filter_config(&config).expect("filter config");
     let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+    let neutralization = config
+        .build_filter_override(&executable_drivers)
         .expect("filter neutralization");
     let attributes = (0..=SentinelFilterProbeBudget::max_probes())
         .map(|index| {
@@ -461,10 +433,8 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
         .collect();
 
     let error = resolve_filter_attribute_sentinels(
-        &git,
-        root,
+        &config,
         attributes,
-        &[],
         &executable_drivers,
         &neutralization,
     )
@@ -477,36 +447,31 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
 }
 
 #[test]
-fn unrelated_sentinel_probe_failures_remain_generic_and_fail_closed() {
+fn sentinel_probe_rejects_non_sentinel_driver_before_launch() {
     let repo = init_filter_repo();
     let root = repo.path();
     configure_marker_filter(root, "set");
     std::fs::write(root.join(".gitattributes"), "file.txt filter\n")
         .expect("write special attribute");
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+    let entries = read_filter_config(&config).expect("filter config");
     let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+    let neutralization = config
+        .build_filter_override(&executable_drivers)
         .expect("filter neutralization");
     let mut budget = SentinelFilterProbeBudget::default();
-    let malformed_config = ["-c".to_string(), "=".to_string()];
 
     let error = sentinel_spelling_selects_filter_driver(
-        &git,
-        root,
+        &config,
         b"file.txt",
-        "set",
-        &malformed_config,
+        "ordinary",
         &neutralization,
         &mut budget,
     )
-    .expect_err("malformed config must fail both probes");
-    assert_eq!(error.kind(), io::ErrorKind::Other);
-    assert!(
-        error
-            .to_string()
-            .starts_with("git filter attribute selection probe failed with required status")
-    );
+    .expect_err("reject non-sentinel probe");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(!marker_filter_ran(root));
 }
 
@@ -782,15 +747,6 @@ async fn checked_has_changes_accepts_non_utf8_repository_root() {
 }
 
 #[cfg(unix)]
-#[test]
-fn git_root_output_preserves_non_utf8_bytes() {
-    use std::os::unix::ffi::OsStrExt;
-
-    let path = git_root_from_stdout(b"/tmp/repo-\xff\n".to_vec()).expect("parse raw Git path");
-    assert_eq!(path.as_os_str().as_bytes(), b"/tmp/repo-\xff");
-}
-
-#[cfg(unix)]
 #[tokio::test]
 async fn root_probe_distinguishes_repository_command_failure() {
     use std::os::unix::fs::PermissionsExt;
@@ -798,7 +754,25 @@ async fn root_probe_distinguishes_repository_command_failure() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
     let failing_git = temp_dir.path().join("failing-git");
-    std::fs::write(&failing_git, "#!/bin/sh\nexit 42\n").expect("write failing Git");
+    let resolved_git = std::process::Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve real Git");
+    assert!(resolved_git.status.success(), "resolve real Git");
+    let real_git = format!(
+        "'{}'",
+        String::from_utf8(resolved_git.stdout)
+            .expect("Git path UTF-8")
+            .trim()
+            .replace('\'', "'\\''")
+    );
+    std::fs::write(
+        &failing_git,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" rev-parse --show-toplevel \"*) exit 42 ;; esac\nexec {real_git} \"$@\"\n"
+        ),
+    )
+    .expect("write failing Git");
     let mut permissions = std::fs::metadata(&failing_git)
         .expect("read failing Git metadata")
         .permissions();
@@ -808,7 +782,7 @@ async fn root_probe_distinguishes_repository_command_failure() {
     let git = GitRunner::from_executable_for_test(&repo_path, failing_git)
         .expect("authority-bound failing Git");
     assert_eq!(
-        resolve_git_root_async(&git, &repo_path).await,
+        prepare_status_config(&git, &repo_path).await.map(|_| ()),
         Err(GitReadError::CommandFailed {
             operation: "resolveGitRoot".to_string(),
             exit_code: Some(42),
@@ -860,9 +834,7 @@ async fn legacy_git_without_show_scope_uses_origin_fallback() {
     let git = GitRunner::from_executable_for_test(&repo_path, wrapper)
         .expect("authority-bound legacy Git");
     assert_eq!(
-        prepare_status_filter_guard(&git, &repo_path)
-            .await
-            .map(|_| ()),
+        prepare_status_config(&git, &repo_path).await.map(|_| ()),
         Err(GitReadError::SelectedExecutableFilter {
             driver: "legacy".to_string(),
             path: "test.txt".to_string(),
@@ -898,6 +870,13 @@ async fn get_has_changes_rejects_core_worktree_redirection_before_running_filter
     .await;
 
     assert_eq!(get_has_changes(&repo_path).await, None);
+    assert_eq!(
+        try_get_has_changes(&repo_path).await,
+        Err(GitReadError::RepositoryRootMismatch {
+            expected_root: std::fs::canonicalize(&repo_path).expect("canonical repository"),
+            reported_root: std::fs::canonicalize(&redirected).expect("canonical redirection"),
+        })
+    );
     assert!(!configured_filter_ran(&repo_path).await);
 }
 
