@@ -3,6 +3,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod text_file;
 
 use std::collections::HashMap;
 use std::io;
@@ -23,6 +24,8 @@ pub use parser::UpdateFileChunk;
 pub use parser::parse_patch;
 use similar::TextDiff;
 pub use streaming_parser::StreamingPatchParser;
+use text_file::Replacement;
+use text_file::SourceFile;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
@@ -688,22 +691,13 @@ async fn derive_new_contents_from_chunks(
         })
     })?;
 
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
-
-    // Drop the trailing empty element that results from the final newline so
-    // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(String::is_empty) {
-        original_lines.pop();
-    }
+    let mut source_file = SourceFile::parse(&original_contents);
+    let original_lines = source_file.line_texts();
 
     let path_text = path.inferred_native_path_string();
     let replacements = compute_replacements(&original_lines, &path_text, chunks)?;
-    let new_lines = apply_replacements(original_lines, &replacements);
-    let mut new_lines = new_lines;
-    if !new_lines.last().is_some_and(String::is_empty) {
-        new_lines.push(String::new());
-    }
-    let new_contents = new_lines.join("\n");
+    source_file.apply_replacements(&replacements);
+    let new_contents = source_file.into_contents();
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -717,8 +711,8 @@ fn compute_replacements(
     original_lines: &[String],
     path: &str,
     chunks: &[UpdateFileChunk],
-) -> std::result::Result<Vec<(usize, usize, Vec<String>)>, ApplyPatchError> {
-    let mut replacements: Vec<(usize, usize, Vec<String>)> = Vec::new();
+) -> std::result::Result<Vec<Replacement>, ApplyPatchError> {
+    let mut replacements: Vec<Replacement> = Vec::new();
     let mut line_index: usize = 0;
 
     for chunk in chunks {
@@ -756,11 +750,11 @@ fn compute_replacements(
         // Attempt to locate the `old_lines` verbatim within the file.  In many
         // real‑world diffs the last element of `old_lines` is an *empty* string
         // representing the terminating newline of the region being replaced.
-        // This sentinel is not present in `original_lines` because we strip the
-        // trailing empty slice emitted by `split('\n')`.  If a direct search
-        // fails and the pattern ends with an empty string, retry without that
-        // final element so that modifications touching the end‑of‑file can be
-        // located reliably.
+        // This sentinel is not present in `original_lines` because `SourceFile`
+        // stores the terminator on the preceding line rather than as an extra
+        // trailing element. If a direct search fails and the pattern ends with
+        // an empty string, retry without that final element so modifications
+        // touching the end‑of‑file can be located reliably.
 
         let mut pattern: &[String] = &chunk.old_lines;
         let mut found =
@@ -785,7 +779,34 @@ fn compute_replacements(
         }
 
         if let Some(start_idx) = found {
-            replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
+            // Context lines occur in both sides of a patch chunk. Keep those
+            // original lines in place so their exact contents and terminators
+            // survive, especially when the file has mixed line endings.
+            let mut old_start = 0;
+            let mut new_start = 0;
+            for &(old_context, new_context) in &chunk.context_line_indices {
+                // A trailing empty context line can be removed from `pattern`
+                // and `new_slice` above when it represents the final newline.
+                if old_context >= pattern.len() || new_context >= new_slice.len() {
+                    break;
+                }
+                if old_start != old_context || new_start != new_context {
+                    replacements.push((
+                        start_idx + old_start,
+                        old_context - old_start,
+                        new_slice[new_start..new_context].to_vec(),
+                    ));
+                }
+                old_start = old_context + 1;
+                new_start = new_context + 1;
+            }
+            if old_start != pattern.len() || new_start != new_slice.len() {
+                replacements.push((
+                    start_idx + old_start,
+                    pattern.len() - old_start,
+                    new_slice[new_start..].to_vec(),
+                ));
+            }
             line_index = start_idx + pattern.len();
         } else {
             return Err(ApplyPatchError::ComputeReplacements(format!(
@@ -799,34 +820,6 @@ fn compute_replacements(
     replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
-}
-
-/// Apply the `(start_index, old_len, new_lines)` replacements to `original_lines`,
-/// returning the modified file contents as a vector of lines.
-fn apply_replacements(
-    mut lines: Vec<String>,
-    replacements: &[(usize, usize, Vec<String>)],
-) -> Vec<String> {
-    // We must apply replacements in descending order so that earlier replacements
-    // don't shift the positions of later ones.
-    for (start_idx, old_len, new_segment) in replacements.iter().rev() {
-        let start_idx = *start_idx;
-        let old_len = *old_len;
-
-        // Remove old lines.
-        for _ in 0..old_len {
-            if start_idx < lines.len() {
-                lines.remove(start_idx);
-            }
-        }
-
-        // Insert new lines.
-        for (offset, new_line) in new_segment.iter().enumerate() {
-            lines.insert(start_idx + offset, new_line.clone());
-        }
-    }
-
-    lines
 }
 
 /// Intended result of a file update for apply_patch.
