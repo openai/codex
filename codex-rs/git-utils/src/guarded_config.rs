@@ -19,6 +19,18 @@ use crate::safe_git::FilterPolicyRole;
 use crate::safe_git::FilterPolicySnapshot;
 use crate::safe_git::build_filter_policy_snapshot;
 
+mod merge_overlay;
+use merge_overlay::SealedMergeConfigOverride;
+#[cfg(test)]
+pub(crate) use merge_overlay::merge_attribute_read_count;
+#[cfg(test)]
+pub(crate) use merge_overlay::merge_config_read_count;
+#[cfg(test)]
+pub(crate) use merge_overlay::merge_overlay_count;
+#[cfg(test)]
+pub(crate) use merge_overlay::reset_merge_policy_counts;
+mod reverse_probe;
+
 /// Proof that one exact Git config invocation has no worktree-controlled
 /// source routes for one runner and canonical repository root.
 ///
@@ -130,6 +142,11 @@ pub(crate) struct GuardedGitConfig<'git> {
     // every later child. Downstream staging may attach a fresh Git-add policy
     // without rebuilding or weakening the source authorization.
     filters: Vec<FilterPolicySnapshot>,
+    // At most one merge-driver neutralizer may be attached. Command assembly
+    // places it between the apply and Git-add filter slots regardless of
+    // attachment timing.
+    merge: Option<SealedMergeConfigOverride>,
+    merge_policy_installed: bool,
 }
 
 struct CapabilityIdentity;
@@ -270,6 +287,8 @@ impl<'git> GuardedGitConfig<'git> {
             sources: ValidatedConfigSources::authorize(git, canonical_root, base_config_args)?,
             identity: Arc::new(CapabilityIdentity),
             filters: Vec::new(),
+            merge: None,
+            merge_policy_installed: false,
         })
     }
 
@@ -341,12 +360,46 @@ impl<'git> GuardedGitConfig<'git> {
             .command_for_cwd(&self.sources.canonical_root)?;
         command.args(&self.sources.base_config_args);
         append_safe_scalar_overrides(&mut command);
-        for filter in &self.filters {
-            if let Some(neutralizer) = filter.neutralizer() {
-                neutralizer.append_to(&self.identity, &mut command)?;
-            }
+        let (apply, git_add) = self.ordered_filter_snapshots()?;
+        if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_to(&self.identity, &mut command)?;
+        }
+        if let Some(merge) = &self.merge {
+            merge.append_to(&self.identity, &mut command)?;
+        }
+        if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_to(&self.identity, &mut command)?;
         }
         Ok(command)
+    }
+
+    fn ordered_filter_snapshots(
+        &self,
+    ) -> io::Result<(Option<&FilterPolicySnapshot>, Option<&FilterPolicySnapshot>)> {
+        let ordered = match self.filters.as_slice() {
+            [] => (None, None),
+            [apply] if apply.role() == FilterPolicyRole::Apply => (Some(apply), None),
+            [git_add] if git_add.role() == FilterPolicyRole::GitAdd => (None, Some(git_add)),
+            [apply, git_add]
+                if apply.role() == FilterPolicyRole::Apply
+                    && git_add.role() == FilterPolicyRole::GitAdd =>
+            {
+                (Some(apply), Some(git_add))
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "invalid ordered Git filter policy state",
+                ));
+            }
+        };
+        if self.merge_policy_installed && ordered.0.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "merge policy requires an apply filter snapshot",
+            ));
+        }
+        Ok(ordered)
     }
 
     pub(crate) fn command_for_sentinel_filter_probe<'operation>(
@@ -361,17 +414,7 @@ impl<'git> GuardedGitConfig<'git> {
                 "Git filter sentinel probe requested for a non-sentinel driver",
             ));
         }
-        let mut command = self
-            .sources
-            .git
-            .command_for_cwd(&self.sources.canonical_root)?;
-        command.args(&self.sources.base_config_args);
-        append_safe_scalar_overrides(&mut command);
-        for filter in &self.filters {
-            if let Some(attached) = filter.neutralizer() {
-                attached.append_to(&self.identity, &mut command)?;
-            }
-        }
+        let mut command = self.command_with_attached_overlays()?;
         neutralizer.append_to(&self.identity, &mut command)?;
         command.args(["-c", &format!("filter.{driver}.required={required}")]);
         BoundSubcommand::HashObject.append_to(&mut command);
@@ -491,6 +534,29 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(())
     }
 
+    pub(crate) fn apply_filter_paths(&self) -> io::Result<Vec<String>> {
+        let [apply] = self.filters.as_slice() else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "merge policy requires exactly one apply filter snapshot",
+            ));
+        };
+        if apply.role() != FilterPolicyRole::Apply {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "merge policy requires an apply filter snapshot",
+            ));
+        }
+        Ok(apply.checked_paths())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn merge_include_arg(&self) -> Option<&str> {
+        self.merge
+            .as_ref()
+            .map(SealedMergeConfigOverride::include_arg)
+    }
+
     pub(crate) fn authorize_git_add_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
         match self.filters.as_slice() {
             [] => {}
@@ -511,10 +577,15 @@ impl<'git> GuardedGitConfig<'git> {
         let mut parts = vec!["git".to_string()];
         parts.extend(self.sources.base_config_args.iter().cloned());
         parts.extend(safe_scalar_override_args());
-        for filter in &self.filters {
-            if let Some(neutralizer) = filter.neutralizer() {
-                neutralizer.append_rendered_args(&self.identity, &mut parts)?;
-            }
+        let (apply, git_add) = self.ordered_filter_snapshots()?;
+        if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
+        }
+        if let Some(merge) = &self.merge {
+            merge.append_rendered_args(&self.identity, &mut parts)?;
+        }
+        if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
+            neutralizer.append_rendered_args(&self.identity, &mut parts)?;
         }
         parts.extend(args.iter().cloned());
         Ok(format!(

@@ -70,6 +70,10 @@ impl FilterPolicySnapshot {
     pub(crate) fn contains_checked_path(&self, path: &str) -> bool {
         self.checked_paths.contains(path)
     }
+
+    pub(crate) fn checked_paths(&self) -> Vec<String> {
+        self.checked_paths.iter().cloned().collect()
+    }
 }
 
 const ISOLATED_GIT_ENVIRONMENT: [&str; 11] = [

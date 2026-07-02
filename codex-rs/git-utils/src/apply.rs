@@ -15,8 +15,8 @@ use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::guarded_config::GuardedGitConfig;
-use crate::patch_paths::extract_effective_paths_from_patch_guarded;
-use crate::patch_paths::stage_effective_paths_from_apply;
+use crate::patch_paths::extract_patch_path_inventory_guarded;
+use crate::reverse_staging::stage_effective_paths_for_reverse;
 #[cfg(test)]
 use crate::safe_git::DISABLED_HOOKS_PATH;
 #[cfg(test)]
@@ -63,21 +63,11 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, req.revert)?;
-    config.authorize_filter_paths(&patch_paths)?;
-
-    if req.revert && !req.preflight {
-        // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths_from_apply(&mut config, &patch_paths)?;
-    }
-
-    // Build git args
-    let mut args: Vec<String> = vec!["apply".into(), "--3way".into()];
-    if req.revert {
-        args.push("-R".into());
-    }
-
-    args.push(patch_path.to_string_lossy().to_string());
+    let patch_path_inventory =
+        extract_patch_path_inventory_guarded(&config, &patch_path, req.revert)?;
+    let patch_paths = &patch_path_inventory.effective_paths;
+    config.authorize_filter_paths(patch_paths)?;
+    let patch_arg = patch_path.to_string_lossy().to_string();
 
     // Optional preflight: dry-run only; do not modify working tree
     if req.preflight {
@@ -85,7 +75,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         if req.revert {
             check_args.push("-R".to_string());
         }
-        check_args.push(patch_path.to_string_lossy().to_string());
+        check_args.push(patch_arg);
         let rendered = config.render_command_for_log(&check_args)?;
         let (c_code, c_out, c_err) = run_guarded_apply(&config, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
@@ -107,11 +97,45 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         });
     }
 
+    // Avoid three-way machinery entirely when the patch applies cleanly. A
+    // reverse check must inspect the working tree before staging: requiring
+    // the old index to match would misclassify a clean undo as a three-way
+    // fallback. Forward direct application still requires index agreement.
+    let mut plain_check_args = vec!["apply".to_string(), "--check".to_string()];
+    if !req.revert {
+        plain_check_args.push("--index".to_string());
+    }
+    if req.revert {
+        plain_check_args.push("-R".to_string());
+    }
+    plain_check_args.push(patch_arg.clone());
+    let (plain_check_code, _, _) = run_guarded_apply(&config, &plain_check_args)?;
+
+    let mut args = vec!["apply".to_string()];
+    if plain_check_code != 0 {
+        config.install_three_way_merge_policy()?;
+        args.push("--3way".to_string());
+    } else {
+        args.push("--index".to_string());
+    }
+    if req.revert {
+        // Stage only after the worktree-only applicability decision. The
+        // guarded config is shared with the final Git command.
+        stage_effective_paths_for_reverse(&mut config, patch_paths)?;
+    }
+    if req.revert {
+        args.push("-R".to_string());
+    }
+    args.push(patch_arg);
+
     let cmd_for_log = config.render_command_for_log(&args)?;
     let (code, stdout, stderr) = run_guarded_apply(&config, &args)?;
 
-    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
-        parse_git_apply_output(&stdout, &stderr);
+    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) = if code == 0 {
+        (patch_path_inventory.primary_paths, Vec::new(), Vec::new())
+    } else {
+        parse_git_apply_output(&stdout, &stderr)
+    };
     applied_paths.sort();
     applied_paths.dedup();
     skipped_paths.sort();
@@ -159,7 +183,7 @@ fn resolve_git_root(config: &GuardedGitConfig<'_>, requested_cwd: &Path) -> io::
     Ok(root)
 }
 
-fn configured_git_config_parts() -> Vec<String> {
+pub(crate) fn configured_git_config_parts() -> Vec<String> {
     let mut cfg_parts = Vec::new();
     if let Ok(cfg) = std::env::var("CODEX_APPLY_GIT_CFG") {
         for pair in cfg.split(',') {
@@ -226,10 +250,17 @@ mod transport_tests;
 mod filter_tests;
 
 #[cfg(test)]
+#[path = "reverse_apply_tests.rs"]
+mod reverse_apply_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::guarded_config::config_source_authorization_count;
+    use crate::guarded_config::merge_attribute_read_count;
+    use crate::guarded_config::merge_config_read_count;
     use crate::guarded_config::reset_config_source_authorization_count;
+    use crate::guarded_config::reset_merge_policy_counts;
     use crate::safe_git::filter_policy_overlay_count;
     use crate::safe_git::filter_policy_read_count;
     use crate::safe_git::reset_filter_policy_counts;
@@ -381,8 +412,32 @@ mod tests {
         let r = apply_git_patch(&req).expect("run apply");
         assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(r.exit_code, 0, "exit code 0");
+        assert_eq!(r.applied_paths, vec!["hello.txt"]);
         // File exists now
         assert!(root.join("hello.txt").exists());
+    }
+
+    #[test]
+    fn preflight_uses_one_authorization_and_skips_merge_policy() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/preflight.txt b/preflight.txt\nnew file mode 100644\n--- /dev/null\n+++ b/preflight.txt\n@@ -0,0 +1 @@\n+preflight\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+
+        reset_config_source_authorization_count();
+        reset_merge_policy_counts();
+        let result = apply_git_patch(&request).expect("preflight");
+
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert_eq!(config_source_authorization_count(), 1);
+        assert_eq!(merge_config_read_count(), 0);
+        assert_eq!(merge_attribute_read_count(), 0);
+        assert!(!root.join("preflight.txt").exists());
     }
 
     #[test]
@@ -635,7 +690,11 @@ mod tests {
         reset_filter_policy_counts();
         let res_revert = apply_git_patch(&revert_req).expect("revert ok");
         assert_eq!(config_source_authorization_count(), 1);
-        assert_eq!(filter_policy_read_count(), 2);
+        assert_eq!(
+            filter_policy_read_count(),
+            1,
+            "reverse staging must skip a fresh Git-add policy when the index already matches"
+        );
         assert_eq!(filter_policy_overlay_count(), 0);
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));

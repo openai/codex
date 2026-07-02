@@ -1,15 +1,63 @@
 //! Effective patch-path discovery and safe staging guards.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::apply::write_temp_patch;
-use crate::exact_staging::update_index_exact_paths_from_apply;
 use crate::exact_staging::update_index_exact_paths_standalone;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
 use crate::guarded_config::GuardedGitConfig;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchPathInventory {
+    pub(crate) primary_paths: Vec<String>,
+    pub(crate) effective_paths: Vec<String>,
+}
+
+/// Extract requested-orientation and effective paths through one bound
+/// operation configuration.
+pub(crate) fn extract_patch_path_inventory_guarded(
+    config: &GuardedGitConfig<'_>,
+    patch_path: &Path,
+    revert: bool,
+) -> io::Result<PatchPathInventory> {
+    let primary_paths = git_apply_numstat_paths_guarded(config, patch_path, revert)?;
+    // `git apply --numstat` reports only the destination of a rename. Parse the
+    // opposite orientation too so both endpoints are included in the result.
+    let opposite_paths = git_apply_numstat_paths_guarded(config, patch_path, !revert)?;
+    if primary_paths.len() != opposite_paths.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "forward and reverse patch parsing returned different path counts",
+        ));
+    }
+    let primary_paths = primary_paths
+        .into_iter()
+        .map(validate_patch_path)
+        .collect::<io::Result<BTreeSet<_>>>()?;
+    let opposite_paths = opposite_paths
+        .into_iter()
+        .map(validate_patch_path)
+        .collect::<io::Result<BTreeSet<_>>>()?;
+    let effective_paths = primary_paths
+        .iter()
+        .cloned()
+        .chain(opposite_paths)
+        .collect::<BTreeSet<_>>();
+    if effective_paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "patch does not identify any paths",
+        ));
+    }
+    Ok(PatchPathInventory {
+        primary_paths: primary_paths.into_iter().collect(),
+        effective_paths: effective_paths.into_iter().collect(),
+    })
+}
 
 /// Extract effective patch paths through a bound operation configuration.
 pub(crate) fn extract_effective_paths_from_patch_guarded(
@@ -17,33 +65,7 @@ pub(crate) fn extract_effective_paths_from_patch_guarded(
     patch_path: &Path,
     revert: bool,
 ) -> io::Result<Vec<String>> {
-    let forward_paths = git_apply_numstat_paths_guarded(config, patch_path, revert)?;
-    let reverse_paths = git_apply_numstat_paths_guarded(config, patch_path, !revert)?;
-    normalize_effective_patch_paths(forward_paths, reverse_paths)
-}
-
-fn normalize_effective_patch_paths(
-    forward_paths: Vec<String>,
-    reverse_paths: Vec<String>,
-) -> io::Result<Vec<String>> {
-    if forward_paths.len() != reverse_paths.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "forward and reverse patch parsing returned different path counts",
-        ));
-    }
-    let effective_paths: std::collections::BTreeSet<String> =
-        forward_paths.into_iter().chain(reverse_paths).collect();
-    if effective_paths.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "patch does not identify any paths",
-        ));
-    }
-    effective_paths
-        .into_iter()
-        .map(validate_patch_path)
-        .collect()
+    Ok(extract_patch_path_inventory_guarded(config, patch_path, revert)?.effective_paths)
 }
 
 fn git_apply_numstat_paths_guarded(
@@ -132,7 +154,7 @@ fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
             )
         })?;
         if path.is_empty() {
-            let old = records
+            let _old = records
                 .next()
                 .filter(|path| !path.is_empty())
                 .ok_or_else(|| {
@@ -150,7 +172,6 @@ fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
                         "git apply returned an incomplete rename path record",
                     )
                 })?;
-            insert_numstat_path(&mut paths, old)?;
             insert_numstat_path(&mut paths, new)?;
         } else {
             insert_numstat_path(&mut paths, path)?;
@@ -251,17 +272,6 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     stage_effective_paths_standalone(&mut config, &paths)
 }
 
-pub(crate) fn stage_effective_paths_from_apply(
-    config: &mut GuardedGitConfig<'_>,
-    paths: &[String],
-) -> io::Result<()> {
-    let (existing, content_filter_paths) = classify_exact_staging_leaves(config, paths)?;
-    let _result = update_index_exact_paths_from_apply(config, &existing, &content_filter_paths)?;
-    // Preserve the public helper's historical best-effort treatment of a
-    // non-zero staging command. Security and probe failures still propagate.
-    Ok(())
-}
-
 fn stage_effective_paths_standalone(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],
@@ -299,12 +309,12 @@ fn classify_exact_staging_leaves(
 }
 
 #[cfg(not(windows))]
-fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     file_type.is_dir()
 }
 
 #[cfg(unix)]
-fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
     // Git stages an exact Unix symlink as a mode-120000 blob containing the
     // link target. The whole-command neutralizer covers unrelated racy index
     // entries while this target is omitted from the selected-filter refusal.
@@ -312,14 +322,14 @@ fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
 }
 
 #[cfg(not(unix))]
-fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
     // Keep the conservative policy on platforms whose symlink staging
     // behavior can depend on repository and host configuration.
     true
 }
 
 #[cfg(windows)]
-fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     use std::os::windows::fs::FileTypeExt;
 
     // Git traverses junctions and container-mapped directory symlinks. Refuse
@@ -371,7 +381,7 @@ pub(crate) struct ConfinedPatchPaths {
 }
 
 impl ConfinedPatchPaths {
-    fn into_exact_leaves(self) -> io::Result<Vec<String>> {
+    pub(crate) fn into_exact_leaves(self) -> io::Result<Vec<String>> {
         self.entries
             .into_iter()
             .map(|entry| {
@@ -408,11 +418,14 @@ pub(crate) fn confine_patch_paths(
     confine_patch_paths_guarded(&config, paths)
 }
 
-fn confine_patch_paths_guarded(
+pub(crate) fn confine_patch_paths_guarded(
     config: &GuardedGitConfig<'_>,
     paths: &[String],
 ) -> io::Result<ConfinedPatchPaths> {
     let canonical_root = std::fs::canonicalize(config.canonical_root())?;
+    if paths.is_empty() || paths.iter().all(|path| !path.contains('/')) {
+        return confine_patch_paths_with_metadata(&canonical_root, paths, &[]);
+    }
     let metadata_dirs = canonical_git_metadata_dirs_guarded(config)?;
     confine_patch_paths_with_metadata(&canonical_root, paths, &metadata_dirs)
 }
@@ -560,6 +573,8 @@ fn canonical_git_metadata_dirs_guarded(config: &GuardedGitConfig<'_>) -> io::Res
     ];
     let mut metadata_dirs = std::collections::BTreeSet::new();
     for args in queries {
+        #[cfg(test)]
+        CONTAINMENT_METADATA_QUERY_COUNT.with(|count| count.set(count.get() + 1));
         let mut command = config.rev_parse_command()?;
         command.args(&args[1..]);
         let output = command.output()?;
@@ -587,6 +602,21 @@ fn canonical_git_metadata_dirs_guarded(config: &GuardedGitConfig<'_>) -> io::Res
         metadata_dirs.insert(std::fs::canonicalize(absolute)?);
     }
     Ok(metadata_dirs.into_iter().collect())
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONTAINMENT_METADATA_QUERY_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_containment_metadata_query_count() {
+    CONTAINMENT_METADATA_QUERY_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn containment_metadata_query_count() -> usize {
+    CONTAINMENT_METADATA_QUERY_COUNT.with(std::cell::Cell::get)
 }
 
 fn insert_candidate_prefixes<'a>(

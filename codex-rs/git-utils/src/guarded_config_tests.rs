@@ -13,6 +13,33 @@ fn run_git(cwd: &Path, args: &[&str]) {
     );
 }
 
+fn run_isolated_config_test(test_name: &str) {
+    let environment = tempfile::tempdir().expect("isolated Git environment");
+    let global_config = environment.path().join("global.gitconfig");
+    let system_config = environment.path().join("system.gitconfig");
+    std::fs::write(&global_config, "").expect("empty global config");
+    std::fs::write(&system_config, "").expect("empty system config");
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    isolate_git_command_environment(&mut command);
+    let output = command
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD", "1")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_SYSTEM", &system_config)
+        .env("RUST_TEST_THREADS", "1")
+        .output()
+        .expect("run isolated test process");
+    assert!(
+        output.status.success(),
+        "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn attached_filter_snapshots_retain_multiple_owned_overrides() {
     let repo = tempfile::tempdir().expect("repo");
@@ -128,6 +155,108 @@ fn composed_staging_subset_proof_requires_exactly_one_apply_snapshot() {
         .ensure_apply_filter_path_subset(&[])
         .expect_err("two snapshots must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::zero_driver_merge_policy_still_occupies_the_single_install_slot",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+
+    let error = config
+        .install_three_way_merge_policy()
+        .expect_err("merge policy without apply snapshot must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("apply snapshot");
+    config
+        .install_three_way_merge_policy()
+        .expect("zero-driver merge policy");
+    assert!(config.merge_policy_installed);
+    assert!(config.merge.is_none());
+
+    let error = config
+        .install_three_way_merge_policy()
+        .expect_err("second merge policy must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
+    if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "guarded_config::tests::command_order_is_apply_filter_then_merge_then_git_add_filter",
+        );
+        return;
+    }
+    let repo = tempfile::tempdir().expect("repo");
+    run_git(repo.path(), &["init", "-q"]);
+    std::fs::write(repo.path().join("file.txt"), "file\n").expect("write file");
+    run_git(
+        repo.path(),
+        &["config", "filter.demo.clean", "git hash-object --stdin"],
+    );
+    run_git(repo.path(), &["config", "merge.unused.driver", "false"]);
+    let git = GitRunner::for_cwd_io(repo.path()).expect("runner");
+    let mut config =
+        GuardedGitConfig::authorize(&git, repo.path(), Vec::new()).expect("authorized config");
+
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("apply filter policy");
+    config
+        .install_three_way_merge_policy()
+        .expect("merge policy");
+    config
+        .authorize_git_add_filter_paths(&["file.txt".to_string()])
+        .expect("Git-add filter policy");
+
+    let apply_include = config.filters[0]
+        .neutralizer()
+        .expect("apply filter overlay")
+        .include_arg
+        .clone();
+    let merge_include = config
+        .merge_include_arg()
+        .expect("merge overlay")
+        .to_string();
+    let git_add_include = config.filters[1]
+        .neutralizer()
+        .expect("Git-add filter overlay")
+        .include_arg
+        .clone();
+    let overlay_paths = [&apply_include, &merge_include, &git_add_include]
+        .map(|include| PathBuf::from(include.strip_prefix("include.path=").expect("include path")));
+
+    let rendered = config
+        .render_command_for_log(&["ls-files".to_string()])
+        .expect("render command");
+    let apply_offset = rendered.find(&apply_include).expect("apply include");
+    let merge_offset = rendered.find(&merge_include).expect("merge include");
+    let git_add_offset = rendered.find(&git_add_include).expect("Git-add include");
+    assert!(apply_offset < merge_offset && merge_offset < git_add_offset);
+    assert_eq!(rendered.matches(&merge_include).count(), 1);
+
+    let output = config
+        .ls_files_command()
+        .expect("bound command")
+        .output()
+        .expect("execute bound command");
+    assert!(output.status.success());
+    assert!(overlay_paths.iter().all(|path| path.is_file()));
+
+    drop(config);
+    assert!(overlay_paths.iter().all(|path| !path.exists()));
 }
 
 #[test]

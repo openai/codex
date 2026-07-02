@@ -297,10 +297,7 @@ fn effective_paths_cover_supported_patch_headers() {
 
     let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
         .expect("parse NUL-delimited rename paths");
-    assert_eq!(
-        nul_rename_paths,
-        vec!["old name.txt".to_string(), "new name.txt".to_string()]
-    );
+    assert_eq!(nul_rename_paths, vec!["new name.txt".to_string()]);
 }
 
 #[test]
@@ -994,6 +991,38 @@ impl Drop for DirectoryAlias {
         #[cfg(windows)]
         let _ = std::fs::remove_dir(&self.0);
     }
+}
+
+#[test]
+fn confinement_skips_metadata_queries_only_for_paths_without_ancestors() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let root = repo.path();
+    let git = GitRunner::for_cwd_io(root).expect("Git runner");
+    let config = GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorization");
+
+    reset_containment_metadata_query_count();
+    confine_patch_paths_guarded(&config, &["leaf".to_string()]).expect("single leaf");
+    assert_eq!(containment_metadata_query_count(), 0);
+
+    reset_containment_metadata_query_count();
+    confine_patch_paths_guarded(&config, &["nested/leaf".to_string()]).expect("nested leaf");
+    assert_eq!(
+        containment_metadata_query_count(),
+        2,
+        "nested paths must still resolve private and common Git metadata"
+    );
+}
+
+#[test]
+fn single_component_git_directory_is_refused_without_metadata_queries() {
+    let _g = env_lock().lock().unwrap();
+    let repo = init_repo();
+    let before = git_index_bytes(repo.path());
+
+    reset_containment_metadata_query_count();
+    assert_stage_refused(repo.path(), ".git", &before);
+    assert_eq!(containment_metadata_query_count(), 0);
 }
 
 #[cfg(any(unix, windows))]

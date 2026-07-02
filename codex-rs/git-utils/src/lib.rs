@@ -15,11 +15,13 @@ mod git_executable;
 mod guarded_config;
 mod info;
 mod local_only;
+mod merge_driver;
 mod operations;
 mod patch_paths;
 mod path_authority;
 mod platform;
 mod repository_authority;
+mod reverse_staging;
 mod safe_git;
 
 pub use apply::ApplyGitRequest;
