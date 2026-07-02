@@ -22,6 +22,23 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PersistedHistoryCursor {
+    pub(crate) item_count: usize,
+    pub(crate) fingerprint: [u8; 20],
+}
+
+/// What kind of persistence operation may have reached storage after reporting an error.
+///
+/// Append-only ambiguity can be resolved by observing the in-memory history as a prefix of a
+/// later durable read. A history rewrite cannot use that proof: the pre-rewrite rollout is also a
+/// strict extension of the rewritten in-memory history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistedHistoryCursorUncertainty {
+    AppendOnly,
+    HistoryRewrite,
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
@@ -43,6 +60,10 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
+    known_persisted_incomplete_tail: Option<String>,
+    known_persisted_history_cursor: Option<PersistedHistoryCursor>,
+    persisted_history_cursor_uncertainty: Option<PersistedHistoryCursorUncertainty>,
+    uncertain_expected_persisted_history_cursor: Option<PersistedHistoryCursor>,
 }
 
 impl SessionState {
@@ -75,6 +96,10 @@ impl SessionState {
             pending_session_start_sources: VecDeque::new(),
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
+            known_persisted_incomplete_tail: None,
+            known_persisted_history_cursor: None,
+            persisted_history_cursor_uncertainty: None,
+            uncertain_expected_persisted_history_cursor: None,
         }
     }
 
@@ -107,6 +132,68 @@ impl SessionState {
         is_first_turn
     }
 
+    pub(crate) fn known_persisted_incomplete_tail(&self) -> Option<String> {
+        self.known_persisted_incomplete_tail.clone()
+    }
+
+    pub(crate) fn set_known_persisted_incomplete_tail(&mut self, tail: Option<String>) {
+        self.known_persisted_incomplete_tail = tail;
+    }
+
+    pub(crate) fn known_persisted_history_cursor(&self) -> Option<PersistedHistoryCursor> {
+        self.known_persisted_history_cursor
+    }
+
+    pub(crate) fn set_known_persisted_history_cursor(
+        &mut self,
+        cursor: Option<PersistedHistoryCursor>,
+    ) {
+        self.known_persisted_history_cursor = cursor;
+        self.persisted_history_cursor_uncertainty = None;
+        self.uncertain_expected_persisted_history_cursor = None;
+    }
+
+    pub(crate) fn persisted_history_cursor_uncertainty(
+        &self,
+    ) -> Option<PersistedHistoryCursorUncertainty> {
+        self.persisted_history_cursor_uncertainty
+    }
+
+    pub(crate) fn uncertain_expected_persisted_history_cursor(
+        &self,
+    ) -> Option<PersistedHistoryCursor> {
+        self.uncertain_expected_persisted_history_cursor
+    }
+
+    pub(crate) fn set_uncertain_expected_persisted_history_cursor(
+        &mut self,
+        cursor: Option<PersistedHistoryCursor>,
+    ) {
+        self.uncertain_expected_persisted_history_cursor = cursor;
+    }
+
+    pub(crate) fn invalidate_persisted_item_cursor(
+        &mut self,
+        uncertainty: PersistedHistoryCursorUncertainty,
+        expected_cursor: Option<PersistedHistoryCursor>,
+    ) {
+        self.known_persisted_history_cursor = None;
+        self.uncertain_expected_persisted_history_cursor = expected_cursor;
+        self.persisted_history_cursor_uncertainty = Some(
+            match (self.persisted_history_cursor_uncertainty, uncertainty) {
+                (Some(PersistedHistoryCursorUncertainty::HistoryRewrite), _)
+                | (_, PersistedHistoryCursorUncertainty::HistoryRewrite) => {
+                    PersistedHistoryCursorUncertainty::HistoryRewrite
+                }
+                _ => PersistedHistoryCursorUncertainty::AppendOnly,
+            },
+        );
+    }
+
+    pub(crate) fn reset_additional_context(&mut self) {
+        self.additional_context = AdditionalContextStore::default();
+    }
+
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }
@@ -116,10 +203,20 @@ impl SessionState {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
+        self.replace_history_preserving_auto_compact_prefill(items, reference_context_item);
+        self.auto_compact_window.clear_prefill();
+    }
+
+    pub(crate) fn replace_history_preserving_auto_compact_prefill(
+        &mut self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
+        // Append-only handoffs stay in the same compaction window, so their server-observed
+        // baseline remains authoritative even though the model history is replaced wholesale.
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
-        self.auto_compact_window.clear_prefill();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -163,6 +260,11 @@ impl SessionState {
         self.auto_compact_window.claim_token_budget_reminder()
     }
 
+    pub(crate) fn set_token_budget_reminder_delivered(&mut self, delivered: bool) {
+        self.auto_compact_window
+            .set_token_budget_reminder_delivered(delivered);
+    }
+
     pub(crate) fn auto_compact_window_number(&self) -> u64 {
         self.auto_compact_window.window_number()
     }
@@ -177,6 +279,14 @@ impl SessionState {
         ids: AutoCompactWindowIds,
     ) {
         self.auto_compact_window.restore(window_number, ids);
+    }
+
+    pub(crate) fn reconcile_auto_compact_window(
+        &mut self,
+        window_number: u64,
+        ids: AutoCompactWindowIds,
+    ) {
+        self.auto_compact_window.reconcile(window_number, ids);
     }
 
     pub(crate) fn advance_auto_compact_window(&mut self) -> (u64, AutoCompactWindowIds) {

@@ -16,6 +16,8 @@ use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_CLOSE_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_OPEN_TAG;
 use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::context_snapshot;
@@ -54,6 +56,10 @@ fn token_budget_contexts(request: &ResponsesRequest) -> Vec<String> {
         .into_iter()
         .filter(|text| text.starts_with(&context_window_prefix))
         .collect()
+}
+
+fn wrapped_token_budget_reminder(message: &str) -> String {
+    format!("{TOKEN_BUDGET_REMINDER_OPEN_TAG}\n{message}\n{TOKEN_BUDGET_REMINDER_CLOSE_TAG}")
 }
 
 fn token_budget_window_ids(
@@ -381,12 +387,14 @@ async fn token_budget_reminder_emits_after_crossing_compaction_threshold() -> Re
     assert_eq!(requests.len(), 2);
     let initial_context = token_budget_contexts(&requests[0]);
     assert_eq!(initial_context.len(), 1);
-    let reminder = "Your context window is nearly exhausted (only 1000 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.";
+    let reminder = wrapped_token_budget_reminder(
+        "Your context window is nearly exhausted (only 1000 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.",
+    );
     assert_eq!(
         requests[1]
             .message_input_texts("developer")
             .into_iter()
-            .filter(|text| text == reminder)
+            .filter(|text| text == &reminder)
             .count(),
         1
     );
@@ -439,7 +447,9 @@ async fn token_budget_reminder_uses_body_after_prefix_window() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
-    let reminder = "Your context window is nearly exhausted (only 400 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.";
+    let reminder = wrapped_token_budget_reminder(
+        "Your context window is nearly exhausted (only 400 tokens remaining) and will be automatically reset for you soon. Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows.",
+    );
     assert!(
         requests[1]
             .message_input_texts("developer")
@@ -451,7 +461,7 @@ async fn token_budget_reminder_uses_body_after_prefix_window() -> Result<()> {
         requests[2]
             .message_input_texts("developer")
             .into_iter()
-            .filter(|text| text == reminder)
+            .filter(|text| text == &reminder)
             .count(),
         1
     );

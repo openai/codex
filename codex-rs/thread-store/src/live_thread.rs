@@ -220,6 +220,17 @@ impl LiveThread {
             .await
     }
 
+    /// Seeds append-derived metadata observation from an already persisted history.
+    ///
+    /// Callers that refresh a live session from storage must do this before accepting another
+    /// append, so metadata imported by the refresh is not mistaken for metadata from that append.
+    pub async fn seed_metadata_from_history(&self, history: &[RolloutItem]) {
+        self.metadata_sync
+            .lock()
+            .await
+            .record_resume_history(history);
+    }
+
     pub async fn read_thread(
         &self,
         include_archived: bool,

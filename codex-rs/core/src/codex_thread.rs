@@ -3,6 +3,8 @@ use crate::config::ConstraintResult;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
+use crate::state::PersistedHistoryCursor;
+use crate::state::PersistedHistoryCursorUncertainty;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -93,6 +95,33 @@ pub enum TryStartTurnIfIdleRejectionReason {
     /// Another turn or task is active, or the idle reservation was lost before
     /// the automatic turn could start.
     Busy,
+}
+
+/// Stable snapshot used to ensure persisted history is only installed over the
+/// same idle in-memory history that preceded the storage read.
+#[derive(Debug)]
+pub struct ThreadHistoryReconciliationSnapshot {
+    pub(crate) history: Vec<ResponseItem>,
+    pub(crate) history_version: u64,
+    pub(crate) known_persisted_incomplete_tail: Option<String>,
+    pub(crate) known_persisted_history_cursor: Option<PersistedHistoryCursor>,
+    pub(crate) persisted_history_cursor_uncertainty: Option<PersistedHistoryCursorUncertainty>,
+    pub(crate) uncertain_expected_persisted_history_cursor: Option<PersistedHistoryCursor>,
+}
+
+/// Result of reconciling a loaded thread with its persisted rollout history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreadHistoryReconciliationOutcome {
+    /// Persisted and in-memory model histories were already identical.
+    Unchanged,
+    /// The persisted rollout was canonically reconstructed and installed.
+    Refreshed,
+    /// A local turn is active, so its live state remains authoritative.
+    Busy,
+    /// The persisted rollout ends in a turn that has not reached a terminal event.
+    Incomplete,
+    /// The local idle history changed after the reconciliation snapshot was taken.
+    Conflict,
 }
 
 /// Rejection returned when an extension asks to start automatic idle work but
@@ -241,6 +270,25 @@ impl CodexThread {
     #[doc(hidden)]
     pub async fn flush_rollout(&self) -> std::io::Result<()> {
         self.codex.session.flush_rollout().await
+    }
+
+    /// Captures the idle model history before a caller performs a persisted-history read.
+    pub async fn history_reconciliation_snapshot(
+        &self,
+    ) -> Option<ThreadHistoryReconciliationSnapshot> {
+        self.codex.session.history_reconciliation_snapshot().await
+    }
+
+    /// Rebuilds and installs a completed persisted rollout without writing it again.
+    pub async fn reconcile_persisted_history(
+        &self,
+        snapshot: ThreadHistoryReconciliationSnapshot,
+        rollout_items: &[RolloutItem],
+    ) -> ThreadHistoryReconciliationOutcome {
+        self.codex
+            .session
+            .reconcile_persisted_history(snapshot, rollout_items)
+            .await
     }
 
     pub async fn submit_with_trace(
@@ -413,6 +461,18 @@ impl CodexThread {
         self.codex.next_event().await
     }
 
+    /// Returns a queued event without waiting. Running-thread resume uses this while holding an
+    /// event-delivery cut so every event represented by its snapshot is consumed before attach.
+    pub fn try_next_event(&self) -> CodexResult<Option<Event>> {
+        self.codex.try_next_event()
+    }
+
+    /// Returns the queue depth at one instant. Running-thread resume uses this to bound its
+    /// pre-attach drain when a legacy exec producer can append output concurrently.
+    pub fn pending_event_count(&self) -> usize {
+        self.codex.pending_event_count()
+    }
+
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
     }
@@ -443,6 +503,20 @@ impl CodexThread {
         self.codex.session.token_usage_info().await
     }
 
+    /// Serializes an idle persisted-history read/replacement with history-only mutations.
+    pub async fn acquire_history_reconciliation_event_cut(
+        &self,
+    ) -> (
+        tokio::sync::OwnedMutexGuard<()>,
+        tokio::sync::OwnedMutexGuard<()>,
+        tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.codex
+            .session
+            .acquire_history_reconciliation_event_cut()
+            .await
+    }
+
     /// Records a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
         let item = ResponseItem::Message {
@@ -466,6 +540,7 @@ impl CodexThread {
             ));
         }
 
+        let _history_guard = self.codex.session.acquire_history_persistence_lock().await;
         let turn_context = self.codex.session.new_default_turn().await;
         if self.codex.session.reference_context_item().await.is_none() {
             // This history-only API runs without run_turn, so it owns its initial step.
@@ -481,7 +556,7 @@ impl CodexThread {
         }
         self.codex
             .session
-            .inject_no_new_turn(items, Some(turn_context.as_ref()))
+            .inject_no_new_turn_locked(items, Some(turn_context.as_ref()))
             .await;
         self.codex.session.flush_rollout().await?;
         Ok(())
@@ -555,6 +630,7 @@ impl CodexThread {
 
     /// Appends rollout items through the live thread so derived metadata stays in sync.
     pub async fn append_rollout_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        let rollout_guard = self.codex.session.acquire_rollout_persistence_lock().await;
         let live_thread = self
             .codex
             .session
@@ -562,7 +638,24 @@ impl CodexThread {
             .map_err(|err| ThreadStoreError::Internal {
                 message: err.to_string(),
             })?;
-        live_thread.append_items(items).await
+        match live_thread.append_items(items).await {
+            Ok(()) => {
+                self.codex
+                    .session
+                    .note_persisted_non_metadata_items(&rollout_guard, items)
+                    .await;
+                Ok(())
+            }
+            Err(err) => {
+                // A failed append can still have reached a buffered writer. Stop using the
+                // incremental cursor until the next full reconciliation establishes a prefix.
+                self.codex
+                    .session
+                    .invalidate_persisted_item_cursor(&rollout_guard, items)
+                    .await;
+                Err(err)
+            }
+        }
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {

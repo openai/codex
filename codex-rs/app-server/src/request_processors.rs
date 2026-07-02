@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::bespoke_event_handling::apply_bespoke_event_handling_with_item_lifecycle_outgoing;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
@@ -318,6 +319,7 @@ use codex_core::SessionMeta;
 use codex_core::StartThreadOptions;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::ThreadHistoryReconciliationOutcome;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -541,9 +543,12 @@ use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
+use crate::thread_state::ThreadPointOperationLeaseAcquireResult;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use token_usage_replay::latest_token_usage_info_from_rollout_items;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
+use token_usage_replay::send_thread_token_usage_snapshot_to_connection;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 
 fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {

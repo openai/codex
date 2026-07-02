@@ -22,6 +22,7 @@ use codex_core::CodexThread;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -44,6 +45,27 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
+    send_thread_token_usage_snapshot_to_connection(
+        outgoing,
+        connection_id,
+        thread_id,
+        thread,
+        info,
+        token_usage_turn_id,
+    )
+    .await;
+}
+
+/// Sends a token snapshot captured from the same persisted-history cut that supplied its owner.
+/// Running-thread resume uses this to avoid pairing a post-cut live value with a pre-cut turn id.
+pub(super) async fn send_thread_token_usage_snapshot_to_connection(
+    outgoing: &Arc<OutgoingMessageSender>,
+    connection_id: ConnectionId,
+    thread_id: ThreadId,
+    thread: &Thread,
+    info: TokenUsageInfo,
+    token_usage_turn_id: Option<String>,
+) {
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
         turn_id: token_usage_turn_id.unwrap_or_else(|| latest_token_usage_turn_id(thread)),
@@ -55,6 +77,17 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
             ServerNotification::ThreadTokenUsageUpdated(notification),
         )
         .await;
+}
+
+pub(super) fn latest_token_usage_info_from_rollout_items(
+    rollout_items: &[RolloutItem],
+) -> Option<TokenUsageInfo> {
+    rollout_items.iter().rev().find_map(|item| {
+        let RolloutItem::EventMsg(EventMsg::TokenCount(event)) = item else {
+            return None;
+        };
+        event.info.clone()
+    })
 }
 
 /// Identifies the turn that was active when a `TokenCount` record appeared.
@@ -74,7 +107,10 @@ pub(super) fn latest_token_usage_turn_id_from_rollout_items(
     let mut token_usage_turn_owner = None;
 
     for item in rollout_items {
-        if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
+        if matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TokenCount(event)) if event.info.is_some()
+        ) {
             token_usage_turn_owner =
                 builder
                     .active_turn_snapshot()
@@ -119,6 +155,9 @@ mod tests {
     use codex_app_server_protocol::build_turns_from_rollout_items;
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::TokenCountEvent;
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
@@ -145,6 +184,130 @@ mod tests {
         );
     }
 
+    #[test]
+    fn persisted_cut_captures_token_value_and_owner_without_post_cut_live_state() {
+        let usage_b = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 20,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 10,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(100_000),
+        };
+        let history_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-b".to_string(),
+                trace_id: None,
+                started_at: Some(1),
+                model_context_window: Some(100_000),
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: Some(usage_b.clone()),
+                rate_limits: None,
+            })),
+        ];
+        let turns = build_turns_from_rollout_items(&history_items);
+
+        assert_eq!(
+            latest_token_usage_info_from_rollout_items(&history_items),
+            Some(usage_b)
+        );
+        assert_eq!(
+            latest_token_usage_turn_id_from_rollout_items(&history_items, &turns),
+            Some("turn-b".to_string())
+        );
+        // A post-cut turn C is deliberately absent: running resume passes this captured B pair
+        // directly to the sender, so live state cannot relabel B or duplicate C.
+    }
+
+    #[test]
+    fn rate_limit_only_token_event_does_not_relabel_previous_usage_owner() {
+        let usage_a = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 10,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 10,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(100_000),
+        };
+        let usage_c = TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: 30,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: 20,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(100_000),
+        };
+        let mut history = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".to_string(),
+                trace_id: None,
+                started_at: Some(1),
+                model_context_window: Some(100_000),
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: Some(usage_a.clone()),
+                rate_limits: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-b".to_string(),
+                trace_id: None,
+                started_at: Some(2),
+                model_context_window: Some(100_000),
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            })),
+        ];
+        let turns = build_turns_from_rollout_items(&history);
+        assert_eq!(
+            latest_token_usage_info_from_rollout_items(&history),
+            Some(usage_a)
+        );
+        assert_eq!(
+            latest_token_usage_turn_id_from_rollout_items(&history, &turns),
+            Some("turn-a".to_string())
+        );
+
+        history.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
+            TurnStartedEvent {
+                turn_id: "turn-c".to_string(),
+                trace_id: None,
+                started_at: Some(3),
+                model_context_window: Some(100_000),
+                collaboration_mode_kind: Default::default(),
+            },
+        )));
+        history.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: Some(usage_c.clone()),
+                rate_limits: None,
+            },
+        )));
+        let turns = build_turns_from_rollout_items(&history);
+        assert_eq!(
+            latest_token_usage_info_from_rollout_items(&history),
+            Some(usage_c)
+        );
+        assert_eq!(
+            latest_token_usage_turn_id_from_rollout_items(&history, &turns),
+            Some("turn-c".to_string())
+        );
+    }
+
     fn token_usage_history() -> Vec<RolloutItem> {
         vec![
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
@@ -161,7 +324,17 @@ mod tests {
                 memory_citation: None,
             })),
             RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
-                info: None,
+                info: Some(TokenUsageInfo {
+                    total_token_usage: TokenUsage {
+                        total_tokens: 10,
+                        ..TokenUsage::default()
+                    },
+                    last_token_usage: TokenUsage {
+                        total_tokens: 10,
+                        ..TokenUsage::default()
+                    },
+                    model_context_window: Some(100_000),
+                }),
                 rate_limits: None,
             })),
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {

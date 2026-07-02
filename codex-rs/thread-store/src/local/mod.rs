@@ -471,6 +471,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_thread_seeded_history_preserves_imported_first_message_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store, create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .seed_metadata_from_history(&[user_message_item("imported first message")])
+            .await;
+        live_thread
+            .append_items(&[user_message_item("later local message")])
+            .await
+            .expect("append after history refresh");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            (
+                metadata.first_user_message.as_deref(),
+                metadata.preview.as_deref(),
+                metadata.title.as_str(),
+            ),
+            (
+                Some("imported first message"),
+                Some("imported first message"),
+                "imported first message",
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn live_thread_output_advances_updated_at_but_not_recency_at() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());

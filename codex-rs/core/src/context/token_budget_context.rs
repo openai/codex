@@ -4,6 +4,8 @@ use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_CLOSE_TAG;
+use codex_protocol::protocol::TOKEN_BUDGET_REMINDER_OPEN_TAG;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,10 +164,13 @@ impl ContextualUserFragment for TokenBudgetReminder {
     }
 
     fn type_markers() -> (&'static str, &'static str) {
-        ("", "")
+        (
+            TOKEN_BUDGET_REMINDER_OPEN_TAG,
+            TOKEN_BUDGET_REMINDER_CLOSE_TAG,
+        )
     }
 
     fn body(&self) -> String {
-        self.message.clone()
+        format!("\n{}\n", self.message)
     }
 }

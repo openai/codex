@@ -115,6 +115,18 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        self.reconstruct_history_from_rollout_with_policy(
+            turn_context.model_info.truncation_policy.into(),
+            rollout_items,
+        )
+        .await
+    }
+
+    pub(super) async fn reconstruct_history_from_rollout_with_policy(
+        &self,
+        truncation_policy: TruncationPolicy,
+        rollout_items: &[RolloutItem],
+    ) -> RolloutReconstruction {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
         // stopping once a surviving replacement-history checkpoint and the required resume metadata
@@ -325,17 +337,11 @@ impl Session {
         for item in rollout_suffix {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(response_item), truncation_policy);
                 }
                 RolloutItem::InterAgentCommunication(communication) => {
                     let response_item = communication.to_model_input_item();
-                    history.record_items(
-                        std::iter::once(&response_item),
-                        turn_context.model_info.truncation_policy.into(),
-                    );
+                    history.record_items(std::iter::once(&response_item), truncation_policy);
                 }
                 RolloutItem::InterAgentCommunicationMetadata { .. } => {}
                 RolloutItem::Compacted(compacted) => {

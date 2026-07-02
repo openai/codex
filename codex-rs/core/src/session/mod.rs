@@ -126,6 +126,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -205,6 +206,7 @@ mod code_mode_warning;
 mod config_lock;
 pub(crate) mod context_window;
 mod handlers;
+mod history_reconciliation;
 mod inject;
 mod input_queue;
 mod mcp;
@@ -218,6 +220,7 @@ pub(crate) mod session;
 pub(crate) mod step_context;
 pub(crate) mod time_reminder;
 mod token_budget;
+
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 mod world_state;
@@ -243,6 +246,9 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
+#[cfg(test)]
+#[path = "history_reconciliation_tests.rs"]
+mod history_reconciliation_tests;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -813,6 +819,18 @@ impl Codex {
         Ok(event)
     }
 
+    pub(crate) fn try_next_event(&self) -> CodexResult<Option<Event>> {
+        match self.rx_event.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(async_channel::TryRecvError::Empty) => Ok(None),
+            Err(async_channel::TryRecvError::Closed) => Err(CodexErr::InternalAgentDied),
+        }
+    }
+
+    pub(crate) fn pending_event_count(&self) -> usize {
+        self.rx_event.len()
+    }
+
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -1151,6 +1169,8 @@ impl Session {
         self.out_of_band_elicitation_paused.send_replace(paused);
     }
 
+    /// Sender for transient stream-only events (for example shell output and MCP startup).
+    /// Persisted events must use `send_event_raw` so resume's persistence/delivery cut orders them.
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
     }
@@ -1303,9 +1323,20 @@ impl Session {
                 .is_non_root_agent()
         };
         let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
+        let known_persisted_history_cursor =
+            self.live_thread()
+                .and_then(|_| match &conversation_history {
+                    InitialHistory::Resumed(resumed) => {
+                        history_reconciliation::persisted_history_cursor(resumed.history.as_slice())
+                    }
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        Some(history_reconciliation::empty_persisted_history_cursor())
+                    }
+                });
         {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
+            state.set_known_persisted_history_cursor(known_persisted_history_cursor);
         }
         match conversation_history {
             InitialHistory::New | InitialHistory::Cleared => {
@@ -1317,9 +1348,15 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
+                let known_persisted_incomplete_tail =
+                    history_reconciliation::persisted_rollout_incomplete_turn_id(&rollout_items);
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                self.state
+                    .lock()
+                    .await
+                    .set_known_persisted_incomplete_tail(known_persisted_incomplete_tail);
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -1402,56 +1439,32 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
-        let rollout_reconstruction::RolloutReconstruction {
-            mut history,
-            previous_turn_settings,
-            reference_context_item,
-            world_state_baseline,
-            window_number,
-            first_window_id,
-            previous_window_id,
-            window_id,
-        } = self
+        let mut reconstruction = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy images are processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
         // This meets image resizing requirements without modifying persisted rollouts.
-        prepare_response_items(&mut history);
+        prepare_response_items(&mut reconstruction.history);
+        let token_budget_reminder_delivered =
+            history_reconciliation::history_contains_token_budget_reminder(&reconstruction.history);
+
         {
             let mut state = self.state.lock().await;
-            state.replace_history(history, reference_context_item);
-            if let Some(world_state) = world_state_baseline {
-                state.history.set_world_state_baseline(world_state);
-            }
-            let fallback_ids = state.auto_compact_window_ids();
-            let window_id = window_id.unwrap_or(fallback_ids.window_id);
-            state.restore_auto_compact_window(
-                window_number,
-                AutoCompactWindowIds {
-                    first_window_id: first_window_id.unwrap_or(window_id),
-                    previous_window_id,
-                    window_id,
+            Self::install_rollout_reconstruction(
+                &mut state,
+                turn_context.config.model_auto_compact_token_limit_scope,
+                reconstruction,
+                history_reconciliation::RolloutReconstructionInstallOptions {
+                    token_info: None,
+                    history: history_reconciliation::RolloutHistoryInstallMode::Replace,
+                    auto_compact_window:
+                        history_reconciliation::AutoCompactWindowInstallMode::Restore,
+                    token_budget_reminder_delivered,
                 },
-            );
-            state.set_previous_turn_settings(previous_turn_settings.clone());
+            )
         }
-        let prefix_tokens = if matches!(
-            turn_context.config.model_auto_compact_token_limit_scope,
-            AutoCompactTokenLimitScope::BodyAfterPrefix
-        ) {
-            let history = self.clone_history().await;
-            let base_instructions = self.get_base_instructions().await;
-            history.estimate_token_count_with_base_instructions(&base_instructions)
-        } else {
-            None
-        };
-        if let Some(prefix_tokens) = prefix_tokens {
-            self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
-                .await;
-        }
-        previous_turn_settings
     }
 
     async fn set_auto_compact_window_estimated_prefill_for_scope(
@@ -1742,6 +1755,20 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
+        let delivered = self
+            .send_event_locked(turn_context, msg, &event_delivery_guard)
+            .await;
+        drop(event_delivery_guard);
+        self.run_event_side_effects(turn_context, &delivered).await;
+    }
+
+    async fn send_event_locked(
+        &self,
+        turn_context: &TurnContext,
+        msg: EventMsg,
+        event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> EventMsg {
         let legacy_source = msg.clone();
         if let EventMsg::Error(error) = &legacy_source
             && error
@@ -1765,12 +1792,7 @@ impl Session {
             id: turn_context.sub_id.clone(),
             msg,
         };
-        self.send_event_raw(event).await;
-        self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
-            .await;
-        self.maybe_mirror_event_text_to_realtime(&legacy_source)
-            .await;
-        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
+        self.send_event_raw_locked(event, event_delivery_guard)
             .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
@@ -1779,8 +1801,17 @@ impl Session {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
             };
-            self.send_event_raw(legacy_event).await;
+            self.send_event_raw_locked(legacy_event, event_delivery_guard)
+                .await;
         }
+        legacy_source
+    }
+
+    async fn run_event_side_effects(&self, turn_context: &TurnContext, msg: &EventMsg) {
+        self.maybe_notify_parent_of_terminal_turn(turn_context, msg)
+            .await;
+        self.maybe_mirror_event_text_to_realtime(msg).await;
+        self.maybe_clear_realtime_handoff_for_event(msg).await;
     }
 
     /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
@@ -1918,16 +1949,31 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
+        self.send_event_raw_locked(event, &event_delivery_guard)
+            .await;
+    }
+
+    async fn send_event_raw_locked(
+        &self,
+        event: Event,
+        _event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
         // Persist the event into rollout storage (the store filters as needed).
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         self.services
             .rollout_thread_trace
             .record_protocol_event(&event.msg);
-        self.deliver_event_raw(event).await;
+        self.deliver_event_raw_locked(event).await;
     }
 
     async fn deliver_event_raw(&self, event: Event) {
+        let _event_delivery_guard = self.acquire_event_delivery_lock().await;
+        self.deliver_event_raw_locked(event).await;
+    }
+
+    async fn deliver_event_raw_locked(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
@@ -1950,6 +1996,25 @@ impl Session {
         .await;
     }
 
+    async fn emit_turn_item_started_locked(
+        &self,
+        turn_context: &TurnContext,
+        item: &TurnItem,
+        event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> EventMsg {
+        self.send_event_locked(
+            turn_context,
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id: self.thread_id,
+                turn_id: turn_context.sub_id.clone(),
+                item: item.clone(),
+                started_at_ms: now_unix_timestamp_ms(),
+            }),
+            event_delivery_guard,
+        )
+        .await
+    }
+
     pub(crate) async fn emit_turn_item_completed(
         &self,
         turn_context: &TurnContext,
@@ -1966,6 +2031,26 @@ impl Session {
             }),
         )
         .await;
+    }
+
+    async fn emit_turn_item_completed_locked(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> EventMsg {
+        record_turn_ttfm_metric(turn_context, &item).await;
+        self.send_event_locked(
+            turn_context,
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id: self.thread_id,
+                turn_id: turn_context.sub_id.clone(),
+                item,
+                completed_at_ms: now_unix_timestamp_ms(),
+            }),
+            event_delivery_guard,
+        )
+        .await
     }
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
@@ -2781,6 +2866,17 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
+        self.record_conversation_items_locked(turn_context, items, &event_delivery_guard)
+            .await;
+    }
+
+    async fn record_conversation_items_locked(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
         let items = self.prepare_conversation_items_for_history(turn_context, items);
         let items = items.as_ref();
         {
@@ -2792,7 +2888,8 @@ impl Session {
             );
         }
         self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        self.send_raw_response_items_locked(turn_context, items, event_delivery_guard)
+            .await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(
@@ -2880,6 +2977,7 @@ impl Session {
         turn_context: &TurnContext,
         mut communication: InterAgentCommunication,
     ) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
         communication.set_turn_id_if_missing(&turn_context.sub_id);
         let response_item = communication.to_model_input_item();
         let items = self.prepare_conversation_items_for_history(
@@ -2903,7 +3001,8 @@ impl Session {
             RolloutItem::ResponseItem(response_item),
         ])
         .await;
-        self.send_raw_response_items(turn_context, items).await;
+        self.send_raw_response_items_locked(turn_context, items, &event_delivery_guard)
+            .await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -3072,11 +3171,17 @@ impl Session {
     }
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
-    async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
+    async fn send_raw_response_items_locked(
+        &self,
+        turn_context: &TurnContext,
+        items: &[ResponseItem],
+        event_delivery_guard: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
         for item in items {
-            self.send_event(
+            self.send_event_locked(
                 turn_context,
                 EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+                event_delivery_guard,
             )
             .await;
         }
@@ -3467,10 +3572,22 @@ impl Session {
 
     #[tracing::instrument(level = "trace", skip_all, fields(item_count = items.len()))]
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        if let Some(live_thread) = self.live_thread()
-            && let Err(e) = live_thread.append_items(items).await
-        {
-            error!("failed to record rollout items: {e:#}");
+        let rollout_guard = self.acquire_rollout_persistence_lock().await;
+        let Some(live_thread) = self.live_thread() else {
+            return;
+        };
+        match live_thread.append_items(items).await {
+            Ok(()) => {
+                self.note_persisted_non_metadata_items(&rollout_guard, items)
+                    .await;
+            }
+            Err(e) => {
+                // A failed append may still become durable if a buffered writer flushes later.
+                // Invalidate the positional cursor so reconciliation uses a full rebuild.
+                self.invalidate_persisted_item_cursor(&rollout_guard, items)
+                    .await;
+                error!("failed to record rollout items: {e:#}");
+            }
         }
     }
 
@@ -3781,14 +3898,30 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
         // Add to conversation history and persist response item to rollout.
-        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+        self.record_conversation_items_locked(
+            turn_context,
+            std::slice::from_ref(&response_item),
+            &event_delivery_guard,
+        )
+        .await;
 
         // Derive a turn item and emit lifecycle events if applicable.
-        if let Some(item) = parse_turn_item(&response_item) {
-            self.emit_turn_item_started(turn_context, &item).await;
-            self.emit_turn_item_completed(turn_context, item).await;
+        let lifecycle_events = if let Some(item) = parse_turn_item(&response_item) {
+            let started = self
+                .emit_turn_item_started_locked(turn_context, &item, &event_delivery_guard)
+                .await;
+            let completed = self
+                .emit_turn_item_completed_locked(turn_context, item, &event_delivery_guard)
+                .await;
+            vec![started, completed]
+        } else {
+            Vec::new()
+        };
+        drop(event_delivery_guard);
+        for event in lifecycle_events {
+            self.run_event_side_effects(turn_context, &event).await;
         }
     }
 
@@ -3798,17 +3931,29 @@ impl Session {
         input: &[UserInput],
         client_id: Option<String>,
     ) {
+        let event_delivery_guard = self.acquire_event_delivery_lock().await;
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         let response_item = self.response_item_from_user_input(input.to_vec());
-        self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
-            .await;
+        self.record_conversation_items_locked(
+            turn_context,
+            std::slice::from_ref(&response_item),
+            &event_delivery_guard,
+        )
+        .await;
         let mut user_message_item = UserMessageItem::new(input);
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
-        self.emit_turn_item_started(turn_context, &turn_item).await;
-        self.emit_turn_item_completed(turn_context, turn_item).await;
+        let started = self
+            .emit_turn_item_started_locked(turn_context, &turn_item, &event_delivery_guard)
+            .await;
+        let completed = self
+            .emit_turn_item_completed_locked(turn_context, turn_item, &event_delivery_guard)
+            .await;
+        drop(event_delivery_guard);
+        self.run_event_side_effects(turn_context, &started).await;
+        self.run_event_side_effects(turn_context, &completed).await;
         self.ensure_rollout_materialized().await;
     }
 
