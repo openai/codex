@@ -41,6 +41,11 @@ fn init_repo_at(root: &Path) {
 
 #[cfg(windows)]
 fn create_junction(path: &Path, target: &Path) {
+    // Bazel's GNU Windows runner can surface temporary paths with `/`
+    // separators. `mklink` treats those separators as option prefixes, so
+    // pass native separators to the cmd.exe built-in.
+    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
+    let target = target.as_os_str().to_string_lossy().replace('/', "\\");
     let output = std::process::Command::new("cmd.exe")
         .args(["/D", "/C", "mklink", "/J"])
         .arg(path)
@@ -830,14 +835,17 @@ fn rejects_every_duplicate_and_nested_include_target() {
     std::fs::write(root.join("driver-config"), "").expect("write nested target");
     let external = tempfile::tempdir().expect("external config directory");
     let outer = external.path().join("outer.gitconfig");
-    std::fs::write(
-        &outer,
-        format!(
-            "[include]\npath = {}\n",
-            root.join("driver-config").display()
-        ),
-    )
-    .expect("write outer config");
+    let nested = root.join("driver-config");
+    run_success(
+        root,
+        &[
+            "config",
+            "--file",
+            outer.to_str().expect("UTF-8 outer path"),
+            "include.path",
+            nested.to_str().expect("UTF-8 nested path"),
+        ],
+    );
     add_include(
         root,
         "include.path",
@@ -1479,14 +1487,21 @@ fn rejects_apfs_data_firmlink_aliases_for_existing_and_missing_worktree_configs(
 }
 
 #[test]
-fn include_path_expansion_preserves_colon_parentheses_as_literal_text() {
+fn include_path_expansion_supports_git_prefix() {
     let repo = init_repo();
     let root = repo.path();
     let git = GitRunner::for_cwd_io(root).expect("Git runner");
     let prefix =
         expand_git_config_path(&git, root, "%(prefix)/etc/gitconfig").expect("expand Git prefix");
     assert!(prefix.is_absolute());
+}
 
+#[cfg(not(windows))]
+#[test]
+fn include_path_expansion_preserves_colon_parentheses_as_literal_text() {
+    let repo = init_repo();
+    let root = repo.path();
+    let git = GitRunner::for_cwd_io(root).expect("Git runner");
     let optional = GitConfigEntry {
         scope: crate::git_config::GitConfigScope::Local,
         origin: crate::git_config::GitConfigOrigin::File(".git/config".into()),
@@ -1549,6 +1564,8 @@ fn windows_path_validator_rejects_namespaces_streams_and_alias_components() {
         r"\\.\pipe\config",
         r"C:\repo\config:stream",
         r"C:relative\config",
+        r":(optional)..\future.gitconfig",
+        r":(unknown)..\future.gitconfig",
         r"C:\repo\NUL.gitconfig",
         r"C:\repo\COM¹.gitconfig",
         r"C:\repo\LPT³.gitconfig",

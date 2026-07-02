@@ -88,7 +88,7 @@ pub(crate) fn repository_route_boundaries(
         let canonical_root = std::fs::canonicalize(root)?;
         let canonical_marker = std::fs::canonicalize(&marker)?;
         if canonical_marker == canonical_root.join(".git") {
-            push_unique_location(&mut metadata_dirs, canonical_marker)?;
+            push_unique_location(&mut metadata_dirs, marker)?;
         }
     }
     for common in common_dirs {
