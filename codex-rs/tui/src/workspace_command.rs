@@ -62,6 +62,15 @@ impl WorkspaceCommand {
         }
     }
 
+    /// Creates a Git command that is restricted to already-local repository data.
+    pub(crate) fn local_only_git(argv: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut command = Self::new(argv);
+        for (key, value) in codex_git_utils::local_only_git_env() {
+            command = command.env(key, value);
+        }
+        command
+    }
+
     /// Sets the command working directory.
     pub(crate) fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = Some(cwd.into());
