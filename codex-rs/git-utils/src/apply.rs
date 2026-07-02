@@ -586,6 +586,22 @@ mod tests {
     #[test]
     fn apply_then_revert_success() {
         let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            let config_dir = tempfile::tempdir().expect("config tempdir");
+            let global_config = config_dir.path().join("global.gitconfig");
+            let system_config = config_dir.path().join("system.gitconfig");
+            std::fs::write(&global_config, "").expect("empty global config");
+            std::fs::write(&system_config, "").expect("empty system config");
+            run_isolated_test(
+                "apply::tests::apply_then_revert_success",
+                &[
+                    ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+                    ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+                ],
+            );
+            return;
+        }
+
         let repo = init_repo();
         let root = repo.path();
         // Seed file and commit original content
