@@ -529,18 +529,23 @@ pub async fn run_main_with_transport_options(
         }
     };
 
-    let otel = codex_core::otel_init::build_provider(
+    let otel = match codex_core::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some(OTEL_SERVICE_NAME),
         default_analytics_enabled,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
+    ) {
+        Ok(otel) => otel,
+        Err(err) => {
+            config_warnings.push(ConfigWarningNotification {
+                summary: "OpenTelemetry disabled; exporter initialization failed.".to_string(),
+                details: Some(err.to_string()),
+                path: None,
+                range: None,
+            });
+            None
+        }
+    };
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let unix_socket_startup_lock = match &transport {

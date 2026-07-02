@@ -4,6 +4,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -59,6 +60,75 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_continues_when_otel_metrics_exporter_config_is_invalid() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_extra(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        r#"
+[analytics]
+enabled = true
+
+[otel]
+metrics_exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317" } }
+"#,
+    )?;
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OTEL_METRICS_EXPORTER", Some("otlp")),
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://127.0.0.1:4317")),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", Some("grpc")),
+            ("OTEL_EXPORTER_OTLP_COMPRESSION", Some("snappy")),
+        ],
+    )
+    .await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "codex_vscode".to_string(),
+            title: Some("Codex VS Code Extension".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(_) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("configWarning"),
+    )
+    .await??;
+    let warning: ConfigWarningNotification = serde_json::from_value(
+        notification
+            .params
+            .ok_or_else(|| anyhow::format_err!("config warning notification missing params"))?,
+    )?;
+
+    assert_eq!(
+        warning.summary,
+        "OpenTelemetry disabled; exporter initialization failed."
+    );
+    let details = warning
+        .details
+        .ok_or_else(|| anyhow::format_err!("config warning notification missing details"))?;
+    assert!(
+        details.contains("failed to build OTLP metrics exporter"),
+        "unexpected config warning details: {details}"
+    );
+    assert_eq!(warning.path, None);
+    assert_eq!(warning.range, None);
     Ok(())
 }
 
