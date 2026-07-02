@@ -632,7 +632,7 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<BranchCandidate>> {
         if let Some(output) = run_git_command_with_timeout(
             &[
                 "for-each-ref",
-                "--format=%(refname)",
+                "--format=%(refname)%00%(symref)",
                 "--contains=HEAD",
                 &format!("refs/remotes/{remote}"),
             ],
@@ -643,7 +643,15 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<BranchCandidate>> {
             && let Ok(text) = String::from_utf8(output.stdout)
         {
             for line in text.lines() {
-                let remote_ref = line.trim();
+                let Some((remote_ref, symbolic_target)) = line.split_once('\0') else {
+                    continue;
+                };
+                // The concrete target will be listed separately when it belongs to
+                // this remote. Excluding aliases also prevents a cross-remote or
+                // stale symbolic ref from bypassing default-branch validation.
+                if !symbolic_target.is_empty() {
+                    continue;
+                }
                 let remote_ref_prefix = format!("refs/remotes/{remote}/");
                 if let Some(stripped) = remote_ref.strip_prefix(&remote_ref_prefix)
                     && !stripped.is_empty()

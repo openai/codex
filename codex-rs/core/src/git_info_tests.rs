@@ -666,6 +666,72 @@ async fn test_git_diff_to_remote_preserves_expanded_remote_ref_identity() {
     assert_ne!(state.sha, GitSha::new(&origin_sha));
 }
 
+#[tokio::test]
+async fn test_git_diff_to_remote_ignores_symbolic_refs_during_expansion() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let repo_path = create_test_git_repo(&temp_dir).await;
+    assert_test_git(&repo_path, &["branch", "-M", "base"]).await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "origin", "/nonexistent/origin.git"],
+    )
+    .await;
+    assert_test_git(
+        &repo_path,
+        &["remote", "add", "upstream", "/nonexistent/upstream.git"],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "feature", "base"]).await;
+    fs::write(repo_path.join("feature.txt"), "feature\n").expect("write feature file");
+    assert_test_git(&repo_path, &["add", "feature.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "feature work"]).await;
+    let poisoned_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "update-ref",
+            "refs/remotes/upstream/poisoned",
+            &poisoned_sha,
+        ],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "-b", "origin-release", "feature"]).await;
+    fs::write(repo_path.join("remote-only.txt"), "remote\n").expect("write remote-only file");
+    assert_test_git(&repo_path, &["add", "remote-only.txt"]).await;
+    assert_test_git(&repo_path, &["commit", "-m", "origin release"]).await;
+    let expected_sha = test_git_stdout(&repo_path, &["rev-parse", "HEAD"]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "update-ref",
+            "refs/remotes/origin/release/v1",
+            &expected_sha,
+        ],
+    )
+    .await;
+
+    assert_test_git(&repo_path, &["checkout", "feature"]).await;
+    assert_test_git(
+        &repo_path,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/upstream/poisoned",
+        ],
+    )
+    .await;
+
+    assert_eq!(default_branch_name(&repo_path).await, None);
+    let state = git_diff_to_remote(&repo_path)
+        .await
+        .expect("Should collect working tree state");
+    assert_eq!(state.sha, GitSha::new(&expected_sha));
+    assert_ne!(state.sha, GitSha::new(&poisoned_sha));
+    assert!(state.diff.contains("remote-only.txt"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn test_default_branch_discovery_does_not_invoke_remote_transport() {
