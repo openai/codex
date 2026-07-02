@@ -3,10 +3,13 @@ mod baseline;
 mod branch;
 mod errors;
 mod fsmonitor;
+mod git_command;
+mod git_config;
 mod info;
 mod local_only;
 mod operations;
 mod platform;
+mod safe_git;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;

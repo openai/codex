@@ -2,11 +2,10 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::GitToolingError;
-
-const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+use crate::git_command::GitRunner;
+use crate::safe_git::DISABLED_HOOKS_PATH;
 
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
@@ -110,16 +109,16 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
-    let mut command = Command::new("git");
+    let git = GitRunner::for_cwd_io(dir)?;
+    let mut command = git.command();
     command.current_dir(dir);
     if let Some(envs) = env {
         for (key, value) in envs {
             command.env(key, value);
         }
     }
-    command.envs(crate::local_only_git_env());
     command.args(&args_vec);
-    let output = command.output()?;
+    let output = git.output(command)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(GitToolingError::GitCommand {
@@ -150,3 +149,7 @@ struct GitRun {
     command: String,
     output: std::process::Output,
 }
+
+#[cfg(test)]
+#[path = "operations_tests.rs"]
+mod tests;
