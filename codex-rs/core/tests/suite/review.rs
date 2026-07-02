@@ -26,12 +26,12 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
+use tokio::time::Duration;
 use uuid::Uuid;
 use wiremock::MockServer;
 
@@ -844,36 +844,71 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .await
         .unwrap();
 
-    wait_for_event_match(&codex, |event| match event {
-        EventMsg::EnteredReviewMode(_) => Some(Ok(())),
-        EventMsg::Error(error) => Some(Err(format!(
-            "review failed before entering review mode: {error:#?}"
-        ))),
-        EventMsg::TurnAborted(aborted) => Some(Err(format!(
-            "review aborted before entering review mode: {aborted:#?}"
-        ))),
-        EventMsg::ExitedReviewMode(exited) => Some(Err(format!(
-            "review exited before entering review mode: {exited:#?}"
-        ))),
-        EventMsg::TurnComplete(completed) => Some(Err(format!(
-            "review completed before entering review mode: {completed:#?}"
-        ))),
-        _ => None,
+    let entered_review_mode = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = codex.next_event().await.expect("stream ended unexpectedly");
+            match event.msg {
+                EventMsg::EnteredReviewMode(_) => return Ok(()),
+                EventMsg::Error(error) => {
+                    return Err(format!(
+                        "review failed before entering review mode: {error:#?}"
+                    ));
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    return Err(format!(
+                        "review aborted before entering review mode: {aborted:#?}"
+                    ));
+                }
+                EventMsg::ExitedReviewMode(exited) => {
+                    return Err(format!(
+                        "review exited before entering review mode: {exited:#?}"
+                    ));
+                }
+                EventMsg::TurnComplete(completed) => {
+                    return Err(format!(
+                        "review completed before entering review mode: {completed:#?}"
+                    ));
+                }
+                _ => {}
+            }
+        }
     })
     .await
-    .unwrap_or_else(|error| panic!("{error}"));
-    wait_for_event_match(&codex, |event| match event {
-        EventMsg::TurnComplete(_) => Some(Ok(())),
-        EventMsg::Error(error) => Some(Err(format!(
-            "review failed before completing the turn: {error:#?}"
-        ))),
-        EventMsg::TurnAborted(aborted) => Some(Err(format!(
-            "review aborted before completing the turn: {aborted:#?}"
-        ))),
-        _ => None,
+    .unwrap_or_else(|_| {
+        panic!(
+            "timeout before entering review mode; mock response requests observed: {}",
+            request_log.requests().len()
+        )
+    });
+    entered_review_mode.unwrap_or_else(|error| panic!("{error}"));
+
+    let completed_turn = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = codex.next_event().await.expect("stream ended unexpectedly");
+            match event.msg {
+                EventMsg::TurnComplete(_) => return Ok(()),
+                EventMsg::Error(error) => {
+                    return Err(format!(
+                        "review failed before completing the turn: {error:#?}"
+                    ));
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    return Err(format!(
+                        "review aborted before completing the turn: {aborted:#?}"
+                    ));
+                }
+                _ => {}
+            }
+        }
     })
     .await
-    .unwrap_or_else(|error| panic!("{error}"));
+    .unwrap_or_else(|_| {
+        panic!(
+            "timeout after entering review mode; mock response requests observed: {}",
+            request_log.requests().len()
+        )
+    });
+    completed_turn.unwrap_or_else(|error| panic!("{error}"));
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 1);
