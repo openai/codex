@@ -28,6 +28,10 @@ pub struct ExecPolicyCheckCommand {
     #[arg(long)]
     pub resolve_host_executables: bool,
 
+    /// Active permissions profile id to use for permissions-scoped rules.
+    #[arg(long, value_name = "ID")]
+    pub permissions: Option<String>,
+
     /// Command tokens to check against the policy.
     #[arg(
         value_name = "COMMAND",
@@ -47,6 +51,7 @@ impl ExecPolicyCheckCommand {
             /*heuristics_fallback*/ None,
             &MatchOptions {
                 resolve_host_executables: self.resolve_host_executables,
+                active_permission_profile: self.permissions.clone(),
             },
         );
 
