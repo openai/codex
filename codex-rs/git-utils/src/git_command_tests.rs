@@ -124,6 +124,11 @@ fn native_git_fixture() -> PathBuf {
 
 #[cfg(windows)]
 fn create_junction(path: &Path, target: &Path) {
+    // Bazel's GNU Windows runner can surface temporary paths with `/`
+    // separators. `mklink` treats those separators as option prefixes, so
+    // pass native separators to the cmd.exe built-in.
+    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
+    let target = target.as_os_str().to_string_lossy().replace('/', "\\");
     let output = Command::new("cmd.exe")
         .args(["/D", "/C", "mklink", "/J"])
         .arg(path)
