@@ -40,7 +40,7 @@ impl ContextualUserFragment for MultiAgentModeInstructions {
         }
 
         match self.multi_agent_mode {
-            MultiAgentMode::None => String::new(),
+            MultiAgentMode::Custom => String::new(),
             MultiAgentMode::ExplicitRequestOnly => {
                 EXPLICIT_REQUEST_ONLY_MULTI_AGENT_MODE_TEXT.to_string()
             }

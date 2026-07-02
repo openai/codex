@@ -127,7 +127,7 @@ async fn ultra_reasoning_uses_max_and_proactive_mode() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_mode_hint_uses_none_mode_across_reasoning_efforts() -> Result<()> {
+async fn configured_mode_hint_uses_custom_mode_across_reasoning_efforts() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -185,7 +185,7 @@ async fn configured_mode_hint_uses_none_mode_across_reasoning_efforts() -> Resul
                 .map(str::to_string)
         })
         .collect::<Vec<_>>();
-    assert_eq!(recorded_modes, ["none", "none"]);
+    assert_eq!(recorded_modes, ["custom", "custom"]);
 
     Ok(())
 }

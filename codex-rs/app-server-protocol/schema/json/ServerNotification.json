@@ -2713,9 +2713,9 @@
       "type": "object"
     },
     "MultiAgentMode": {
-      "description": "Controls the effective multi-agent delegation instructions for a turn. `none` bypasses the built-in explicit/proactive policy so configured mode instructions can define the policy.",
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
       "enum": [
-        "none",
+        "custom",
         "explicitRequestOnly",
         "proactive"
       ],

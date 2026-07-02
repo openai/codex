@@ -41,15 +41,14 @@ pub(crate) fn effective_multi_agent_mode(turn_context: &TurnContext) -> Option<M
         return None;
     }
 
-    // A configured hint fully defines the mode instructions, so select the `None` variant to
-    // bypass effort-derived explicit/proactive policy. `Some("")` intentionally suppresses both
-    // built-in instructions.
+    // A configured hint, including an empty string, defines a custom policy instead of an
+    // effort-derived built-in policy.
     let multi_agent_mode = match &turn_context
         .config
         .multi_agent_v2
         .multi_agent_mode_hint_text
     {
-        Some(_) => MultiAgentMode::None,
+        Some(_) => MultiAgentMode::Custom,
         None => match turn_context.effective_reasoning_effort() {
             Some(ReasoningEffort::Ultra) => MultiAgentMode::Proactive,
             _ => MultiAgentMode::ExplicitRequestOnly,

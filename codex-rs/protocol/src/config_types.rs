@@ -296,8 +296,8 @@ pub enum Personality {
     Pragmatic,
 }
 
-/// Controls the effective multi-agent delegation instructions for a turn. `none` bypasses the
-/// built-in explicit/proactive policy so configured mode instructions can define the policy.
+/// Controls the effective multi-agent delegation instructions for a turn. `custom` means the
+/// configured mode hint defines the policy instead of a built-in policy.
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
@@ -305,7 +305,8 @@ pub enum Personality {
 #[ts(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum MultiAgentMode {
-    None,
+    #[serde(alias = "none")]
+    Custom,
     #[default]
     ExplicitRequestOnly,
     Proactive,
