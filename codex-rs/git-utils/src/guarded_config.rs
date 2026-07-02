@@ -14,6 +14,8 @@ use crate::git_config::read_effective_config_with_fallback;
 use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ExecutableFilterDrivers;
+use crate::safe_git::FilterExecution;
+use crate::safe_git::FilterPolicyRole;
 use crate::safe_git::FilterPolicySnapshot;
 use crate::safe_git::build_filter_policy_snapshot;
 
@@ -61,6 +63,36 @@ impl<'git> ValidatedConfigSources<'git> {
             probe,
         )
     }
+
+    fn read_bool(&self, key: &str) -> io::Result<Option<bool>> {
+        let mut command = self.git.command_for_cwd(&self.canonical_root)?;
+        command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .args(&self.base_config_args)
+            .args(["config", "--type=bool", "--get", key]);
+        let output = self.git.output(command)?;
+        if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+            return Ok(None);
+        }
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Git boolean config probe for {key:?} failed with status {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
+        }
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            value => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected normalized Git boolean value {value:?} for {key:?}"),
+            )),
+        }
+    }
 }
 
 fn validate_base_config_args(args: &[String]) -> io::Result<()> {
@@ -104,29 +136,48 @@ struct CapabilityIdentity;
 
 #[derive(Clone, Copy)]
 enum BoundSubcommand {
-    AddLiteralPathspecs,
     Apply,
     CheckAttr,
+    CheckIgnore,
     HashObject,
+    ListBuiltinCommands,
+    LsFiles,
     RevParse,
+    SparseCheckout,
+    UpdateIndexLiteralPathspecs,
 }
 
 impl BoundSubcommand {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::AddLiteralPathspecs => "add",
-            Self::Apply => "apply",
-            Self::CheckAttr => "check-attr",
-            Self::HashObject => "hash-object",
-            Self::RevParse => "rev-parse",
-        }
-    }
-
     fn append_to(self, command: &mut GitCommand) {
-        if matches!(self, Self::AddLiteralPathspecs) {
-            command.arg("--literal-pathspecs");
+        match self {
+            Self::Apply => {
+                command.arg("apply");
+            }
+            Self::CheckAttr => {
+                command.arg("check-attr");
+            }
+            Self::CheckIgnore => {
+                command.arg("check-ignore");
+            }
+            Self::HashObject => {
+                command.arg("hash-object");
+            }
+            Self::ListBuiltinCommands => {
+                command.arg("--list-cmds=builtins");
+            }
+            Self::LsFiles => {
+                command.arg("ls-files");
+            }
+            Self::RevParse => {
+                command.arg("rev-parse");
+            }
+            Self::SparseCheckout => {
+                command.arg("sparse-checkout");
+            }
+            Self::UpdateIndexLiteralPathspecs => {
+                command.args(["--literal-pathspecs", "update-index"]);
+            }
         }
-        command.arg(self.as_str());
     }
 }
 
@@ -230,22 +281,60 @@ impl<'git> GuardedGitConfig<'git> {
         self.guarded_command(BoundSubcommand::Apply)
     }
 
-    pub(crate) fn literal_add_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
-        self.guarded_command(BoundSubcommand::AddLiteralPathspecs)
-    }
-
     pub(crate) fn rev_parse_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
         self.guarded_command(BoundSubcommand::RevParse)
     }
 
-    pub(crate) fn filter_attribute_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
-        self.guarded_command(BoundSubcommand::CheckAttr)
+    pub(crate) fn check_ignore_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        self.guarded_command(BoundSubcommand::CheckIgnore)
+    }
+
+    pub(crate) fn list_builtin_commands(&self) -> io::Result<std::process::Output> {
+        let mut command = self.guarded_command(BoundSubcommand::ListBuiltinCommands)?;
+        command.disable_optional_locks();
+        command.output()
+    }
+
+    pub(crate) fn ls_files_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        self.guarded_command(BoundSubcommand::LsFiles)
+    }
+
+    pub(crate) fn sparse_checkout_command(&self) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        self.guarded_command(BoundSubcommand::SparseCheckout)
+    }
+
+    pub(crate) fn update_index_literal_pathspecs_command(
+        &self,
+    ) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        self.guarded_command(BoundSubcommand::UpdateIndexLiteralPathspecs)
+    }
+
+    pub(crate) fn pending_filter_attribute_command<'operation>(
+        &'operation self,
+        neutralizer: &'operation SealedFilterConfigOverride,
+    ) -> io::Result<GuardedGitCommand<'operation, 'git>> {
+        let mut command = self.command_with_attached_overlays()?;
+        neutralizer.append_to(&self.identity, &mut command)?;
+        BoundSubcommand::CheckAttr.append_to(&mut command);
+        Ok(GuardedGitCommand {
+            operation: self,
+            inner: command,
+        })
     }
 
     fn guarded_command(
         &self,
         subcommand: BoundSubcommand,
     ) -> io::Result<GuardedGitCommand<'_, 'git>> {
+        let mut command = self.command_with_attached_overlays()?;
+        subcommand.append_to(&mut command);
+        Ok(GuardedGitCommand {
+            operation: self,
+            inner: command,
+        })
+    }
+
+    fn command_with_attached_overlays(&self) -> io::Result<GitCommand> {
         let mut command = self
             .sources
             .git
@@ -257,11 +346,7 @@ impl<'git> GuardedGitConfig<'git> {
                 neutralizer.append_to(&self.identity, &mut command)?;
             }
         }
-        subcommand.append_to(&mut command);
-        Ok(GuardedGitCommand {
-            operation: self,
-            inner: command,
-        })
+        Ok(command)
     }
 
     pub(crate) fn command_for_sentinel_filter_probe<'operation>(
@@ -302,6 +387,10 @@ impl<'git> GuardedGitConfig<'git> {
         probe: &str,
     ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
         self.sources.read_effective(pattern, probe)
+    }
+
+    pub(crate) fn read_bool(&self, key: &str) -> io::Result<Option<bool>> {
+        self.sources.read_bool(key)
     }
 
     fn ensure_owned_config_path(&self, path: &Path, description: &str) -> io::Result<()> {
@@ -363,7 +452,57 @@ impl<'git> GuardedGitConfig<'git> {
     }
 
     pub(crate) fn authorize_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
-        let filter = build_filter_policy_snapshot(self, paths)?;
+        if !self.filters.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "apply filter policy must be the first operation snapshot",
+            ));
+        }
+        let filter =
+            build_filter_policy_snapshot(self, paths, FilterExecution::AnyWorktreeOperation)?;
+        self.filters.push(filter);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_apply_filter_path_subset(&self, paths: &[String]) -> io::Result<()> {
+        let [apply] = self.filters.as_slice() else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "composed exact staging requires exactly one apply filter snapshot",
+            ));
+        };
+        if apply.role() != FilterPolicyRole::Apply {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "composed exact staging requires an apply filter snapshot",
+            ));
+        }
+        if let Some(path) = paths
+            .iter()
+            .find(|path| !apply.contains_checked_path(path.as_str()))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "content-filter staging path {path:?} was not authorized by the apply snapshot"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn authorize_git_add_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
+        match self.filters.as_slice() {
+            [] => {}
+            [apply] if apply.role() == FilterPolicyRole::Apply => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Git-add filter policy requires zero snapshots or exactly one apply snapshot",
+                ));
+            }
+        }
+        let filter = build_filter_policy_snapshot(self, paths, FilterExecution::GitAdd)?;
         self.filters.push(filter);
         Ok(())
     }

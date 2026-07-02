@@ -3,5 +3,8 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "git-utils",
     crate_name = "codex_git_utils",
+    test_shard_counts = {
+        "git-utils-unit-tests": 2,
+    },
     unit_test_timeout = "long",
 )

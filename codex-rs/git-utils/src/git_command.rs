@@ -126,6 +126,10 @@ impl GitRunner {
         self.authority.ensure_active_worktree_root(root)
     }
 
+    pub(crate) fn ensure_repository_root_route(&self, root: &Path) -> io::Result<()> {
+        self.authority.ensure_repository_root_route(root)
+    }
+
     pub(crate) fn config_environment_value(&self, name: &str) -> Option<&OsStr> {
         self.config_environment.value(name)
     }
