@@ -432,6 +432,14 @@ impl App {
                 self.lookup_message_history_entry(thread_id, offset, log_id)
                     .await?;
             }
+            AppEvent::LookupMessageHistoryBatch {
+                thread_id,
+                cursor,
+                log_id,
+            } => {
+                self.lookup_message_history_batch(thread_id, cursor, log_id)
+                    .await?;
+            }
             AppEvent::ApproveRecentAutoReviewDenial { thread_id, id } => {
                 self.chat_widget
                     .approve_recent_auto_review_denial(thread_id, id);

@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::HistoryLookupResponse;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
 use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
@@ -1612,16 +1613,28 @@ impl BottomPane {
             || self.composer.is_in_paste_burst()
     }
 
-    pub(crate) fn on_history_entry_response(
-        &mut self,
-        log_id: u64,
-        offset: usize,
-        entry: Option<String>,
-    ) {
-        let updated = self
-            .composer
-            .on_history_entry_response(log_id, offset, entry);
-
+    pub(crate) fn on_history_lookup_response(&mut self, response: HistoryLookupResponse) {
+        let updated = match response {
+            HistoryLookupResponse::Entry {
+                offset,
+                log_id,
+                entry,
+            } => self
+                .composer
+                .on_history_entry_response(log_id, offset, entry),
+            HistoryLookupResponse::Batch {
+                cursor,
+                log_id,
+                entries,
+                next_older_cursor,
+            } => {
+                self.composer
+                    .on_history_batch_response(log_id, cursor, entries, next_older_cursor)
+            }
+            HistoryLookupResponse::BatchError { cursor, log_id } => {
+                self.composer.on_history_batch_error(log_id, cursor)
+            }
+        };
         if updated {
             self.composer.sync_popups();
             self.request_redraw();
