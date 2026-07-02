@@ -132,12 +132,16 @@ fn resolve_upstream_if_remote_ahead(
 mod tests {
     use super::merge_base_with_head;
     use crate::GitToolingError;
+    #[cfg(unix)]
     use crate::git_command::GitRunner;
     use crate::git_command::git_runner_construction_count;
     use crate::git_command::reset_git_runner_construction_count;
+    #[cfg(unix)]
     use crate::operations::ensure_git_repository;
+    #[cfg(unix)]
     use crate::operations::resolve_repository_root;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use std::io;
     use std::path::Path;
     use std::process::Command;
