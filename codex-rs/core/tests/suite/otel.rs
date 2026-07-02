@@ -567,19 +567,22 @@ async fn process_sse_emits_completed_telemetry() {
 
     mount_sse_once(
         &server,
-        sse(vec![serde_json::json!({
-            "type": "response.completed",
-            "response": {
-                "id": "resp1",
-                "usage": {
-                    "input_tokens": 3,
-                    "input_tokens_details": { "cached_tokens": 1 },
-                    "output_tokens": 5,
-                    "output_tokens_details": { "reasoning_tokens": 2 },
-                    "total_tokens": 9
+        sse(vec![
+            ev_reasoning_item_added("reasoning-1", &[]),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp1",
+                    "usage": {
+                        "input_tokens": 3,
+                        "input_tokens_details": { "cached_tokens": 1 },
+                        "output_tokens": 5,
+                        "output_tokens_details": { "reasoning_tokens": 2 },
+                        "total_tokens": 9
+                    }
                 }
-            }
-        })]),
+            }),
+        ]),
     )
     .await;
 
@@ -612,6 +615,9 @@ async fn process_sse_emits_completed_telemetry() {
                     && line.contains("cached_token_count=1")
                     && line.contains("reasoning_token_count=2")
                     && line.contains("tool_token_count=9")
+                    && extract_log_field(line, "ttft_ms")
+                        .and_then(|ttft_ms| ttft_ms.parse::<i64>().ok())
+                        .is_some()
             })
             .map(|_| Ok(()))
             .unwrap_or(Err("missing response.completed telemetry".to_string()))
