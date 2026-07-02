@@ -4,6 +4,7 @@ use crate::AuthProvider;
 use bytes::Bytes;
 use codex_client::build_reqwest_client_with_custom_ca;
 use futures::Stream;
+use futures::stream;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
@@ -81,11 +82,61 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
+/// Uploads an in-memory artifact directly into the user's persistent Library.
+///
+/// This is intended for host-owned outputs such as generated images that do not
+/// have a path in a turn environment. The upload uses the same ChatGPT file
+/// pipeline as upload_openai_file, but opts into Library persistence at file
+/// creation time.
+pub async fn upload_openai_file_bytes_to_library(
+    base_url: &str,
+    auth: &dyn AuthProvider,
+    file_name: String,
+    mime_type: String,
+    contents: Bytes,
+) -> Result<UploadedOpenAiFile, OpenAiFileError> {
+    let file_size_bytes = contents.len() as u64;
+    let contents = stream::once(async move { Ok(contents) });
+    upload_openai_file_with_destination(
+        base_url,
+        auth,
+        file_name,
+        file_size_bytes,
+        OpenAiFileDestination::Library { mime_type },
+        contents,
+    )
+    .await
+}
+
 pub async fn upload_openai_file(
     base_url: &str,
     auth: &dyn AuthProvider,
     file_name: String,
     file_size_bytes: u64,
+    contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+) -> Result<UploadedOpenAiFile, OpenAiFileError> {
+    upload_openai_file_with_destination(
+        base_url,
+        auth,
+        file_name,
+        file_size_bytes,
+        OpenAiFileDestination::Temporary,
+        contents,
+    )
+    .await
+}
+
+enum OpenAiFileDestination {
+    Temporary,
+    Library { mime_type: String },
+}
+
+async fn upload_openai_file_with_destination(
+    base_url: &str,
+    auth: &dyn AuthProvider,
+    file_name: String,
+    file_size_bytes: u64,
+    destination: OpenAiFileDestination,
     contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     if file_size_bytes > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
@@ -97,12 +148,17 @@ pub async fn upload_openai_file(
     }
 
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    let mut create_body = serde_json::json!({
+        "file_name": file_name.as_str(),
+        "file_size": file_size_bytes,
+        "use_case": OPENAI_FILE_USE_CASE,
+    });
+    if let OpenAiFileDestination::Library { mime_type } = destination {
+        create_body["mime_type"] = serde_json::Value::String(mime_type);
+        create_body["store_in_library"] = serde_json::Value::Bool(true);
+    }
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&serde_json::json!({
-            "file_name": file_name.as_str(),
-            "file_size": file_size_bytes,
-            "use_case": OPENAI_FILE_USE_CASE,
-        }))
+        .json(&create_body)
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -340,5 +396,66 @@ mod tests {
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn upload_openai_file_bytes_to_library_requests_persistence() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .and(body_json(serde_json::json!({
+                "file_name": "generated-image.png",
+                "file_size": 5,
+                "mime_type": "image/png",
+                "store_in_library": true,
+                "use_case": "codex",
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"file_id": "file_456", "upload_url": format!("{}/upload/file_456", server.uri())})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_456"))
+            .and(header("content-length", "5"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let download_url = format!("{}/download/file_456", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_456/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": download_url,
+                "file_name": "generated-image.png",
+                "mime_type": "image/png",
+                "file_size_bytes": 5
+            })))
+            .mount(&server)
+            .await;
+
+        let uploaded = upload_openai_file_bytes_to_library(
+            &base_url_for(&server),
+            &chatgpt_auth(),
+            "generated-image.png".to_string(),
+            "image/png".to_string(),
+            Bytes::from_static(b"hello"),
+        )
+        .await
+        .expect("upload succeeds");
+
+        assert_eq!(
+            uploaded,
+            UploadedOpenAiFile {
+                file_id: "file_456".to_string(),
+                uri: "sediment://file_456".to_string(),
+                download_url: format!("{}/download/file_456", server.uri()),
+                file_name: "generated-image.png".to_string(),
+                file_size_bytes: 5,
+                mime_type: Some("image/png".to_string()),
+            }
+        );
     }
 }

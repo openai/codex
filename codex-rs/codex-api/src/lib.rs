@@ -69,6 +69,7 @@ pub use crate::endpoint::session_update_session_json;
 pub use crate::error::ApiError;
 pub use crate::files::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 pub use crate::files::upload_openai_file;
+pub use crate::files::upload_openai_file_bytes_to_library;
 pub use crate::images::ImageBackground;
 pub use crate::images::ImageData;
 pub use crate::images::ImageEditRequest;
