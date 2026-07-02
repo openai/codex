@@ -852,6 +852,12 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         EventMsg::TurnAborted(aborted) => Some(Err(format!(
             "review aborted before entering review mode: {aborted:#?}"
         ))),
+        EventMsg::ExitedReviewMode(exited) => Some(Err(format!(
+            "review exited before entering review mode: {exited:#?}"
+        ))),
+        EventMsg::TurnComplete(completed) => Some(Err(format!(
+            "review completed before entering review mode: {completed:#?}"
+        ))),
         _ => None,
     })
     .await

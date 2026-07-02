@@ -13,7 +13,12 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SubAgentSource;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use futures::future::Shared;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
@@ -31,12 +36,47 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use super::SessionTaskResult;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+type EnterReviewModeFuture = Shared<BoxFuture<'static, ()>>;
+
+pub(crate) struct ReviewTask {
+    review_request: ReviewRequest,
+    enter_review_mode: OnceCell<EnterReviewModeFuture>,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(review_request: ReviewRequest) -> Self {
+        Self {
+            review_request,
+            enter_review_mode: OnceCell::new(),
+        }
+    }
+
+    async fn enter_review_mode_once(
+        &self,
+        session: &Arc<SessionTaskContext>,
+        ctx: &Arc<TurnContext>,
+    ) {
+        // Normal completion and abort can race. Both paths await the same shared send future so
+        // neither ExitedReviewMode nor a terminal turn event can overtake EnteredReviewMode.
+        let enter_review_mode = self
+            .enter_review_mode
+            .get_or_init(|| {
+                let session = session.clone_session();
+                let ctx = Arc::clone(ctx);
+                let review_request = self.review_request.clone();
+                std::future::ready(
+                    async move {
+                        session
+                            .send_event(ctx.as_ref(), EventMsg::EnteredReviewMode(review_request))
+                            .await;
+                    }
+                    .boxed()
+                    .shared(),
+                )
+            })
+            .await
+            .clone();
+        enter_review_mode.await;
     }
 }
 
@@ -56,6 +96,7 @@ impl SessionTask for ReviewTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        self.enter_review_mode_once(&session, &ctx).await;
         session.session.services.session_telemetry.counter(
             "codex.task.review",
             /*inc*/ 1,
@@ -89,6 +130,7 @@ impl SessionTask for ReviewTask {
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+        self.enter_review_mode_once(&session, &ctx).await;
         exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
     }
 }
