@@ -1411,12 +1411,14 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            let request_start = Instant::now();
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
                 Ok(stream) => {
                     let (stream, _) = map_response_stream(
                         stream,
+                        request_start,
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
@@ -1599,6 +1601,7 @@ impl ModelClientSession {
                         "websocket connection is unavailable".to_string(),
                     ))
                 })?;
+            let request_start = Instant::now();
             let stream_result = websocket_connection
                 .stream_request(
                     ws_request,
@@ -1619,6 +1622,7 @@ impl ModelClientSession {
                 })?;
             let (stream, last_request_rx) = map_response_stream(
                 stream_result,
+                request_start,
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
@@ -1868,6 +1872,7 @@ const STREAM_DROPPED_REASON: &str = "response stream dropped before provider ter
 
 fn map_response_stream(
     api_stream: codex_api::ResponseStream,
+    request_start: Instant,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
@@ -1883,6 +1888,7 @@ fn map_response_stream(
     map_response_events(
         upstream_request_id,
         api_stream,
+        request_start,
         session_telemetry,
         inference_trace_attempt,
         provider,
@@ -1892,6 +1898,7 @@ fn map_response_stream(
 fn map_response_events<S>(
     upstream_request_id: Option<String>,
     api_stream: S,
+    request_start: Instant,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
@@ -1912,6 +1919,7 @@ where
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
+        let mut ttft_ms = None;
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1961,6 +1969,7 @@ where
                             Some(usage.cached_input_tokens),
                             Some(usage.reasoning_output_tokens),
                             usage.total_tokens,
+                            ttft_ms,
                         );
                     }
                     inference_trace_attempt.record_completed(
@@ -1988,6 +1997,11 @@ where
                     }
                 }
                 Ok(event) => {
+                    if matches!(&event, ResponseEvent::OutputItemAdded(_)) && ttft_ms.is_none() {
+                        ttft_ms = Some(
+                            i64::try_from(request_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                        );
+                    }
                     if tx_event.send(Ok(event)).await.is_err() {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,

@@ -63,6 +63,7 @@ use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tracing::Event;
@@ -582,6 +583,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let (mut stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
+        Instant::now(),
         test_session_telemetry(),
         attempt,
         test_model_provider(),
@@ -632,6 +634,7 @@ async fn response_stream_records_last_model_feedback_ids() {
     let (mut stream, _) = super::map_response_events(
         Some("req-123".to_string()),
         api_stream,
+        Instant::now(),
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
@@ -707,6 +710,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     let (stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
+        Instant::now(),
         test_session_telemetry(),
         attempt,
         test_model_provider(),
