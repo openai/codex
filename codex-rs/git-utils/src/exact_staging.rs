@@ -4,22 +4,23 @@ use std::collections::BTreeSet;
 use std::io;
 use std::io::Seek;
 use std::io::Write;
-use std::path::Path;
 use std::process::Stdio;
 
-use crate::apply::run_git;
 use crate::exact_index_policy::ExactIndexPolicy;
-use crate::exact_index_policy::effective_git_bool;
 use crate::exact_index_policy::resolve_exact_index_policy;
-use crate::git_command::GitRunner;
-use crate::git_config_sources::ensure_no_worktree_config_sources;
+use crate::guarded_config::GuardedGitConfig;
 use crate::patch_paths::validate_patch_path;
-use crate::safe_git::ensure_no_selected_git_add_filters;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StagePathsResult {
     pub(crate) exit_code: i32,
     pub(crate) stderr: String,
+}
+
+#[derive(Clone, Copy)]
+enum StagingProvenance {
+    FromApply,
+    Standalone,
 }
 
 /// Stage only the literal paths supplied by a caller that has already applied
@@ -35,19 +36,38 @@ pub(crate) struct StagePathsResult {
 /// bytes read for an already-confined index pathname. It cannot make this
 /// exact command recurse into, or create index entries for, descendant paths;
 /// the filter neutralizer also remains in force for the entire command.
-pub(crate) fn update_index_exact_paths(
-    git: &GitRunner,
-    git_root: &Path,
+pub(crate) fn update_index_exact_paths_from_apply(
+    config: &mut GuardedGitConfig<'_>,
     paths: &[String],
     content_filter_paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<StagePathsResult> {
-    if paths.is_empty() {
-        return Ok(StagePathsResult {
-            exit_code: 0,
-            stderr: String::new(),
-        });
-    }
+    update_index_exact_paths_common(
+        config,
+        paths,
+        content_filter_paths,
+        StagingProvenance::FromApply,
+    )
+}
+
+pub(crate) fn update_index_exact_paths_standalone(
+    config: &mut GuardedGitConfig<'_>,
+    paths: &[String],
+    content_filter_paths: &[String],
+) -> io::Result<StagePathsResult> {
+    update_index_exact_paths_common(
+        config,
+        paths,
+        content_filter_paths,
+        StagingProvenance::Standalone,
+    )
+}
+
+fn update_index_exact_paths_common(
+    config: &mut GuardedGitConfig<'_>,
+    paths: &[String],
+    content_filter_paths: &[String],
+    provenance: StagingProvenance,
+) -> io::Result<StagePathsResult> {
     for path in paths {
         if path.as_bytes().contains(&0) {
             return Err(io::Error::new(
@@ -67,29 +87,34 @@ pub(crate) fn update_index_exact_paths(
             "content-filter staging path is not in the exact staging set",
         ));
     }
+    if matches!(provenance, StagingProvenance::FromApply) {
+        config.ensure_apply_filter_path_subset(content_filter_paths)?;
+    }
+    if paths.is_empty() {
+        return Ok(StagePathsResult {
+            exit_code: 0,
+            stderr: String::new(),
+        });
+    }
 
-    ensure_no_worktree_config_sources(git, git_root, git_config_args)?;
+    let (paths, content_filter_paths) =
+        match resolve_exact_index_policy(config, paths, content_filter_paths)? {
+            ExactIndexPolicy::Proceed {
+                paths,
+                content_filter_paths,
+            } => (paths, content_filter_paths),
+            ExactIndexPolicy::Refuse { stderr } => {
+                return Ok(StagePathsResult {
+                    exit_code: 1,
+                    stderr,
+                });
+            }
+        };
+    if matches!(provenance, StagingProvenance::FromApply) {
+        config.ensure_apply_filter_path_subset(&content_filter_paths)?;
+    }
 
-    let (paths, content_filter_paths) = match resolve_exact_index_policy(
-        git,
-        git_root,
-        paths,
-        content_filter_paths,
-        git_config_args,
-    )? {
-        ExactIndexPolicy::Proceed {
-            paths,
-            content_filter_paths,
-        } => (paths, content_filter_paths),
-        ExactIndexPolicy::Refuse { stderr } => {
-            return Ok(StagePathsResult {
-                exit_code: 1,
-                stderr,
-            });
-        }
-    };
-
-    let ignored = ignored_untracked_paths(git, git_root, &paths, git_config_args)?;
+    let ignored = ignored_untracked_paths(config, &paths)?;
     if !ignored.is_empty() {
         return Ok(StagePathsResult {
             exit_code: 1,
@@ -99,32 +124,26 @@ pub(crate) fn update_index_exact_paths(
             ),
         });
     }
-    if let Some(result) = sparse_checkout_policy(git, git_root, &paths, git_config_args)? {
+    if let Some(result) = sparse_checkout_policy(config, &paths)? {
         return Ok(result);
     }
 
-    let filter_guard =
-        ensure_no_selected_git_add_filters(git, git_root, &content_filter_paths, git_config_args)?;
-    let mut guarded_config = git_config_args.to_vec();
-    guarded_config.extend_from_slice(filter_guard.git_config_args());
-
-    let mut update_args = vec![
-        "--literal-pathspecs".to_string(),
-        "update-index".to_string(),
-        "--add".to_string(),
-        "--remove".to_string(),
-        "--".to_string(),
-    ];
-    update_args.extend_from_slice(&paths);
-    let (exit_code, _stdout, stderr) = run_git(git, git_root, &guarded_config, &update_args)?;
-    Ok(StagePathsResult { exit_code, stderr })
+    config.authorize_git_add_filter_paths(&content_filter_paths)?;
+    let mut command = config.update_index_literal_pathspecs_command()?;
+    command
+        .disable_optional_locks()
+        .args(["--add", "--remove", "--"])
+        .args(&paths);
+    let output = command.output()?;
+    Ok(StagePathsResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 fn ignored_untracked_paths(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<BTreeSet<String>> {
     if paths.is_empty() {
         return Ok(BTreeSet::new());
@@ -138,15 +157,14 @@ fn ignored_untracked_paths(
         .map(|path| format!("./{path}"))
         .collect::<Vec<_>>();
     let input = nul_path_input(&probe_paths)?;
-    let mut command = git.command_for_cwd(git_root)?;
+    let mut command = config.check_ignore_command()?;
     command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
+        .disable_optional_locks()
         // `check-ignore --stdin` consumes pathnames rather than pathspecs and
         // rejects the global literal-pathspec mode as unsupported magic.
-        .args(["check-ignore", "--stdin", "-z"])
+        .args(["--stdin", "-z"])
         .stdin(Stdio::from(input));
-    let output = git.output(command)?;
+    let output = command.output()?;
     match output.status.code() {
         Some(0) => {
             let ignored = parse_reported_paths(&output.stdout, &probe_paths, "ignored-path")?
@@ -171,13 +189,10 @@ fn ignored_untracked_paths(
 }
 
 fn sparse_checkout_policy(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<Option<StagePathsResult>> {
-    if !effective_git_bool(git, git_root, git_config_args, "core.sparseCheckout")?.unwrap_or(false)
-    {
+    if !config.read_bool("core.sparseCheckout")?.unwrap_or(false) {
         return Ok(None);
     }
 
@@ -185,12 +200,7 @@ fn sparse_checkout_policy(
     // `git-sparse-checkout` helper. Repository-controlled PATH entries are
     // outside the trusted executable boundary. `--list-cmds=builtins` is a
     // main-program capability query and cannot dispatch an external command.
-    let mut builtins_command = git.command_for_cwd(git_root)?;
-    builtins_command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .arg("--list-cmds=builtins");
-    let builtins = git.output(builtins_command)?;
+    let builtins = config.list_builtin_commands()?;
     let sparse_checkout_is_builtin = builtins.status.success()
         && std::str::from_utf8(&builtins.stdout)
             .is_ok_and(|output| output.lines().any(|command| command == "sparse-checkout"));
@@ -203,13 +213,12 @@ fn sparse_checkout_policy(
     }
 
     let input = nul_path_input(paths)?;
-    let mut command = git.command_for_cwd(git_root)?;
+    let mut command = config.sparse_checkout_command()?;
     command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args(["sparse-checkout", "check-rules", "-z"])
+        .disable_optional_locks()
+        .args(["check-rules", "-z"])
         .stdin(Stdio::from(input));
-    let output = git.output(command)?;
+    let output = command.output()?;
     if !output.status.success() {
         return Ok(Some(StagePathsResult {
             exit_code: output.status.code().unwrap_or(-1),

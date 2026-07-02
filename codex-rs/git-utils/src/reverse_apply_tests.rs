@@ -1,5 +1,12 @@
 use super::*;
+use crate::guarded_config::config_source_authorization_count;
+use crate::guarded_config::merge_attribute_read_count;
+use crate::guarded_config::merge_config_read_count;
+use crate::guarded_config::reset_config_source_authorization_count;
+use crate::guarded_config::reset_merge_policy_counts;
+use crate::safe_git::filter_policy_read_count;
 use crate::safe_git::isolate_git_command_environment;
+use crate::safe_git::reset_filter_policy_counts;
 use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -575,4 +582,79 @@ fn direct_success_paths_are_machine_readable_in_each_orientation() {
         assert_eq!(result.exit_code, 0, "{}", result.stderr);
         assert_eq!(result.applied_paths, vec![expected]);
     }
+}
+
+#[test]
+fn reverse_three_way_with_staging_candidate_uses_one_authorization() {
+    let child_marker = "CODEX_GIT_UTILS_REVERSE_THREE_WAY_TRACE_CHILD";
+    if std::env::var_os(child_marker).is_none() {
+        let environment = tempfile::tempdir().expect("isolated Git environment");
+        let global_config = environment.path().join("global.gitconfig");
+        let system_config = environment.path().join("system.gitconfig");
+        std::fs::write(&global_config, "").expect("empty global config");
+        std::fs::write(&system_config, "").expect("empty system config");
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        isolate_git_command_environment(&mut command);
+        let output = command
+            .arg("apply::reverse_apply_tests::reverse_three_way_with_staging_candidate_uses_one_authorization")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(child_marker, "1")
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_SYSTEM", &system_config)
+            .env("RUST_TEST_THREADS", "1")
+            .output()
+            .expect("run isolated reverse three-way test");
+        assert!(
+            output.status.success(),
+            "isolated reverse three-way test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    let base_contents = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\nbase\n12\n13\n14\n15\n";
+    let theirs_contents =
+        "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\ntheirs\n12\n13\n14\n15\n";
+    let independently_edited =
+        "01\n02\n03\n04\n05\n06\n07\nEIGHT\n09\n10\ntheirs\n12\n13\n14\n15\n";
+    let expected = "01\n02\n03\n04\n05\n06\n07\nEIGHT\n09\n10\nbase\n12\n13\n14\n15\n";
+    std::fs::write(root.join("file.txt"), base_contents).expect("write base");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    let base = String::from_utf8(run_success(root, &["rev-parse", "HEAD"])).expect("base OID");
+    std::fs::write(root.join("file.txt"), theirs_contents).expect("write theirs");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "theirs"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &[
+            "diff",
+            "--full-index",
+            base.trim(),
+            "HEAD",
+            "--",
+            "file.txt",
+        ],
+    ))
+    .expect("patch");
+    // Change a context line so a plain reverse check fails, while a three-way
+    // reverse can preserve the independent edit after exact staging.
+    std::fs::write(root.join("file.txt"), independently_edited).expect("write independent edit");
+
+    reset_config_source_authorization_count();
+    reset_filter_policy_counts();
+    reset_merge_policy_counts();
+    let result = apply_git_patch(&request(root, &patch)).expect("reverse three-way apply");
+
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert!(result.cmd_for_log.contains("--3way"));
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(filter_policy_read_count(), 2);
+    assert_eq!(merge_config_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(read_file_normalized(&root.join("file.txt")), expected);
 }

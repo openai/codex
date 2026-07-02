@@ -6,7 +6,7 @@ use std::io;
 use std::path::Path;
 
 use crate::exact_filesystem_policy::filesystem_spelling_conflicts;
-use crate::git_command::GitRunner;
+use crate::guarded_config::GuardedGitConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ExactIndexPolicy {
@@ -90,16 +90,14 @@ impl<'a> IndexEvidence<'a> {
 }
 
 pub(crate) fn resolve_exact_index_policy(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
     content_filter_paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<ExactIndexPolicy> {
-    let output = read_index(git, git_root, git_config_args)?;
+    let output = read_index(config)?;
     let entries = parse_index_entries(&output)?;
-    let ignore_case =
-        effective_git_bool(git, git_root, git_config_args, "core.ignoreCase")?.unwrap_or(false);
+    let ignore_case = config.read_bool("core.ignoreCase")?.unwrap_or(false);
+    let git_root = config.canonical_root();
 
     let (paths, content_filter_paths) = if ignore_case {
         let mapped = match map_ignore_case_paths(git_root, &entries, paths, content_filter_paths) {
@@ -171,15 +169,14 @@ pub(crate) fn resolve_exact_index_policy(
     })
 }
 
-fn read_index(git: &GitRunner, git_root: &Path, git_config_args: &[String]) -> io::Result<Vec<u8>> {
+fn read_index(config: &GuardedGitConfig<'_>) -> io::Result<Vec<u8>> {
     // One full, byte-oriented scan avoids invoking Git once per patch path and
     // lets one parse enforce aliases, directory prefixes, and flags together.
-    let mut command = git.command_for_cwd(git_root)?;
+    let mut command = config.ls_files_command()?;
     command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args(["ls-files", "--cached", "-v", "-z"]);
-    let output = git.output(command)?;
+        .disable_optional_locks()
+        .args(["--cached", "-v", "-z"]);
+    let output = command.output()?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
             "git exact-index probe failed with status {}: {}",
@@ -421,38 +418,6 @@ fn non_leaf_prefixes(path: &[u8]) -> impl Iterator<Item = &[u8]> {
 
 fn ascii_fold(value: &[u8]) -> Vec<u8> {
     value.iter().map(u8::to_ascii_lowercase).collect()
-}
-
-pub(crate) fn effective_git_bool(
-    git: &GitRunner,
-    git_root: &Path,
-    git_config_args: &[String],
-    key: &str,
-) -> io::Result<Option<bool>> {
-    let mut command = git.command_for_cwd(git_root)?;
-    command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args(["config", "--type=bool", "--get", key]);
-    let output = git.output(command)?;
-    if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
-        return Ok(None);
-    }
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "git boolean config probe for {key} failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    match String::from_utf8_lossy(&output.stdout).trim() {
-        "true" => Ok(Some(true)),
-        "false" => Ok(Some(false)),
-        value => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unexpected normalized Git boolean value for {key}: {value:?}"),
-        )),
-    }
 }
 
 fn quote_paths(paths: &BTreeSet<String>) -> String {

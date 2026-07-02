@@ -3,29 +3,21 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
-use std::path::Path;
 
-use crate::exact_staging::update_index_exact_paths;
-use crate::git_command::GitRunner;
-use crate::patch_paths::confine_patch_paths;
+use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::guarded_config::GuardedGitConfig;
+use crate::patch_paths::confine_patch_paths_guarded;
 use crate::patch_paths::leaf_is_traversable_directory;
 use crate::patch_paths::leaf_may_run_git_content_filter;
 
-#[cfg(unix)]
-const WORKTREE_FILEMODE_CONFIG_ARGS: &[&str] = &["-c", "core.filemode=true"];
-#[cfg(not(unix))]
-const WORKTREE_FILEMODE_CONFIG_ARGS: &[&str] = &[];
-
 pub(crate) fn stage_effective_paths_for_reverse(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &mut GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<()> {
-    let confined = confine_patch_paths(git, git_root, paths)?;
+    let confined = confine_patch_paths_guarded(config, paths)?;
     let mut worktree_paths = BTreeMap::new();
     for path in confined.into_exact_leaves()? {
-        let joined = git_root.join(&path);
+        let joined = config.canonical_root().join(&path);
         let state = match std::fs::symlink_metadata(&joined) {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
@@ -58,7 +50,7 @@ pub(crate) fn stage_effective_paths_for_reverse(
     }
 
     let exact_paths = worktree_paths.keys().cloned().collect::<Vec<_>>();
-    let index_entries = read_reverse_index_entries(git, git_root, &exact_paths, git_config_args)?;
+    let index_entries = read_reverse_index_entries(config, &exact_paths)?;
     for path in &exact_paths {
         let entries = index_entries.get(path).map(Vec::as_slice).unwrap_or(&[]);
         if !matches!(
@@ -75,43 +67,12 @@ pub(crate) fn stage_effective_paths_for_reverse(
     }
 
     let cached_invisible_status = read_name_status(
-        git,
-        git_root,
+        config,
         &exact_paths,
-        git_config_args,
-        &[
-            "--literal-pathspecs",
-            "diff",
-            "--cached",
-            "--name-status",
-            "-z",
-            "--no-renames",
-            "--ita-invisible-in-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--ignore-submodules=none",
-        ],
-        "inspect reverse paths with intent-to-add entries hidden",
+        ReverseCachedView::IntentToAddInvisible,
     )?;
-    let cached_visible_status = read_name_status(
-        git,
-        git_root,
-        &exact_paths,
-        git_config_args,
-        &[
-            "--literal-pathspecs",
-            "diff",
-            "--cached",
-            "--name-status",
-            "-z",
-            "--no-renames",
-            "--ita-visible-in-index",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--ignore-submodules=none",
-        ],
-        "inspect reverse paths with intent-to-add entries visible",
-    )?;
+    let cached_visible_status =
+        read_name_status(config, &exact_paths, ReverseCachedView::IntentToAddVisible)?;
     if cached_invisible_status != cached_visible_status {
         let path = exact_paths
             .iter()
@@ -121,24 +82,7 @@ pub(crate) fn stage_effective_paths_for_reverse(
             "refusing to stage reverse patch path {path:?} because it has intent-to-add index state"
         )));
     }
-    let worktree_changed_paths = read_changed_paths(
-        git,
-        git_root,
-        &exact_paths,
-        git_config_args,
-        WORKTREE_FILEMODE_CONFIG_ARGS,
-        &[
-            "--literal-pathspecs",
-            "diff-files",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--ignore-submodules=none",
-        ],
-        "compare reverse path index entries with the worktree",
-    )?;
+    let worktree_changed_paths = read_changed_paths(config, &exact_paths)?;
 
     let mut staging_candidates = Vec::new();
     for path in &exact_paths {
@@ -178,13 +122,8 @@ pub(crate) fn stage_effective_paths_for_reverse(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let result = update_index_exact_paths(
-        git,
-        git_root,
-        &staging_candidates,
-        &content_filter_paths,
-        git_config_args,
-    )?;
+    let result =
+        update_index_exact_paths_from_apply(config, &staging_candidates, &content_filter_paths)?;
     if result.exit_code == 0 {
         Ok(())
     } else {
@@ -209,24 +148,10 @@ struct ReverseIndexEntry {
 }
 
 fn read_reverse_index_entries(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
 ) -> io::Result<BTreeMap<String, Vec<ReverseIndexEntry>>> {
-    let mut command = git.command_for_cwd(git_root)?;
-    command
-        .args(git_config_args)
-        .args([
-            "--literal-pathspecs",
-            "ls-files",
-            "-v",
-            "--stage",
-            "-z",
-            "--",
-        ])
-        .args(paths);
-    let output = git.output(command)?;
+    let output = config.reverse_index_stage_output(paths)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
             "failed to inspect reverse patch index entries: {}",
@@ -295,17 +220,35 @@ fn read_reverse_index_entries(
     Ok(entries)
 }
 
+#[derive(Clone, Copy)]
+enum ReverseCachedView {
+    IntentToAddInvisible,
+    IntentToAddVisible,
+}
+
 fn read_name_status(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
-    args: &[&str],
-    operation: &str,
+    view: ReverseCachedView,
 ) -> io::Result<BTreeMap<String, u8>> {
-    let output =
-        run_path_list_command(git, git_root, paths, git_config_args, &[], args, operation)?;
-    let fields = nul_fields(&output, operation)?;
+    let (output, operation) = match view {
+        ReverseCachedView::IntentToAddInvisible => (
+            config.reverse_cached_name_status_invisible_output(paths)?,
+            "inspect reverse paths with intent-to-add entries hidden",
+        ),
+        ReverseCachedView::IntentToAddVisible => (
+            config.reverse_cached_name_status_visible_output(paths)?,
+            "inspect reverse paths with intent-to-add entries visible",
+        ),
+    };
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "failed to {operation} (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let fields = nul_fields(&output.stdout, operation)?;
     if fields.len() % 2 != 0 {
         return Err(invalid_reverse_index_output(
             "git diff returned an incomplete name-status record",
@@ -331,26 +274,21 @@ fn read_name_status(
 }
 
 fn read_changed_paths(
-    git: &GitRunner,
-    git_root: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
-    extra_git_args: &[&str],
-    args: &[&str],
-    operation: &str,
 ) -> io::Result<BTreeSet<String>> {
-    let output = run_path_list_command(
-        git,
-        git_root,
-        paths,
-        git_config_args,
-        extra_git_args,
-        args,
-        operation,
-    )?;
+    let operation = "compare reverse path index entries with the worktree";
+    let output = config.reverse_worktree_changed_paths_output(paths)?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "failed to {operation} (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
     let expected = paths.iter().map(String::as_str).collect::<BTreeSet<_>>();
     let mut changed = BTreeSet::new();
-    for path in nul_fields(&output, operation)? {
+    for path in nul_fields(&output.stdout, operation)? {
         let path = parse_expected_path(path, &expected, operation)?;
         if !changed.insert(path) {
             return Err(invalid_reverse_index_output(
@@ -359,33 +297,6 @@ fn read_changed_paths(
         }
     }
     Ok(changed)
-}
-
-fn run_path_list_command(
-    git: &GitRunner,
-    git_root: &Path,
-    paths: &[String],
-    git_config_args: &[String],
-    extra_git_args: &[&str],
-    args: &[&str],
-    operation: &str,
-) -> io::Result<Vec<u8>> {
-    let mut command = git.command_for_cwd(git_root)?;
-    command
-        .args(git_config_args)
-        .args(extra_git_args)
-        .args(args)
-        .arg("--")
-        .args(paths);
-    let output = git.output(command)?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "failed to {operation} (status {}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(output.stdout)
 }
 
 fn reverse_staging_error(message: impl Into<String>) -> io::Error {

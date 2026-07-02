@@ -1,9 +1,18 @@
 use super::*;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
+use crate::git_command::GitRunner;
 use crate::git_config::GitConfigOrigin;
 use crate::git_config::GitConfigScope;
+use crate::guarded_config::GuardedGitConfig;
+use crate::guarded_config::config_source_authorization_count;
+use crate::guarded_config::merge_attribute_read_count;
+use crate::guarded_config::merge_config_read_count;
+use crate::guarded_config::merge_overlay_count;
+use crate::guarded_config::reset_config_source_authorization_count;
+use crate::guarded_config::reset_merge_policy_counts;
 use std::ffi::OsStr;
+use std::path::Path;
 
 #[test]
 fn apply_allows_unused_global_merge_driver() {
@@ -113,6 +122,8 @@ fn apply_rejects_global_merge_driver_before_three_way() {
     let (commit_code, _, commit_err) = run(root, &["git", "commit", "-am", "ours"]);
     assert_eq!(commit_code, 0, "commit ours: {commit_err}");
 
+    reset_config_source_authorization_count();
+    reset_merge_policy_counts();
     let error = apply_git_patch(&ApplyGitRequest {
         cwd: root.to_path_buf(),
         diff,
@@ -120,6 +131,10 @@ fn apply_rejects_global_merge_driver_before_three_way() {
         preflight: false,
     })
     .expect_err("reject global merge driver");
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(merge_config_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(merge_overlay_count(), 0);
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "merge driver must not run");
@@ -165,6 +180,8 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
         "configure unused local driver: {config_err}"
     );
 
+    reset_config_source_authorization_count();
+    reset_merge_policy_counts();
     let result = apply_git_patch(&ApplyGitRequest {
         cwd: root.to_path_buf(),
         diff,
@@ -172,6 +189,10 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
         preflight: false,
     })
     .expect("allow unrelated local merge driver during three-way fallback");
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(merge_config_read_count(), 1);
+    assert_eq!(merge_attribute_read_count(), 1);
+    assert_eq!(merge_overlay_count(), 1);
     assert_eq!(result.exit_code, 0, "three-way apply: {}", result.stderr);
     assert!(result.cmd_for_log.contains("--3way"));
     assert_eq!(
@@ -206,6 +227,7 @@ fn apply_allows_clean_patch_with_selected_merge_driver() {
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
 
+    reset_merge_policy_counts();
     let result = apply_git_patch(&ApplyGitRequest {
         cwd: root.to_path_buf(),
         diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
@@ -215,6 +237,9 @@ fn apply_allows_clean_patch_with_selected_merge_driver() {
     .expect("allow clean patch with selected merge driver");
 
     assert_eq!(result.exit_code, 0);
+    assert_eq!(merge_config_read_count(), 0);
+    assert_eq!(merge_attribute_read_count(), 0);
+    assert_eq!(merge_overlay_count(), 0);
     assert!(!result.cmd_for_log.contains("--3way"));
     let contents = std::fs::read_to_string(root.join("file.txt")).expect("read file");
     assert!(
@@ -315,6 +340,7 @@ fn preflight_does_not_probe_or_run_selected_merge_driver() {
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
 
+    reset_merge_policy_counts();
     let result = apply_git_patch(&ApplyGitRequest {
         cwd: root.to_path_buf(),
         diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n".to_string(),
@@ -323,12 +349,70 @@ fn preflight_does_not_probe_or_run_selected_merge_driver() {
     })
     .expect("preflight must not probe merge drivers");
     assert_eq!(result.exit_code, 0);
+    assert_eq!(merge_config_read_count(), 0);
+    assert_eq!(merge_attribute_read_count(), 0);
+    assert_eq!(merge_overlay_count(), 0);
     assert_eq!(
         std::fs::read_to_string(root.join("file.txt")).expect("read file"),
         "old\n"
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "preflight must not run merge driver");
+}
+
+#[test]
+fn merge_override_rejects_process_temp_directory_inside_worktree() {
+    let root_name = "CODEX_GIT_UTILS_MERGE_WORKTREE_TMP_ROOT";
+    if let Some(root) = std::env::var_os(root_name) {
+        let root = std::path::PathBuf::from(root);
+        let patch = std::fs::read_to_string(root.join("fixture.patch")).expect("read patch");
+        let before_tree = run(&root, &["git", "write-tree"]).1;
+        let before_contents = std::fs::read_to_string(root.join("file.txt")).expect("read ours");
+        let error = apply_git_patch(&ApplyGitRequest {
+            cwd: root.clone(),
+            diff: patch,
+            revert: false,
+            preflight: false,
+        })
+        .expect_err("reject worktree-owned merge override");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(run(&root, &["git", "write-tree"]).1, before_tree);
+        assert_eq!(
+            std::fs::read_to_string(root.join("file.txt")).expect("read after"),
+            before_contents
+        );
+        let (marker_code, _, _) = run(&root, &["git", "config", "--get", "codex.mergeran"]);
+        assert_ne!(marker_code, 0, "merge driver must not run");
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    let patch = build_three_way_fixture(root);
+    std::fs::write(root.join("fixture.patch"), patch).expect("write fixture patch");
+    let (config_code, _, config_err) = run(
+        root,
+        &[
+            "git",
+            "config",
+            "merge.unused.driver",
+            "git config codex.mergeran true && false",
+        ],
+    );
+    assert_eq!(config_code, 0, "configure merge driver: {config_err}");
+    let worktree_temp = root.join("process-temp");
+    std::fs::create_dir(&worktree_temp).expect("worktree temp directory");
+    run_isolated_merge_test(
+        "merge_driver::tests::merge_override_rejects_process_temp_directory_inside_worktree",
+        &[
+            (root_name, root.as_os_str()),
+            ("TMPDIR", worktree_temp.as_os_str()),
+            #[cfg(windows)]
+            ("TEMP", worktree_temp.as_os_str()),
+            #[cfg(windows)]
+            ("TMP", worktree_temp.as_os_str()),
+        ],
+    );
 }
 
 #[test]
@@ -343,16 +427,14 @@ fn empty_name_driver_follows_effective_git_selection() {
         &["git", "config", "merge..driver", "empty-name helper"],
     );
     assert_eq!(config_code, 0, "configure empty-name driver: {config_err}");
-    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
     let paths = ["file.txt".to_string()];
 
-    ensure_no_selected_merge_drivers(&git, root, &paths, &[])
-        .expect("allow unused empty-name driver");
+    install_merge_policy(root, &paths).expect("allow unused empty-name driver");
 
     std::fs::write(root.join(".gitattributes"), "file.txt merge=\n")
         .expect("select empty-name driver");
-    let selected_error = ensure_no_selected_merge_drivers(&git, root, &paths, &[])
-        .expect_err("reject selected empty-name driver");
+    let selected_error =
+        install_merge_policy(root, &paths).expect_err("reject selected empty-name driver");
     assert_eq!(selected_error.kind(), io::ErrorKind::Unsupported);
 
     std::fs::write(root.join(".gitattributes"), "").expect("clear attributes");
@@ -361,18 +443,16 @@ fn empty_name_driver_follows_effective_git_selection() {
         default_code, 0,
         "configure empty merge.default: {default_err}"
     );
-    let default_error = ensure_no_selected_merge_drivers(&git, root, &paths, &[])
+    let default_error = install_merge_policy(root, &paths)
         .expect_err("reject empty-name driver selected by empty default");
     assert_eq!(default_error.kind(), io::ErrorKind::Unsupported);
 
     let (empty_code, _, empty_err) = run(root, &["git", "config", "merge..driver", ""]);
     assert_eq!(empty_code, 0, "empty effective driver: {empty_err}");
-    ensure_no_selected_merge_drivers(&git, root, &paths, &[])
-        .expect("allow selected empty command through empty default");
+    install_merge_policy(root, &paths).expect("allow selected empty command through empty default");
     std::fs::write(root.join(".gitattributes"), "file.txt merge=\n")
         .expect("select empty-name driver");
-    ensure_no_selected_merge_drivers(&git, root, &paths, &[])
-        .expect("allow explicitly selected empty command");
+    install_merge_policy(root, &paths).expect("allow explicitly selected empty command");
 }
 
 #[test]
@@ -522,6 +602,43 @@ fn config_entries<const N: usize>(values: [(&str, &str); N]) -> BTreeMap<String,
             )
         })
         .collect()
+}
+
+fn install_merge_policy(root: &Path, paths: &[String]) -> io::Result<()> {
+    let git = GitRunner::for_cwd_io(root)?;
+    let mut config = GuardedGitConfig::authorize(&git, root, Vec::new())?;
+    config.authorize_filter_paths(paths)?;
+    config.install_three_way_merge_policy()
+}
+
+fn build_three_way_fixture(root: &Path) -> String {
+    std::fs::write(root.join("file.txt"), "base\n").expect("write base");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    let base = run(root, &["git", "rev-parse", "HEAD"]).1;
+    std::fs::write(root.join("file.txt"), "theirs\n").expect("write theirs");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "theirs"]).0, 0);
+    let patch = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--full-index",
+            base.trim(),
+            "HEAD",
+            "--",
+            "file.txt",
+        ],
+    );
+    assert_eq!(patch.0, 0, "create patch: {}", patch.2);
+    assert_eq!(
+        run(root, &["git", "checkout", "-b", "ours", base.trim()]).0,
+        0
+    );
+    std::fs::write(root.join("file.txt"), "ours\n").expect("write ours");
+    assert_eq!(run(root, &["git", "commit", "-am", "ours"]).0, 0);
+    patch.1
 }
 
 fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {

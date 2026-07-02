@@ -1,104 +1,11 @@
+use crate::git_config::GitConfigEntry;
+#[cfg(test)]
+use crate::safe_git::isolate_git_command_environment;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
-use std::io::Seek;
-use std::io::Write;
-use std::path::Path;
-use std::process::Stdio;
 
-use crate::git_command::GitRunner;
-use crate::git_config::GitConfigEntry;
-use crate::safe_git::GitConfigOverrideFile;
-#[cfg(test)]
-use crate::safe_git::isolate_git_command_environment;
-use crate::safe_git::read_effective_config_with_fallback;
-
-const MERGE_CONFIG_PATTERN: &str = r"^(merge\.default|merge\..*\.driver)$";
-
-pub(crate) fn ensure_no_selected_merge_drivers(
-    git: &GitRunner,
-    cwd: &Path,
-    paths: &[String],
-    git_config_args: &[String],
-) -> io::Result<Option<GitConfigOverrideFile>> {
-    let entries = read_merge_config(git, cwd, git_config_args)?;
-    let attributes = read_merge_attributes(git, cwd, paths, git_config_args)?;
-    if let Some((driver, path)) = untrusted_driver_selection(&entries, &attributes)? {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!(
-                "refusing to run an internal Git three-way apply with merge driver {driver:?} selected for {path:?}"
-            ),
-        ));
-    }
-
-    let driver_keys = entries
-        .values()
-        .filter(|entry| entry.key != "merge.default" && !entry.value.is_empty())
-        .map(|entry| entry.key.clone())
-        .collect::<Vec<_>>();
-    if driver_keys.is_empty() {
-        return Ok(None);
-    }
-
-    let guard = GitConfigOverrideFile::new("merge-driver-neutralization.gitconfig")?;
-    for key in driver_keys {
-        guard.add_value(
-            git,
-            cwd,
-            &key,
-            "",
-            &format!("Git merge-driver neutralization for {key:?}"),
-        )?;
-    }
-    Ok(Some(guard))
-}
-
-fn read_merge_config(
-    git: &GitRunner,
-    cwd: &Path,
-    git_config_args: &[String],
-) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    read_effective_config_with_fallback(git, cwd, git_config_args, MERGE_CONFIG_PATTERN, "merge")
-}
-
-fn read_merge_attributes(
-    git: &GitRunner,
-    cwd: &Path,
-    paths: &[String],
-    git_config_args: &[String],
-) -> io::Result<BTreeMap<String, String>> {
-    if paths.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "refusing to inspect merge attributes for an empty patch path set",
-        ));
-    }
-    let mut input = tempfile::tempfile()?;
-    for path in paths {
-        input.write_all(path.as_bytes())?;
-        input.write_all(&[0])?;
-    }
-    input.rewind()?;
-
-    let mut command = git.command_for_cwd(cwd)?;
-    command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args(["check-attr", "--stdin", "-z", "merge"])
-        .stdin(Stdio::from(input));
-    let output = git.output(command)?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "git merge attribute probe failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    parse_merge_attributes(&output.stdout, paths)
-}
-
-fn parse_merge_attributes(
+pub(crate) fn parse_merge_attributes(
     output: &[u8],
     expected_paths: &[String],
 ) -> io::Result<BTreeMap<String, String>> {
@@ -145,7 +52,7 @@ fn parse_merge_attributes(
     Ok(attributes)
 }
 
-fn untrusted_driver_selection(
+pub(crate) fn untrusted_driver_selection(
     entries: &BTreeMap<String, GitConfigEntry>,
     attributes: &BTreeMap<String, String>,
 ) -> io::Result<Option<(String, String)>> {
