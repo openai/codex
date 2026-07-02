@@ -22,6 +22,13 @@ tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
