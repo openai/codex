@@ -3,6 +3,12 @@ use std::io;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::mpsc::Receiver;
+#[cfg(test)]
+use std::sync::mpsc::SyncSender;
+#[cfg(test)]
+use std::sync::mpsc::sync_channel;
 
 use crate::git_command::GitRunner;
 use crate::git_config::read_config_entries_without_includes;
@@ -29,6 +35,84 @@ use primary_sources::selected_git_prefix_system_candidate_async;
 const INCLUDE_CONFIG_PATTERN: &str = r"^include(\.path|if\..*\.path)$";
 const MAX_CONFIG_INCLUDE_DEPTH: usize = 10;
 const MAX_CONFIG_INCLUDE_FILES: usize = 1024;
+
+#[cfg(test)]
+struct BlockingNoIncludesQuerySignal {
+    reached: SyncSender<()>,
+    resume: Receiver<()>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BLOCKING_NO_INCLUDES_QUERY_SIGNAL: std::cell::RefCell<
+        Option<BlockingNoIncludesQuerySignal>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only rendezvous at the blocking config-source policy boundary.
+///
+/// The production build does not compile this hook. Unit tests can use it to
+/// mutate a config source after the no-includes query has completed and before
+/// the returned include entries are validated, without relying on trace-file
+/// polling or scheduler timing.
+#[cfg(test)]
+pub(crate) struct BlockingNoIncludesQueryPhase {
+    reached: Receiver<()>,
+    resume: SyncSender<()>,
+}
+
+#[cfg(test)]
+impl BlockingNoIncludesQueryPhase {
+    pub(crate) fn run(self, action: impl FnOnce()) -> bool {
+        if self.reached.recv().is_err() {
+            return false;
+        }
+        action();
+        self.resume.send(()).is_ok()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn install_blocking_no_includes_query_phase() -> BlockingNoIncludesQueryPhase {
+    let (reached, reached_receiver) = sync_channel(/*bound*/ 0);
+    let (resume, resume_receiver) = sync_channel(/*bound*/ 0);
+    BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "blocking no-includes query phase already installed on this thread"
+        );
+        *slot.borrow_mut() = Some(BlockingNoIncludesQuerySignal {
+            reached,
+            resume: resume_receiver,
+        });
+    });
+    BlockingNoIncludesQueryPhase {
+        reached: reached_receiver,
+        resume,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn clear_blocking_no_includes_query_phase() {
+    BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| {
+        slot.borrow_mut().take();
+    });
+}
+
+#[cfg(test)]
+fn signal_blocking_no_includes_query_phase() {
+    let signal = BLOCKING_NO_INCLUDES_QUERY_SIGNAL.with(|slot| slot.borrow_mut().take());
+    if let Some(signal) = signal {
+        signal
+            .reached
+            .send(())
+            .expect("blocking no-includes query phase receiver");
+        signal
+            .resume
+            .recv()
+            .expect("blocking no-includes query phase release");
+    }
+}
 
 /// Reject configuration that an untrusted worktree writer can change between
 /// a policy probe and the Git command it guards.
@@ -172,6 +256,10 @@ async fn ensure_no_worktree_config_sources_impl(
     let entries = execution
         .read_include_entries(&git_root, git_config_args, /*config_file*/ None)
         .await?;
+    #[cfg(test)]
+    if matches!(execution, SourceExecution::Blocking(_)) {
+        signal_blocking_no_includes_query_phase();
+    }
     let mut pending = Vec::new();
     let mut include_budget = IncludeGraphBudget::default();
     execution

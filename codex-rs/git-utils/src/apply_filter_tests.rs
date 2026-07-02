@@ -6,7 +6,6 @@ use std::fs::FileTimes;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 use std::time::UNIX_EPOCH;
 
 const PATCH: &str =
@@ -204,21 +203,6 @@ fn run_isolated_test(test_name: &str, env: &[(&str, &OsStr)]) {
     );
 }
 
-fn wait_for_config_source_probe(trace: &Path) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        let contents = std::fs::read_to_string(trace).unwrap_or_default();
-        if contents
-            .find("^include")
-            .is_some_and(|offset| contents[offset..].contains("\"event\":\"exit\""))
-        {
-            return true;
-        }
-        thread::yield_now();
-    }
-    false
-}
-
 #[test]
 fn reverse_staging_uses_command_scoped_filter_override() {
     if std::env::var_os("CODEX_GIT_UTILS_APPLY_FILTER_ENV_CHILD").is_none() {
@@ -342,23 +326,22 @@ fn apply_rejects_unseen_driver_added_through_worktree_include_after_source_probe
 
     let trace = PathBuf::from(std::env::var_os("GIT_TRACE2_EVENT").expect("trace path"));
     std::fs::write(&trace, "").expect("clear fixture trace");
-    let watcher_trace = trace.clone();
+    let phase = crate::git_config_sources::install_blocking_no_includes_query_phase();
     let watcher = thread::spawn(move || {
-        let observed = wait_for_config_source_probe(&watcher_trace);
-        if observed {
+        phase.run(|| {
             std::fs::write(
                 included,
                 format!("[filter \"fresh\"]\n\tclean = {FILTER_COMMAND}\n\trequired = true\n"),
             )
             .expect("add previously unseen filter driver");
-        }
-        observed
+        })
     });
 
     let error = apply_git_patch(&request(
         root, /*revert*/ false, /*preflight*/ false,
     ))
     .expect_err("reject worktree config source before final apply");
+    crate::git_config_sources::clear_blocking_no_includes_query_phase();
     assert!(watcher.join().expect("config watcher"));
 
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
