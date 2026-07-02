@@ -912,11 +912,10 @@ impl Tui {
             let mut area = terminal.viewport_area;
             area.height = height.min(size.height);
             area.width = size.width;
-            // If the viewport has expanded, scroll everything else up to make room.
+            // Keep the viewport bottom-aligned as it grows. The next frame
+            // redraws the expanded viewport, so scrolling rows above it here
+            // would permanently discard visible transcript lines.
             if area.bottom() > size.height {
-                terminal
-                    .backend_mut()
-                    .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
                 area.y = size.height - area.height;
             }
             if area != terminal.viewport_area {
