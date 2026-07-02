@@ -493,6 +493,9 @@ impl CatalogRequestProcessor {
             .await;
         let skills_service = self.thread_manager.skills_service();
         let plugins_manager = self.thread_manager.plugins_manager();
+        if force_reload {
+            skills_service.clear_cache();
+        }
         let fs = self
             .thread_manager
             .environment_manager()

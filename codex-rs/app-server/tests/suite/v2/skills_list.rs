@@ -21,6 +21,10 @@ use codex_app_server_protocol::SkillsExtraRootsSetResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -691,6 +695,98 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
             .iter()
             .any(|skill| skill.name == "late-extra-skill")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_list_force_reload_clears_turn_skills_cache() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(cwd.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_response)?;
+
+    let skill_dir = codex_home.path().join("skills/late-extra-skill");
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: late-extra-skill\ndescription: late skill\n---\n\n# Body\n",
+    )?;
+
+    let skills_request_id = mcp
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.path().to_path_buf()],
+            force_reload: true,
+        })
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(skills_request_id)),
+    )
+    .await??;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Use the updated skill".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_response)?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let request_body = requests
+        .last()
+        .context("expected a model request")?
+        .body_json::<serde_json::Value>()?;
+    let developer_messages = request_body["input"]
+        .as_array()
+        .context("expected model input")?
+        .iter()
+        .filter(|item| item["role"] == "developer")
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        developer_messages.contains("late-extra-skill"),
+        "expected updated skill in developer messages: {developer_messages}"
+    );
+    assert!(developer_messages.contains("late skill"));
     Ok(())
 }
 
