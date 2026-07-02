@@ -492,7 +492,7 @@ pub async fn run_remote_environment(
                     noise_outcome = "ok",
                     "Noise executor connected to rendezvous"
                 );
-                run_multiplexed_environment(
+                let disconnect_reason = run_multiplexed_environment(
                     websocket,
                     processor.clone(),
                     response.environment_id.clone(),
@@ -505,7 +505,15 @@ pub async fn run_remote_environment(
                     },
                 )
                 .await;
-                config.telemetry.remote_reconnect("disconnected");
+                info!(
+                    noise_event = "rendezvous_connection",
+                    noise_outcome = "disconnected",
+                    noise_reason = disconnect_reason.as_str(),
+                    "Noise executor disconnected from rendezvous"
+                );
+                config
+                    .telemetry
+                    .remote_reconnect(disconnect_reason.as_str());
             }
             Err(error) => {
                 let registration_rejected = matches!(
@@ -561,7 +569,9 @@ async fn connect_rendezvous(
         connect_async_with_config(
             request,
             Some(noise_relay_websocket_config()),
-            /*disable_nagle*/ false,
+            // Rendezvous sends small, latency-sensitive frames, so avoid Nagle's coalescing delay.
+            /*disable_nagle*/
+            true,
         )
         .await
         .map(|(websocket, _)| websocket)
