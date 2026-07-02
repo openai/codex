@@ -1,0 +1,217 @@
+use super::*;
+use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::BlockedRequestArgs;
+use codex_network_proxy::NetworkMode;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
+use pretty_assertions::assert_eq;
+use std::time::Duration;
+
+fn make_exec_output(
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    aggregated: &str,
+) -> ExecToolCallOutput {
+    ExecToolCallOutput {
+        exit_code,
+        stdout: StreamOutput::new(stdout.to_string()),
+        stderr: StreamOutput::new(stderr.to_string()),
+        aggregated_output: StreamOutput::new(aggregated.to_string()),
+        duration: Duration::from_millis(1),
+        timed_out: false,
+    }
+}
+
+#[test]
+fn classifies_legacy_denial_keywords() {
+    for keyword in [
+        "operation not permitted",
+        "permission denied",
+        "read-only file system",
+        "seccomp",
+        "sandbox",
+        "landlock",
+        "failed to write file",
+    ] {
+        let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
+
+        assert!(
+            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output).is_some(),
+            "{keyword}"
+        );
+    }
+}
+
+#[test]
+fn normalizes_backend_keywords_as_policy_denied() {
+    for keyword in ["seccomp", "sandbox", "landlock"] {
+        let output = make_exec_output(/*exit_code*/ 1, "", keyword, "");
+
+        assert_eq!(
+            classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
+            Some(FileSystemSandboxViolation {
+                backend: SandboxViolationBackend::Bubblewrap,
+                reason: FileSystemSandboxViolationReason::PolicyDenied,
+                path: None,
+                output_snippet: keyword.to_string(),
+            })
+        );
+    }
+}
+
+#[test]
+fn preserves_legacy_denial_ordering() {
+    let quick_reject_without_keyword =
+        make_exec_output(/*exit_code*/ 127, "", "command not found", "");
+    let quick_reject_with_keyword =
+        make_exec_output(/*exit_code*/ 127, "", "Permission denied", "");
+    let zero_exit_with_keyword =
+        make_exec_output(/*exit_code*/ 0, "", "Operation not permitted", "");
+    let non_sandbox_with_keyword =
+        make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
+
+    assert!(
+        classify_filesystem_sandbox_violation(
+            SandboxType::LinuxSeccomp,
+            &quick_reject_without_keyword
+        )
+        .is_none()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(
+            SandboxType::LinuxSeccomp,
+            &quick_reject_with_keyword
+        )
+        .is_some()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &zero_exit_with_keyword)
+            .is_none()
+    );
+    assert!(
+        classify_filesystem_sandbox_violation(SandboxType::None, &non_sandbox_with_keyword)
+            .is_none()
+    );
+}
+
+#[test]
+fn classifies_filesystem_violation_with_path() {
+    let output = make_exec_output(
+        /*exit_code*/ 1,
+        "",
+        "bash: /private/tmp/denied: Operation not permitted",
+        "",
+    );
+
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
+        Some(FileSystemSandboxViolation {
+            backend: SandboxViolationBackend::Seatbelt,
+            reason: FileSystemSandboxViolationReason::OperationNotPermitted,
+            path: Some("/private/tmp/denied".to_string()),
+            output_snippet: "bash: /private/tmp/denied: Operation not permitted".to_string(),
+        })
+    );
+}
+
+#[test]
+fn classifies_filesystem_violation_with_unicode_before_marker() {
+    let output = make_exec_output(
+        /*exit_code*/ 1,
+        "",
+        "bash: /private/tmp/\u{130}-denied: Operation not permitted",
+        "",
+    );
+
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
+        Some(FileSystemSandboxViolation {
+            backend: SandboxViolationBackend::Seatbelt,
+            reason: FileSystemSandboxViolationReason::OperationNotPermitted,
+            path: Some("/private/tmp/\u{130}-denied".to_string()),
+            output_snippet: "bash: /private/tmp/\u{130}-denied: Operation not permitted"
+                .to_string(),
+        })
+    );
+}
+
+#[test]
+fn classifies_filesystem_violation_from_aggregated_output() {
+    let output = make_exec_output(
+        /*exit_code*/ 101,
+        "",
+        "",
+        "cargo failed: Read-only file system when writing target",
+    );
+
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::MacosSeatbelt, &output),
+        Some(FileSystemSandboxViolation {
+            backend: SandboxViolationBackend::Seatbelt,
+            reason: FileSystemSandboxViolationReason::ReadOnlyFileSystem,
+            path: None,
+            output_snippet: "cargo failed: Read-only file system when writing target".to_string(),
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn classifies_linux_sigsys_exit() {
+    let output = make_exec_output(
+        /*exit_code*/ EXIT_CODE_SIGNAL_BASE + libc::SIGSYS,
+        "",
+        "",
+        "",
+    );
+
+    assert_eq!(
+        classify_filesystem_sandbox_violation(SandboxType::LinuxSeccomp, &output),
+        Some(FileSystemSandboxViolation {
+            backend: SandboxViolationBackend::Bubblewrap,
+            reason: FileSystemSandboxViolationReason::SignalSyscall,
+            path: None,
+            output_snippet: String::new(),
+        })
+    );
+}
+
+#[test]
+fn does_not_classify_non_sandbox_mode() {
+    let output = make_exec_output(/*exit_code*/ 1, "", "Operation not permitted", "");
+
+    assert!(classify_filesystem_sandbox_violation(SandboxType::None, &output).is_none());
+}
+
+#[test]
+fn converts_blocked_request_to_network_violation() {
+    let blocked = BlockedRequest::new(BlockedRequestArgs {
+        host: "example.com".to_string(),
+        reason: "not_allowed".to_string(),
+        client: Some("curl".to_string()),
+        method: Some("CONNECT".to_string()),
+        mode: Some(NetworkMode::Limited),
+        protocol: "https".to_string(),
+        decision: Some("block".to_string()),
+        source: Some("policy".to_string()),
+        port: Some(443),
+    });
+
+    assert_eq!(
+        NetworkSandboxViolation::from_blocked_request(&blocked),
+        NetworkSandboxViolation {
+            backend: SandboxViolationBackend::ManagedNetworkProxy,
+            host: "example.com".to_string(),
+            reason: "not_allowed".to_string(),
+            client: Some("curl".to_string()),
+            method: Some("CONNECT".to_string()),
+            mode: Some(NetworkMode::Limited),
+            protocol: "https".to_string(),
+            decision: Some("block".to_string()),
+            source: Some("policy".to_string()),
+            port: Some(443),
+            timestamp: blocked.timestamp,
+        }
+    );
+}

@@ -2,7 +2,11 @@ use codex_protocol::exec_output::ExecToolCallOutput;
 
 use crate::SandboxType;
 
-/// Returns whether a failed command was likely denied by the selected sandbox.
+/// We don't have a fully deterministic way to tell if our command failed
+/// because of the sandbox - a command in the user's zshrc file might hit an
+/// error, but the command itself might fail or succeed for other reasons.
+/// For now, we conservatively check for well known command failure exit codes and
+/// also look for common sandbox denial keywords in the command output.
 pub fn is_likely_sandbox_denied(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
@@ -11,6 +15,10 @@ pub fn is_likely_sandbox_denied(
         return false;
     }
 
+    // Quick rejects: well-known non-sandbox shell exit codes
+    // 2: misuse of shell builtins
+    // 126: permission denied
+    // 127: command not found
     const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
         "operation not permitted",
         "permission denied",
@@ -46,8 +54,9 @@ pub fn is_likely_sandbox_denied(
     #[cfg(unix)]
     {
         const EXIT_CODE_SIGNAL_BASE: i32 = 128;
+        const SIGSYS_CODE: i32 = libc::SIGSYS;
         if sandbox_type == SandboxType::LinuxSeccomp
-            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + libc::SIGSYS
+            && exec_output.exit_code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE
         {
             return true;
         }
