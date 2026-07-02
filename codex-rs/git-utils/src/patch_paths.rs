@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use crate::apply::run_git;
 use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
+use crate::exact_staging::update_index_exact_paths;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
-use crate::safe_git::ensure_no_selected_git_add_filters;
 
 pub(crate) fn extract_effective_paths_from_patch(
     git: &GitRunner,
@@ -157,7 +157,7 @@ fn insert_numstat_path(paths: &mut Vec<String>, path: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_patch_path(path: String) -> io::Result<String> {
+pub(crate) fn validate_patch_path(path: String) -> io::Result<String> {
     if path.starts_with('/')
         || path.ends_with('/')
         || invalid_platform_patch_path(&path)
@@ -261,18 +261,15 @@ pub(crate) fn stage_effective_paths(
     if existing.is_empty() {
         return Ok(());
     }
-    let filter_guard =
-        ensure_no_selected_git_add_filters(git, git_root, &content_filter_paths, git_config_args)?;
-    let mut args = vec![
-        "--literal-pathspecs".to_string(),
-        "add".to_string(),
-        "--".to_string(),
-    ];
-    args.extend(existing);
-    let mut guarded_config = git_config_args.to_vec();
-    guarded_config.extend_from_slice(filter_guard.git_config_args());
-    let (_code, _, _) = run_git(git, git_root, &guarded_config, &args)?;
-    // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
+    let _result = update_index_exact_paths(
+        git,
+        git_root,
+        &existing,
+        &content_filter_paths,
+        git_config_args,
+    )?;
+    // Preserve the public helper's historical best-effort treatment of a
+    // non-zero staging command. Security and probe failures still propagate.
     Ok(())
 }
 
