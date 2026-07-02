@@ -2,10 +2,10 @@ use super::*;
 use crate::GitReadError;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
-use crate::get_has_changes;
 use crate::git_command::GitRunner;
 use crate::git_config::GitConfigScope;
 use crate::guarded_config::GuardedGitConfig;
+use crate::info::try_get_has_changes_with_test_timeout;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
 #[cfg(unix)]
@@ -660,9 +660,8 @@ async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
     let repo_path = create_test_git_repo(&temp_dir).await;
     configure_clean_filter(&repo_path, "test.txt").await;
 
-    assert_eq!(get_has_changes(&repo_path).await, None);
     assert_eq!(
-        try_get_has_changes(&repo_path).await,
+        try_get_has_changes_with_test_timeout(&repo_path).await,
         Err(GitReadError::SelectedExecutableFilter {
             driver: "x=y".to_string(),
             path: "test.txt".to_string(),
@@ -699,7 +698,11 @@ async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_name
         run_git_async(&repo_path, &["add", ".gitattributes"]).await;
         run_git_async(&repo_path, &["commit", "-m", "sentinel attribute"]).await;
 
-        assert_eq!(try_get_has_changes(&repo_path).await, Ok(false), "{driver}");
+        assert_eq!(
+            try_get_has_changes_with_test_timeout(&repo_path).await,
+            Ok(false),
+            "{driver}"
+        );
         assert!(!configured_filter_ran(&repo_path).await, "{driver}");
 
         std::fs::write(
@@ -708,7 +711,7 @@ async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_name
         )
         .expect("write literal sentinel-named driver");
         assert_eq!(
-            try_get_has_changes(&repo_path).await,
+            try_get_has_changes_with_test_timeout(&repo_path).await,
             Err(GitReadError::SelectedExecutableFilter {
                 driver: driver.to_string(),
                 path: "test.txt".to_string(),
@@ -743,7 +746,10 @@ async fn checked_has_changes_accepts_non_utf8_repository_root() {
     std::fs::create_dir(&repo_path).expect("create non-UTF-8 repository directory");
     run_git_async(&repo_path, &["init"]).await;
 
-    assert_eq!(try_get_has_changes(&repo_path).await, Ok(false));
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Ok(false)
+    );
 }
 
 #[cfg(unix)]
@@ -792,7 +798,7 @@ async fn checked_has_changes_preserves_lexical_repository_ancestry_for_git_selec
         std::env::var_os("CODEX_GIT_UTILS_PHYSICAL_REPO").expect("physical repository"),
     );
     assert_eq!(
-        try_get_has_changes(&physical_nested).await,
+        try_get_has_changes_with_test_timeout(&physical_nested).await,
         Err(GitReadError::CommandFailed {
             operation: "statusFilterPreparation".to_string(),
             exit_code: None,
@@ -802,7 +808,7 @@ async fn checked_has_changes_preserves_lexical_repository_ancestry_for_git_selec
     let lexical_nested =
         PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"));
     assert_eq!(
-        try_get_has_changes(&lexical_nested).await,
+        try_get_has_changes_with_test_timeout(&lexical_nested).await,
         Err(GitReadError::NoTrustedGit),
         "the lexical spelling must exclude the enclosing repository's native Git decoy"
     );
@@ -931,9 +937,8 @@ async fn get_has_changes_rejects_core_worktree_redirection_before_running_filter
     )
     .await;
 
-    assert_eq!(get_has_changes(&repo_path).await, None);
     assert_eq!(
-        try_get_has_changes(&repo_path).await,
+        try_get_has_changes_with_test_timeout(&repo_path).await,
         Err(GitReadError::RepositoryRootMismatch {
             expected_root: std::fs::canonicalize(&repo_path).expect("canonical repository"),
             reported_root: std::fs::canonicalize(&redirected).expect("canonical redirection"),
@@ -994,7 +999,13 @@ async fn legacy_git_config_cannot_hide_a_selected_local_filter_from_probe() {
 
     let repo_path =
         PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"));
-    assert_eq!(get_has_changes(&repo_path).await, None);
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Err(GitReadError::SelectedExecutableFilter {
+            driver: "evil".to_string(),
+            path: "test.txt".to_string(),
+        })
+    );
 }
 
 #[tokio::test]
@@ -1003,7 +1014,10 @@ async fn get_has_changes_does_not_enter_dirty_submodules() {
     let repo_path = create_test_git_repo(&temp_dir).await;
     add_submodule_with_clean_filter(&repo_path).await;
 
-    assert_eq!(get_has_changes(&repo_path).await, Some(false));
+    assert_eq!(
+        try_get_has_changes_with_test_timeout(&repo_path).await,
+        Ok(false)
+    );
     assert!(!configured_filter_ran(&repo_path.join("nested")).await);
 }
 

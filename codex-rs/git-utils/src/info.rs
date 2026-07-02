@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
@@ -301,12 +303,23 @@ pub async fn try_get_has_changes(cwd: &Path) -> Result<bool, GitReadError> {
     // It cancels active Git children through the runner's kill-on-drop handle;
     // synchronous filesystem authority checks are not preemptible mid-call.
     let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
-    match timeout(
+    run_status_read_with_timeout(
         GIT_COMMAND_TIMEOUT,
-        Box::pin(try_get_has_changes_within_deadline(cwd, &phase)),
+        &phase,
+        try_get_has_changes_within_deadline(cwd, &phase),
     )
     .await
-    {
+}
+
+async fn run_status_read_with_timeout<F, T>(
+    duration: Duration,
+    phase: &AtomicU8,
+    status_read: F,
+) -> Result<T, GitReadError>
+where
+    F: Future<Output = Result<T, GitReadError>>,
+{
+    match timeout(duration, status_read).await {
         Ok(result) => result,
         Err(_) => Err(GitReadError::CommandTimedOut {
             operation: StatusReadPhase::from_u8(phase.load(Ordering::Relaxed))
@@ -314,6 +327,24 @@ pub async fn try_get_has_changes(cwd: &Path) -> Result<bool, GitReadError> {
                 .to_string(),
         }),
     }
+}
+
+#[cfg(test)]
+const TEST_STATUS_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Run the production status pipeline with a generous safety deadline for
+/// semantic tests whose assertions should not depend on the product SLA.
+#[cfg(test)]
+pub(crate) async fn try_get_has_changes_with_test_timeout(
+    cwd: &Path,
+) -> Result<bool, GitReadError> {
+    let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+    run_status_read_with_timeout(
+        TEST_STATUS_READ_TIMEOUT,
+        &phase,
+        try_get_has_changes_within_deadline(cwd, &phase),
+    )
+    .await
 }
 
 #[derive(Clone, Copy)]
@@ -971,6 +1002,100 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    #[tokio::test(start_paused = true)]
+    async fn status_read_timeout_passes_through_ready_ok() {
+        let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+
+        assert_eq!(
+            run_status_read_with_timeout(Duration::from_secs(1), &phase, async { Ok(false) }).await,
+            Ok(false)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_read_timeout_passes_through_ready_error() {
+        let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+        let error = GitReadError::InvalidOutput {
+            operation: "testOperation".to_string(),
+        };
+
+        assert_eq!(
+            run_status_read_with_timeout(Duration::from_secs(1), &phase, async {
+                Err::<bool, _>(error.clone())
+            })
+            .await,
+            Err(error)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_read_timeout_maps_every_pending_phase() {
+        for (phase_value, operation) in [
+            (StatusReadPhase::Preparation, "statusFilterPreparation"),
+            (StatusReadPhase::Fsmonitor, "statusFsmonitor"),
+            (StatusReadPhase::Status, "status"),
+        ] {
+            let phase = AtomicU8::new(phase_value as u8);
+
+            assert_eq!(
+                run_status_read_with_timeout(
+                    Duration::from_secs(1),
+                    &phase,
+                    std::future::pending::<Result<bool, GitReadError>>(),
+                )
+                .await,
+                Err(GitReadError::CommandTimedOut {
+                    operation: operation.to_string(),
+                })
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_read_timeout_uses_live_phase_transition() {
+        let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+
+        assert_eq!(
+            run_status_read_with_timeout(Duration::from_secs(1), &phase, async {
+                phase.store(StatusReadPhase::Fsmonitor as u8, Ordering::Relaxed);
+                std::future::pending::<Result<bool, GitReadError>>().await
+            })
+            .await,
+            Err(GitReadError::CommandTimedOut {
+                operation: "statusFsmonitor".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn status_read_timeout_drops_pending_future() {
+        struct DropSentinel(Arc<AtomicBool>);
+
+        impl Drop for DropSentinel {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let phase = AtomicU8::new(StatusReadPhase::Preparation as u8);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let sentinel = DropSentinel(Arc::clone(&dropped));
+
+        assert_eq!(
+            run_status_read_with_timeout(Duration::from_secs(1), &phase, async move {
+                let _sentinel = sentinel;
+                std::future::pending::<Result<bool, GitReadError>>().await
+            })
+            .await,
+            Err(GitReadError::CommandTimedOut {
+                operation: "statusFilterPreparation".to_string(),
+            })
+        );
+        assert!(dropped.load(Ordering::Relaxed));
+    }
 
     #[cfg(unix)]
     fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
