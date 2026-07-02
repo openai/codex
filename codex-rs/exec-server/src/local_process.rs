@@ -55,7 +55,7 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::protocol::WriteStatus;
 use crate::rpc::RpcNotificationSender;
-use crate::rpc::RpcServerOutboundMessage;
+use crate::rpc::RpcServerOutboundEnvelope;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
@@ -169,7 +169,7 @@ impl LocalProcess {
 
     fn with_discarded_notifications(runtime_paths: Option<ExecServerRuntimePaths>) -> Self {
         let (outgoing_tx, mut outgoing_rx) =
-            mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
+            mpsc::channel::<RpcServerOutboundEnvelope>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
         Self::with_runtime_paths(
             RpcNotificationSender::new(outgoing_tx),
