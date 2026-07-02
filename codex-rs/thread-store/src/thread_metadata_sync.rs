@@ -37,7 +37,6 @@ pub(crate) struct ThreadMetadataSync {
     cwd_seen: bool,
     preview_seen: bool,
     first_user_message_seen: bool,
-    title_seen: bool,
     pending_update: Option<ThreadMetadataPatch>,
     pending_update_generation: u64,
     last_touch_persisted_at: Option<Instant>,
@@ -83,7 +82,6 @@ impl ThreadMetadataSync {
             cwd_seen: !cwd.as_os_str().is_empty(),
             preview_seen: false,
             first_user_message_seen: false,
-            title_seen: false,
             pending_update: Some(update),
             pending_update_generation: 1,
             last_touch_persisted_at: None,
@@ -102,7 +100,6 @@ impl ThreadMetadataSync {
                 .is_some_and(|cwd| !cwd.as_os_str().is_empty()),
             preview_seen: false,
             first_user_message_seen: false,
-            title_seen: false,
             pending_update: None,
             pending_update_generation: 0,
             last_touch_persisted_at: None,
@@ -259,12 +256,9 @@ impl ThreadMetadataSync {
                             update.preview = Some(preview);
                         }
                     }
-                    if !self.title_seen {
-                        let title = strip_user_message_prefix(user.message.as_str());
-                        if !title.is_empty() {
-                            self.title_seen = true;
-                            update.title = Some(title.to_string());
-                        }
+                    let title = strip_user_message_prefix(user.message.as_str());
+                    if !title.is_empty() {
+                        update.derived_title = Some(title.to_string());
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TokenCount(token_count)) => {
@@ -357,6 +351,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
     update.rollout_path.is_some()
         || update.preview.is_some()
         || update.title.is_some()
+        || update.derived_title.is_some()
         || update.model_provider.is_some()
         || update.model.is_some()
         || update.reasoning_effort.is_some()
@@ -422,7 +417,10 @@ mod tests {
             "2025-01-03T12:00:00+00:00"
         );
         assert_eq!(update.patch.preview.as_deref(), Some("hello metadata"));
-        assert_eq!(update.patch.title.as_deref(), Some("hello metadata"));
+        assert_eq!(
+            update.patch.derived_title.as_deref(),
+            Some("hello metadata")
+        );
         assert_eq!(
             update.patch.first_user_message.as_deref(),
             Some("hello metadata")
@@ -457,11 +455,14 @@ mod tests {
             update.patch.first_user_message.as_deref(),
             Some("first user text")
         );
-        assert_eq!(update.patch.title.as_deref(), Some("first user text"));
+        assert_eq!(
+            update.patch.derived_title.as_deref(),
+            Some("first user text")
+        );
     }
 
     #[test]
-    fn later_user_messages_do_not_emit_existing_preview_fields() {
+    fn later_user_messages_update_title_without_existing_preview_fields() {
         let thread_id = ThreadId::new();
         let mut sync = ThreadMetadataSync::for_resume(&resume_params(
             thread_id,
@@ -479,9 +480,35 @@ mod tests {
             .expect("updated_at touch");
 
         assert_eq!(update.patch.preview, None);
-        assert_eq!(update.patch.title, None);
+        assert_eq!(
+            update.patch.derived_title.as_deref(),
+            Some("later user text")
+        );
         assert_eq!(update.patch.first_user_message, None);
         assert!(update.patch.updated_at.is_some());
+    }
+
+    #[test]
+    fn resume_history_derives_title_from_latest_user_message() {
+        let thread_id = ThreadId::new();
+        let sync = ThreadMetadataSync::for_resume(&resume_params(
+            thread_id,
+            vec![
+                RolloutItem::EventMsg(EventMsg::UserMessage(user_message("first user text"))),
+                RolloutItem::EventMsg(EventMsg::UserMessage(user_message("latest user text"))),
+            ],
+        ));
+
+        let update = sync.take_pending_update().expect("pending metadata update");
+        assert_eq!(update.patch.preview.as_deref(), Some("first user text"));
+        assert_eq!(
+            update.patch.first_user_message.as_deref(),
+            Some("first user text")
+        );
+        assert_eq!(
+            update.patch.derived_title.as_deref(),
+            Some("latest user text")
+        );
     }
 
     #[test]

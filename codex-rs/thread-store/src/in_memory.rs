@@ -744,8 +744,25 @@ fn stored_thread_from_state(
         thread_id,
         items: history_items.clone(),
     });
-    let name = state.names.get(&thread_id).cloned().flatten();
     let metadata = state.metadata_updates.get(&thread_id);
+    let preview = metadata
+        .and_then(|metadata| metadata.preview.clone())
+        .unwrap_or_default();
+    let name = state
+        .names
+        .get(&thread_id)
+        .cloned()
+        .flatten()
+        .or_else(|| {
+            let title = metadata
+                .and_then(|metadata| {
+                    metadata
+                        .title
+                        .clone()
+                        .or_else(|| metadata.derived_title.clone())
+                })?;
+            (title.trim() != preview.trim()).then_some(title)
+        });
     let rollout_path = state
         .rollout_paths
         .iter()
@@ -761,9 +778,7 @@ fn stored_thread_from_state(
             .or(rollout_path),
         forked_from_id: created.forked_from_id,
         parent_thread_id: created.parent_thread_id,
-        preview: metadata
-            .and_then(|metadata| metadata.preview.clone())
-            .unwrap_or_default(),
+        preview,
         name,
         model_provider: metadata
             .and_then(|metadata| metadata.model_provider.clone())

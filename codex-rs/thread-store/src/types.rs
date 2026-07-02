@@ -538,6 +538,11 @@ pub struct ThreadMetadataPatch {
     pub preview: Option<String>,
     /// Best-effort title derived from history.
     pub title: Option<String>,
+    /// Best-effort live title derived from appended history.
+    ///
+    /// Unlike `title`, stores may ignore this when a user-facing name has
+    /// already been set explicitly.
+    pub derived_title: Option<String>,
     /// Model provider associated with the thread.
     pub model_provider: Option<String>,
     /// Latest observed model.
@@ -617,6 +622,9 @@ impl ThreadMetadataPatch {
         if next.title.is_some() {
             self.title = next.title;
         }
+        if next.derived_title.is_some() {
+            self.derived_title = next.derived_title;
+        }
         if next.model_provider.is_some() {
             self.model_provider = next.model_provider;
         }
@@ -683,6 +691,7 @@ impl ThreadMetadataPatch {
             && self.rollout_path.is_none()
             && self.preview.is_none()
             && self.title.is_none()
+            && self.derived_title.is_none()
             && self.model_provider.is_none()
             && self.model.is_none()
             && self.reasoning_effort.is_none()
@@ -832,6 +841,7 @@ mod tests {
             name: Some(None),
             preview: None,
             title: Some("new title".to_string()),
+            derived_title: Some("derived title".to_string()),
             git_info: Some(GitInfoPatch {
                 sha: None,
                 branch: Some(Some("feature".to_string())),
@@ -843,6 +853,7 @@ mod tests {
         assert_eq!(current.name, Some(None));
         assert_eq!(current.preview.as_deref(), Some("old preview"));
         assert_eq!(current.title.as_deref(), Some("new title"));
+        assert_eq!(current.derived_title.as_deref(), Some("derived title"));
         assert_eq!(
             current.git_info,
             Some(GitInfoPatch {

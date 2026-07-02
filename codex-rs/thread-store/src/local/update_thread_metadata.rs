@@ -12,6 +12,7 @@ use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_thread_name_by_id;
 use codex_rollout::find_thread_path_by_id_str;
 use codex_rollout::read_session_meta_line;
 use codex_state::ThreadMetadataBuilder;
@@ -253,6 +254,11 @@ async fn apply_metadata_update(
             if let Some(preview) = patch.preview {
                 metadata.preview = Some(preview);
             }
+            if let Some(derived_title) = patch.derived_title
+                && !has_explicit_thread_name(store, thread_id).await
+            {
+                metadata.title = derived_title;
+            }
             if let Some(name) = patch.name {
                 metadata.title = name.unwrap_or_default();
             }
@@ -482,6 +488,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
     patch.rollout_path.is_some()
         || patch.preview.is_some()
         || patch.title.is_some()
+        || patch.derived_title.is_some()
         || patch.model_provider.is_some()
         || patch.model.is_some()
         || patch.reasoning_effort.is_some()
@@ -497,6 +504,14 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.permission_profile.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
+}
+
+async fn has_explicit_thread_name(store: &LocalThreadStore, thread_id: ThreadId) -> bool {
+    find_thread_name_by_id(store.config.codex_home.as_path(), &thread_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|name| !name.trim().is_empty())
 }
 
 fn enum_to_string<T: serde::Serialize>(value: &T) -> String {
@@ -1442,6 +1457,56 @@ mod tests {
             .expect("apply observed metadata");
 
         assert_eq!(thread.name.as_deref(), Some("Derived first message"));
+    }
+
+    #[tokio::test]
+    async fn metadata_patch_does_not_apply_derived_title_over_existing_name() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let uuid = Uuid::from_u128(307);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T16-15-00", uuid).expect("session file");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    name: Some(Some("User chosen name".to_string())),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set explicit name");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    derived_title: Some("Later live prompt".to_string()),
+                    preview: Some("Original prompt".to_string()),
+                    first_user_message: Some("Original prompt".to_string()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("apply observed metadata");
+
+        assert_eq!(thread.name.as_deref(), Some("User chosen name"));
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(metadata.title, "User chosen name");
     }
 
     #[tokio::test]

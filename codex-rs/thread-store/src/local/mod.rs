@@ -471,6 +471,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_thread_refreshes_title_from_later_user_messages() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = Arc::new(LocalThreadStore::new(config, Some(runtime.clone())));
+        let thread_id = ThreadId::default();
+        let live_thread = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create live thread");
+
+        live_thread
+            .append_items(&[user_message_item("initial setup task")])
+            .await
+            .expect("append first user message");
+        live_thread
+            .append_items(&[user_message_item("switch to release notes")])
+            .await
+            .expect("append later user message");
+        live_thread.flush().await.expect("flush thread");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.first_user_message.as_deref(),
+            Some("initial setup task")
+        );
+        assert_eq!(metadata.preview.as_deref(), Some("initial setup task"));
+        assert_eq!(metadata.title, "switch to release notes");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+        assert_eq!(thread.preview, "initial setup task");
+        assert_eq!(thread.name.as_deref(), Some("switch to release notes"));
+    }
+
+    #[tokio::test]
     async fn live_thread_output_advances_updated_at_but_not_recency_at() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -728,6 +778,7 @@ mod tests {
             metadata.first_user_message.as_deref(),
             Some("Hello from user")
         );
+        assert_eq!(metadata.title, "new live append");
     }
 
     #[tokio::test]
