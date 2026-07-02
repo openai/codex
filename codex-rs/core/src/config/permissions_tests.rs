@@ -43,6 +43,31 @@ fn windows_verbatim_path_prefix_does_not_count_as_glob_syntax() {
     ));
 }
 
+#[test]
+fn windows_root_dot_warning_explains_drive_root_footgun() {
+    let mut startup_warnings = Vec::new();
+
+    maybe_push_windows_root_dot_warning(":root", ".", &mut startup_warnings, /*is_windows*/ true);
+
+    assert_eq!(startup_warnings.len(), 1);
+    assert!(startup_warnings[0].contains("filesystem or drive root on Windows"));
+    assert!(startup_warnings[0].contains(":workspace_roots"));
+}
+
+#[test]
+fn windows_root_dot_warning_is_windows_only() {
+    let mut startup_warnings = Vec::new();
+
+    maybe_push_windows_root_dot_warning(
+        ":root",
+        ".",
+        &mut startup_warnings,
+        /*is_windows*/ false,
+    );
+
+    assert!(startup_warnings.is_empty());
+}
+
 #[tokio::test]
 async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
