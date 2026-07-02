@@ -603,6 +603,8 @@ fn compile_scoped_filesystem_path(
     subpath: &str,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<FileSystemPath> {
+    maybe_push_windows_root_dot_warning(path, subpath, startup_warnings, cfg!(windows));
+
     if subpath == "." {
         return compile_filesystem_path(path, startup_warnings);
     }
@@ -901,6 +903,22 @@ fn maybe_push_unknown_special_path_warning(
                 "Configured filesystem path `{path}` is not recognized by this version of Codex and will be ignored. Upgrade Codex if this path is required."
             ),
         },
+    );
+}
+
+fn maybe_push_windows_root_dot_warning(
+    path: &str,
+    subpath: &str,
+    startup_warnings: &mut Vec<String>,
+    is_windows: bool,
+) {
+    if !is_windows || path != ":root" || subpath != "." {
+        return;
+    }
+
+    push_warning(
+        startup_warnings,
+        "Configured filesystem path `:root` with nested entry `.` resolves to the filesystem or drive root on Windows, not the current workspace. Use `:workspace_roots` for workspace-scoped access.".to_string(),
     );
 }
 
