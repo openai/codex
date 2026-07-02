@@ -161,6 +161,96 @@ async fn websocket_transport_rejects_browser_origin_without_auth() -> Result<()>
 }
 
 #[tokio::test]
+async fn websocket_transport_requires_generated_query_token() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr, token) =
+        spawn_websocket_server_with_generated_token(codex_home.path(), "ws://127.0.0.1:0", &[])
+            .await?;
+
+    assert_websocket_query_connect_rejected(bind_addr, /*query_token*/ None).await?;
+    assert_websocket_query_connect_rejected(bind_addr, Some("wrong-token")).await?;
+
+    let mut ws = connect_websocket_with_query_token(bind_addr, &token).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_generated_token_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_uses_remote_ws_token() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let expected_token = "configured-remote-ws-token";
+
+    let (mut process, bind_addr, token) = spawn_websocket_server_and_read_generated_token(
+        codex_home.path(),
+        "ws://127.0.0.1:0",
+        &[],
+        &[("CODEX_REMOTE_WS_TOKEN", expected_token)],
+    )
+    .await?;
+    assert_eq!(token.as_deref(), Some(expected_token));
+
+    let mut ws = connect_websocket_with_query_token(bind_addr, expected_token).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_remote_token_client").await?;
+    let init = read_response_for_id(&mut ws, /*id*/ 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_no_token_check_accepts_invalid_tokens() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr, token) = spawn_websocket_server_with_generated_token(
+        codex_home.path(),
+        "ws://127.0.0.1:0",
+        &["--no-token-check".to_string()],
+    )
+    .await?;
+
+    let mut without_token = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut without_token, /*id*/ 1, "ws_missing_token_client").await?;
+    read_response_for_id(&mut without_token, /*id*/ 1).await?;
+
+    let mut wrong_token = connect_websocket_with_query_token(bind_addr, "wrong-token").await?;
+    send_initialize_request(&mut wrong_token, /*id*/ 2, "ws_wrong_token_client").await?;
+    read_response_for_id(&mut wrong_token, /*id*/ 2).await?;
+
+    let mut matching_token = connect_websocket_with_query_token(bind_addr, &token).await?;
+    send_initialize_request(
+        &mut matching_token,
+        /*id*/ 3,
+        "ws_matching_token_client",
+    )
+    .await?;
+    read_response_for_id(&mut matching_token, /*id*/ 3).await?;
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn websocket_transport_rejects_missing_and_invalid_capability_tokens() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
@@ -322,24 +412,24 @@ async fn websocket_transport_rejects_short_signed_bearer_secret_configuration() 
 }
 
 #[tokio::test]
-async fn websocket_transport_rejects_unauthenticated_non_loopback_startup() -> Result<()> {
+async fn websocket_transport_authenticates_non_loopback_by_default() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let output =
-        run_websocket_server_to_completion_with_args(codex_home.path(), "ws://0.0.0.0:0", &[])
+    let (mut process, bind_addr, token) =
+        spawn_websocket_server_with_generated_token(codex_home.path(), "ws://0.0.0.0:0", &[])
             .await?;
-    assert!(
-        !output.status.success(),
-        "unauthenticated non-loopback listener should fail websocket server startup"
-    );
-    let stderr = String::from_utf8(output.stderr).context("stderr should be valid utf-8")?;
-    assert!(
-        stderr.contains("refusing to start non-loopback websocket listener"),
-        "unexpected stderr: {stderr}"
-    );
 
+    assert_websocket_query_connect_rejected(bind_addr, /*query_token*/ None).await?;
+    let mut ws = connect_websocket_with_query_token(bind_addr, &token).await?;
+    send_initialize_request(&mut ws, /*id*/ 1, "ws_non_loopback_token_client").await?;
+    read_response_for_id(&mut ws, /*id*/ 1).await?;
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
     Ok(())
 }
 
@@ -376,7 +466,12 @@ async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_tim
 }
 
 pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, SocketAddr)> {
-    spawn_websocket_server_with_args(codex_home, "ws://127.0.0.1:0", &[]).await
+    spawn_websocket_server_with_args(
+        codex_home,
+        "ws://127.0.0.1:0",
+        &["--no-token-check".to_string()],
+    )
+    .await
 }
 
 pub(super) async fn spawn_websocket_server_with_args(
@@ -384,6 +479,30 @@ pub(super) async fn spawn_websocket_server_with_args(
     listen_url: &str,
     extra_args: &[String],
 ) -> Result<(Child, SocketAddr)> {
+    let (process, bind_addr, _token) =
+        spawn_websocket_server_and_read_generated_token(codex_home, listen_url, extra_args, &[])
+            .await?;
+    Ok((process, bind_addr))
+}
+
+async fn spawn_websocket_server_with_generated_token(
+    codex_home: &Path,
+    listen_url: &str,
+    extra_args: &[String],
+) -> Result<(Child, SocketAddr, String)> {
+    let (process, bind_addr, token) =
+        spawn_websocket_server_and_read_generated_token(codex_home, listen_url, extra_args, &[])
+            .await?;
+    let token = token.context("websocket app-server did not print a generated query token")?;
+    Ok((process, bind_addr, token))
+}
+
+async fn spawn_websocket_server_and_read_generated_token(
+    codex_home: &Path,
+    listen_url: &str,
+    extra_args: &[String],
+    extra_env: &[(&str, &str)],
+) -> Result<(Child, SocketAddr, Option<String>)> {
     let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
         .context("should find app-server binary")?;
     let mut cmd = Command::new(program);
@@ -395,6 +514,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
+        .envs(extra_env.iter().copied())
         .env("RUST_LOG", "warn");
     let mut process = cmd
         .kill_on_drop(true)
@@ -407,7 +527,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         .context("failed to capture websocket app-server stderr")?;
     let mut stderr_reader = BufReader::new(stderr).lines();
     let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let bind_addr = loop {
+    let (bind_addr, generated_token) = loop {
         let line = timeout(
             deadline.saturating_duration_since(Instant::now()),
             stderr_reader.next_line(),
@@ -436,13 +556,25 @@ pub(super) async fn spawn_websocket_server_with_args(
             stripped
         };
 
-        if let Some(bind_addr) = stripped_line
+        let Some(raw_url) = stripped_line
             .split_whitespace()
             .find_map(|token| token.strip_prefix("ws://"))
-            .and_then(|addr| addr.parse::<SocketAddr>().ok())
-        {
-            break bind_addr;
-        }
+        else {
+            continue;
+        };
+        let Ok(url) = url::Url::parse(&format!("ws://{raw_url}")) else {
+            continue;
+        };
+        let Ok(socket_addrs) = url.socket_addrs(|| None) else {
+            continue;
+        };
+        let Some(bind_addr) = socket_addrs.first().copied() else {
+            continue;
+        };
+        let generated_token = url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "token").then(|| value.into_owned()));
+        break (bind_addr, generated_token);
     };
 
     tokio::spawn(async move {
@@ -451,7 +583,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         }
     });
 
-    Ok((process, bind_addr))
+    Ok((process, bind_addr, generated_token))
 }
 
 pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient> {
@@ -475,6 +607,63 @@ pub(super) async fn connect_websocket_with_bearer(
                 sleep(Duration::from_millis(50)).await;
             }
         }
+    }
+}
+
+async fn connect_websocket_with_query_token(
+    bind_addr: SocketAddr,
+    query_token: &str,
+) -> Result<WsClient> {
+    let url = format!(
+        "ws://{}/?token={query_token}",
+        connectable_bind_addr(bind_addr)
+    );
+    let request = websocket_request(
+        url.as_str(),
+        /*bearer_token*/ None,
+        /*origin*/ None,
+    )?;
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    loop {
+        match connect_async(request.clone()).await {
+            Ok((stream, _response)) => return Ok(stream),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    bail!("failed to connect websocket to {url}: {err}");
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+async fn assert_websocket_query_connect_rejected(
+    bind_addr: SocketAddr,
+    query_token: Option<&str>,
+) -> Result<()> {
+    let path_and_query = query_token
+        .map(|token| format!("/?token={token}"))
+        .unwrap_or_default();
+    let url = format!("ws://{}{path_and_query}", connectable_bind_addr(bind_addr));
+    let request = websocket_request(
+        url.as_str(),
+        /*bearer_token*/ None,
+        /*origin*/ None,
+    )?;
+
+    match connect_async(request).await {
+        Ok((_stream, response)) => {
+            bail!(
+                "expected websocket handshake rejection, got {}",
+                response.status()
+            )
+        }
+        // The pinned tungstenite fork can replace an otherwise valid rejected
+        // upgrade response with a synthetic 400 when it normalizes a response
+        // that lacks websocket response headers. Unit coverage verifies that
+        // app-server's authorization result itself is 401.
+        Err(WsError::Http(_response)) => Ok(()),
+        Err(err) => bail!("expected http rejection during websocket handshake: {err}"),
     }
 }
 
