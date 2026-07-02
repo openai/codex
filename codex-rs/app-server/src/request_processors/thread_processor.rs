@@ -3,6 +3,7 @@ use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -910,13 +911,14 @@ impl ThreadRequestProcessor {
             model_provider,
             allow_provider_model_fallback,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
             approvals_reviewer,
             sandbox,
             permissions,
-            config,
+            config: request_overrides,
             service_name,
             base_instructions,
             developer_instructions,
@@ -944,6 +946,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -978,7 +981,7 @@ impl ThreadRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 supports_openai_form_elicitation,
-                config,
+                request_overrides,
                 typesafe_overrides,
                 dynamic_tools,
                 selected_capability_roots.unwrap_or_default(),
@@ -1323,6 +1326,7 @@ impl ThreadRequestProcessor {
         model: Option<String>,
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
+        reasoning_summary_delivery: Option<Option<ReasoningSummaryDelivery>>,
         cwd: Option<String>,
         runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
@@ -1337,6 +1341,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd: cwd.map(PathBuf::from),
             workspace_roots: runtime_workspace_roots,
             default_permissions: permissions,
@@ -2681,6 +2686,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -2723,6 +2729,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -3001,6 +3008,16 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+            if let Some(reasoning_summary_delivery) = params.reasoning_summary_delivery {
+                existing_thread
+                    .set_reasoning_summary_delivery(reasoning_summary_delivery)
+                    .await
+                    .map_err(|error| {
+                        invalid_request(format!(
+                            "invalid reasoning_summary_delivery override: {error}"
+                        ))
+                    })?;
+            }
             let existing_thread_rollout_path = existing_thread.rollout_path();
             let active_path = existing_thread_rollout_path
                 .as_ref()
@@ -3392,6 +3409,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,
@@ -3465,6 +3483,7 @@ impl ThreadRequestProcessor {
             model,
             model_provider,
             service_tier,
+            reasoning_summary_delivery,
             cwd,
             runtime_workspace_roots,
             approval_policy,

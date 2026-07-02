@@ -640,6 +640,7 @@ impl Codex {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            reasoning_summary_delivery: config.reasoning_summary_delivery,
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
             personality: config.personality,

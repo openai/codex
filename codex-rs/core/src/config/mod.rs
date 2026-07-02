@@ -88,6 +88,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -945,6 +946,9 @@ pub struct Config {
     /// Optional value to use for `reasoning.summary` when making a request
     /// using the Responses API. When unset, the model catalog default is used.
     pub model_reasoning_summary: Option<ReasoningSummary>,
+
+    /// Optional delivery mode for reasoning summaries in streaming Responses API requests.
+    pub reasoning_summary_delivery: Option<ReasoningSummaryDelivery>,
 
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -2383,6 +2387,7 @@ pub struct ConfigOverrides {
     pub default_permissions: Option<String>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<String>>,
+    pub reasoning_summary_delivery: Option<Option<ReasoningSummaryDelivery>>,
     pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
@@ -2971,6 +2976,7 @@ impl Config {
             default_permissions: default_permissions_override,
             model_provider,
             service_tier: service_tier_override,
+            reasoning_summary_delivery: reasoning_summary_delivery_override,
             codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
@@ -3562,6 +3568,8 @@ impl Config {
                 None => Some(service_tier),
             }
         });
+        let reasoning_summary_delivery =
+            reasoning_summary_delivery_override.unwrap_or(cfg.reasoning_summary_delivery);
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -3872,6 +3880,7 @@ impl Config {
             model_reasoning_effort: cfg.model_reasoning_effort,
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
+            reasoning_summary_delivery,
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: cfg.model_verbosity,

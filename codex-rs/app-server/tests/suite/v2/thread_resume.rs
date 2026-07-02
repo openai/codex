@@ -57,6 +57,7 @@ use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -2896,10 +2897,24 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         responses::ev_completed("resp-2"),
     ]))
     .set_delay(std::time::Duration::from_millis(500));
-    let _response_mock =
-        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
+    let third_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-3"),
+        responses::ev_assistant_message("msg-3", "Done"),
+        responses::ev_completed("resp-3"),
+    ]));
+    let response_mock = responses::mount_response_sequence(
+        &server,
+        vec![first_response, second_response, third_response],
+    )
+    .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        config.replace("Mock provider for test", "OpenAI"),
+    )?;
 
     let mut primary = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
@@ -2969,6 +2984,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
+            reasoning_summary_delivery: Some(Some(ReasoningSummaryDelivery::ConcurrentCutoff)),
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                 limit: None,
                 sort_direction: None,
@@ -3013,6 +3029,37 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![UserInput::Text {
+                text: "use updated delivery".to_string(),
+                text_elements: Vec::new(),
+            }],
+            summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].body_json().get("stream_options").is_none());
+    assert_eq!(
+        requests[2].body_json()["stream_options"],
+        json!({ "reasoning_summary_delivery": "concurrent_cutoff" })
+    );
 
     Ok(())
 }

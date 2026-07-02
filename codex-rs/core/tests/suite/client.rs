@@ -25,6 +25,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ReasoningSummaryDelivery;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
@@ -247,7 +248,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
+async fn non_openai_responses_requests_omit_openai_internal_fields() {
     let server = MockServer::start().await;
     let response_mock = mount_sse_once(
         &server,
@@ -263,6 +264,7 @@ async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
         .with_config(move |config| {
             config.model_provider_id = provider.name.clone();
             config.model_provider = provider;
+            config.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
         })
         .build(&server)
         .await
@@ -285,6 +287,7 @@ async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let body = response_mock.single_request().body_json();
+    assert!(body.get("stream_options").is_none());
     let input = body["input"]
         .as_array()
         .expect("request should include input items");
@@ -1356,6 +1359,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            config.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
@@ -2417,6 +2421,46 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_reasoning_summary_delivery_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.reasoning_summary_delivery = Some(ReasoningSummaryDelivery::ConcurrentCutoff);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    pretty_assertions::assert_eq!(
+        resp_mock.single_request().body_json()["stream_options"],
+        json!({ "reasoning_summary_delivery": "concurrent_cutoff" })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -3034,6 +3078,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            config.reasoning_summary_delivery,
             /*service_tier*/ None,
             &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
