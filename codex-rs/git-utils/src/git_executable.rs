@@ -13,6 +13,7 @@ use std::path::Prefix;
 
 pub(crate) struct SelectedGitExecutable {
     pub(crate) executable: PathBuf,
+    #[cfg(any(unix, test))]
     pub(crate) argv0: PathBuf,
     pub(crate) safe_path: OsString,
 }
@@ -55,13 +56,21 @@ pub(crate) fn select_git_executable(
         if let Some(parent) = canonical_candidate.parent() {
             push_unique_path(&mut safe_directories, parent.to_path_buf());
         }
-        selected = Some((canonical_candidate, candidate));
+        #[cfg(any(unix, test))]
+        let selected_candidate = (canonical_candidate, candidate);
+        #[cfg(not(any(unix, test)))]
+        let selected_candidate = canonical_candidate;
+        selected = Some(selected_candidate);
     }
+    #[cfg(any(unix, test))]
     let (executable, argv0) = selected.ok_or(GitReadError::NoTrustedGit)?;
+    #[cfg(not(any(unix, test)))]
+    let executable = selected.ok_or(GitReadError::NoTrustedGit)?;
     let safe_path =
         std::env::join_paths(safe_directories).map_err(|_| GitReadError::NoTrustedGit)?;
     Ok(SelectedGitExecutable {
         executable,
+        #[cfg(any(unix, test))]
         argv0,
         safe_path,
     })
@@ -203,7 +212,7 @@ pub(crate) fn is_native_executable_file(path: &Path) -> bool {
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
         return false;
     }
-    let Ok(bytes) = read_prefix(path, 4) else {
+    let Ok(bytes) = read_prefix(path, /*length*/ 4) else {
         return false;
     };
     matches!(
@@ -228,7 +237,7 @@ pub(crate) fn is_native_executable_file(path: &Path) -> bool {
     };
     metadata.is_file()
         && metadata.permissions().mode() & 0o111 != 0
-        && read_prefix(path, 4).is_ok_and(|bytes| bytes == b"\x7fELF")
+        && read_prefix(path, /*length*/ 4).is_ok_and(|bytes| bytes == b"\x7fELF")
 }
 
 #[cfg(windows)]
@@ -257,7 +266,7 @@ pub(crate) fn is_native_executable_file(path: &Path) -> bool {
     if file.read_exact(&mut dos).is_err() || &dos[..2] != b"MZ" {
         return false;
     }
-    let offset = u32::from_le_bytes(dos[60..64].try_into().expect("PE offset bytes")) as u64;
+    let offset = u32::from_le_bytes([dos[60], dos[61], dos[62], dos[63]]) as u64;
     if offset > 1024 * 1024 || offset + 4 > metadata.len() {
         return false;
     }

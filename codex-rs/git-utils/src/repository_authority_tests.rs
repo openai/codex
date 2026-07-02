@@ -26,6 +26,15 @@ fn write_common_config(body: &[u8]) -> tempfile::TempDir {
     common
 }
 
+fn git_config_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    #[cfg(not(windows))]
+    let path = path.into_owned();
+    format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn native_bare_value(config: &Path, includes: bool) -> io::Result<Option<bool>> {
     let mut command = std::process::Command::new("git");
     crate::safe_git::isolate_git_command_environment(&mut command);
@@ -116,7 +125,7 @@ fn plain_common_bare_parser_matches_native_boolean_syntax_and_is_stricter_on_dup
             "authority result for {name}"
         );
         assert_eq!(
-            native_bare_value(&common.path().join("config"), false).expect(name),
+            native_bare_value(&common.path().join("config"), /*includes*/ false).expect(name),
             native,
             "native result for {name}"
         );
@@ -161,16 +170,18 @@ fn common_bare_proof_rejects_includes_worktree_config_and_relative_worktree() {
     let common = write_common_config(
         format!(
             "[core]\n\tbare = true\n[include]\n\tpath = {}\n",
-            include_target.path().display()
+            git_config_path(include_target.path())
         )
         .as_bytes(),
     );
     assert_eq!(
-        native_bare_value(&common.path().join("config"), false).expect("direct native bare"),
+        native_bare_value(&common.path().join("config"), /*includes*/ false)
+            .expect("direct native bare"),
         Some(true)
     );
     assert_eq!(
-        native_bare_value(&common.path().join("config"), true).expect("included native bare"),
+        native_bare_value(&common.path().join("config"), /*includes*/ true)
+            .expect("included native bare"),
         Some(false)
     );
     assert_eq!(
@@ -203,7 +214,11 @@ fn common_bare_proof_rejects_includes_worktree_config_and_relative_worktree() {
 fn common_config_absolute_worktree_is_returned_as_authority() {
     let worktree = tempfile::tempdir().expect("worktree");
     let common = write_common_config(
-        format!("[core]\n\tworktree = {}\n", worktree.path().display()).as_bytes(),
+        format!(
+            "[core]\n\tworktree = {}\n",
+            git_config_path(worktree.path())
+        )
+        .as_bytes(),
     );
     assert_eq!(
         inspect_plain_common_config_authority(common.path()).expect("worktree authority"),
@@ -218,7 +233,7 @@ fn common_config_rejects_contradictory_or_malformed_bare_with_absolute_worktree(
         let common = write_common_config(
             format!(
                 "[core]\n\tbare = {bare}\n\tworktree = {}\n",
-                worktree.path().display()
+                git_config_path(worktree.path())
             )
             .as_bytes(),
         );

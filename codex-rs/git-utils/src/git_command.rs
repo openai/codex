@@ -26,6 +26,7 @@ pub(crate) struct GitRunner {
     /// Canonical executable target pinned at selection time. Never execute the
     /// mutable PATH spelling after validation.
     executable: PathBuf,
+    #[cfg(any(unix, test))]
     argv0: PathBuf,
     safe_path: std::ffi::OsString,
     authority: RepositoryAuthority,
@@ -116,6 +117,7 @@ impl GitRunner {
         let selected = select_git_executable(&authority, search_path)?;
         Ok(Self {
             executable: selected.executable,
+            #[cfg(any(unix, test))]
             argv0: selected.argv0,
             safe_path: selected.safe_path,
             authority,

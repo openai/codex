@@ -128,6 +128,29 @@ fn path_text(path: &Path) -> &str {
     path.to_str().expect("UTF-8 fixture path")
 }
 
+fn tempdir_for_native_git() -> tempfile::TempDir {
+    #[cfg(windows)]
+    {
+        // Git for Windows rejects the `\\?\` spelling returned when the
+        // process temp directory is canonicalized.
+        tempfile::tempdir().expect("fixture")
+    }
+    #[cfg(not(windows))]
+    {
+        let temp_base = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
+        tempfile::tempdir_in(temp_base).expect("fixture")
+    }
+}
+
+fn git_config_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    #[cfg(not(windows))]
+    let path = path.into_owned();
+    format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 struct OverlappingRegisteredRoute {
     main: PathBuf,
     nested: PathBuf,
@@ -1056,6 +1079,34 @@ fn command_cwd_is_bound_before_worktree_junction_retarget() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn command_for_cwd_executes_from_a_canonical_windows_path() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let canonical_root = std::fs::canonicalize(&root).expect("canonical repository");
+
+    let runner = GitRunner::for_cwd(&root).expect("runner for canonical cwd");
+    let mut command = runner
+        .command_for_cwd(&canonical_root)
+        .expect("command for canonical cwd");
+    command.args(["rev-parse", "--show-toplevel"]);
+    let output = runner.output(command).expect("run Git from canonical cwd");
+    assert!(
+        output.status.success(),
+        "Git rejected canonical cwd {}: {}",
+        canonical_root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::canonicalize(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("canonical Git root"),
+        canonical_root
+    );
+}
+
 #[test]
 fn gitdir_terminal_worktree_root_is_never_promoted_to_metadata() {
     let fixture = tempfile::tempdir().expect("fixture");
@@ -1406,8 +1457,7 @@ fn linked_worktree_rejects_git_from_main_and_linked_worktrees() {
 
 #[test]
 fn registered_sibling_remains_untrusted_without_its_worktree_marker_or_root() {
-    let temp_base = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
-    let fixture = tempfile::tempdir_in(temp_base).expect("fixture");
+    let fixture = tempdir_for_native_git();
     let main = fixture.path().join("main");
     let sibling = fixture.path().join("sibling");
     let sibling_bin = sibling.join("bin");
@@ -2218,8 +2268,7 @@ fn nested_repo_inside_linked_outer_denies_unproven_outer_primary_before_path_git
 
 #[test]
 fn explicit_absolute_core_worktree_is_recorded_before_path_selection() {
-    let temp_base = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
-    let fixture = tempfile::tempdir_in(temp_base).expect("fixture");
+    let fixture = tempdir_for_native_git();
     let primary = fixture.path().join("primary");
     let common = fixture.path().join("separate-common");
     let linked = fixture.path().join("linked");
@@ -2249,7 +2298,10 @@ fn explicit_absolute_core_worktree_is_recorded_before_path_selection() {
         ],
     );
     let mut config = std::fs::read_to_string(common.join("config")).expect("read common config");
-    config.push_str(&format!("\n[core]\n\tworktree = {}\n", primary.display()));
+    config.push_str(&format!(
+        "\n[core]\n\tworktree = {}\n",
+        git_config_path(&primary)
+    ));
     std::fs::write(common.join("config"), config).expect("write explicit core.worktree");
     std::fs::remove_file(primary.join(".git")).expect("remove primary reverse marker");
     write_git_candidate(&primary_bin);
@@ -2355,8 +2407,8 @@ fn resolver_rejects_unicode_case_alias_through_repository_junction() {
 
     let locations = locations_for_root(&repo);
     assert!(
-        !path_is_untrusted(&verbatim_case_alias, &locations),
-        "fixture must exercise the Unicode alias before canonical ancestry"
+        path_is_untrusted(&verbatim_case_alias, &locations),
+        "route observation missed the Unicode repository alias"
     );
     assert!(search_directory_is_untrusted(
         &verbatim_case_alias,
@@ -2407,4 +2459,8 @@ fn resolver_selects_native_git_exe_only() {
     let path = std::env::join_paths([scripts, native.clone()]).expect("PATH");
     let runner = GitRunner::from_search_path(locations, &path).expect("native Git");
     assert_eq!(runner.argv0, native.join("git.exe"));
+    assert_eq!(
+        runner.executable,
+        std::fs::canonicalize(native.join("git.exe")).expect("canonical native Git")
+    );
 }

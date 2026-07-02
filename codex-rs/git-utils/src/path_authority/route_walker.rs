@@ -103,7 +103,7 @@ fn push_unique_spelling(paths: &mut Vec<PathBuf>, path: PathBuf) {
 fn symlink_route_hops(path: &Path) -> io::Result<Vec<SymlinkRouteHop>> {
     let mut hops = Vec::new();
     let mut seen = BTreeSet::new();
-    collect_symlink_route_hops(path, 0, &mut seen, &mut hops)?;
+    collect_symlink_route_hops(path, /*depth*/ 0, &mut seen, &mut hops)?;
     Ok(hops)
 }
 
@@ -121,8 +121,8 @@ fn collect_symlink_route_hops(
     }
     for ancestor in path.ancestors() {
         match std::fs::symlink_metadata(ancestor) {
-            Ok(_) => match std::fs::read_link(ancestor) {
-                Ok(target) => {
+            Ok(_) => match read_link_if_symlink(ancestor) {
+                Ok(Some(target)) => {
                     let parent = ancestor
                         .parent()
                         .ok_or_else(|| invalid_data("authority symlink has no parent"))?;
@@ -143,7 +143,7 @@ fn collect_symlink_route_hops(
                     });
                     collect_symlink_route_hops(&projected, depth + 1, seen, hops)?;
                 }
-                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+                Ok(None) => {}
                 Err(error) => return Err(error),
             },
             Err(error)
@@ -157,8 +157,30 @@ fn collect_symlink_route_hops(
     Ok(())
 }
 
+fn read_link_if_symlink(path: &Path) -> io::Result<Option<PathBuf>> {
+    match std::fs::read_link(path) {
+        Ok(target) => Ok(Some(target)),
+        Err(error) if read_link_error_means_not_symlink(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_link_error_means_not_symlink(error: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        // Win32 reports this for ordinary files and directories passed to
+        // `std::fs::read_link`; it is the Windows equivalent of EINVAL here.
+        const ERROR_NOT_A_REPARSE_POINT: i32 = 4390;
+        error.raw_os_error() == Some(ERROR_NOT_A_REPARSE_POINT)
+    }
+    #[cfg(not(windows))]
+    {
+        error.kind() == io::ErrorKind::InvalidInput
+    }
+}
+
 fn project_through_longest_existing_ancestor(path: &Path) -> io::Result<PathBuf> {
-    project_path(path, 0)
+    project_path(path, /*symlink_depth*/ 0)
 }
 
 fn project_path(path: &Path, symlink_depth: usize) -> io::Result<PathBuf> {
@@ -219,3 +241,7 @@ fn resolve_literal_path(path: impl AsRef<Path>, base: &Path) -> PathBuf {
 pub(super) fn invalid_data(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+#[cfg(test)]
+#[path = "route_walker_tests.rs"]
+mod tests;

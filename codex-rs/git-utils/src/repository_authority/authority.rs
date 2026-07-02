@@ -173,7 +173,7 @@ impl RepositoryAuthority {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn active_git_dir(&self) -> Option<&Path> {
         self.active_metadata
             .as_ref()
