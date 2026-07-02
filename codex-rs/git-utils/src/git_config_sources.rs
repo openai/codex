@@ -124,13 +124,13 @@ fn reject_source(
     git.ensure_config_source_is_not_worktree_controlled(&absolute, description)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 use crate::git_config::GitConfigEntry;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use include_graph::expand_git_config_path;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 use include_graph::resolve_include_path;
 #[cfg(test)]
 use path_safety::windows_config_path_is_ambiguous;
