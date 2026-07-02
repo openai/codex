@@ -84,6 +84,7 @@ pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
+pub use crate::legacy_events::HasLegacyEvent;
 pub use crate::permissions::FileSystemAccessMode;
 pub use crate::permissions::FileSystemPath;
 pub use crate::permissions::FileSystemSandboxEntry;
@@ -1794,25 +1795,6 @@ pub struct ItemStartedEvent {
     pub started_at_ms: i64,
 }
 
-impl HasLegacyEvent for ItemStartedEvent {
-    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        match &self.item {
-            TurnItem::WebSearch(item) => vec![EventMsg::WebSearchBegin(WebSearchBeginEvent {
-                call_id: item.id.clone(),
-            })],
-            TurnItem::ImageView(_) => Vec::new(),
-            TurnItem::ImageGeneration(item) => {
-                vec![EventMsg::ImageGenerationBegin(ImageGenerationBeginEvent {
-                    call_id: item.id.clone(),
-                })]
-            }
-            TurnItem::FileChange(item) => vec![item.as_legacy_begin_event(self.turn_id.clone())],
-            TurnItem::McpToolCall(item) => vec![item.as_legacy_begin_event()],
-            _ => Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ItemCompletedEvent {
     pub thread_id: ThreadId,
@@ -1829,34 +1811,12 @@ const fn default_item_completed_at_ms() -> i64 {
     0
 }
 
-pub trait HasLegacyEvent {
-    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg>;
-}
-
-impl HasLegacyEvent for ItemCompletedEvent {
-    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
-        match &self.item {
-            TurnItem::FileChange(item) => item
-                .as_legacy_end_event(self.turn_id.clone())
-                .into_iter()
-                .collect(),
-            _ => self.item.as_legacy_events(show_raw_agent_reasoning),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct AgentMessageContentDeltaEvent {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
-}
-
-impl HasLegacyEvent for AgentMessageContentDeltaEvent {
-    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        Vec::new()
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1878,12 +1838,6 @@ pub struct ReasoningContentDeltaEvent {
     pub summary_index: i64,
 }
 
-impl HasLegacyEvent for ReasoningContentDeltaEvent {
-    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        Vec::new()
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ReasoningRawContentDeltaEvent {
     pub thread_id: String,
@@ -1893,31 +1847,6 @@ pub struct ReasoningRawContentDeltaEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub content_index: i64,
-}
-
-impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
-    fn as_legacy_events(&self, _: bool) -> Vec<EventMsg> {
-        Vec::new()
-    }
-}
-
-impl HasLegacyEvent for EventMsg {
-    fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
-        match self {
-            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
-            EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
-            EventMsg::AgentMessageContentDelta(event) => {
-                event.as_legacy_events(show_raw_agent_reasoning)
-            }
-            EventMsg::ReasoningContentDelta(event) => {
-                event.as_legacy_events(show_raw_agent_reasoning)
-            }
-            EventMsg::ReasoningRawContentDelta(event) => {
-                event.as_legacy_events(show_raw_agent_reasoning)
-            }
-            _ => Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5386,6 +5315,7 @@ mod tests {
         let event = serde_json::from_value::<ItemCompletedEvent>(value).unwrap();
         assert_eq!(event.completed_at_ms, 0);
     }
+
     #[test]
     fn rollback_failed_error_does_not_affect_turn_status() {
         let event = ErrorEvent {
