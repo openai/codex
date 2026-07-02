@@ -26,6 +26,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -843,8 +844,30 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .await
         .unwrap();
 
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_event_match(&codex, |event| match event {
+        EventMsg::EnteredReviewMode(_) => Some(Ok(())),
+        EventMsg::Error(error) => Some(Err(format!(
+            "review failed before entering review mode: {error:#?}"
+        ))),
+        EventMsg::TurnAborted(aborted) => Some(Err(format!(
+            "review aborted before entering review mode: {aborted:#?}"
+        ))),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|error| panic!("{error}"));
+    wait_for_event_match(&codex, |event| match event {
+        EventMsg::TurnComplete(_) => Some(Ok(())),
+        EventMsg::Error(error) => Some(Err(format!(
+            "review failed before completing the turn: {error:#?}"
+        ))),
+        EventMsg::TurnAborted(aborted) => Some(Err(format!(
+            "review aborted before completing the turn: {aborted:#?}"
+        ))),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|error| panic!("{error}"));
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 1);
