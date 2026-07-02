@@ -11,6 +11,26 @@ fn run_apply_patch_in_dir(dir: &Path, patch: &str) -> anyhow::Result<assert_cmd:
     Ok(cmd.arg(patch).assert())
 }
 
+fn assert_apply_patch_updates_file(
+    file_name: &str,
+    original: &[u8],
+    patch: &str,
+    expected: &[u8],
+) -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join(file_name);
+    fs::write(&target_path, original)?;
+
+    run_apply_patch_in_dir(tmp.path(), patch)?
+        .success()
+        .stdout(format!(
+            "Success. Updated the following files:\nM {file_name}\n"
+        ));
+
+    assert_eq!(fs::read(target_path)?, expected);
+    Ok(())
+}
+
 fn apply_patch_command(dir: &Path) -> anyhow::Result<Command> {
     let mut cmd = Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?);
     cmd.current_dir(dir);
@@ -66,93 +86,55 @@ fn test_apply_patch_cli_applies_multiple_chunks() -> anyhow::Result<()> {
 
 #[test]
 fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let target_path = tmp.path().join("crlf.txt");
-    fs::write(&target_path, b"one\r\ntwo\r\nthree\r\n")?;
-
     let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n@@\n two\n+\n+between\n three\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout("Success. Updated the following files:\nM crlf.txt\n");
-
-    assert_eq!(
-        fs::read(target_path)?,
-        b"uno\r\ntwo\r\n\r\nbetween\r\nthree\r\n"
-    );
-
-    Ok(())
+    assert_apply_patch_updates_file(
+        "crlf.txt",
+        b"one\r\ntwo\r\nthree\r\n",
+        patch,
+        b"uno\r\ntwo\r\n\r\nbetween\r\nthree\r\n",
+    )
 }
 
 #[test]
 fn test_apply_patch_cli_preserves_change_order_with_repeated_lines() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let target_path = tmp.path().join("repeated.txt");
-    fs::write(&target_path, "a\nb\n")?;
-
     let patch =
         "*** Begin Patch\n*** Update File: repeated.txt\n@@\n-a\n-b\n+b\n+b\n+a\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout("Success. Updated the following files:\nM repeated.txt\n");
-
-    assert_eq!(fs::read_to_string(target_path)?, "b\nb\na\n");
-
-    Ok(())
+    assert_apply_patch_updates_file("repeated.txt", b"a\nb\n", patch, b"b\nb\na\n")
 }
 
 #[test]
 fn test_apply_patch_cli_preserves_repeated_context_line_ending() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let target_path = tmp.path().join("repeated_context.txt");
-    fs::write(&target_path, b"same\r\nsame\n")?;
-
     let patch =
         "*** Begin Patch\n*** Update File: repeated_context.txt\n@@\n-same\n same\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout("Success. Updated the following files:\nM repeated_context.txt\n");
-
-    assert_eq!(fs::read(target_path)?, b"same\n");
-
-    Ok(())
+    assert_apply_patch_updates_file("repeated_context.txt", b"same\r\nsame\n", patch, b"same\n")
 }
 
 #[test]
 fn test_apply_patch_cli_preserves_untouched_mixed_line_endings() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let target_path = tmp.path().join("mixed.txt");
-    fs::write(&target_path, b"one\r\ntwo\nthree\r\nfour\n")?;
-
     let patch = "*** Begin Patch\n*** Update File: mixed.txt\n@@\n one\n two\n-three\n+THREE\n four\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout("Success. Updated the following files:\nM mixed.txt\n");
-
-    assert_eq!(fs::read(target_path)?, b"one\r\ntwo\nTHREE\r\nfour\n");
-
-    Ok(())
+    assert_apply_patch_updates_file(
+        "mixed.txt",
+        b"one\r\ntwo\nthree\r\nfour\n",
+        patch,
+        b"one\r\ntwo\nTHREE\r\nfour\n",
+    )
 }
 
 #[test]
 fn test_apply_patch_cli_uses_crlf_for_new_trailing_newline() -> anyhow::Result<()> {
-    let tmp = tempdir()?;
-    let target_path = tmp.path().join("no_trailing_newline.txt");
-    fs::write(&target_path, b"one\r\ntwo")?;
-
     let patch =
         "*** Begin Patch\n*** Update File: no_trailing_newline.txt\n@@\n-one\n+ONE\n*** End Patch";
 
-    run_apply_patch_in_dir(tmp.path(), patch)?
-        .success()
-        .stdout("Success. Updated the following files:\nM no_trailing_newline.txt\n");
-
-    assert_eq!(fs::read(target_path)?, b"ONE\r\ntwo\r\n");
-
-    Ok(())
+    assert_apply_patch_updates_file(
+        "no_trailing_newline.txt",
+        b"one\r\ntwo",
+        patch,
+        b"ONE\r\ntwo\r\n",
+    )
 }
 
 #[test]

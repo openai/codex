@@ -26,6 +26,10 @@ pub(super) struct SourceFile {
 }
 
 impl SourceFile {
+    /// Splits contents into logical lines while retaining each line ending.
+    ///
+    /// The first existing ending becomes the preferred style for inserted
+    /// lines; files without an ending default to LF.
     pub(super) fn parse(contents: &str) -> Self {
         let mut lines = Vec::new();
         let mut preferred_ending = None;
@@ -38,8 +42,6 @@ impl SourceFile {
             } else {
                 (line, LineEnding::Lf)
             };
-            // Match rustfmt and Ruff's auto-detection behavior by using the
-            // first existing newline as the file's preferred style.
             preferred_ending.get_or_insert(ending);
             lines.push(SourceLine {
                 text: text.to_string(),
@@ -65,6 +67,11 @@ impl SourceFile {
         self.lines.iter().map(|line| line.text.clone()).collect()
     }
 
+    /// Rebuilds the file from source-ordered, non-overlapping replacements.
+    ///
+    /// Unchanged lines retain their original endings, inserted lines use the
+    /// preferred ending, and every resulting line receives an ending to match
+    /// apply-patch's historical trailing-newline behavior.
     pub(super) fn apply_replacements(&mut self, replacements: &[Replacement]) {
         let mut source_lines = std::mem::take(&mut self.lines).into_iter();
         let mut new_lines = Vec::new();
