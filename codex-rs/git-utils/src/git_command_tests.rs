@@ -364,6 +364,14 @@ fn config_source_authority_allows_protected_metadata_and_unrelated_external_path
             "protected metadata config",
         )
         .expect("protected metadata config");
+    let canonical_config =
+        std::fs::canonicalize(root.join(".git/config")).expect("canonical metadata config");
+    authority
+        .ensure_config_source_is_not_worktree_controlled(
+            &canonical_config,
+            "canonical protected metadata config",
+        )
+        .expect("canonical protected metadata config");
     authority
         .ensure_config_source_is_not_worktree_controlled(&external, "external config")
         .expect("unrelated external config");

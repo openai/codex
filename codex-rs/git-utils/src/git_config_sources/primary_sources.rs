@@ -224,11 +224,11 @@ fn git_home_directories() -> Vec<std::ffi::OsString> {
             homes.push(home);
         }
         if let Some(profile) = std::env::var_os("USERPROFILE")
-            && !homes.iter().any(|home| *home == profile)
+            && !homes.contains(&profile)
         {
             homes.push(profile);
         }
-        return homes;
+        homes
     }
     #[cfg(not(windows))]
     Vec::new()
