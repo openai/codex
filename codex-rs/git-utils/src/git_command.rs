@@ -1,389 +1,314 @@
 use std::ffi::OsStr;
 use std::io;
-#[cfg(windows)]
-use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(windows)]
-use std::path::Prefix;
 use std::process::Command;
+use std::process::Stdio;
+
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 
 use crate::errors::GitReadError;
-use crate::git_config::path_is_within;
+#[cfg(test)]
+use crate::git_executable::git_executable_name;
+use crate::git_executable::harden_git_launch_environment;
+#[cfg(test)]
+use crate::git_executable::path_is_untrusted;
+#[cfg(test)]
+use crate::git_executable::search_directory_is_untrusted;
+use crate::git_executable::select_git_executable;
+#[cfg(all(test, windows))]
+use crate::git_executable::windows_path_requires_fail_closed;
+use crate::repository_authority::RepositoryAuthority;
+#[cfg(test)]
+use crate::repository_authority::parse_marker_path as parse_git_marker_path;
 use crate::safe_git::isolate_git_command_environment;
-use crate::safe_git::isolate_tokio_git_command_environment;
+
+pub(crate) const MAX_INTERNAL_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 /// A Git executable outside the repository-controlled roots for one operation.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct GitRunner {
+    /// Canonical executable target pinned at selection time. Never execute the
+    /// mutable PATH spelling after validation.
     executable: PathBuf,
+    #[cfg(any(unix, test))]
+    argv0: PathBuf,
+    safe_path: std::ffi::OsString,
+    authority: RepositoryAuthority,
 }
 
-struct UntrustedGitLocations {
-    roots: Vec<PathBuf>,
-    common_dirs: Vec<PathBuf>,
+/// A Git command that can only be spawned through [`GitRunner::output`],
+/// keeping metadata revalidation and launch hardening at one choke point.
+pub(crate) struct GitCommand {
+    inner: Command,
+}
+
+/// A Tokio Git command that retains the same authority and launch-hardening
+/// choke point as [`GitCommand`]. Callers can configure arguments and stdin,
+/// but cannot replace the authorized process cwd.
+pub(crate) struct GitAsyncCommand {
+    inner: tokio::process::Command,
+    stdin_configured: bool,
+}
+
+impl GitCommand {
+    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg(arg);
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.inner.args(args);
+        self
+    }
+
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env(key, value);
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
+        self
+    }
+}
+
+impl GitAsyncCommand {
+    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg(arg);
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.inner.args(args);
+        self
+    }
+
+    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env(key, value);
+        self
+    }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
+        self.stdin_configured = true;
+        self
+    }
 }
 
 impl GitRunner {
     pub(crate) fn for_cwd(cwd: &Path) -> Result<Self, GitReadError> {
-        let locations = untrusted_git_locations_for_cwd(cwd)?;
+        let authority = repository_authority_for_cwd(cwd)?;
         let search_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
-        Self::from_search_path(&locations, &search_path)
+        Self::from_search_path(authority, &search_path)
     }
 
     pub(crate) fn for_cwd_io(cwd: &Path) -> io::Result<Self> {
-        Self::for_cwd(cwd).map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))
+        Self::for_cwd(cwd).map_err(GitReadError::into_io_error)
     }
 
-    pub(crate) fn command(&self) -> Command {
-        Command::new(&self.executable)
+    pub(crate) fn command(&self) -> GitCommand {
+        let mut command = Command::new(&self.executable);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+
+            command.arg0(&self.argv0);
+        }
+        if let Some(parent) = self.executable.parent() {
+            command.current_dir(parent);
+        }
+        harden_git_launch_environment(&mut command, &self.safe_path);
+        GitCommand { inner: command }
     }
 
-    pub(crate) fn tokio_command(&self) -> tokio::process::Command {
-        tokio::process::Command::new(&self.executable)
+    pub(crate) fn command_for_cwd(&self, cwd: &Path) -> io::Result<GitCommand> {
+        let cwd = self.canonical_command_cwd(cwd)?;
+        let mut command = self.command();
+        command.arg("-C").arg(cwd);
+        Ok(command)
     }
 
-    pub(crate) fn output(&self, mut command: Command) -> io::Result<std::process::Output> {
-        isolate_git_command_environment(&mut command);
+    pub(crate) fn async_command_for_cwd(&self, cwd: &Path) -> io::Result<GitAsyncCommand> {
+        let cwd = self.canonical_command_cwd(cwd)?;
+        let mut command = tokio::process::Command::from(self.command().inner);
+        command.arg("-C").arg(cwd);
+        Ok(GitAsyncCommand {
+            inner: command,
+            stdin_configured: false,
+        })
+    }
+
+    fn canonical_command_cwd(&self, cwd: &Path) -> io::Result<PathBuf> {
+        let cwd = if cwd.is_absolute() {
+            cwd.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(cwd)
+        };
+        self.authority.canonical_command_cwd(&cwd)
+    }
+
+    pub(crate) fn ensure_config_source_is_not_worktree_controlled(
+        &self,
+        path: &Path,
+        description: &str,
+    ) -> io::Result<()> {
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(path, description)
+    }
+
+    pub(crate) fn active_worktree_root(&self) -> Option<&Path> {
+        self.authority.active_worktree_root()
+    }
+
+    pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {
+        self.prepare_command_for_launch(&mut command.inner)?;
+        command.inner.output()
+    }
+
+    fn revalidate_active_repository_metadata(&self) -> io::Result<()> {
+        self.authority.revalidate_active_repository_metadata()
+    }
+
+    fn prepare_command_for_launch(&self, command: &mut Command) -> io::Result<()> {
+        self.revalidate_active_repository_metadata()?;
+        isolate_git_command_environment(command);
         command.envs(crate::local_only_git_env());
-        command.output()
+        harden_git_launch_environment(command, &self.safe_path);
+        Ok(())
     }
 
     /// Spawn a configured Tokio command after applying the final
     /// repository-selector environment lock.
-    pub(crate) async fn output_tokio(
+    #[cfg(test)]
+    pub(crate) async fn output_async(
         &self,
-        mut command: tokio::process::Command,
+        mut command: GitAsyncCommand,
     ) -> io::Result<std::process::Output> {
-        isolate_tokio_git_command_environment(&mut command);
-        command.envs(crate::local_only_git_env());
-        command.output().await
+        self.prepare_command_for_launch(command.inner.as_std_mut())?;
+        command.inner.kill_on_drop(true);
+        command.inner.output().await
+    }
+
+    pub(crate) async fn output_async_bounded(
+        &self,
+        mut command: GitAsyncCommand,
+        max_bytes_per_stream: usize,
+    ) -> io::Result<std::process::Output> {
+        self.prepare_command_for_launch(command.inner.as_std_mut())?;
+        command.inner.kill_on_drop(true);
+        if !command.stdin_configured {
+            command.inner.stdin(Stdio::null());
+        }
+        command.inner.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.inner.spawn()?;
+        // No caller can obtain the pipe writer through this opaque command.
+        // Close it immediately so a child configured with `Stdio::piped()`
+        // observes EOF instead of waiting forever for unreachable input.
+        drop(child.stdin.take());
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("missing bounded Git stdout pipe"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::other("missing bounded Git stderr pipe"))?;
+        let output = tokio::try_join!(
+            read_bounded_output(stdout, max_bytes_per_stream),
+            read_bounded_output(stderr, max_bytes_per_stream)
+        );
+        let (stdout, stderr) = match output {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(error);
+            }
+        };
+        let status = child.wait().await?;
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
     }
 
     fn from_search_path(
-        untrusted: &UntrustedGitLocations,
+        authority: RepositoryAuthority,
         search_path: &OsStr,
     ) -> Result<Self, GitReadError> {
-        for directory in std::env::split_paths(search_path) {
-            if !directory.is_absolute() {
-                continue;
-            }
-            // Check the PATH spelling before appending `git`. On Windows,
-            // PathBuf::push resolves `..` when its base uses a verbatim prefix,
-            // which would otherwise erase repository traversal before the
-            // first containment check.
-            if search_directory_is_untrusted(&directory, untrusted) {
-                continue;
-            }
-            let candidate = directory.join(git_executable_name());
-            if path_is_untrusted(&candidate, untrusted) {
-                continue;
-            }
-            let Ok(canonical_parent) = std::fs::canonicalize(&directory) else {
-                continue;
-            };
-            if path_is_untrusted(&canonical_parent, untrusted) {
-                continue;
-            }
-            let Ok(canonical_candidate) = std::fs::canonicalize(&candidate) else {
-                continue;
-            };
-            if path_is_untrusted(&canonical_candidate, untrusted)
-                || !is_native_executable_file(&canonical_candidate)
-            {
-                continue;
-            }
-            return Ok(Self {
-                // Preserve multicall spelling because argv[0] may select mode.
-                executable: candidate,
-            });
-        }
-        Err(GitReadError::NoTrustedGit)
+        authority.ensure_primary_authority()?;
+        let selected = select_git_executable(&authority, search_path)?;
+        Ok(Self {
+            executable: selected.executable,
+            #[cfg(any(unix, test))]
+            argv0: selected.argv0,
+            safe_path: selected.safe_path,
+            authority,
+        })
     }
 
     #[cfg(all(test, unix))]
-    pub(crate) fn from_executable_for_test(executable: PathBuf) -> Self {
-        Self { executable }
+    pub(crate) fn from_executable_for_test(
+        cwd: &Path,
+        executable: PathBuf,
+    ) -> Result<Self, GitReadError> {
+        let authority = repository_authority_for_cwd(cwd)?;
+        let safe_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
+        Ok(Self {
+            argv0: executable.clone(),
+            executable,
+            safe_path,
+            authority,
+        })
     }
 }
 
-fn untrusted_git_locations_for_cwd(cwd: &Path) -> Result<UntrustedGitLocations, GitReadError> {
-    let lexical_cwd = if cwd.is_absolute() {
-        cwd.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|_| GitReadError::NotRepository {
-                path: cwd.to_path_buf(),
-            })?
-            .join(cwd)
-    };
-    let canonical_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
-        path: cwd.to_path_buf(),
-    })?;
-    let worktree_root = crate::get_git_repo_root(&canonical_cwd)
-        .and_then(|root| std::fs::canonicalize(root).ok())
-        .unwrap_or_else(|| canonical_cwd.clone());
-    let mut locations = UntrustedGitLocations {
-        roots: Vec::new(),
-        common_dirs: Vec::new(),
-    };
-    record_repository_ancestry(&worktree_root, &mut locations)?;
-
-    // Canonicalization can erase a repository-controlled symlink prefix. Walk
-    // the requested spelling too, deliberately retaining symlink and `..`
-    // components so every lexical enclosing checkout remains untrusted.
-    let lexical_base = if lexical_cwd.is_dir() {
-        lexical_cwd
-    } else {
-        lexical_cwd
-            .parent()
-            .ok_or_else(|| GitReadError::NotRepository {
-                path: cwd.to_path_buf(),
-            })?
-            .to_path_buf()
-    };
-    record_repository_ancestry(&lexical_base, &mut locations)?;
-
-    // Callers commonly obtain their default cwd from `current_dir()`, which
-    // can already have erased a symlink spelling. Recover the standard logical
-    // process cwd only when it is absolute and resolves to both the requested
-    // cwd and the process cwd. Treating extra roots as untrusted cannot widen
-    // executable selection.
-    if let Some(logical_cwd) = validated_logical_process_cwd(&canonical_cwd) {
-        record_repository_ancestry(&logical_cwd, &mut locations)?;
-    }
-    Ok(locations)
-}
-
-fn validated_logical_process_cwd(canonical_cwd: &Path) -> Option<PathBuf> {
-    let process_cwd = std::fs::canonicalize(std::env::current_dir().ok()?).ok()?;
-    if !paths_equal(&process_cwd, canonical_cwd) {
-        return None;
-    }
-    let logical_cwd = PathBuf::from(std::env::var_os("PWD")?);
-    if !logical_cwd.is_absolute() {
-        return None;
-    }
-    let canonical_logical_cwd = std::fs::canonicalize(&logical_cwd).ok()?;
-    paths_equal(&canonical_logical_cwd, canonical_cwd).then_some(logical_cwd)
-}
-
-fn record_repository_ancestry(
-    start: &Path,
-    locations: &mut UntrustedGitLocations,
-) -> Result<(), GitReadError> {
-    push_unique(&mut locations.roots, start.to_path_buf());
-    record_repository_marker(start, locations)?;
-    for ancestor in start.parent().into_iter().flat_map(Path::ancestors) {
-        let dot_git = ancestor.join(".git");
-        match std::fs::symlink_metadata(&dot_git) {
-            Ok(_) => {
-                push_unique(&mut locations.roots, ancestor.to_path_buf());
-                let canonical_root =
-                    std::fs::canonicalize(ancestor).map_err(|_| GitReadError::NoTrustedGit)?;
-                push_unique(&mut locations.roots, canonical_root.clone());
-                record_repository_marker(ancestor, locations)?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err(GitReadError::NoTrustedGit),
+async fn read_bounded_output(
+    mut reader: impl AsyncRead + Unpin,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(output);
         }
-    }
-    Ok(())
-}
-
-fn record_repository_marker(
-    worktree_root: &Path,
-    locations: &mut UntrustedGitLocations,
-) -> Result<(), GitReadError> {
-    let dot_git = worktree_root.join(".git");
-    let common_dir = match std::fs::symlink_metadata(&dot_git) {
-        Ok(_) => resolve_common_git_dir(&dot_git).map_err(|()| GitReadError::NoTrustedGit)?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(GitReadError::NoTrustedGit),
-    };
-    if !path_is_within(&common_dir, worktree_root) {
-        push_unique(&mut locations.roots, common_dir.clone());
-    }
-    push_unique(&mut locations.common_dirs, common_dir);
-    Ok(())
-}
-
-fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| paths_equal(existing, &path)) {
-        paths.push(path);
-    }
-}
-
-fn path_is_untrusted(path: &Path, locations: &UntrustedGitLocations) -> bool {
-    if locations
-        .roots
-        .iter()
-        .any(|root| path_is_within(path, root))
-    {
-        return true;
-    }
-    locations
-        .common_dirs
-        .iter()
-        .any(|common_dir| path_is_in_worktree_for_common_dir(path, common_dir))
-}
-
-fn search_directory_is_untrusted(directory: &Path, locations: &UntrustedGitLocations) -> bool {
-    #[cfg(windows)]
-    if windows_path_requires_fail_closed(directory)
-        || windows_path_has_untrusted_canonical_ancestor(directory, locations)
-    {
-        return true;
-    }
-    path_is_untrusted(directory, locations)
-}
-
-#[cfg(windows)]
-fn windows_path_requires_fail_closed(path: &Path) -> bool {
-    let mut components = path.components();
-    let supported_namespace = match components.next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(_)
-            | Prefix::VerbatimDisk(_)
-            | Prefix::UNC(_, _)
-            | Prefix::VerbatimUNC(_, _) => true,
-            Prefix::DeviceNS(device) => windows_device_namespace_is_filesystem(device),
-            Prefix::Verbatim(namespace) => namespace
-                .to_str()
-                .is_some_and(|namespace| namespace.eq_ignore_ascii_case("UNC")),
-        },
-        _ => false,
-    };
-    !supported_namespace || components.any(|component| matches!(component, Component::ParentDir))
-}
-
-#[cfg(windows)]
-fn windows_device_namespace_is_filesystem(device: &OsStr) -> bool {
-    let bytes = device.as_encoded_bytes();
-    bytes.eq_ignore_ascii_case(b"UNC")
-        || matches!(bytes, [drive, b':'] if drive.is_ascii_alphabetic())
-}
-
-#[cfg(windows)]
-fn windows_path_has_untrusted_canonical_ancestor(
-    path: &Path,
-    locations: &UntrustedGitLocations,
-) -> bool {
-    let Ok(canonical_path) = std::fs::canonicalize(path) else {
-        return true;
-    };
-    if path_is_untrusted(&canonical_path, locations) {
-        return true;
-    }
-    for ancestor in path.ancestors().skip(1) {
-        let canonical_ancestor = match std::fs::canonicalize(ancestor) {
-            Ok(canonical_ancestor) => canonical_ancestor,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
-                ) =>
-            {
-                continue;
-            }
-            Err(_) => return true,
-        };
-        if path_is_untrusted(&canonical_ancestor, locations) {
-            return true;
+        if output.len().saturating_add(read) > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Git output exceeded the {max_bytes}-byte stream limit"),
+            ));
         }
+        output.extend_from_slice(&chunk[..read]);
     }
-    false
 }
 
-fn path_is_in_worktree_for_common_dir(path: &Path, expected_common_dir: &Path) -> bool {
-    let path = if path.is_dir() {
-        path
-    } else {
-        path.parent().unwrap_or(path)
-    };
-    for ancestor in path.ancestors() {
-        let dot_git = ancestor.join(".git");
-        match std::fs::symlink_metadata(&dot_git) {
-            Ok(_) => match resolve_common_git_dir(&dot_git) {
-                Ok(common_dir) if paths_equal(&common_dir, expected_common_dir) => return true,
-                Ok(_) => {}
-                Err(()) => return true,
-            },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return true,
-        }
-    }
-    false
-}
-
-fn paths_equal(left: &Path, right: &Path) -> bool {
-    path_is_within(left, right) && path_is_within(right, left)
-}
-
-fn resolve_common_git_dir(dot_git: &Path) -> Result<PathBuf, ()> {
-    if dot_git.is_dir() {
-        return std::fs::canonicalize(dot_git).map_err(|_| ());
-    }
-    let contents = std::fs::read_to_string(dot_git).map_err(|_| ())?;
-    let git_dir = contents
-        .trim()
-        .strip_prefix("gitdir:")
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .ok_or(())?;
-    let git_dir = canonicalize_from(dot_git.parent().ok_or(())?, git_dir)?;
-    let commondir = git_dir.join("commondir");
-    if commondir.is_file() {
-        let common_dir = std::fs::read_to_string(commondir).map_err(|_| ())?;
-        let common_dir = common_dir.trim();
-        if common_dir.is_empty() {
-            return Err(());
-        }
-        return canonicalize_from(&git_dir, common_dir);
-    }
-    if git_dir
-        .parent()
-        .is_some_and(|parent| parent.file_name() == Some(OsStr::new("worktrees")))
-    {
-        return std::fs::canonicalize(git_dir.parent().and_then(Path::parent).ok_or(())?)
-            .map_err(|_| ());
-    }
-    Ok(git_dir)
-}
-
-fn canonicalize_from(base: &Path, path: &str) -> Result<PathBuf, ()> {
-    std::fs::canonicalize(base.join(path)).map_err(|_| ())
-}
-
-#[cfg(windows)]
-fn git_executable_name() -> &'static str {
-    "git.exe"
-}
-
-#[cfg(not(windows))]
-fn git_executable_name() -> &'static str {
-    "git"
-}
-
-#[cfg(unix)]
-fn is_native_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(windows)]
-fn is_native_executable_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-        && std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn is_native_executable_file(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+pub(crate) fn repository_authority_for_cwd(
+    cwd: &Path,
+) -> Result<RepositoryAuthority, GitReadError> {
+    RepositoryAuthority::discover(cwd)
 }
 
 #[cfg(test)]

@@ -46,8 +46,28 @@ pub enum GitToolingError {
     rename_all_fields = "camelCase"
 )]
 pub enum GitReadError {
-    #[error("no trusted Git executable is available")]
+    #[error(
+        "no trusted native Git executable is available; script-based and non-native Git wrappers are skipped, so install a native Git binary outside the repository and place its directory on PATH"
+    )]
     NoTrustedGit,
+    #[error(
+        "refusing non-bare linked worktree because its primary worktree cannot be proven from Git metadata: {common_dir}; run the operation from the primary worktree, or use a standard linked-worktree or plain bare-backed layout"
+    )]
+    UnprovenPrimaryAuthority { common_dir: String },
+    #[error("unsafe Git repository metadata at {path:?}: {reason}")]
+    UnsafeRepositoryMetadata {
+        #[serde(with = "lossy_path")]
+        path: PathBuf,
+        #[serde(rename = "details")]
+        reason: String,
+    },
+    #[error("invalid or unsupported Git repository metadata at {path:?}: {reason}")]
+    InvalidRepositoryMetadata {
+        #[serde(with = "lossy_path")]
+        path: PathBuf,
+        #[serde(rename = "details")]
+        reason: String,
+    },
     #[error("{path:?} is not a Git repository")]
     NotRepository {
         #[serde(with = "lossy_path")]
@@ -69,6 +89,10 @@ pub enum GitReadError {
     },
     #[error("Git operation {operation:?} returned invalid output")]
     InvalidOutput { operation: String },
+    #[error("repository authority refused Git operation {operation:?}")]
+    AuthorityRefused { operation: String },
+    #[error("Git filter attribute selection exceeded its {max_probes}-probe limit")]
+    FilterSelectionProbeLimitExceeded { max_probes: usize },
     #[error("executable filter {driver:?} is selected for {path:?}")]
     SelectedExecutableFilter { driver: String, path: String },
 }
@@ -96,5 +120,28 @@ mod lossy_path {
         D: Deserializer<'de>,
     {
         String::deserialize(deserializer).map(PathBuf::from)
+    }
+}
+
+impl GitReadError {
+    pub(crate) fn io_kind(&self) -> std::io::ErrorKind {
+        match self {
+            Self::NoTrustedGit | Self::NotRepository { .. } => std::io::ErrorKind::NotFound,
+            Self::UnprovenPrimaryAuthority { .. }
+            | Self::UnsafeRepositoryMetadata { .. }
+            | Self::RepositoryRootMismatch { .. }
+            | Self::AuthorityRefused { .. }
+            | Self::FilterSelectionProbeLimitExceeded { .. }
+            | Self::SelectedExecutableFilter { .. } => std::io::ErrorKind::PermissionDenied,
+            Self::InvalidRepositoryMetadata { .. } | Self::InvalidOutput { .. } => {
+                std::io::ErrorKind::InvalidData
+            }
+            Self::CommandTimedOut { .. } => std::io::ErrorKind::TimedOut,
+            Self::CommandFailed { .. } => std::io::ErrorKind::Other,
+        }
+    }
+
+    pub(crate) fn into_io_error(self) -> std::io::Error {
+        std::io::Error::new(self.io_kind(), self)
     }
 }

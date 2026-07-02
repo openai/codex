@@ -81,12 +81,11 @@ fn read_merge_attributes(
     }
     input.rewind()?;
 
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(cwd)?;
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         .args(["check-attr", "--stdin", "-z", "merge"])
-        .current_dir(cwd)
         .stdin(Stdio::from(input));
     let output = git.output(command)?;
     if !output.status.success() {

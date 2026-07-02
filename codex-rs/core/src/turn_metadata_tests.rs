@@ -67,6 +67,16 @@ fn workspace_metadata_serializes_structured_has_changes_refusal() {
             "exitCode": 128,
         })
     );
+    assert_eq!(
+        serde_json::to_value(codex_git_utils::GitReadError::AuthorityRefused {
+            operation: "status".to_string(),
+        })
+        .expect("serialize authority refusal"),
+        serde_json::json!({
+            "reason": "authorityRefused",
+            "operation": "status",
+        })
+    );
 }
 
 #[cfg(any(unix, windows))]
@@ -863,22 +873,26 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
 
     state.spawn_git_enrichment_task();
 
-    let json = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let header = test_turn_metadata_header(&state);
-            let json: Value = serde_json::from_str(&header).expect("json");
-            if json
-                .get("workspaces")
-                .and_then(Value::as_object)
-                .is_some_and(|workspaces| !workspaces.is_empty())
-            {
-                return json;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("git enrichment should complete");
+    let enrichment_task = state
+        .enrichment_task
+        .lock()
+        .expect("enrichment task lock")
+        .take()
+        .expect("git enrichment task");
+    // Status enrichment has its own five-second bounded Git deadline. Give the
+    // outer test enough headroom to observe its result on a contended host.
+    tokio::time::timeout(Duration::from_secs(10), enrichment_task)
+        .await
+        .expect("git enrichment should complete")
+        .expect("git enrichment task should not panic");
+
+    let header = test_turn_metadata_header(&state);
+    let json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        json.get("workspaces")
+            .and_then(Value::as_object)
+            .is_some_and(|workspaces| !workspaces.is_empty())
+    );
 
     assert_eq!(
         json["forked_from_thread_id"].as_str(),

@@ -319,7 +319,7 @@ impl TurnMetadataState {
         let (head_commit_hash, associated_remote_urls, has_changes_result) = tokio::join!(
             get_head_commit_hash(&self.cwd),
             get_git_remote_urls_assume_git_repo(&self.cwd),
-            try_get_has_changes(&self.cwd),
+            Box::pin(try_get_has_changes(&self.cwd)),
         );
         let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
         let (has_changes, has_changes_unavailable_reason) = split_has_changes(has_changes_result);
@@ -338,7 +338,7 @@ async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetada
     let (head_commit_hash, associated_remote_urls, has_changes_result) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd),
-        try_get_has_changes(cwd),
+        Box::pin(try_get_has_changes(cwd)),
     );
     let (has_changes, has_changes_unavailable_reason) = split_has_changes(has_changes_result);
     let workspace_git_metadata = WorkspaceGitMetadata {

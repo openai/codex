@@ -174,12 +174,11 @@ pub(crate) fn resolve_exact_index_policy(
 fn read_index(git: &GitRunner, git_root: &Path, git_config_args: &[String]) -> io::Result<Vec<u8>> {
     // One full, byte-oriented scan avoids invoking Git once per patch path and
     // lets one parse enforce aliases, directory prefixes, and flags together.
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
-        .args(["ls-files", "--cached", "-v", "-z"])
-        .current_dir(git_root);
+        .args(["ls-files", "--cached", "-v", "-z"]);
     let output = git.output(command)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
@@ -430,12 +429,11 @@ pub(crate) fn effective_git_bool(
     git_config_args: &[String],
     key: &str,
 ) -> io::Result<Option<bool>> {
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
-        .args(["config", "--type=bool", "--get", key])
-        .current_dir(git_root);
+        .args(["config", "--type=bool", "--get", key]);
     let output = git.output(command)?;
     if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
         return Ok(None);

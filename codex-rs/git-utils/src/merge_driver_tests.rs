@@ -1,6 +1,7 @@
 use super::*;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
+use crate::git_config::GitConfigOrigin;
 use crate::git_config::GitConfigScope;
 use std::ffi::OsStr;
 
@@ -43,7 +44,9 @@ fn apply_allows_unused_global_merge_driver() {
     .expect("allow unrelated global merge driver");
     assert_eq!(result.exit_code, 0);
     assert_eq!(
-        std::fs::read_to_string(root.join("file.txt")).expect("read file"),
+        std::fs::read_to_string(root.join("file.txt"))
+            .expect("read file")
+            .replace("\r\n", "\n"),
         "new\n"
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
@@ -124,7 +127,7 @@ fn apply_rejects_global_merge_driver_before_three_way() {
         std::fs::read_to_string(root.join("file.txt")).expect("read ours"),
         "ours\n"
     );
-    let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+    let (status_code, status, status_err) = status_with_apply_config(root);
     assert_eq!(status_code, 0, "status: {status_err}");
     assert!(status.is_empty(), "worktree/index changed: {status}");
 }
@@ -220,7 +223,7 @@ fn apply_allows_clean_patch_with_selected_merge_driver() {
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "merge driver must not run");
-    let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+    let (status_code, status, status_err) = status_with_apply_config(root);
     assert_eq!(status_code, 0, "status: {status_err}");
     assert_eq!(
         status.trim(),
@@ -282,7 +285,7 @@ fn reverse_apply_allows_clean_patch_with_selected_merge_driver() {
     );
     let (marker_code, _, _) = run(root, &["git", "config", "--get", "codex.mergeran"]);
     assert_ne!(marker_code, 0, "merge driver must not run");
-    let (status_code, status, status_err) = run(root, &["git", "status", "--porcelain"]);
+    let (status_code, status, status_err) = status_with_apply_config(root);
     assert_eq!(status_code, 0, "status: {status_err}");
     assert!(
         status.is_empty(),
@@ -512,7 +515,7 @@ fn config_entries<const N: usize>(values: [(&str, &str); N]) -> BTreeMap<String,
                 key.to_string(),
                 GitConfigEntry {
                     scope: GitConfigScope::Global,
-                    origin: "file:/tmp/global.gitconfig".to_string(),
+                    origin: GitConfigOrigin::File("/tmp/global.gitconfig".into()),
                     key: key.to_string(),
                     value: value.to_string(),
                 },
@@ -534,6 +537,14 @@ fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
+}
+
+fn status_with_apply_config(cwd: &Path) -> (i32, String, String) {
+    let mut args = vec!["git".to_string()];
+    args.extend(crate::apply::configured_git_config_parts());
+    args.extend(["status".to_string(), "--porcelain".to_string()]);
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run(cwd, &args)
 }
 
 fn run_isolated_merge_test(test_name: &str, env: &[(&str, &OsStr)]) {

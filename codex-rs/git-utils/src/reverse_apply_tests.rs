@@ -36,7 +36,7 @@ fn run(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> std::process::Output 
 }
 
 fn run_success(cwd: &Path, args: &[&str]) -> Vec<u8> {
-    let output = run(cwd, args, None);
+    let output = run(cwd, args, /*input*/ None);
     assert!(
         output.status.success(),
         "git {args:?}: {}",
@@ -54,6 +54,26 @@ fn init_repo() -> tempfile::TempDir {
     run_success(root, &["config", "core.autocrlf", "false"]);
     run_success(root, &["config", "core.filemode", "true"]);
     repo
+}
+
+fn read_file_normalized(path: &Path) -> String {
+    std::fs::read_to_string(path)
+        .expect("read file")
+        .replace("\r\n", "\n")
+}
+
+fn run_success_with_apply_config(root: &Path, command_args: &[&str]) -> Vec<u8> {
+    let mut configured_args = configured_git_config_parts();
+    configured_args.extend(command_args.iter().map(ToString::to_string));
+    let configured_args = configured_args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    run_success(root, &configured_args)
+}
+
+fn status_porcelain_with_apply_config(root: &Path) -> Vec<u8> {
+    run_success_with_apply_config(root, &["status", "--porcelain"])
 }
 
 fn request(root: &Path, patch: &str) -> ApplyGitRequest {
@@ -191,9 +211,9 @@ fn reverse_rename_accepts_each_partially_staged_form() {
         let result = apply_git_patch(&request(root, &patch)).expect("safe partial rename reverse");
         assert_eq!(result.exit_code, 0, "{}", result.stderr);
         assert_eq!(result.applied_paths, vec!["old.txt"]);
-        assert_eq!(std::fs::read(root.join("old.txt")).unwrap(), b"old\n");
+        assert_eq!(read_file_normalized(&root.join("old.txt")), "old\n");
         assert!(!root.join("new.txt").exists());
-        assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+        assert!(status_porcelain_with_apply_config(root).is_empty());
     }
 }
 
@@ -201,13 +221,13 @@ fn reverse_rename_accepts_each_partially_staged_form() {
 fn reverse_staged_delete_succeeds_but_recreated_worktree_is_refused() {
     let (repo, patch) = topology_fixture(Topology::Delete);
     let root = repo.path();
-    run_success(root, &["rm", "-q", "old.txt"]);
+    run_success_with_apply_config(root, &["rm", "-q", "old.txt"]);
     let result = apply_git_patch(&request(root, &patch)).expect("already-staged reverse delete");
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     assert_eq!(result.applied_paths, vec!["old.txt"]);
-    assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+    assert!(status_porcelain_with_apply_config(root).is_empty());
 
-    run_success(root, &["rm", "-q", "old.txt"]);
+    run_success_with_apply_config(root, &["rm", "-q", "old.txt"]);
     std::fs::write(root.join("old.txt"), b"recreated\n").unwrap();
     assert_refused_without_mutation(root, &patch);
 }
@@ -374,7 +394,7 @@ fn reverse_mode_only_change_succeeds_when_repository_ignores_filemode() {
                 & 0o777,
             base_mode
         );
-        assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+        assert!(status_porcelain_with_apply_config(root).is_empty());
     }
 }
 
@@ -412,11 +432,11 @@ fn reverse_content_only_change_preserves_executable_index_mode_when_filemode_is_
 
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     assert_eq!(result.applied_paths, vec!["script.sh"]);
-    assert_eq!(std::fs::read(root.join("script.sh")).unwrap(), b"old\n");
+    assert_eq!(read_file_normalized(&root.join("script.sh")), "old\n");
     let index =
         String::from_utf8(run_success(root, &["ls-files", "--stage", "script.sh"])).unwrap();
     assert!(index.starts_with("100755 "), "{index}");
-    assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+    assert!(status_porcelain_with_apply_config(root).is_empty());
 }
 
 #[test]
@@ -451,10 +471,7 @@ fn reverse_handles_unborn_empty_index_and_refuses_unborn_index_state() {
     let result = apply_git_patch(&request(clean.path(), DELETE_PATCH)).expect("unborn reverse add");
     assert_eq!(result.exit_code, 0, "{}", result.stderr);
     assert_eq!(result.applied_paths, vec!["old.txt"]);
-    assert_eq!(
-        std::fs::read(clean.path().join("old.txt")).unwrap(),
-        b"old\n"
-    );
+    assert_eq!(read_file_normalized(&clean.path().join("old.txt")), "old\n");
 
     for intent_to_add in [false, true] {
         let repo = init_repo();
