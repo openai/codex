@@ -1663,6 +1663,16 @@ impl ModelClientSession {
         websocket_telemetry
     }
 
+    #[instrument(
+        name = "model_client.prewarm_websocket",
+        level = "trace",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            transport = "responses_websocket",
+            websocket.warmup = true
+        )
+    )]
     #[allow(clippy::too_many_arguments)]
     pub async fn prewarm_websocket(
         &mut self,
