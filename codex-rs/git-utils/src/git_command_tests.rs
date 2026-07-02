@@ -189,6 +189,7 @@ struct OverlappingRegisteredRoute {
     main: PathBuf,
     nested: PathBuf,
     linked: PathBuf,
+    #[cfg(unix)]
     nested_admin: PathBuf,
     linked_admin: PathBuf,
     registry_marker: PathBuf,
@@ -203,6 +204,7 @@ fn overlapping_registered_route(fixture: &Path) -> OverlappingRegisteredRoute {
     run_git(&main, &["init", "-q"]);
     run_git(&main, &["worktree", "add", "--orphan", path_text(&nested)]);
     run_git(&main, &["worktree", "add", "--orphan", path_text(&linked)]);
+    #[cfg(unix)]
     let nested_admin = PathBuf::from(run_git_stdout(
         &nested,
         &["rev-parse", "--absolute-git-dir"],
@@ -219,6 +221,7 @@ fn overlapping_registered_route(fixture: &Path) -> OverlappingRegisteredRoute {
         main,
         nested,
         linked,
+        #[cfg(unix)]
         nested_admin,
         linked_admin,
         registry_marker,
@@ -232,6 +235,7 @@ struct MetadataAliasRegisteredRoute {
     linked_admin: PathBuf,
     pivot: PathBuf,
     registry_marker: PathBuf,
+    #[cfg(unix)]
     raw_marker: PathBuf,
 }
 
@@ -264,6 +268,7 @@ fn metadata_alias_registered_route(
         linked_admin,
         pivot,
         registry_marker,
+        #[cfg(unix)]
         raw_marker,
     }
 }
@@ -312,6 +317,7 @@ fn assert_unsafe_registry_route(result: Result<RepositoryAuthority, GitReadError
     }
 }
 
+#[cfg(unix)]
 fn assert_unsafe_registry_route_at_one_of(
     result: Result<RepositoryAuthority, GitReadError>,
     markers: &[&Path],
