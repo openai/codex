@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
+use tracing::instrument;
 
 use super::UnifiedExecContext;
 use super::process::UnifiedExecProcess;
@@ -192,6 +193,7 @@ async fn process_chunk(
 /// as the primary source of aggregated_output and falling back to the provided
 /// text when the transcript is empty.
 #[allow(clippy::too_many_arguments)]
+#[instrument(name = "unified_exec.emit_end", level = "info", skip_all)]
 pub(crate) async fn emit_exec_end_for_unified_exec(
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
@@ -317,6 +319,11 @@ fn split_valid_utf8_prefix_with_max(buffer: &mut Vec<u8>, max_bytes: usize) -> O
     Some(byte)
 }
 
+#[instrument(
+    name = "unified_exec.resolve_aggregated_output",
+    level = "info",
+    skip_all
+)]
 async fn resolve_aggregated_output(
     transcript: &Arc<Mutex<HeadTailBuffer>>,
     fallback: String,

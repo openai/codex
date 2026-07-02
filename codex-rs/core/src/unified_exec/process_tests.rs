@@ -172,3 +172,34 @@ async fn remote_terminate_confirmed_updates_state_on_success_only() {
 
     assert!(process.has_exited());
 }
+
+#[tokio::test]
+async fn remote_process_attach_surfaces_early_sandbox_denial() {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let started = StartedExecProcess {
+        process: Arc::new(MockExecProcess {
+            process_id: "test-process".to_string().into(),
+            write_response: WriteResponse {
+                status: WriteStatus::Accepted,
+            },
+            read_responses: Mutex::new(VecDeque::new()),
+            terminate_error: None,
+            wake_tx,
+        }),
+    };
+
+    let error = UnifiedExecProcess::from_exec_server_started_with_output_task(
+        started,
+        |_started, _output_handles, _output_tx, state_tx| {
+            tokio::spawn(async move {
+                let mut state = state_tx.borrow().clone();
+                state.sandbox_denied = true;
+                let _ = state_tx.send_replace(state.exited(Some(1)));
+            })
+        },
+    )
+    .await
+    .expect_err("early remote sandbox denial should fail the orchestrated launch attempt");
+
+    assert!(matches!(error, UnifiedExecError::SandboxDenied { .. }));
+}
