@@ -132,6 +132,8 @@ pub struct UpdateFileChunk {
 }
 
 impl UpdateFileChunk {
+    /// Adds a context line to both sides while recording its corresponding
+    /// indices so it remains distinguishable from identical changed lines.
     pub(crate) fn push_context_line(&mut self, line: String) {
         self.context_line_indices
             .push((self.old_lines.len(), self.new_lines.len()));
