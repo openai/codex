@@ -29,6 +29,7 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use std::collections::HashMap;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -44,15 +45,57 @@ const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
+#[cfg(test)]
 pub(crate) async fn load_project_instructions(
     config: &Config,
     user_instructions: Option<UserInstructions>,
     environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
+    load_project_instructions_with_roots(config, user_instructions, environments)
+        .await
+        .loaded
+}
+
+fn effective_project_root_markers(config: &Config) -> Vec<String> {
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config.config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    }
+}
+
+pub(crate) struct ProjectInstructionsLoadOutcome {
+    pub(crate) loaded: Option<LoadedAgentsMd>,
+    pub(crate) project_roots: HashMap<String, PathUri>,
+}
+
+/// Loads project instructions and retains the project roots found along the way.
+///
+/// Skills discovery uses the same project-root markers. Keeping this result avoids repeating the
+/// remote marker walk immediately after AGENTS.md discovery during session startup.
+pub(crate) async fn load_project_instructions_with_roots(
+    config: &Config,
+    user_instructions: Option<UserInstructions>,
+    environments: &TurnEnvironmentSnapshot,
+) -> ProjectInstructionsLoadOutcome {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
+    let mut project_roots = HashMap::new();
     for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
-        match read_agents_md(
+        match read_agents_md_with_root(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
@@ -60,8 +103,14 @@ pub(crate) async fn load_project_instructions(
         )
         .await
         {
-            Ok(Some(docs)) => loaded.entries.extend(docs.entries),
-            Ok(None) => {}
+            Ok(outcome) => {
+                if let Some(project_root) = outcome.project_root {
+                    project_roots.insert(turn_environment.environment_id.clone(), project_root);
+                }
+                if let Some(docs) = outcome.loaded {
+                    loaded.entries.extend(docs.entries);
+                }
+            }
             Err(e) => {
                 error!(
                     environment_id = turn_environment.environment_id,
@@ -71,7 +120,15 @@ pub(crate) async fn load_project_instructions(
         }
     }
 
-    (!loaded.is_empty()).then_some(loaded)
+    ProjectInstructionsLoadOutcome {
+        loaded: (!loaded.is_empty()).then_some(loaded),
+        project_roots,
+    }
+}
+
+struct ReadAgentsMdOutcome {
+    loaded: Option<LoadedAgentsMd>,
+    project_root: Option<PathUri>,
 }
 
 /// Attempt to locate and load AGENTS.md documentation.
@@ -80,27 +137,27 @@ pub(crate) async fn load_project_instructions(
 /// discovered doc. If no documentation file is found the function returns
 /// `Ok(None)`. Unexpected I/O failures bubble up as `Err` so callers can
 /// decide how to handle them.
-async fn read_agents_md(
+async fn read_agents_md_with_root(
     config: &Config,
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
     cwd: &PathUri,
-) -> io::Result<Option<LoadedAgentsMd>> {
+) -> io::Result<ReadAgentsMdOutcome> {
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {
-        return Ok(None);
+        return Ok(ReadAgentsMdOutcome {
+            loaded: None,
+            project_root: None,
+        });
     }
 
-    let paths = agents_md_paths(config, cwd, fs).await?;
-    if paths.is_empty() {
-        return Ok(None);
-    }
+    let discovery = discover_agents_md_paths(config, cwd, fs).await?;
 
     let mut remaining: u64 = max_total as u64;
     let mut loaded = LoadedAgentsMd::default();
 
-    for p in paths {
+    for p in discovery.paths {
         if remaining == 0 {
             break;
         }
@@ -137,40 +194,48 @@ async fn read_agents_md(
         }
     }
 
-    if loaded.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(loaded))
-    }
+    Ok(ReadAgentsMdOutcome {
+        loaded: (!loaded.is_empty()).then_some(loaded),
+        project_root: Some(discovery.project_root),
+    })
+}
+
+#[cfg(test)]
+async fn read_agents_md(
+    config: &Config,
+    fs: &dyn ExecutorFileSystem,
+    environment_id: &str,
+    cwd: &PathUri,
+) -> io::Result<Option<LoadedAgentsMd>> {
+    Ok(read_agents_md_with_root(config, fs, environment_id, cwd)
+        .await?
+        .loaded)
+}
+
+struct AgentsMdPathDiscovery {
+    paths: Vec<PathUri>,
+    project_root: PathUri,
 }
 
 /// Discovers AGENTS.md files from the project root to the current working
 /// directory, inclusive. Symlinks are allowed.
+#[cfg(test)]
 async fn agents_md_paths(
     config: &Config,
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
 ) -> io::Result<Vec<PathUri>> {
+    Ok(discover_agents_md_paths(config, cwd, fs).await?.paths)
+}
+
+async fn discover_agents_md_paths(
+    config: &Config,
+    cwd: &PathUri,
+    fs: &dyn ExecutorFileSystem,
+) -> io::Result<AgentsMdPathDiscovery> {
     let dir = cwd.clone();
 
-    let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in config.config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
-        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
-            continue;
-        }
-        merge_toml_values(&mut merged, &layer.config);
-    }
-    let project_root_markers = match project_root_markers_from_config(&merged) {
-        Ok(Some(markers)) => markers,
-        Ok(None) => default_project_root_markers(),
-        Err(err) => {
-            tracing::warn!("invalid project_root_markers: {err}");
-            default_project_root_markers()
-        }
-    };
+    let project_root_markers = effective_project_root_markers(config);
     let project_root = find_nearest_ancestor_with_markers(
         fs,
         &dir,
@@ -179,12 +244,13 @@ async fn agents_md_paths(
         /*sandbox*/ None,
     )
     .await?;
-    let search_dirs = if let Some(root) = project_root {
+    let project_root = project_root.unwrap_or_else(|| dir.clone());
+    let search_dirs = {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
             dirs.push(cursor.clone());
-            if cursor == root {
+            if cursor == project_root {
                 break;
             }
             let Some(parent) = cursor.parent() else {
@@ -194,8 +260,6 @@ async fn agents_md_paths(
         }
         dirs.reverse();
         dirs
-    } else {
-        vec![dir]
     };
 
     let mut found = Vec::new();
@@ -216,7 +280,10 @@ async fn agents_md_paths(
             }
         }
     }
-    Ok(found)
+    Ok(AgentsMdPathDiscovery {
+        paths: found,
+        project_root,
+    })
 }
 
 fn candidate_filenames(config: &Config) -> Vec<&str> {

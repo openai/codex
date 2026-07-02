@@ -4,18 +4,29 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorFileSystemFuture;
+use codex_exec_server::FileMetadata;
+use codex_exec_server::FileSystemReadStream;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::PathExt;
+use codex_utils_path_uri::PathUri;
 use dunce::canonicalize as canonicalize_path;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
@@ -24,6 +35,108 @@ const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 struct TestConfig {
     cwd: AbsolutePathBuf,
     config_layer_stack: ConfigLayerStack,
+}
+
+struct MetadataRecordingFileSystem {
+    metadata_paths: Mutex<Vec<PathUri>>,
+}
+
+impl MetadataRecordingFileSystem {
+    fn new() -> Self {
+        Self {
+            metadata_paths: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn metadata_paths(&self) -> Vec<PathUri> {
+        self.metadata_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ExecutorFileSystem for MetadataRecordingFileSystem {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, PathUri> {
+        LOCAL_FS.canonicalize(path, sandbox)
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
+        LOCAL_FS.read_file(path, sandbox)
+    }
+
+    fn read_file_stream<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileSystemReadStream> {
+        LOCAL_FS.read_file_stream(path, sandbox)
+    }
+
+    fn write_file<'a>(
+        &'a self,
+        path: &'a PathUri,
+        contents: Vec<u8>,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.write_file(path, contents, sandbox)
+    }
+
+    fn create_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: CreateDirectoryOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.create_directory(path, options, sandbox)
+    }
+
+    fn get_metadata<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
+        self.metadata_paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.clone());
+        LOCAL_FS.get_metadata(path, sandbox)
+    }
+
+    fn read_directory<'a>(
+        &'a self,
+        path: &'a PathUri,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, Vec<ReadDirectoryEntry>> {
+        LOCAL_FS.read_directory(path, sandbox)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        path: &'a PathUri,
+        options: RemoveOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.remove(path, options, sandbox)
+    }
+
+    fn copy<'a>(
+        &'a self,
+        source_path: &'a PathUri,
+        destination_path: &'a PathUri,
+        options: CopyOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ()> {
+        LOCAL_FS.copy(source_path, destination_path, options, sandbox)
+    }
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
@@ -143,6 +256,94 @@ fn normalized(path: &Path) -> AbsolutePathBuf {
     canonicalize_path(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .abs()
+}
+
+#[tokio::test]
+async fn repo_skill_roots_use_one_shot_hint_then_observe_new_nearest_marker() {
+    let codex_home = tempfile::tempdir().expect("codex home");
+    let repo = codex_home.path().join("repo");
+    let cwd = repo.join("packages/app");
+    let repo_skills = repo.join(".agents/skills");
+    fs::create_dir_all(&cwd).expect("create cwd");
+    fs::create_dir_all(&repo_skills).expect("create repo skills");
+    mark_as_git_repo(&repo);
+    let config = make_config_for_cwd(&codex_home, cwd).await;
+    let repo = repo.abs();
+
+    let supplied_root_fs = Arc::new(MetadataRecordingFileSystem::new());
+    let roots = super::repo_agents_skill_roots(
+        Some(supplied_root_fs.clone()),
+        &config.config_layer_stack,
+        &config.cwd,
+        Some((&config.cwd, &repo)),
+    )
+    .await;
+    assert!(roots.iter().any(|root| root.path == repo_skills.abs()));
+    assert!(
+        supplied_root_fs
+            .metadata_paths()
+            .iter()
+            .all(|path| path.basename().as_deref() != Some(".git")),
+        "a supplied root must avoid marker probes"
+    );
+
+    let nested_root = codex_home.path().join("repo/packages");
+    let nested_skills = nested_root.join(".agents/skills");
+    fs::create_dir_all(&nested_skills).expect("create nested repo skills");
+    mark_as_git_repo(&nested_root);
+
+    let fallback_fs = Arc::new(MetadataRecordingFileSystem::new());
+    let roots = super::repo_agents_skill_roots(
+        Some(fallback_fs.clone()),
+        &config.config_layer_stack,
+        &config.cwd,
+        /*project_root*/ None,
+    )
+    .await;
+    assert!(roots.iter().any(|root| root.path == nested_skills.abs()));
+    assert!(roots.iter().all(|root| root.path != repo_skills.abs()));
+    assert!(
+        fallback_fs
+            .metadata_paths()
+            .iter()
+            .any(|path| path == &PathUri::from_abs_path(&nested_root.join(".git").abs())),
+        "the post-startup fallback must observe a newly-created nearer marker"
+    );
+}
+
+#[tokio::test]
+async fn repo_skill_roots_ignore_hint_discovered_for_different_cwd() {
+    let codex_home = tempfile::tempdir().expect("codex home");
+    let repo = codex_home.path().join("repo");
+    let nested_root = repo.join("packages");
+    let cwd = nested_root.join("app");
+    let repo_skills = repo.join(".agents/skills");
+    let nested_skills = nested_root.join(".agents/skills");
+    fs::create_dir_all(&cwd).expect("create cwd");
+    fs::create_dir_all(&repo_skills).expect("create repo skills");
+    fs::create_dir_all(&nested_skills).expect("create nested repo skills");
+    mark_as_git_repo(&repo);
+    mark_as_git_repo(&nested_root);
+    let config = make_config_for_cwd(&codex_home, cwd).await;
+    let repo = repo.abs();
+
+    let fs = Arc::new(MetadataRecordingFileSystem::new());
+    let roots = super::repo_agents_skill_roots(
+        Some(fs.clone()),
+        &config.config_layer_stack,
+        &config.cwd,
+        Some((&repo, &repo)),
+    )
+    .await;
+
+    assert!(roots.iter().any(|root| root.path == nested_skills.abs()));
+    assert!(roots.iter().all(|root| root.path != repo_skills.abs()));
+    assert!(
+        fs.metadata_paths()
+            .iter()
+            .any(|path| path == &PathUri::from_abs_path(&nested_root.join(".git").abs())),
+        "a hint from a different cwd must be ignored so a nearer marker can be found"
+    );
 }
 
 #[tokio::test]
@@ -2147,6 +2348,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         Some(Arc::clone(&LOCAL_FS)),
         &cfg.config_layer_stack,
         &cfg.cwd,
+        /*project_root*/ None,
         Vec::new(),
         Vec::new(),
     )

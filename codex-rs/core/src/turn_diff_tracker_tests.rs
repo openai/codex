@@ -50,6 +50,22 @@ fn tracker_with_root(root: &Path) -> TurnDiffTracker {
     TurnDiffTracker::with_environment_display_roots([("".to_string(), root.to_path_buf())])
 }
 
+#[test]
+fn display_roots_are_initialized_only_when_supplied() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = TurnDiffTracker::new();
+
+    assert!(tracker.needs_display_roots());
+
+    tracker.set_environment_display_roots([("local".to_string(), dir.path().to_path_buf())]);
+
+    assert!(!tracker.needs_display_roots());
+
+    let mut invalid_tracker = TurnDiffTracker::new();
+    invalid_tracker.invalidate();
+    assert!(!invalid_tracker.needs_display_roots());
+}
+
 #[tokio::test]
 async fn accumulates_add_then_update_as_single_add() {
     let dir = tempdir().expect("tempdir");

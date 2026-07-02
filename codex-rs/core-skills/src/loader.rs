@@ -20,6 +20,8 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_native_ancestor_with_markers;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -238,6 +240,7 @@ pub(crate) async fn skill_roots(
     fs: Option<Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_root: Option<(&AbsolutePathBuf, &AbsolutePathBuf)>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
@@ -247,6 +250,7 @@ pub(crate) async fn skill_roots(
         fs,
         config_layer_stack,
         cwd,
+        project_root,
         home_dir.as_ref(),
         plugin_skill_roots,
         extra_skill_roots,
@@ -258,6 +262,7 @@ async fn skill_roots_with_home_dir(
     fs: Option<Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_root: Option<(&AbsolutePathBuf, &AbsolutePathBuf)>,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
@@ -279,7 +284,7 @@ async fn skill_roots_with_home_dir(
         plugin_namespace: None,
         plugin_root: None,
     }));
-    roots.extend(repo_agents_skill_roots(fs, config_layer_stack, cwd).await);
+    roots.extend(repo_agents_skill_roots(fs, config_layer_stack, cwd, project_root).await);
     dedupe_skill_roots_by_path(&mut roots);
     roots
 }
@@ -374,12 +379,20 @@ async fn repo_agents_skill_roots(
     fs: Option<Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_root: Option<(&AbsolutePathBuf, &AbsolutePathBuf)>,
 ) -> Vec<SkillRoot> {
     let Some(fs) = fs else {
         return Vec::new();
     };
-    let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let project_root = find_project_root(fs.as_ref(), cwd, &project_root_markers).await;
+    let project_root = match project_root.filter(|(discovery_cwd, root)| {
+        *discovery_cwd == cwd && cwd.as_path().starts_with(root.as_path())
+    }) {
+        Some((_, project_root)) => project_root.clone(),
+        None => {
+            let project_root_markers = project_root_markers_from_stack(config_layer_stack);
+            find_project_root(fs.as_ref(), cwd, &project_root_markers).await
+        }
+    };
     let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
     for dir in dirs {
@@ -438,24 +451,17 @@ async fn find_project_root(
         return cwd.clone();
     }
 
-    for ancestor in cwd.ancestors() {
-        for marker in project_root_markers {
-            let marker_path = ancestor.join(marker);
-            let marker_path_uri = PathUri::from_abs_path(&marker_path);
-            match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await {
-                Ok(_) => return ancestor,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to stat project root marker {}: {err:#}",
-                        marker_path.display()
-                    );
-                }
-            }
-        }
-    }
-
-    cwd.clone()
+    find_nearest_native_ancestor_with_markers(
+        fs,
+        cwd,
+        project_root_markers.to_vec(),
+        FindUpErrorPolicy::Ignore,
+        /*sandbox*/ None,
+    )
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| cwd.clone())
 }
 
 fn dirs_between_project_root_and_cwd(
@@ -1280,6 +1286,7 @@ pub(crate) async fn skill_roots_from_layer_stack(
         Some(fs),
         config_layer_stack,
         cwd,
+        /*project_root*/ None,
         home_dir,
         Vec::new(),
         Vec::new(),
