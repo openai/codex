@@ -17,6 +17,7 @@ mod patch_paths;
 mod platform;
 mod reverse_staging;
 mod safe_git;
+mod status_guard;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;

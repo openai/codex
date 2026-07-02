@@ -21,7 +21,7 @@ use crate::GitSha;
 use crate::git_command::GitRunner;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::GIT_COMMAND_TIMEOUT;
-use crate::safe_git::selected_executable_filter_from;
+use crate::status_guard::selected_executable_filter_from;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.

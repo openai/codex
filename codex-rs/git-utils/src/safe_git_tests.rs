@@ -6,6 +6,9 @@ use crate::get_has_changes;
 use crate::git_config::GitConfigScope;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
+use crate::status_guard::git_root_from_stdout;
+use crate::status_guard::resolve_git_root_async;
+use crate::status_guard::selected_executable_filter_from;
 use crate::try_get_has_changes;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
