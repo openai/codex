@@ -72,6 +72,8 @@ impl GitCommand {
 
 impl GitRunner {
     pub(crate) fn for_cwd(cwd: &Path) -> Result<Self, GitReadError> {
+        #[cfg(test)]
+        GIT_RUNNER_CONSTRUCTION_COUNT.with(|count| count.set(count.get() + 1));
         let authority = repository_authority_for_cwd(cwd)?;
         let search_path = std::env::var_os("PATH").ok_or(GitReadError::NoTrustedGit)?;
         Self::from_search_path(authority, &search_path)
@@ -143,6 +145,21 @@ impl GitRunner {
             authority,
         })
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GIT_RUNNER_CONSTRUCTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_git_runner_construction_count() {
+    GIT_RUNNER_CONSTRUCTION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn git_runner_construction_count() -> usize {
+    GIT_RUNNER_CONSTRUCTION_COUNT.with(std::cell::Cell::get)
 }
 
 pub(crate) fn repository_authority_for_cwd(
