@@ -9,6 +9,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -21,6 +22,7 @@ use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
@@ -86,6 +88,146 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
         !output.contains("invariant failed: matched_rules must be non-empty"),
         "unexpected invariant panic surfaced in output: {output}"
     );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AgentExecTool {
+    Shell,
+    UnifiedExec,
+}
+
+async fn assert_generic_git_prompts_without_amendment(
+    tool: AgentExecTool,
+    command: &str,
+) -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        if matches!(tool, AgentExecTool::UnifiedExec) {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        }
+    });
+    let test = builder.build(&server).await?;
+    let (call_id, tool_name, args) = match tool {
+        AgentExecTool::Shell => (
+            "git-approval-shell",
+            "shell_command",
+            json!({
+                "command": command,
+                "timeout_ms": 1_000,
+            }),
+        ),
+        AgentExecTool::UnifiedExec => (
+            "git-approval-unified-exec",
+            "exec_command",
+            json!({
+                "cmd": command,
+                "yield_time_ms": 1_000,
+            }),
+        ),
+    };
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-git-approval-1"),
+            ev_function_call(call_id, tool_name, &serde_json::to_string(&args)?),
+            ev_completed("resp-git-approval-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-git-approval-1", "done"),
+            ev_completed("resp-git-approval-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run repository-sensitive git status",
+        AskForApproval::UnlessTrusted,
+        PermissionProfile::Disabled,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let approval_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("{tool:?} git command completed without requesting approval");
+    };
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    assert!(
+        approval
+            .command
+            .iter()
+            .any(|argument| argument.contains(command)),
+        "unexpected {tool:?} approval command: {:?}",
+        approval.command
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("rejected by user"),
+        "unexpected {tool:?} denial output: {output}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_git_shell_command_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(AgentExecTool::Shell, "git status --short").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_git_unified_exec_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(AgentExecTool::UnifiedExec, "git status --short")
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_wrapped_git_shell_command_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(
+        AgentExecTool::Shell,
+        "env GIT_OPTIONAL_LOCKS=0 git status --short",
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_wrapped_git_unified_exec_prompts_without_amendment() -> Result<()> {
+    assert_generic_git_prompts_without_amendment(
+        AgentExecTool::UnifiedExec,
+        "env GIT_OPTIONAL_LOCKS=0 git status --short",
+    )
+    .await
 }
 
 #[cfg(windows)]

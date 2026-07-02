@@ -1,4 +1,8 @@
 use super::ShellRequest;
+use super::trusted_executable::ParentApprovedIntercept;
+use super::trusted_executable::TrustedExecutableDir;
+use super::trusted_executable::trusted_executable_dirs;
+use super::trusted_executable::trusted_intercepted_executable_name;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::cancel_when_either;
@@ -245,6 +249,18 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
+        trusted_executable_dirs: trusted_executable_dirs(
+            &command_executor.env,
+            &command_executor.file_system_sandbox_policy,
+            &command_executor.cwd,
+        ),
+        parent_approved_intercept: ParentApprovedIntercept::for_parent_git_approval(
+            &req.command,
+            &req.exec_approval_requirement,
+            ctx.turn.approval_policy.value(),
+            req.sandbox_permissions,
+            req.additional_permissions.as_ref(),
+        ),
         stopwatch: stopwatch.clone(),
     };
 
@@ -332,6 +348,18 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             req.additional_permissions_preapproved,
         ),
         prompt_permissions: req.additional_permissions.clone(),
+        trusted_executable_dirs: trusted_executable_dirs(
+            &command_executor.env,
+            &command_executor.file_system_sandbox_policy,
+            &command_executor.cwd,
+        ),
+        parent_approved_intercept: ParentApprovedIntercept::for_parent_git_approval(
+            &req.command,
+            &req.exec_approval_requirement,
+            ctx.turn.approval_policy.value(),
+            req.sandbox_permissions,
+            req.additional_permissions.as_ref(),
+        ),
         stopwatch: Stopwatch::unlimited(),
     };
 
@@ -364,6 +392,8 @@ struct CoreShellActionProvider {
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
+    trusted_executable_dirs: Vec<TrustedExecutableDir>,
+    parent_approved_intercept: Option<ParentApprovedIntercept>,
     stopwatch: Stopwatch,
 }
 
@@ -655,6 +685,8 @@ impl CoreShellActionProvider {
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                    trusted_executable_dirs: self.trusted_executable_dirs.clone(),
+                    cwd: workdir.clone(),
                 },
             )
         };
@@ -667,6 +699,28 @@ impl CoreShellActionProvider {
             SandboxPermissions::UseDefault => unsandboxed_allowed && decision_driven_by_policy,
             SandboxPermissions::RequireEscalated => unsandboxed_allowed,
             SandboxPermissions::WithAdditionalPermissions => true,
+        };
+        let decision = if evaluation.decision == Decision::Prompt
+            && !decision_driven_by_policy
+            && !needs_escalation
+            && self
+                .parent_approved_intercept
+                .as_ref()
+                .is_some_and(|approved| {
+                    approved.consume_if_matches(
+                        program,
+                        argv,
+                        &self.trusted_executable_dirs,
+                        &self.file_system_sandbox_policy,
+                        workdir,
+                    )
+                }) {
+            tracing::debug!(
+                "reusing exact parent approval for trusted intercepted command {program:?}"
+            );
+            Decision::Allow
+        } else {
+            evaluation.decision
         };
 
         let decision_source = if decision_driven_by_policy {
@@ -685,7 +739,7 @@ impl CoreShellActionProvider {
             ),
         };
         self.process_decision(
-            evaluation.decision,
+            decision,
             needs_escalation,
             program,
             argv,
@@ -723,27 +777,51 @@ fn evaluate_intercepted_exec_policy(
         windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
+        trusted_executable_dirs,
+        cwd,
     } = context;
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     let CandidateCommands {
         commands,
         used_complex_parsing,
+        trusted_executable_name,
     } = if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
-        commands_for_intercepted_exec_policy(program, argv)
+        commands_for_intercepted_exec_policy(
+            program,
+            argv,
+            &trusted_executable_dirs,
+            &file_system_sandbox_policy,
+            &cwd,
+        )
     } else {
         // In this codepath, `commands` has a single entry where the program
         // is always an absolute path.
         CandidateCommands {
             commands: vec![join_program_and_argv(program, argv)],
             used_complex_parsing: false,
+            trusted_executable_name: trusted_intercepted_executable_name(
+                program,
+                argv,
+                &trusted_executable_dirs,
+                &file_system_sandbox_policy,
+                &cwd,
+            ),
         }
     };
 
     let fallback = |cmd: &[String]| {
+        let normalized_fallback_command = trusted_executable_name.as_ref().map(|name| {
+            let mut normalized = cmd.to_vec();
+            if let Some(executable) = normalized.first_mut() {
+                *executable = name.clone();
+            }
+            normalized
+        });
         crate::exec_policy::render_decision_for_unmatched_command(
-            cmd,
+            normalized_fallback_command.as_deref().unwrap_or(cmd),
             crate::exec_policy::UnmatchedCommandContext {
                 approval_policy,
                 permission_profile: &permission_profile,
@@ -771,16 +849,22 @@ struct InterceptedExecPolicyContext {
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
+    trusted_executable_dirs: Vec<TrustedExecutableDir>,
+    cwd: AbsolutePathBuf,
 }
 
 struct CandidateCommands {
     commands: Vec<Vec<String>>,
     used_complex_parsing: bool,
+    trusted_executable_name: Option<String>,
 }
 
 fn commands_for_intercepted_exec_policy(
     program: &AbsolutePathBuf,
     argv: &[String],
+    trusted_executable_dirs: &[TrustedExecutableDir],
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
 ) -> CandidateCommands {
     if let [_, flag, script] = argv {
         let shell_command = [
@@ -792,12 +876,14 @@ fn commands_for_intercepted_exec_policy(
             return CandidateCommands {
                 commands,
                 used_complex_parsing: false,
+                trusted_executable_name: None,
             };
         }
         if let Some(single_command) = parse_shell_lc_single_command_prefix(&shell_command) {
             return CandidateCommands {
                 commands: vec![single_command],
                 used_complex_parsing: true,
+                trusted_executable_name: None,
             };
         }
     }
@@ -805,6 +891,13 @@ fn commands_for_intercepted_exec_policy(
     CandidateCommands {
         commands: vec![join_program_and_argv(program, argv)],
         used_complex_parsing: false,
+        trusted_executable_name: trusted_intercepted_executable_name(
+            program,
+            argv,
+            trusted_executable_dirs,
+            file_system_sandbox_policy,
+            cwd,
+        ),
     }
 }
 

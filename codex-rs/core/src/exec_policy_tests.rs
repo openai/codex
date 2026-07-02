@@ -1017,12 +1017,9 @@ prefix_rule(pattern=["git"], decision="prompt")
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                disallowed_git_path,
-                "status".to_string(),
-            ])),
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1136,6 +1133,389 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
             },
         )
     );
+}
+
+#[test]
+fn git_status_requires_approval_for_untrusted_projects() {
+    let command = vec!["git".to_string(), "status".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
+fn git_branch_requires_approval_for_untrusted_projects() {
+    let command = vec!["git".to_string(), "branch".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
+fn path_qualified_safe_basename_requires_approval_for_untrusted_projects() {
+    let executable = if cfg!(windows) { r".\cat.exe" } else { "./cat" };
+    let command = vec![executable.to_string(), "Cargo.toml".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
+fn git_executable_detection_is_platform_independent() {
+    for executable in [
+        "git",
+        "GIT",
+        "/usr/bin/git",
+        "/opt/tools/GiT.ExE",
+        r"C:\Program Files\Git\cmd\git.exe",
+        r"C:/Program Files/Git/cmd/GIT.CMD",
+        r"C:git.exe",
+        r"d:GIT.CmD",
+        r"..\bin\git.BaT",
+        r".\git.CoM",
+    ] {
+        assert!(
+            starts_with_git_executable(&[executable.to_string()]),
+            "expected {executable:?} to be recognized as Git"
+        );
+    }
+
+    for executable in [
+        "git-lfs",
+        "legit",
+        "git.exe.old",
+        "/usr/bin/git/",
+        r"C:\tools\git.exe\helper",
+        r"C:notgit.exe",
+    ] {
+        assert!(
+            !starts_with_git_executable(&[executable.to_string()]),
+            "expected {executable:?} not to be recognized as Git"
+        );
+    }
+}
+
+#[test]
+fn non_durable_wrapper_detection_is_platform_independent() {
+    for executable in [
+        "env",
+        "/usr/bin/env",
+        r"C:\Windows\System32\ENV.EXE",
+        r"C:env.cmd",
+        "/usr/bin/sudo",
+        r"C:\tools\COMMAND.BAT",
+        "/usr/bin/nice",
+    ] {
+        assert!(
+            starts_with_non_durable_executable(&[executable.to_string()]),
+            "expected {executable:?} to be non-durable"
+        );
+    }
+
+    for executable in [
+        "envy",
+        "/tmp/env.exe.old",
+        "/usr/bin/env/",
+        r"C:notenv.exe",
+        "commander",
+        "nicety",
+    ] {
+        assert!(
+            !starts_with_non_durable_executable(&[executable.to_string()]),
+            "expected {executable:?} to remain eligible for normal amendment handling"
+        );
+    }
+}
+
+#[test]
+fn single_plain_git_command_rejects_wrappers_and_multiple_commands() {
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "git status --short"])),
+        Some(vec_str(&["git", "status", "--short"]))
+    );
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "env git status"])),
+        None
+    );
+    assert_eq!(
+        single_plain_git_command(&vec_str(&["/bin/zsh", "-lc", "git status && git diff",])),
+        None
+    );
+}
+
+#[tokio::test]
+async fn generic_git_policy_matrix_preserves_sandbox_and_escalation_semantics() {
+    let command = vec!["git".to_string(), "status".to_string()];
+
+    for approval_policy in [
+        AskForApproval::OnRequest,
+        AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command: command.clone(),
+                approval_policy,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        )
+        .await;
+
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command: command.clone(),
+                approval_policy,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        )
+        .await;
+    }
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            permission_profile: PermissionProfile::workspace_write(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn generic_git_one_shot_approval_does_not_create_cross_repo_cache() {
+    let manager = ExecPolicyManager::default();
+    let command = vec!["git".to_string(), "status".to_string()];
+
+    // A one-shot approval does not mutate the policy manager. Because Codex no
+    // longer offers a durable amendment for repository-sensitive Git, the same
+    // argv in a second checkout must prompt again.
+    for checkout in ["first checkout", "second checkout"] {
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+            "{checkout} must require its own approval",
+        );
+    }
+}
+
+#[tokio::test]
+async fn non_durable_commands_never_offer_generated_durable_amendments() {
+    for (command, prefix_rule) in [
+        (
+            vec_str(&["git", "status"]),
+            Some(vec_str(&["git", "status"])),
+        ),
+        (vec_str(&["bash", "-lc", "git status"]), None),
+        (vec_str(&["/usr/bin/git", "status"]), None),
+        (
+            vec_str(&[r"C:\Program Files\Git\cmd\GIT.EXE", "status"]),
+            None,
+        ),
+        (vec_str(&["env", "git", "status"]), None),
+        (vec_str(&["/usr/bin/env", "-i", "git", "status"]), None),
+        (vec_str(&["env", "--", "git", "status"]), None),
+        (
+            vec_str(&["env", "-u", "GIT_CONFIG_SYSTEM", "git", "status"]),
+            None,
+        ),
+        (
+            vec_str(&["env", "GIT_OPTIONAL_LOCKS=0", "git", "status"]),
+            Some(vec_str(&["env", "GIT_OPTIONAL_LOCKS=0"])),
+        ),
+        (vec_str(&["env", "-S", "git status"]), None),
+        (vec_str(&["env", "FOO=1", "cargo", "check"]), None),
+        (
+            vec_str(&[
+                r"C:\Windows\System32\ENV.EXE",
+                r"C:\Program Files\Git\cmd\git.exe",
+                "status",
+            ]),
+            None,
+        ),
+        (vec_str(&["sudo", "git", "status"]), None),
+        (vec_str(&["command", "git", "status"]), None),
+        (vec_str(&["nice", "git", "status"]), None),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule,
+            },
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn env_wrappers_suppress_sandbox_fallback_amendments() {
+    for (sandbox_permissions, expected) in [
+        (
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+        (
+            SandboxPermissions::RequireEscalated,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: None,
+                command: vec_str(&["/usr/bin/env", "GIT_OPTIONAL_LOCKS=0", "git", "status"]),
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions,
+                prefix_rule: None,
+            },
+            expected,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn explicit_user_authored_env_git_rule_still_allows_matching_commands() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(
+                r#"prefix_rule(pattern=["env", "git", "status"], decision="allow")"#.to_string(),
+            ),
+            command: vec_str(&["env", "git", "status"]),
+            approval_policy: AskForApproval::UnlessTrusted,
+            permission_profile: PermissionProfile::workspace_write(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_user_authored_git_policy_rule_still_allows_matching_commands() {
+    for command in [
+        vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--short".to_string(),
+        ],
+        vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "git status --short".to_string(),
+        ],
+    ] {
+        assert_exec_approval_requirement_for_command(
+            ExecApprovalRequirementScenario {
+                policy_src: Some(
+                    r#"prefix_rule(pattern=["git", "status"], decision="allow")"#.to_string(),
+                ),
+                command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: PermissionProfile::workspace_write(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            },
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+        )
+        .await;
+    }
 }
 
 #[test]
