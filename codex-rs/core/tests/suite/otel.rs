@@ -821,7 +821,7 @@ async fn record_responses_sets_span_fields_for_response_events() {
         ev_message_item_added("msg-added", "hi there"),
         ev_reasoning_item_added("reasoning-1", &["summary"]),
         ev_output_text_delta("delta"),
-        ev_reasoning_summary_text_delta("summary-delta"),
+        ev_reasoning_summary_text_delta("reasoning-1", /*summary_index*/ 0, "summary-delta"),
         ev_reasoning_text_delta("raw-delta"),
         ev_function_call("call-1", "fn", "{\"key\":\"value\"}"),
         ev_assistant_message("msg-1", "agent"),

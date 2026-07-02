@@ -341,8 +341,11 @@ pub fn process_responses_event(
             }
         }
         "response.reasoning_summary_text.delta" => {
-            if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
+            if let (Some(item_id), Some(delta), Some(summary_index)) =
+                (event.item_id, event.delta, event.summary_index)
+            {
                 return Ok(Some(ResponseEvent::ReasoningSummaryDelta {
+                    item_id,
                     delta,
                     summary_index,
                 }));
@@ -434,8 +437,9 @@ pub fn process_responses_event(
             }
         }
         "response.reasoning_summary_part.added" => {
-            if let Some(summary_index) = event.summary_index {
+            if let (Some(item_id), Some(summary_index)) = (event.item_id, event.summary_index) {
                 return Ok(Some(ResponseEvent::ReasoningSummaryPartAdded {
+                    item_id,
                     summary_index,
                 }));
             }
@@ -786,6 +790,44 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn preserves_reasoning_summary_item_ids() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.reasoning_summary_part.added",
+                "item_id": "reasoning-1",
+                "summary_index": 0
+            }),
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "reasoning-1",
+                "summary_index": 0,
+                "delta": "Checking"
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ReasoningSummaryPartAdded {
+                item_id,
+                summary_index: 0,
+            } if item_id == "reasoning-1"
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::ReasoningSummaryDelta {
+                item_id,
+                delta,
+                summary_index: 0,
+            } if item_id == "reasoning-1" && delta == "Checking"
+        );
     }
 
     #[tokio::test]
