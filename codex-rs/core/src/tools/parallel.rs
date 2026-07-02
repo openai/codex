@@ -359,6 +359,154 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
+    use tracing_test::internal::MockWriter;
+
+    #[test]
+    fn tool_call_timing_guard_ignores_code_mode_source() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let call = ToolCall {
+                tool_name: codex_tools::ToolName::plain("test_tool"),
+                call_id: "call-1".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            };
+            let direct_guard = ToolCallTimingGuard::capture(
+                Instant::now(),
+                &"conversation-id",
+                "turn-id",
+                &call,
+                &ToolCallSource::Direct,
+            );
+            assert!(
+                direct_guard.is_some(),
+                "direct tool calls should create a timing guard"
+            );
+            drop(direct_guard);
+
+            let code_mode_guard = ToolCallTimingGuard::capture(
+                Instant::now(),
+                &"conversation-id",
+                "turn-id",
+                &call,
+                &ToolCallSource::CodeMode {
+                    cell_id: "cell-1".to_string(),
+                    runtime_tool_call_id: "runtime-call-1".to_string(),
+                },
+            );
+            assert!(
+                code_mode_guard.is_none(),
+                "nested code-mode calls should not create overlapping timing events"
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_dispatch_admission_logs_dispatch_only_timing() -> anyhow::Result<()>
+    {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("test_tool");
+        let handler = Arc::new(ImmediateHandler {
+            tool_name: tool_name.clone(),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+        ));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(router, session, step_context, tracker);
+        let execution_gate = Arc::clone(&runtime.parallel_execution);
+        let execution_gate_guard = execution_gate
+            .try_write_owned()
+            .expect("execution gate should be available before dispatch starts");
+        let (release_execution_gate_tx, release_execution_gate_rx) = std::sync::mpsc::channel();
+        let execution_gate_task = tokio::task::spawn_blocking(move || {
+            let _execution_gate_guard = execution_gate_guard;
+            release_execution_gate_rx
+                .recv()
+                .expect("test should release the execution gate");
+        });
+
+        let buffer: &'static std::sync::Mutex<Vec<u8>> =
+            Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(MockWriter::new(buffer))
+            .finish();
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+        let cancellation_token = CancellationToken::new();
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+        let response_task =
+            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
+        cancellation_token.cancel();
+        tokio::time::timeout(Duration::from_secs(1), response_task)
+            .await
+            .expect("timed out waiting for cancelled tool response")
+            .expect("cancelled tool response task should join")
+            .expect("cancelled tool call should produce a response");
+
+        let logs = String::from_utf8(
+            buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )?;
+        let timing_events = logs
+            .lines()
+            .filter(|line| line.contains("event.name=\"codex.tool_call\""))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            timing_events.len(),
+            1,
+            "cancelled tool call should emit exactly one timing event; logs:\n{logs}"
+        );
+        let timing_event = timing_events[0];
+        assert!(
+            timing_event.contains("execution_started=false"),
+            "tool cancelled before admission should not report execution started: {timing_event}"
+        );
+        assert!(
+            timing_event.contains("handler_duration_ms=0"),
+            "tool cancelled before admission should report zero handler duration: {timing_event}"
+        );
+        let duration_field = |name: &str| {
+            timing_event.split_whitespace().find_map(|field| {
+                field
+                    .strip_prefix(&format!("{name}="))
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+        };
+        let dispatch_duration_ms = duration_field("dispatch_duration_ms")
+            .expect("timing event should include dispatch_duration_ms");
+        let total_duration_ms = duration_field("total_duration_ms")
+            .expect("timing event should include total_duration_ms");
+        assert_eq!(
+            dispatch_duration_ms, total_duration_ms,
+            "tool cancelled before admission should attribute all elapsed time to dispatch: {timing_event}"
+        );
+        release_execution_gate_tx
+            .send(())
+            .expect("execution gate task should remain available");
+        execution_gate_task
+            .await
+            .expect("execution gate task should join");
+
+        Ok(())
+    }
 
     #[test]
     fn tool_call_timing_guard_ignores_code_mode_source() {
