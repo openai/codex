@@ -370,6 +370,15 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    /// Returns immediately with whether every configured client has finished starting.
+    ///
+    /// A manager with no configured clients is considered complete.
+    pub fn startup_is_complete(&self) -> bool {
+        self.clients
+            .values()
+            .all(|client| client.startup_complete.load(Ordering::Acquire))
+    }
+
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
         self.clients.contains_key(server_name)
     }

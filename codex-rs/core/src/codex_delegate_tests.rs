@@ -174,6 +174,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             parent_ctx,
             cancel_token,
             SubAgentSource::Review,
+            crate::session::turn_context::McpAccess::Enabled,
             /*initial_history*/ None,
         ),
     )

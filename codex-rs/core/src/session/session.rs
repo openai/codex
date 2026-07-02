@@ -38,6 +38,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(super) mcp_access: McpAccess,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
@@ -490,6 +491,7 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        mcp_access: McpAccess,
         skills_service: Arc<SkillsService>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
@@ -689,14 +691,19 @@ impl Session {
                 .await;
             let mcp_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
             let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
-            let auth_statuses = compute_auth_statuses(
-                mcp_servers.iter(),
-                config_for_mcp.mcp_oauth_credentials_store_mode,
-                config_for_mcp.auth_keyring_backend_kind(),
-                auth.as_ref(),
-                &mcp_runtime_context_for_auth,
-            )
-            .await;
+            let auth_statuses = match mcp_access {
+                McpAccess::Enabled => {
+                    compute_auth_statuses(
+                        mcp_servers.iter(),
+                        config_for_mcp.mcp_oauth_credentials_store_mode,
+                        config_for_mcp.auth_keyring_backend_kind(),
+                        auth.as_ref(),
+                        &mcp_runtime_context_for_auth,
+                    )
+                    .await
+                }
+                McpAccess::Disabled => Default::default(),
+            };
             (
                 auth,
                 mcp_config,
@@ -1136,6 +1143,7 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                mcp_access,
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
@@ -1193,35 +1201,42 @@ impl Session {
                 *cancel_guard = cancel_token.clone();
                 cancel_token
             };
-            let mcp_connection_manager = McpConnectionManager::new(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                config.auth_keyring_backend_kind(),
-                auth_statuses,
-                &session_configuration.approval_policy,
-                INITIAL_SUBMIT_ID.to_owned(),
-                tx_event.clone(),
-                mcp_startup_cancellation_token,
-                session_configuration.permission_profile(),
-                mcp_runtime_context.clone(),
-                config.codex_home.to_path_buf(),
-                sess.services.mcp_manager.codex_apps_tools_cache(),
-                codex_apps_tools_cache_key(auth),
-                config.prefix_mcp_tool_names(),
-                mcp_config.client_elicitation_capability.clone(),
-                sess.services
-                    .supports_openai_form_elicitation
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                tool_plugin_provenance,
-                auth,
-                Some(sess.mcp_elicitation_reviewer()),
-                codex_mcp::ElicitationRequestRouter::default(),
-            )
-            .instrument(info_span!(
-                "session_init.mcp_manager_init",
-                otel.name = "session_init.mcp_manager_init",
-            ))
-            .await;
+            let mcp_connection_manager = match mcp_access {
+                McpAccess::Enabled => McpConnectionManager::new(
+                    &mcp_servers,
+                    config.mcp_oauth_credentials_store_mode,
+                    config.auth_keyring_backend_kind(),
+                    auth_statuses,
+                    &session_configuration.approval_policy,
+                    INITIAL_SUBMIT_ID.to_owned(),
+                    tx_event.clone(),
+                    mcp_startup_cancellation_token,
+                    session_configuration.permission_profile(),
+                    mcp_runtime_context.clone(),
+                    config.codex_home.to_path_buf(),
+                    sess.services.mcp_manager.codex_apps_tools_cache(),
+                    codex_apps_tools_cache_key(auth),
+                    config.prefix_mcp_tool_names(),
+                    mcp_config.client_elicitation_capability.clone(),
+                    sess.services
+                        .supports_openai_form_elicitation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    tool_plugin_provenance,
+                    auth,
+                    Some(sess.mcp_elicitation_reviewer()),
+                    codex_mcp::ElicitationRequestRouter::default(),
+                )
+                .instrument(info_span!(
+                    "session_init.mcp_manager_init",
+                    otel.name = "session_init.mcp_manager_init",
+                ))
+                .await,
+                McpAccess::Disabled => McpConnectionManager::new_uninitialized_with_permission_profile(
+                    &session_configuration.approval_policy,
+                    &session_configuration.permission_profile(),
+                    config.prefix_mcp_tool_names(),
+                ),
+            };
             sess.services
                 .install_mcp_connection_manager(
                     Arc::new(mcp_config),

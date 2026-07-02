@@ -670,6 +670,7 @@ async fn spawn_guardian_review_session(
         Arc::clone(parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
+        crate::session::turn_context::McpAccess::Enabled,
         initial_history,
     ))
     .await?;

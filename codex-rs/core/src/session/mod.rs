@@ -241,6 +241,7 @@ use self::turn::AssistantMessageStreamParsers;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::realtime_text_for_event;
+use self::turn_context::McpAccess;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
@@ -424,6 +425,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) requested_history_mode: Option<ThreadHistoryMode>,
     pub(crate) session_source: SessionSource,
+    pub(crate) mcp_access: McpAccess,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -516,6 +518,7 @@ impl Codex {
             conversation_history,
             requested_history_mode,
             session_source,
+            mcp_access,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
@@ -688,6 +691,7 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
+            mcp_access,
             skills_service,
             plugins_manager,
             mcp_manager.clone(),
@@ -2859,13 +2863,21 @@ impl Session {
         let selected_capability_roots = self
             .resolve_selected_capability_roots_for_step(&environments)
             .await;
-        let mcp = self
-            .mcp_runtime_for_step(
+        let mcp = match turn_context.mcp_access() {
+            McpAccess::Disabled => self.disabled_mcp_runtime_for_step(
                 turn_context.as_ref(),
                 &environments,
                 &selected_capability_roots,
-            )
-            .await;
+            ),
+            McpAccess::Enabled => {
+                self.mcp_runtime_for_step(
+                    turn_context.as_ref(),
+                    &environments,
+                    &selected_capability_roots,
+                )
+                .await
+            }
+        };
         Arc::new(StepContext::new(
             turn_context,
             environments,

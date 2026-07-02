@@ -173,6 +173,44 @@ impl Session {
         .await
     }
 
+    /// Builds a step-local empty MCP runtime without replacing the session's published runtime.
+    ///
+    /// This preserves environment context needed during tool planning while suppressing Apps,
+    /// configured servers, connectors, and MCP-backed skill dependencies for the step.
+    pub(crate) fn disabled_mcp_runtime_for_step(
+        &self,
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+        selected_capability_roots: &[ResolvedSelectedCapabilityRoot],
+    ) -> Arc<McpRuntimeSnapshot> {
+        let available_environment_ids =
+            Self::available_selected_environment_ids(selected_capability_roots);
+        let mut mcp_config = self.services.latest_mcp_runtime().config().clone();
+        mcp_config.apps_enabled = false;
+        mcp_config.skill_mcp_dependency_install_enabled = false;
+        mcp_config.mcp_server_catalog = Default::default();
+        mcp_config.connector_snapshot = Default::default();
+        let environment_manager = self.services.turn_environments.environment_manager();
+        #[allow(deprecated)]
+        let cwd = environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| turn_context.cwd.to_path_buf());
+        let runtime_context = McpRuntimeContext::new(environment_manager, cwd);
+        let manager = McpConnectionManager::new_uninitialized_with_permission_profile(
+            &turn_context.approval_policy,
+            &turn_context.permission_profile(),
+            mcp_config.prefix_mcp_tool_names,
+        );
+        Arc::new(McpRuntimeSnapshot::new(
+            Arc::new(mcp_config),
+            Arc::new(manager),
+            runtime_context,
+            available_environment_ids,
+        ))
+    }
+
     pub(crate) async fn resolve_selected_capability_roots_for_step(
         &self,
         environments: &TurnEnvironmentSnapshot,
