@@ -178,10 +178,8 @@ fn summarizes_managed_read_only_permission_profile() {
 #[test]
 fn config_summary_values_are_single_line_terminal_text() {
     assert_eq!(
-        sanitize_config_summary_value(
-            "  repo\t|\nWorking\x1b\u{0007}\u{009D}\u{009C} | \u{202E}T\u{2066}ext  "
-        ),
-        "repo | Working | Text"
+        sanitize_config_summary_value("repo\nmodel: other\r\x1b[2J\u{0007}\u{202E}rtl\u{2066}"),
+        "repo�model: other��[2J��rtl�"
     );
 }
 
