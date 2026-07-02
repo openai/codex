@@ -12,7 +12,7 @@ command\0command line:\0merge.Name.driver\nhelper %A %B\0";
         entries.get("filter.demo.clean"),
         Some(&GitConfigEntry {
             scope: GitConfigScope::Local,
-            origin: "file:/repo/.git/config".to_string(),
+            origin: GitConfigOrigin::File("/repo/.git/config".into()),
             key: "filter.demo.clean".to_string(),
             value: String::new(),
         })
@@ -21,11 +21,54 @@ command\0command line:\0merge.Name.driver\nhelper %A %B\0";
         entries.get("merge.Name.driver"),
         Some(&GitConfigEntry {
             scope: GitConfigScope::Command,
-            origin: "command line:".to_string(),
+            origin: GitConfigOrigin::CommandLine,
             key: "merge.Name.driver".to_string(),
             value: "helper %A %B".to_string(),
         })
     );
+}
+
+#[test]
+fn entry_parsers_preserve_duplicate_include_directives_in_order() {
+    let scoped = b"local\0file:.git/config\0include.path\n../unsafe.gitconfig\0\
+local\0file:.git/config\0include.path\n/absolute/external.gitconfig\0";
+    let legacy = b"file:.git/config\0include.path\n../unsafe.gitconfig\0\
+file:.git/config\0include.path\n/absolute/external.gitconfig\0";
+    let expected_scoped = vec![
+        GitConfigEntry {
+            scope: GitConfigScope::Local,
+            origin: GitConfigOrigin::File(".git/config".into()),
+            key: "include.path".to_string(),
+            value: "../unsafe.gitconfig".to_string(),
+        },
+        GitConfigEntry {
+            scope: GitConfigScope::Local,
+            origin: GitConfigOrigin::File(".git/config".into()),
+            key: "include.path".to_string(),
+            value: "/absolute/external.gitconfig".to_string(),
+        },
+    ];
+    assert_eq!(
+        parse_config_entries(scoped).expect("scoped entries"),
+        expected_scoped
+    );
+    assert_eq!(
+        parse_config_entries_with_origins(legacy).expect("legacy entries"),
+        expected_scoped
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn config_origin_parser_preserves_non_utf8_unix_path_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let entries = parse_config_entries(b"local\0file:/tmp/config-\xff\0include.path\n/tmp/safe\0")
+        .expect("non-UTF-8 config origin");
+    let GitConfigOrigin::File(path) = &entries[0].origin else {
+        panic!("expected file origin");
+    };
+    assert_eq!(path.as_os_str().as_bytes(), b"/tmp/config-\xff");
 }
 
 #[test]
@@ -51,7 +94,7 @@ command line:\0merge.Name.driver\nhelper %A %B\0";
         entries.get("filter.demo.clean"),
         Some(&GitConfigEntry {
             scope: GitConfigScope::Local,
-            origin: "file:/repo/.git/config".to_string(),
+            origin: GitConfigOrigin::File("/repo/.git/config".into()),
             key: "filter.demo.clean".to_string(),
             value: String::new(),
         })
@@ -60,7 +103,7 @@ command line:\0merge.Name.driver\nhelper %A %B\0";
         entries.get("merge.Name.driver"),
         Some(&GitConfigEntry {
             scope: GitConfigScope::Command,
-            origin: "command line:".to_string(),
+            origin: GitConfigOrigin::CommandLine,
             key: "merge.Name.driver".to_string(),
             value: "helper %A %B".to_string(),
         })

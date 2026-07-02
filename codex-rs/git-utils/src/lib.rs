@@ -9,11 +9,15 @@ mod exact_staging;
 mod fsmonitor;
 mod git_command;
 mod git_config;
+mod git_config_sources;
+mod git_executable;
 mod info;
 mod local_only;
 mod operations;
 mod patch_paths;
+mod path_authority;
 mod platform;
+mod repository_authority;
 mod safe_git;
 
 pub use apply::ApplyGitRequest;

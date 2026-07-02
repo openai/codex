@@ -64,11 +64,21 @@ fn read_file_normalized(path: &Path) -> String {
 
 fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
-    let cwd = std::env::current_dir()?;
-    let git = GitRunner::for_cwd_io(&cwd)?;
-    let paths = extract_effective_paths_from_patch(&git, &patch_path, revert)?;
+    let repo = init_repo();
+    let cwd = repo.path();
+    let git = GitRunner::for_cwd_io(cwd)?;
+    let git_root =
+        crate::get_git_repo_root(cwd).ok_or_else(|| io::Error::other("not a Git repository"))?;
+    let git_root = std::fs::canonicalize(git_root)?;
+    ensure_no_worktree_config_sources(&git, &git_root, &[])?;
+    let paths = extract_effective_paths_from_patch(&git, &git_root, &patch_path, revert, &[])?;
     drop(tmpdir);
     Ok(paths)
+}
+
+fn best_effort_paths(diff: &str) -> Vec<String> {
+    let repo = init_repo();
+    extract_paths_from_patch_from_cwd(diff, repo.path())
 }
 
 #[test]
@@ -129,7 +139,7 @@ fn effective_paths_cover_supported_patch_headers() {
                 "{name}, revert={revert}"
             );
         }
-        assert_eq!(extract_paths_from_patch(diff), expected, "{name}");
+        assert_eq!(best_effort_paths(diff), expected, "{name}");
     }
 
     let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
@@ -152,7 +162,7 @@ fn effective_paths_follow_git_for_mismatched_headers() {
         effective_paths(mismatch, /*revert*/ true).unwrap(),
         expected
     );
-    assert_eq!(extract_paths_from_patch(mismatch), expected);
+    assert_eq!(best_effort_paths(mismatch), expected);
 }
 
 #[test]
@@ -1480,95 +1490,27 @@ fn exact_staging_preserves_sparse_checkout_policy() {
     assert!(!index_entry(root, "inside/untracked.txt").is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn sparse_rule_probe_failure_is_closed_only_for_sparse_repositories() {
-    use std::os::unix::fs::PermissionsExt;
-
-    const TEST_NAME: &str =
-        "patch_paths::tests::sparse_rule_probe_failure_is_closed_only_for_sparse_repositories";
-    if let Some(mode) = std::env::var_os("CODEX_GIT_UTILS_FAKE_SPARSE_MODE") {
-        let root = PathBuf::from(
-            std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
-        );
-        let result = exact_stage(&root, &["file.txt"], &["file.txt"]);
-        if mode == "sparse" {
-            assert_ne!(result.exit_code, 0);
-            assert!(result.stderr.contains("fake unsupported check-rules"));
-            assert!(index_entry(&root, "file.txt").is_empty());
-        } else if mode == "legacy" {
-            assert_ne!(result.exit_code, 0);
-            assert!(result.stderr.contains("built-in Git command"));
-            assert!(index_entry(&root, "file.txt").is_empty());
-            assert!(
-                !PathBuf::from(
-                    std::env::var_os("CODEX_GIT_UTILS_SPARSE_HELPER_MARKER")
-                        .expect("helper marker"),
-                )
-                .exists(),
-                "legacy Git must not dispatch a PATH-resolved sparse helper"
-            );
-        } else {
-            assert_eq!(result.exit_code, 0, "{}", result.stderr);
-            assert!(!index_entry(&root, "file.txt").is_empty());
-        }
-        return;
-    }
-
-    let wrapper_dir = tempfile::tempdir().expect("wrapper directory");
-    let wrapper = wrapper_dir.path().join("git");
-    std::fs::write(
-        &wrapper,
-        "#!/bin/sh\nprevious=\nfor argument in \"$@\"; do\n  if [ \"$CODEX_GIT_UTILS_FAKE_SPARSE_MODE\" = legacy ] && [ \"$argument\" = --list-cmds=builtins ]; then\n    echo add\n    echo config\n    exit 0\n  fi\n  if [ \"$previous\" = sparse-checkout ] && [ \"$argument\" = check-rules ]; then\n    echo fake unsupported check-rules >&2\n    exit 129\n  fi\n  previous=$argument\ndone\nexec \"$CODEX_GIT_UTILS_REAL_GIT\" \"$@\"\n",
-    )
-    .expect("write Git wrapper");
-    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&wrapper, permissions).expect("make wrapper executable");
-    let sparse_helper = wrapper_dir.path().join("git-sparse-checkout");
-    std::fs::write(
-        &sparse_helper,
-        "#!/bin/sh\n: > \"$CODEX_GIT_UTILS_SPARSE_HELPER_MARKER\"\nexit 0\n",
-    )
-    .expect("write malicious sparse helper");
-    let mut permissions = std::fs::metadata(&sparse_helper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&sparse_helper, permissions).expect("make sparse helper executable");
-    let real_git = [
-        "/usr/bin/git",
-        "/opt/homebrew/bin/git",
-        "/usr/local/bin/git",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.is_file())
-    .expect("native Git outside the test wrapper");
-    let wrapper_path = std::env::join_paths([wrapper_dir.path()]).expect("wrapper PATH");
-    let helper_marker = wrapper_dir.path().join("sparse-helper-ran");
-
-    for mode in ["ordinary", "sparse", "legacy"] {
+    for sparse in [false, true] {
         let repo = init_repo();
         let root = repo.path();
-        if matches!(mode, "sparse" | "legacy") {
+        if sparse {
             assert_eq!(
                 run(root, &["git", "config", "core.sparseCheckout", "true"]).0,
                 0
             );
         }
         std::fs::write(root.join("file.txt"), "new\n").expect("write staging file");
-        run_isolated_test(
-            TEST_NAME,
-            &[
-                ("CODEX_GIT_UTILS_FAKE_SPARSE_MODE", OsStr::new(mode)),
-                ("CODEX_GIT_UTILS_TARGET_REPO", root.as_os_str()),
-                ("CODEX_GIT_UTILS_REAL_GIT", real_git.as_os_str()),
-                (
-                    "CODEX_GIT_UTILS_SPARSE_HELPER_MARKER",
-                    helper_marker.as_os_str(),
-                ),
-                ("PATH", wrapper_path.as_os_str()),
-            ],
-        );
+        let result = exact_stage(root, &["file.txt"], &["file.txt"]);
+        if sparse {
+            assert_ne!(result.exit_code, 0);
+            assert!(result.stderr.contains("sparse-checkout"), "{result:?}");
+            assert!(index_entry(root, "file.txt").is_empty());
+        } else {
+            assert_eq!(result.exit_code, 0, "{}", result.stderr);
+            assert!(!index_entry(root, "file.txt").is_empty());
+        }
     }
 }
 
@@ -2052,7 +1994,11 @@ fn staging_allows_optional_smudge_only_but_refuses_required_or_malformed_smudge(
             assert_eq!(staged, "selected.txt\n");
         } else {
             let error = result.expect_err("refuse required or malformed smudge-only target");
-            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::Unsupported,
+                "required={required}: {error}"
+            );
             assert_eq!(git_index_bytes(root), before);
         }
     }

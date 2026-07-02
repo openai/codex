@@ -4,6 +4,9 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::FileTimes;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::UNIX_EPOCH;
 
 const PATCH: &str =
@@ -46,6 +49,7 @@ fn init_repo() -> tempfile::TempDir {
     run_success(root, &["init"]);
     run_success(root, &["config", "user.email", "codex@example.com"]);
     run_success(root, &["config", "user.name", "Codex"]);
+    run_success(root, &["config", "core.autocrlf", "false"]);
     std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
     run_success(root, &["add", "file.txt"]);
     run_success(root, &["commit", "-m", "seed"]);
@@ -200,6 +204,21 @@ fn run_isolated_test(test_name: &str, env: &[(&str, &OsStr)]) {
     );
 }
 
+fn wait_for_config_source_probe(trace: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let contents = std::fs::read_to_string(trace).unwrap_or_default();
+        if contents
+            .find("^include")
+            .is_some_and(|offset| contents[offset..].contains("\"event\":\"exit\""))
+        {
+            return true;
+        }
+        thread::yield_now();
+    }
+    false
+}
+
 #[test]
 fn reverse_staging_uses_command_scoped_filter_override() {
     if std::env::var_os("CODEX_GIT_UTILS_APPLY_FILTER_ENV_CHILD").is_none() {
@@ -232,6 +251,127 @@ fn reverse_staging_uses_command_scoped_filter_override() {
     assert_eq!(
         std::fs::read_to_string(root.join("file.txt")).expect("read file"),
         "orig\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_rejects_worktree_primary_config_fifo_before_any_git_launch() {
+    use std::io::Write as _;
+
+    const TEST_NAME: &str =
+        "apply::filter_tests::apply_rejects_worktree_primary_config_fifo_before_any_git_launch";
+    if std::env::var_os("CODEX_GIT_UTILS_APPLY_FILTER_ENV_CHILD").is_none() {
+        let repo = init_repo();
+        let primary_config = repo.path().join("worktree-global.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&primary_config)
+            .status()
+            .expect("run mkfifo");
+        assert!(status.success(), "mkfifo failed: {status}");
+        let trace = tempfile::NamedTempFile::new().expect("trace file");
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                ("CODEX_APPLY_CONFIG_SOURCE_ROOT", repo.path().as_os_str()),
+                ("GIT_CONFIG_GLOBAL", primary_config.as_os_str()),
+                ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+                ("GIT_TRACE2_EVENT", trace.path().as_os_str()),
+            ],
+        );
+        return;
+    }
+
+    let root = PathBuf::from(
+        std::env::var_os("CODEX_APPLY_CONFIG_SOURCE_ROOT").expect("fixture repository root"),
+    );
+    let trace = PathBuf::from(std::env::var_os("GIT_TRACE2_EVENT").expect("trace path"));
+    let primary_config =
+        PathBuf::from(std::env::var_os("GIT_CONFIG_GLOBAL").expect("worktree primary config FIFO"));
+    // Keep the FIFO readable and prefill a valid config so a regression starts
+    // and finishes instead of hanging the test process while opening it.
+    let mut fifo_guard = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(primary_config)
+        .expect("open worktree primary config FIFO");
+    fifo_guard
+        .write_all(b"[user]\n\tname = worktree-controlled\n")
+        .expect("prefill worktree primary config FIFO");
+    let release_fifo = thread::spawn(move || {
+        thread::sleep(Duration::from_secs(1));
+        drop(fifo_guard);
+    });
+    let error = apply_git_patch(&request(
+        &root, /*revert*/ false, /*preflight*/ true,
+    ))
+    .expect_err("reject worktree-controlled primary config");
+    release_fifo.join().expect("release config FIFO");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("worktree-controlled"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(trace).expect("read Git trace"),
+        "",
+        "config authorization must reject before rev-parse or numstat starts Git",
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read worktree file"),
+        "orig\n"
+    );
+}
+
+#[test]
+fn apply_rejects_unseen_driver_added_through_worktree_include_after_source_probe() {
+    const TEST_NAME: &str = "apply::filter_tests::apply_rejects_unseen_driver_added_through_worktree_include_after_source_probe";
+    if std::env::var_os("CODEX_GIT_UTILS_APPLY_FILTER_ENV_CHILD").is_none() {
+        let trace = tempfile::NamedTempFile::new().expect("trace file");
+        run_isolated_test(TEST_NAME, &[("GIT_TRACE2_EVENT", trace.path().as_os_str())]);
+        return;
+    }
+
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=fresh\n")
+        .expect("write filter attributes");
+    run_success(root, &["add", ".gitattributes"]);
+    run_success(root, &["commit", "-m", "filter target"]);
+    let included = root.join("driver-config");
+    std::fs::write(&included, "").expect("write initially empty included config");
+    run_success(root, &["config", "include.path", "../driver-config"]);
+
+    let trace = PathBuf::from(std::env::var_os("GIT_TRACE2_EVENT").expect("trace path"));
+    std::fs::write(&trace, "").expect("clear fixture trace");
+    let watcher_trace = trace.clone();
+    let watcher = thread::spawn(move || {
+        let observed = wait_for_config_source_probe(&watcher_trace);
+        if observed {
+            std::fs::write(
+                included,
+                format!("[filter \"fresh\"]\n\tclean = {FILTER_COMMAND}\n\trequired = true\n"),
+            )
+            .expect("add previously unseen filter driver");
+        }
+        observed
+    });
+
+    let error = apply_git_patch(&request(
+        root, /*revert*/ false, /*preflight*/ false,
+    ))
+    .expect_err("reject worktree config source before final apply");
+    assert!(watcher.join().expect("config watcher"));
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(!configured_filter_ran(root));
+    assert_eq!(index_contents(root, "file.txt"), "orig\n");
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("read worktree file"),
+        "orig\n"
+    );
+    assert!(
+        !std::fs::read_to_string(trace)
+            .expect("read completed trace")
+            .contains("--3way")
     );
 }
 
