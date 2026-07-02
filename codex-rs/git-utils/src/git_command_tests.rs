@@ -255,16 +255,48 @@ fn assert_unsafe_registry_route(result: Result<RepositoryAuthority, GitReadError
     }
 }
 
+fn assert_unsafe_registry_route_at_one_of(
+    result: Result<RepositoryAuthority, GitReadError>,
+    markers: &[&Path],
+) {
+    match result {
+        Err(GitReadError::UnsafeRepositoryMetadata { path, reason }) => {
+            assert_eq!(
+                reason,
+                "Git worktree registry route crosses a repository worktree"
+            );
+            assert!(
+                markers
+                    .iter()
+                    .any(|marker| affected_paths_match(&path, marker)),
+                "unexpected affected registry path: {}",
+                path.display()
+            );
+        }
+        other => panic!("expected unsafe worktree registry route, got {other:?}"),
+    }
+}
+
 fn assert_same_affected_path(actual: &Path, expected: &Path) {
-    assert_eq!(actual.file_name(), expected.file_name());
-    let actual_parent = actual.parent().expect("actual marker parent");
-    let expected_parent = expected.parent().expect("expected marker parent");
     assert!(
-        same_file::is_same_file(actual_parent, expected_parent).expect("compare marker parents"),
-        "marker parent differs: actual={} expected={}",
-        actual_parent.display(),
-        expected_parent.display()
+        affected_paths_match(actual, expected),
+        "affected paths differ: actual={} expected={}",
+        actual.display(),
+        expected.display()
     );
+}
+
+fn affected_paths_match(actual: &Path, expected: &Path) -> bool {
+    if actual.file_name() != expected.file_name() {
+        return false;
+    }
+    let Some(actual_parent) = actual.parent() else {
+        return false;
+    };
+    let Some(expected_parent) = expected.parent() else {
+        return false;
+    };
+    same_file::is_same_file(actual_parent, expected_parent).unwrap_or(false)
 }
 
 #[test]
@@ -1606,9 +1638,10 @@ fn overlapping_registered_route_remains_rejected_after_symlink_retarget() {
         std::fs::canonicalize(&route.raw_marker).expect("canonical retargeted marker"),
         std::fs::canonicalize(attacker_linked.join(".git")).expect("canonical attacker marker")
     );
-    assert_unsafe_registry_route(
+    let nested_registry_marker = route.nested_admin.join("gitdir");
+    assert_unsafe_registry_route_at_one_of(
         repository_authority_for_cwd(&route.main),
-        &route.registry_marker,
+        &[&route.registry_marker, &nested_registry_marker],
     );
 }
 
@@ -1644,9 +1677,10 @@ fn overlapping_registered_route_remains_rejected_after_junction_retarget() {
         std::fs::canonicalize(&route.raw_marker).expect("canonical retargeted marker"),
         std::fs::canonicalize(attacker_linked.join(".git")).expect("canonical attacker marker")
     );
-    assert_unsafe_registry_route(
+    let nested_registry_marker = route.nested_admin.join("gitdir");
+    assert_unsafe_registry_route_at_one_of(
         repository_authority_for_cwd(&route.main),
-        &route.registry_marker,
+        &[&route.registry_marker, &nested_registry_marker],
     );
 }
 
