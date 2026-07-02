@@ -1198,6 +1198,7 @@ async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()>
                     "call_id": call_id,
                     "delta": "*** Add File: streamed.txt\n+hello",
                 }),
+                ev_assistant_message("unrelated-message", ""),
                 json!({
                     "type": "response.custom_tool_call_input.delta",
                     "call_id": call_id,
