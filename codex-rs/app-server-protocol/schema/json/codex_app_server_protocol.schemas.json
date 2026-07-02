@@ -11177,6 +11177,17 @@
           }
         ]
       },
+      "InstallationMethod": {
+        "enum": [
+          "npm",
+          "bun",
+          "brew",
+          "standaloneUnix",
+          "standaloneWindows",
+          "other"
+        ],
+        "type": "string"
+      },
       "InternalChatMessageMetadataPassthrough": {
         "description": "Internal Responses API passthrough metadata copied into underlying chat messages.\n\nResponses API strongly types this payload. Do not modify it without first getting API approval and making the corresponding Responses API change.",
         "properties": {

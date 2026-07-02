@@ -86,6 +86,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "update",
     "tools",
     "v8-poc",
     "utils/absolute-path",
@@ -231,6 +232,7 @@ codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
+codex-update = { path = "update" }
 codex-uds = { path = "uds" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }

@@ -865,6 +865,18 @@ client_request_definitions! {
         serialization: None,
         response: v2::ModelProviderCapabilitiesReadResponse,
     },
+    #[experimental("update/check")]
+    UpdateCheck => "update/check" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("update"),
+        response: v2::UpdateCheckResponse,
+    },
+    #[experimental("update/install")]
+    UpdateInstall => "update/install" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("update"),
+        response: v2::UpdateInstallResponse,
+    },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
         serialization: global("config"),

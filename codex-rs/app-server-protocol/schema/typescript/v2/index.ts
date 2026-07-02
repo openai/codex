@@ -186,6 +186,7 @@ export type { HookTrustStatus } from "./HookTrustStatus";
 export type { HooksListEntry } from "./HooksListEntry";
 export type { HooksListParams } from "./HooksListParams";
 export type { HooksListResponse } from "./HooksListResponse";
+export type { InstallationMethod } from "./InstallationMethod";
 export type { ItemCompletedNotification } from "./ItemCompletedNotification";
 export type { ItemGuardianApprovalReviewCompletedNotification } from "./ItemGuardianApprovalReviewCompletedNotification";
 export type { ItemGuardianApprovalReviewStartedNotification } from "./ItemGuardianApprovalReviewStartedNotification";

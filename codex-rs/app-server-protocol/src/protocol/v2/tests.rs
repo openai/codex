@@ -3184,6 +3184,25 @@ fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
 }
 
 #[test]
+fn update_check_response_serializes_installation_capabilities() {
+    assert_eq!(
+        serde_json::to_value(UpdateCheckResponse {
+            current_version: "1.2.3".to_string(),
+            latest_version: "1.3.0".to_string(),
+            installation_method: InstallationMethod::StandaloneUnix,
+            can_auto_update: true,
+        })
+        .unwrap(),
+        json!({
+            "currentVersion": "1.2.3",
+            "latestVersion": "1.3.0",
+            "installationMethod": "standaloneUnix",
+            "canAutoUpdate": true,
+        }),
+    );
+}
+
+#[test]
 fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
     assert_eq!(
         serde_json::to_value(PluginMarketplaceEntry {

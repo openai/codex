@@ -58,6 +58,7 @@ codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-image-generation-extension = { workspace = true }
+codex-install-context = { workspace = true }
 codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }
 codex-memories-write = { workspace = true }
@@ -75,6 +76,7 @@ codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
+codex-update = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 codex-utils-path-uri = { workspace = true }

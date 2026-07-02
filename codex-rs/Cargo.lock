@@ -1993,6 +1993,7 @@ dependencies = [
  "codex-home",
  "codex-hooks",
  "codex-image-generation-extension",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -2012,6 +2013,7 @@ dependencies = [
  "codex-state",
  "codex-thread-store",
  "codex-tools",
+ "codex-update",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -4115,6 +4117,7 @@ dependencies = [
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
+ "codex-update",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
@@ -4194,6 +4197,22 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uds_windows",
+]
+
+[[package]]
+name = "codex-update"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-install-context",
+ "codex-login",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
