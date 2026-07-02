@@ -52,6 +52,95 @@ fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
+#[test]
+fn runner_binds_config_environment_across_ambient_mutation() {
+    const CHILD: &str = "CODEX_GIT_CONFIG_BINDING_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let repo = fixture.path().join("repo");
+        let safe_home = fixture.path().join("safe-home");
+        let malicious_home = repo.join("malicious-home");
+        std::fs::create_dir_all(&repo).expect("repo");
+        std::fs::create_dir_all(&safe_home).expect("safe home");
+        std::fs::create_dir_all(&malicious_home).expect("malicious home");
+        run_git(&repo, &["init", "-q"]);
+        std::fs::write(
+            safe_home.join(".gitconfig"),
+            "[codex]\n\tbound = safe-home\n",
+        )
+        .expect("safe home config");
+        let malicious_global = repo.join("malicious.gitconfig");
+        std::fs::write(&malicious_global, "[codex]\n\tbound = malicious\n")
+            .expect("malicious global config");
+        std::fs::write(
+            malicious_home.join(".gitconfig"),
+            "[codex]\n\tbound = malicious-home\n",
+        )
+        .expect("malicious home config");
+
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        isolate_git_command_environment(&mut command);
+        let output = command
+            .arg("git_command::tests::runner_binds_config_environment_across_ambient_mutation")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env("RUST_TEST_THREADS", "1")
+            .env("CODEX_GIT_CONFIG_BINDING_ROOT", &repo)
+            .env("CODEX_GIT_CONFIG_BINDING_MALICIOUS", &malicious_global)
+            .env("CODEX_GIT_CONFIG_BINDING_MALICIOUS_HOME", &malicious_home)
+            .env("HOME", &safe_home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "codex.count")
+            .env("GIT_CONFIG_VALUE_0", "safe-count")
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("GIT_CONFIG_SYSTEM")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .output()
+            .expect("isolated config binding test");
+        assert!(
+            output.status.success(),
+            "isolated config binding test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let root = PathBuf::from(std::env::var_os("CODEX_GIT_CONFIG_BINDING_ROOT").expect("root"));
+    let malicious =
+        std::env::var_os("CODEX_GIT_CONFIG_BINDING_MALICIOUS").expect("malicious config");
+    let malicious_home =
+        std::env::var_os("CODEX_GIT_CONFIG_BINDING_MALICIOUS_HOME").expect("malicious home");
+    let runner = GitRunner::for_cwd_io(&root).expect("runner with captured config environment");
+
+    // SAFETY: the parent starts an isolated test process that runs only this
+    // exact test with one harness thread. No other application thread reads or
+    // writes these variables, and the process exits after the assertions.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_GLOBAL", malicious);
+        std::env::set_var("HOME", malicious_home);
+        std::env::set_var("GIT_CONFIG_VALUE_0", "malicious-count");
+        std::env::set_var(
+            "GIT_CONFIG_PARAMETERS",
+            "'codex.count'='malicious-parameter'",
+        );
+    }
+
+    for (key, expected) in [("codex.bound", "safe-home"), ("codex.count", "safe-count")] {
+        let mut command = runner.command_for_cwd(&root).expect("bound command");
+        command.args(["config", "--get", key]);
+        let output = runner.output(command).expect("bound config read");
+        assert!(
+            output.status.success(),
+            "{key}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+}
+
 fn commit_all(cwd: &Path, message: &str) {
     run_git(
         cwd,
@@ -151,6 +240,16 @@ fn locations_for_root(root: &Path) -> RepositoryAuthority {
     }
     RepositoryAuthority::from_test_locations(roots.clone(), roots, Vec::new())
         .expect("test repository authority")
+}
+
+fn config_authority_for_root(root: &Path) -> RepositoryAuthority {
+    let mut roots = vec![root.to_path_buf()];
+    let canonical = std::fs::canonicalize(root).expect("canonical root");
+    if !roots.contains(&canonical) {
+        roots.push(canonical);
+    }
+    RepositoryAuthority::from_test_locations(roots.clone(), roots, vec![root.join(".git")])
+        .expect("config repository authority")
 }
 
 fn raw_parent_traversal(root: &Path, sibling: &str) -> PathBuf {
@@ -292,6 +391,105 @@ fn git_metadata_marker_parser_preserves_leading_path_space() {
     assert!(parse_git_marker_path(b"gitdir:/missing-space\n", b"gitdir: ").is_err());
 }
 
+#[test]
+fn config_source_authority_requires_an_absolute_raw_path() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+    let path = Path::new("relative/config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(path, "test config")
+        .expect_err("relative config path");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("test config"), "{error}");
+    assert!(error.to_string().contains("relative/config"), "{error}");
+}
+
+#[test]
+fn config_source_authority_preserves_and_rejects_a_worktree_crossing_spelling() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let safe = fixture.path().join("safe");
+    std::fs::create_dir_all(root.join("nested")).expect("create repository descendant");
+    std::fs::create_dir_all(&safe).expect("create safe directory");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+    let raw = root
+        .join("nested")
+        .join("..")
+        .join("..")
+        .join("safe/config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(&raw, "crossing config")
+        .expect_err("worktree-crossing config path");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("crossing config"), "{error}");
+    assert!(
+        error.to_string().contains(&raw.display().to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn config_source_authority_allows_protected_metadata_and_unrelated_external_paths() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let external = fixture.path().join("external/config");
+    std::fs::create_dir_all(&root).expect("create repository");
+    std::fs::create_dir_all(external.parent().expect("external parent"))
+        .expect("create external directory");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+
+    authority
+        .ensure_config_source_is_not_worktree_controlled(
+            &root.join(".git/config"),
+            "protected metadata config",
+        )
+        .expect("protected metadata config");
+    let canonical_config =
+        std::fs::canonicalize(root.join(".git/config")).expect("canonical metadata config");
+    authority
+        .ensure_config_source_is_not_worktree_controlled(
+            &canonical_config,
+            "canonical protected metadata config",
+        )
+        .expect("canonical protected metadata config");
+    authority
+        .ensure_config_source_is_not_worktree_controlled(&external, "external config")
+        .expect("unrelated external config");
+}
+
+#[test]
+fn config_source_authority_rejects_an_unregistered_related_repository_root() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let alias = fixture.path().join("unregistered-related-root");
+    std::fs::create_dir_all(&root).expect("create repository");
+    std::fs::create_dir_all(&alias).expect("create related root");
+    run_git(&root, &["init", "-q"]);
+    std::fs::write(
+        alias.join(".git"),
+        format!("gitdir: {}\n", root.join(".git").display()),
+    )
+    .expect("write related metadata marker");
+    let authority = config_authority_for_root(&root);
+    let path = alias.join("config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(&path, "related config")
+        .expect_err("unregistered related repository config");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("related config"), "{error}");
+}
+
 fn selected_git(locations: &RepositoryAuthority, directories: &[&Path]) -> PathBuf {
     let search_path = std::env::join_paths(directories).expect("PATH");
     select_git_executable(locations, &search_path)
@@ -393,6 +591,12 @@ fn git_read_error_io_kind_table_is_exhaustive() {
             GitReadError::InvalidRepositoryMetadata {
                 path,
                 reason: "malformed marker".to_string(),
+            },
+            io::ErrorKind::InvalidData,
+        ),
+        (
+            GitReadError::InvalidConfigEnvironment {
+                reason: "malformed GIT_CONFIG_COUNT".to_string(),
             },
             io::ErrorKind::InvalidData,
         ),

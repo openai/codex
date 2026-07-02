@@ -18,7 +18,7 @@ use route_walker::invalid_data;
 use route_walker::observe_route;
 #[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_authority_path_is_ambiguous;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_path_is_ambiguous;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -88,7 +88,7 @@ pub(crate) fn repository_route_boundaries(
         let canonical_root = std::fs::canonicalize(root)?;
         let canonical_marker = std::fs::canonicalize(&marker)?;
         if canonical_marker == canonical_root.join(".git") {
-            push_unique_location(&mut metadata_dirs, canonical_marker)?;
+            push_unique_location(&mut metadata_dirs, marker)?;
         }
     }
     for common in common_dirs {

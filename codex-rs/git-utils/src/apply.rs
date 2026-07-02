@@ -13,8 +13,9 @@ use std::path::PathBuf;
 use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
-use crate::patch_paths::extract_effective_paths_from_patch;
-use crate::patch_paths::stage_effective_paths;
+use crate::guarded_config::GuardedGitConfig;
+use crate::patch_paths::extract_effective_paths_from_patch_guarded;
+use crate::patch_paths::stage_effective_paths_guarded;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
@@ -45,19 +46,27 @@ pub struct ApplyGitResult {
 /// When [`ApplyGitRequest::preflight`] is `true`, this behaves like `git apply --check` and
 /// leaves the working tree untouched while still parsing the command output for diagnostics.
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
+    let cfg_parts = configured_git_config_parts();
+    // Construct from the caller's exact route before canonicalization so
+    // repository authority retains lexical enclosing worktrees.
     let git = GitRunner::for_cwd_io(&req.cwd)?;
-    let mut cfg_parts = configured_git_config_parts();
-    let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
+    let requested_cwd = std::fs::canonicalize(&req.cwd)?;
+    let expected_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| io::Error::other("not a Git repository"))
+        .and_then(std::fs::canonicalize)?;
+    let mut config = GuardedGitConfig::authorize(&git, &expected_root, cfg_parts)?;
+    resolve_git_root(&config, &requested_cwd)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
+    let patch_paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, req.revert)?;
+    config.authorize_filter_paths(&patch_paths)?;
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git, &git_root, &patch_paths)?;
+        stage_effective_paths_guarded(&config, &patch_paths)?;
     }
 
     // Build git args
@@ -65,8 +74,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     if req.revert {
         args.push("-R".into());
     }
-
-    cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
 
@@ -77,8 +84,8 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
             check_args.push("-R".to_string());
         }
         check_args.push(patch_path.to_string_lossy().to_string());
-        let rendered = render_command_for_log(&git_root, &cfg_parts, &check_args);
-        let (c_code, c_out, c_err) = run_git(&git, &git_root, &cfg_parts, &check_args)?;
+        let rendered = config.render_command_for_log(&check_args)?;
+        let (c_code, c_out, c_err) = run_guarded_apply(&config, &check_args)?;
         let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
             parse_git_apply_output(&c_out, &c_err);
         applied_paths.sort();
@@ -98,8 +105,8 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         });
     }
 
-    let cmd_for_log = render_command_for_log(&git_root, &cfg_parts, &args);
-    let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
+    let cmd_for_log = config.render_command_for_log(&args)?;
+    let (code, stdout, stderr) = run_guarded_apply(&config, &args)?;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
         parse_git_apply_output(&stdout, &stderr);
@@ -121,18 +128,10 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     })
 }
 
-fn resolve_git_root(
-    git: &GitRunner,
-    cwd: &Path,
-    git_config_args: &[String],
-) -> io::Result<PathBuf> {
-    let requested_cwd = std::fs::canonicalize(cwd)?;
-    let mut command = git.command_for_cwd(&requested_cwd)?;
-    command
-        .args(git_config_args)
-        .arg("rev-parse")
-        .arg("--show-toplevel");
-    let out = git.output(command)?;
+fn resolve_git_root(config: &GuardedGitConfig<'_>, requested_cwd: &Path) -> io::Result<PathBuf> {
+    let mut command = config.rev_parse_command()?;
+    command.arg("--show-toplevel");
+    let out = command.output()?;
     let code = out.status.code().unwrap_or(-1);
     if code != 0 {
         return Err(io::Error::other(format!(
@@ -143,18 +142,7 @@ fn resolve_git_root(
     }
     let reported_root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
     let root = std::fs::canonicalize(&reported_root)?;
-    let expected_root = crate::get_git_repo_root(&requested_cwd)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "refusing to apply a patch because Git resolved worktree {} without a .git marker above requested cwd {}",
-                    root.display(),
-                    requested_cwd.display()
-                ),
-            )
-        })
-        .and_then(std::fs::canonicalize)?;
+    let expected_root = config.canonical_root();
     if root != expected_root {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -211,6 +199,32 @@ pub(crate) fn run_git(
     Ok((code, stdout, stderr))
 }
 
+fn run_guarded_apply(
+    config: &GuardedGitConfig<'_>,
+    args: &[String],
+) -> io::Result<(i32, String, String)> {
+    let Some((subcommand, args)) = args.split_first() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing guarded Git subcommand",
+        ));
+    };
+    if subcommand != "apply" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unexpected guarded Git subcommand",
+        ));
+    }
+    let mut command = config.apply_command()?;
+    command.args(args);
+    let output = command.output()?;
+    Ok((
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 pub(crate) fn safe_git_config_parts() -> Vec<String> {
     vec![
         "-c".to_string(),
@@ -220,40 +234,19 @@ pub(crate) fn safe_git_config_parts() -> Vec<String> {
     ]
 }
 
-fn quote_shell(s: &str) -> String {
-    let simple = s
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "-_.:/@%+".contains(c));
-    if simple {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
-}
-
-fn render_command_for_log(cwd: &Path, git_cfg: &[String], args: &[String]) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    parts.push("git".to_string());
-    for a in git_cfg {
-        parts.push(quote_shell(a));
-    }
-    for a in args {
-        parts.push(quote_shell(a));
-    }
-    format!(
-        "(cd {} && {})",
-        quote_shell(&cwd.display().to_string()),
-        parts.join(" ")
-    )
-}
-
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
 
 #[cfg(test)]
+#[path = "apply_filter_tests.rs"]
+mod filter_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guarded_config::config_source_authorization_count;
+    use crate::guarded_config::reset_config_source_authorization_count;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::sync::Mutex;
@@ -316,6 +309,57 @@ mod tests {
             .replace("\r\n", "\n")
     }
 
+    fn commit_filter_attributes(root: &Path, tracked_path: &str) {
+        std::fs::write(
+            root.join(".gitattributes"),
+            format!("{tracked_path} filter=x=y\n"),
+        )
+        .expect("write attributes");
+        let (add_code, _, add_err) = run(root, &["git", "add", ".gitattributes"]);
+        assert_eq!(add_code, 0, "add attributes: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "attributes"]);
+        assert_eq!(commit_code, 0, "commit attributes: {commit_err}");
+    }
+
+    fn configure_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure filter: {config_err}");
+    }
+
+    fn configure_worktree_clean_filter(root: &Path, tracked_path: &str) {
+        commit_filter_attributes(root, tracked_path);
+        let (extension_code, _, extension_err) = run(
+            root,
+            &["git", "config", "extensions.worktreeConfig", "true"],
+        );
+        assert_eq!(extension_code, 0, "enable worktree config: {extension_err}");
+        let (config_code, _, config_err) = run(
+            root,
+            &[
+                "git",
+                "config",
+                "--worktree",
+                "filter.x=y.clean",
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        );
+        assert_eq!(config_code, 0, "configure worktree filter: {config_err}");
+    }
+
+    fn configured_filter_ran(root: &Path) -> bool {
+        let (code, _, _) = run(root, &["git", "config", "--get", "codex.filterran"]);
+        code == 0
+    }
+
     #[cfg(unix)]
     fn trusted_git_directory() -> PathBuf {
         std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
@@ -347,7 +391,9 @@ mod tests {
             revert: false,
             preflight: false,
         };
+        reset_config_source_authorization_count();
         let r = apply_git_patch(&req).expect("run apply");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(r.exit_code, 0, "exit code 0");
         // File exists now
         assert!(root.join("hello.txt").exists());
@@ -476,6 +522,41 @@ mod tests {
         assert!(!marker.exists(), "enclosing Git shim must not run");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn apply_uses_physical_repository_for_symlinked_nested_cwd() {
+        let _g = env_lock().lock().unwrap();
+        let fixture = tempfile::tempdir().expect("fixture");
+        let outer = fixture.path().join("outer");
+        let target = fixture.path().join("target");
+        let nested = target.join("nested");
+        std::fs::create_dir_all(&outer).expect("outer");
+        std::fs::create_dir_all(&nested).expect("nested");
+        let (outer_init, _, outer_error) = run(&outer, &["git", "init", "-q"]);
+        assert_eq!(outer_init, 0, "outer init: {outer_error}");
+        let (target_init, _, target_error) = run(&target, &["git", "init", "-q"]);
+        assert_eq!(target_init, 0, "target init: {target_error}");
+        let lexical_cwd = outer.join("linked-nested");
+        std::os::unix::fs::symlink(&nested, &lexical_cwd).expect("nested cwd symlink");
+
+        reset_config_source_authorization_count();
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: lexical_cwd,
+            diff: "diff --git a/physical.txt b/physical.txt\nnew file mode 100644\n--- /dev/null\n+++ b/physical.txt\n@@ -0,0 +1 @@\n+physical\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply through symlinked nested cwd");
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(config_source_authorization_count(), 1);
+        assert_eq!(
+            read_file_normalized(&target.join("physical.txt")),
+            "physical\n"
+        );
+        assert!(!outer.join("physical.txt").exists());
+    }
+
     #[test]
     fn apply_modify_conflict() {
         let _g = env_lock().lock().unwrap();
@@ -534,7 +615,9 @@ mod tests {
             revert: false,
             preflight: false,
         };
+        reset_config_source_authorization_count();
         let res_apply = apply_git_patch(&apply_req).expect("apply ok");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(res_apply.exit_code, 0, "forward apply succeeded");
         let after_apply = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_apply, "ORIG\n");
@@ -546,7 +629,9 @@ mod tests {
             revert: true,
             preflight: false,
         };
+        reset_config_source_authorization_count();
         let res_revert = apply_git_patch(&revert_req).expect("revert ok");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_revert, "orig\n");
@@ -583,7 +668,9 @@ mod tests {
             revert: true,
             preflight: true,
         };
+        reset_config_source_authorization_count();
         let res_preflight = apply_git_patch(&preflight_req).expect("preflight ok");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_eq!(res_preflight.exit_code, 0, "revert preflight succeeded");
         let (_code_after, staged_after, _stderr_after) =
             run(root, &["git", "diff", "--cached", "--name-only"]);
@@ -613,7 +700,9 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             revert: false,
             preflight: true,
         };
+        reset_config_source_authorization_count();
         let r1 = apply_git_patch(&req1).expect("preflight apply");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_ne!(r1.exit_code, 0, "preflight reports failure");
         assert!(
             !root.join("ok.txt").exists(),
@@ -631,12 +720,109 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             revert: false,
             preflight: false,
         };
+        reset_config_source_authorization_count();
         let r2 = apply_git_patch(&req2).expect("direct apply");
+        assert_eq!(config_source_authorization_count(), 1);
         assert_ne!(r2.exit_code, 0, "apply is expected to fail overall");
         assert!(
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
+    }
+
+    #[test]
+    fn apply_rejects_configured_clean_filter_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_clean_filter(root, "file.txt");
+
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n";
+        for (revert, preflight) in [(false, false), (false, true), (true, false), (true, true)] {
+            let request = ApplyGitRequest {
+                cwd: root.to_path_buf(),
+                diff: diff.to_string(),
+                revert,
+                preflight,
+            };
+            reset_config_source_authorization_count();
+            let error = apply_git_patch(&request).expect_err("reject configured filter");
+            assert_eq!(
+                config_source_authorization_count(),
+                1,
+                "{revert} {preflight}"
+            );
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert!(!configured_filter_ran(root));
+            assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+        }
+    }
+
+    #[test]
+    fn apply_rejects_worktree_scoped_clean_filter_without_running_it() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        configure_worktree_clean_filter(root, "file.txt");
+
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&request).expect_err("reject worktree filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
+    }
+
+    #[test]
+    fn apply_probe_rejects_command_scoped_clean_filter() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            run_isolated_test(
+                "apply::tests::apply_probe_rejects_command_scoped_clean_filter",
+                &[(
+                    "CODEX_APPLY_GIT_CFG",
+                    OsStr::new(
+                        "filter.codex-test.clean=git config codex.filterran true && git hash-object --stdin",
+                    ),
+                )],
+            );
+            return;
+        }
+
+        let repo = init_repo();
+        let root = repo.path();
+        std::fs::write(root.join("test.txt"), "orig\n").expect("write file");
+        let (add_code, _, add_err) = run(root, &["git", "add", "test.txt"]);
+        assert_eq!(add_code, 0, "add file: {add_err}");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
+        assert_eq!(commit_code, 0, "commit file: {commit_err}");
+        std::fs::write(root.join(".gitattributes"), "test.txt filter=codex-test\n")
+            .expect("attributes");
+
+        let request = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/test.txt b/test.txt\n--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-orig\n+next\n".to_string(),
+            revert: false,
+            preflight: true,
+        };
+        let error = apply_git_patch(&request).expect_err("reject command-scoped filter");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!configured_filter_ran(root));
+        assert_eq!(read_file_normalized(&root.join("test.txt")), "orig\n");
     }
 
     #[test]
@@ -658,8 +844,10 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             assert_eq!(config_code, 0, "configure core.worktree: {config_err}");
 
             let git = GitRunner::for_cwd_io(&attacker).expect("trusted Git");
+            let guarded = GuardedGitConfig::authorize(&git, &attacker, Vec::new())
+                .expect("authorize attacker repository config");
             let error =
-                resolve_git_root(&git, &attacker, &[]).expect_err("reject redirected worktree");
+                resolve_git_root(&guarded, &attacker).expect_err("reject redirected worktree");
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
             assert!(error.to_string().contains("instead of expected worktree"));
         }
