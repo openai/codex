@@ -617,8 +617,7 @@ fn reverse_three_way_with_staging_candidate_uses_one_authorization() {
     let repo = init_repo();
     let root = repo.path();
     let base_contents = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\nbase\n12\n13\n14\n15\n";
-    let theirs_contents =
-        "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\ntheirs\n12\n13\n14\n15\n";
+    let theirs_contents = "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\ntheirs\n12\n13\n14\n15\n";
     let independently_edited =
         "01\n02\n03\n04\n05\n06\n07\nEIGHT\n09\n10\ntheirs\n12\n13\n14\n15\n";
     let expected = "01\n02\n03\n04\n05\n06\n07\nEIGHT\n09\n10\nbase\n12\n13\n14\n15\n";

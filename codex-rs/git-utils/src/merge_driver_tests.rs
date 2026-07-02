@@ -11,6 +11,7 @@ use crate::guarded_config::merge_config_read_count;
 use crate::guarded_config::merge_overlay_count;
 use crate::guarded_config::reset_config_source_authorization_count;
 use crate::guarded_config::reset_merge_policy_counts;
+use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
 use std::path::Path;
 
