@@ -298,6 +298,10 @@ fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)>
         })
 }
 
+pub(crate) fn is_unrecoverable_config_error(err: &std::io::Error) -> bool {
+    codex_core::config::is_windows_sandbox_network_proxy_incompatible_error(err)
+}
+
 fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
     match err {
         ExecPolicyError::ParsePolicy { path, source } => {
