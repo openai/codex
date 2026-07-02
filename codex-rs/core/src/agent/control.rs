@@ -154,12 +154,13 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         initial_operation: Op,
     ) -> CodexResult<String> {
-        let last_task_message = match &initial_operation {
-            Op::InterAgentCommunication { communication } => {
-                last_task_message_from_communication(communication)
-            }
-            _ => non_empty_task_message(render_input_preview(&initial_operation)),
-        };
+        if let Op::InterAgentCommunication { communication } = initial_operation {
+            return self
+                .submit_inter_agent_communication(agent_id, state, communication)
+                .await;
+        }
+
+        let last_task_message = non_empty_task_message(render_input_preview(&initial_operation));
         let result = self
             .handle_thread_request_result(
                 agent_id,
@@ -183,12 +184,25 @@ impl AgentControl {
         agent_id: ThreadId,
         communication: InterAgentCommunication,
     ) -> CodexResult<String> {
+        self.send_input(agent_id, Op::InterAgentCommunication { communication })
+            .await
+    }
+
+    async fn submit_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<String> {
         let last_task_message = last_task_message_from_communication(&communication);
-        let state = self.upgrade()?;
-        let op = Op::InterAgentCommunication { communication };
-        self.ensure_execution_capacity_for_op(agent_id, &op).await?;
         let result = self
-            .handle_thread_request_result(agent_id, &state, state.send_op(agent_id, op).await)
+            .handle_thread_request_result(
+                agent_id,
+                state,
+                state
+                    .send_op(agent_id, Op::InterAgentCommunication { communication })
+                    .await,
+            )
             .await;
         if result.is_ok() {
             match last_task_message {
