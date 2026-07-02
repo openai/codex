@@ -35,8 +35,10 @@ use tracing::instrument;
 use crate::config::Config;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_shell_command::bash::extract_bash_command;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
+use codex_shell_command::powershell::extract_powershell_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
@@ -110,6 +112,9 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
 pub(crate) enum ExecPolicyCommandOrigin {
     /// Use the generic unmatched-command heuristics.
     Generic,
+    /// A shell executable path came from model-controlled command input. The
+    /// inner argv cannot confer trust on the outer executable.
+    PathQualifiedShell,
     #[cfg(windows)]
     /// The command words came from the `-Command` body of a top-level
     /// PowerShell wrapper, so use PowerShell-specific unmatched-command
@@ -236,6 +241,16 @@ pub(crate) struct ExecPolicyManager {
     update_lock: Semaphore,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExecPolicyInputSource {
+    /// The wrapper was selected by Codex from the user's configured shell.
+    Configured,
+    /// The model selected a shell by an unqualified executable name.
+    ModelSelectedBare,
+    /// The model selected a path-qualified shell executable.
+    ModelSelectedPath,
+}
+
 pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
@@ -243,6 +258,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) input_source: ExecPolicyInputSource,
 }
 
 impl ExecPolicyManager {
@@ -277,17 +293,24 @@ impl ExecPolicyManager {
             windows_sandbox_level,
             sandbox_permissions,
             prefix_rule,
+            input_source,
         } = req;
         let exec_policy = self.current();
         let ExecPolicyCommands {
             commands,
             used_complex_parsing,
             command_origin,
-        } = commands_for_exec_policy(command);
+        } = commands_for_exec_policy(command, input_source);
+        let contains_path_qualified_shell = commands
+            .iter()
+            .any(|command| path_qualified_shell_wrapper(command));
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_complex_parsing;
+        let auto_amendment_allowed = !used_complex_parsing
+            && !contains_path_qualified_shell
+            && !sandbox_permissions.requests_sandbox_override()
+            && input_source == ExecPolicyInputSource::Configured;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 cmd,
@@ -637,8 +660,27 @@ pub(crate) fn render_decision_for_unmatched_command(
         command_origin,
     } = context;
     let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+
+    // A model request to expand beyond a restricted sandbox is an approval
+    // boundary of its own. Known-safe classification only describes argv; it
+    // must never turn that explicit expansion request into an implicit allow.
+    if sandbox_permissions.requests_sandbox_override()
+        && matches!(
+            file_system_sandbox_policy.kind,
+            FileSystemSandboxKind::Restricted
+        )
+    {
+        return match approval_policy {
+            AskForApproval::Never => Decision::Forbidden,
+            AskForApproval::OnRequest
+            | AskForApproval::UnlessTrusted
+            | AskForApproval::Granular(_) => Decision::Prompt,
+        };
+    }
+
     let is_known_safe = match command_origin {
         ExecPolicyCommandOrigin::Generic => is_known_safe_command(command),
+        ExecPolicyCommandOrigin::PathQualifiedShell => false,
         #[cfg(windows)]
         ExecPolicyCommandOrigin::PowerShell => {
             codex_shell_command::is_safe_command::is_safe_powershell_words(command)
@@ -669,6 +711,7 @@ pub(crate) fn render_decision_for_unmatched_command(
     // forbid the command.
     let command_is_dangerous = match command_origin {
         ExecPolicyCommandOrigin::Generic => command_might_be_dangerous(command),
+        ExecPolicyCommandOrigin::PathQualifiedShell => true,
         #[cfg(windows)]
         ExecPolicyCommandOrigin::PowerShell => {
             codex_shell_command::is_dangerous_command::is_dangerous_powershell_words(command)
@@ -756,21 +799,38 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
-    if let Some(commands) = parse_shell_lc_plain_commands(command)
+fn commands_for_exec_policy(
+    command: &[String],
+    input_source: ExecPolicyInputSource,
+) -> ExecPolicyCommands {
+    let parse_shell_wrapper = input_source != ExecPolicyInputSource::ModelSelectedPath;
+
+    if parse_shell_wrapper
+        && let Some(commands) = parse_shell_lc_plain_commands(command)
         && !commands.is_empty()
     {
+        let command_origin = if commands
+            .iter()
+            .any(|command| path_qualified_shell_wrapper(command))
+        {
+            ExecPolicyCommandOrigin::PathQualifiedShell
+        } else {
+            ExecPolicyCommandOrigin::Generic
+        };
         return ExecPolicyCommands {
             commands,
             used_complex_parsing: false,
-            command_origin: ExecPolicyCommandOrigin::Generic,
+            command_origin,
         };
     }
 
     #[cfg(windows)]
     {
-        if let Some(commands) =
-            codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
+        if parse_shell_wrapper
+            && let Some(commands) =
+                codex_shell_command::powershell::parse_powershell_command_into_plain_commands(
+                    command,
+                )
             && !commands.is_empty()
         {
             return ExecPolicyCommands {
@@ -781,7 +841,9 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
         }
     }
 
-    if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
+    if parse_shell_wrapper
+        && let Some(single_command) = parse_shell_lc_single_command_prefix(command)
+    {
         return ExecPolicyCommands {
             commands: vec![single_command],
             used_complex_parsing: true,
@@ -792,8 +854,26 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
     ExecPolicyCommands {
         commands: vec![command.to_vec()],
         used_complex_parsing: false,
-        command_origin: ExecPolicyCommandOrigin::Generic,
+        command_origin: if input_source == ExecPolicyInputSource::ModelSelectedPath {
+            ExecPolicyCommandOrigin::PathQualifiedShell
+        } else {
+            ExecPolicyCommandOrigin::Generic
+        },
     }
+}
+
+fn path_qualified_shell_wrapper(command: &[String]) -> bool {
+    let shell = extract_bash_command(command)
+        .map(|(shell, _)| shell)
+        .or_else(|| extract_powershell_command(command).map(|(shell, _)| shell));
+
+    shell.is_some_and(shell_executable_is_path_qualified)
+}
+
+pub(crate) fn shell_executable_is_path_qualified(shell: &str) -> bool {
+    Path::new(shell).components().count() != 1
+        || shell.contains(['/', '\\'])
+        || shell.as_bytes().get(1) == Some(&b':')
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval

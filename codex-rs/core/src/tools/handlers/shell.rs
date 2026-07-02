@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::exec_policy::ExecPolicyInputSource;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
@@ -179,6 +180,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
                 effective_additional_permissions.sandbox_permissions
             },
             prefix_rule,
+            input_source: ExecPolicyInputSource::Configured,
         })
         .await;
 
