@@ -97,6 +97,18 @@ fn test_apply_patch_cli_preserves_crlf_from_target_file() -> anyhow::Result<()> 
 }
 
 #[test]
+fn test_apply_patch_cli_preserves_cr_from_target_file() -> anyhow::Result<()> {
+    let patch = "*** Begin Patch\n*** Update File: cr.txt\n@@\n-one\n+uno\n@@\n two\n+\n+between\n three\n*** End Patch";
+
+    assert_apply_patch_updates_file(
+        "cr.txt",
+        b"one\rtwo\rthree\r",
+        patch,
+        b"uno\rtwo\r\rbetween\rthree\r",
+    )
+}
+
+#[test]
 fn test_apply_patch_cli_preserves_change_order_with_repeated_lines() -> anyhow::Result<()> {
     let patch =
         "*** Begin Patch\n*** Update File: repeated.txt\n@@\n-a\n-b\n+b\n+b\n+a\n*** End Patch";
@@ -118,9 +130,9 @@ fn test_apply_patch_cli_preserves_untouched_mixed_line_endings() -> anyhow::Resu
 
     assert_apply_patch_updates_file(
         "mixed.txt",
-        b"one\r\ntwo\nthree\r\nfour\n",
+        b"one\r\ntwo\rthree\nfour\r\n",
         patch,
-        b"one\r\ntwo\nTHREE\r\nfour\n",
+        b"one\r\ntwo\rTHREE\r\nfour\r\n",
     )
 }
 

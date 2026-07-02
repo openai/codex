@@ -4,6 +4,7 @@ pub(super) type Replacement = (usize, usize, Vec<String>);
 enum LineEnding {
     Lf,
     CrLf,
+    Cr,
 }
 
 impl LineEnding {
@@ -11,6 +12,7 @@ impl LineEnding {
         match self {
             Self::Lf => "\n",
             Self::CrLf => "\r\n",
+            Self::Cr => "\r",
         }
     }
 }
@@ -34,20 +36,27 @@ impl SourceFile {
         let mut lines = Vec::new();
         let mut preferred_ending = None;
         let mut line_start = 0;
+        let mut cursor = 0;
 
-        for (newline, _) in contents.match_indices('\n') {
-            let line = &contents[line_start..newline];
-            let (text, ending) = if let Some(text) = line.strip_suffix('\r') {
-                (text, LineEnding::CrLf)
-            } else {
-                (line, LineEnding::Lf)
+        while cursor < contents.len() {
+            let (ending, ending_len) = match contents.as_bytes()[cursor] {
+                b'\r' if contents.as_bytes().get(cursor + 1) == Some(&b'\n') => {
+                    (LineEnding::CrLf, 2)
+                }
+                b'\r' => (LineEnding::Cr, 1),
+                b'\n' => (LineEnding::Lf, 1),
+                _ => {
+                    cursor += 1;
+                    continue;
+                }
             };
             preferred_ending.get_or_insert(ending);
             lines.push(SourceLine {
-                text: text.to_string(),
+                text: contents[line_start..cursor].to_string(),
                 ending: Some(ending),
             });
-            line_start = newline + 1;
+            cursor += ending_len;
+            line_start = cursor;
         }
 
         if line_start < contents.len() {
