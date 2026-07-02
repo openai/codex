@@ -1987,23 +1987,49 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                let completes_active_tool_call = active_tool_argument_diff_consumer
+                    .as_ref()
+                    .is_some_and(|(active_call_id, _)| {
+                        matches!(
+                            &item,
+                            ResponseItem::CustomToolCall { call_id, .. }
+                                if call_id == active_call_id
+                        )
+                    });
+                if completes_active_tool_call
+                    && let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
                 let completed_item_id = item.id().map(str::to_owned);
-                let previously_streamed_item = if let Some(item_id) = completed_item_id.as_deref() {
-                    streamed_items.remove(item_id)
-                } else {
-                    active_item
-                        .as_ref()
-                        .and_then(|active| streamed_items.remove(&active.id()))
-                };
                 let completes_active_item = match (&completed_item_id, active_item.as_ref()) {
                     (Some(completed_item_id), Some(active)) => completed_item_id == &active.id(),
-                    (None, Some(_)) => true,
+                    (None, Some(active)) => {
+                        // Some providers omit IDs on completion events. Only fall back to the
+                        // active item when its variant matches; tool completions can interleave
+                        // with a streamed non-tool item and must not close it.
+                        match (&item, active) {
+                            (ResponseItem::Message { role, .. }, TurnItem::AgentMessage(_)) => {
+                                role == "assistant"
+                            }
+                            (ResponseItem::Reasoning { .. }, TurnItem::Reasoning(_))
+                            | (ResponseItem::WebSearchCall { .. }, TurnItem::WebSearch(_))
+                            | (
+                                ResponseItem::ImageGenerationCall { .. },
+                                TurnItem::ImageGeneration(_),
+                            ) => true,
+                            _ => false,
+                        }
+                    }
                     _ => false,
+                };
+                let previously_streamed_item = match completed_item_id.as_deref() {
+                    Some(item_id) => streamed_items.remove(item_id),
+                    None if completes_active_item => active_item
+                        .as_ref()
+                        .and_then(|active| streamed_items.remove(&active.id())),
+                    None => None,
                 };
                 if completes_active_item {
                     active_item = None;
