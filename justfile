@@ -162,6 +162,11 @@ write-config-schema:
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
 
+# Compare the stable app-server protocol schema against a git revision.
+[no-cd]
+check-app-server-protocol-compatibility base="origin/main" head="HEAD":
+    {{ python }} scripts/check_app_server_protocol_compatibility.py --base "{{base}}" --head "{{head}}"
+
 [no-cd]
 write-hooks-schema:
     cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures

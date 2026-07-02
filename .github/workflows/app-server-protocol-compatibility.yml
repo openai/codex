@@ -1,0 +1,35 @@
+name: app-server-protocol-compatibility
+
+on:
+  pull_request: {}
+
+jobs:
+  check:
+    name: App-server protocol compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just
+
+      - name: Test compatibility checker
+        run: python3 -m unittest discover -s scripts -p 'test_check_app_server_protocol_compatibility.py'
+
+      - name: Generate stable app-server schema
+        run: just write-app-server-schema --schema-root "$RUNNER_TEMP/app-server-schema"
+
+      - name: Check backwards compatibility
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          python3 scripts/check_app_server_protocol_compatibility.py
+          --base "$BASE_SHA"
+          --head-schema-root "$RUNNER_TEMP/app-server-schema"
