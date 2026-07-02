@@ -14,6 +14,8 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -1867,10 +1869,12 @@ impl Session {
             message,
             /*trigger_turn*/ false,
         );
+        let context =
+            AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
         if let Err(err) = self
             .services
             .agent_control
-            .send_inter_agent_communication(parent_thread_id, communication)
+            .send_inter_agent_communication(parent_thread_id, communication, context)
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");

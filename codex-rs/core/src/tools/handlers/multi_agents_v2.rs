@@ -19,7 +19,6 @@ use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SubAgentActivityEvent;
 use codex_protocol::protocol::SubAgentActivityKind;
-use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
