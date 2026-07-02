@@ -2277,6 +2277,106 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_uses_retired_previous_model_after_rename() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let retired_model = "gpt-5.6-oai";
+    let renamed_model = "gpt-5.6-sol-oai";
+    let unsupported_model_message =
+        "The 'gpt-5.6-oai' model is not supported when using Codex with a ChatGPT account.";
+    let mut retired_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-a"));
+    retired_model_info.slug = retired_model.to_string();
+    let mut renamed_model_info = model_info_with_optional_comp_hash("gpt-5.4", Some("hash-b"));
+    renamed_model_info.slug = renamed_model.to_string();
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![retired_model_info, renamed_model_info],
+        },
+    )
+    .await;
+
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            sse_response(sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ])),
+            wiremock::ResponseTemplate::new(/*status*/ 400).set_body_json(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": unsupported_model_message,
+                }
+            })),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.request_max_retries = Some(0);
+    model_provider.stream_max_retries = Some(0);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(retired_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            retired_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            renamed_model.to_string(),
+        ))
+        .await
+        .expect("submit renamed-model turn");
+
+    let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        unreachable!();
+    };
+    assert!(error.message.contains(unsupported_model_message));
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        2,
+        "the renamed-model turn should stop after compaction fails"
+    );
+    assert_eq!(
+        requests[0].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+    assert_eq!(
+        requests[1].body_json()["model"].as_str(),
+        Some(retired_model)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_compact_skips_when_either_comp_hash_is_missing() {
     skip_if_no_network!();
 
