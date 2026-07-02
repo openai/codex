@@ -20,15 +20,21 @@ const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567"
 #[test]
 fn git_command_sanitizes_ambient_repository_environment() {
     let command = git_command("git");
-
-    for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
+    for name in [
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_WORK_TREE",
+    ] {
         assert_eq!(
             command
                 .get_envs()
                 .find(|(key, _)| *key == OsStr::new(name))
                 .map(|(_, value)| value),
             Some(None),
-            "{name} should be removed from startup sync Git commands"
+            "{name} should be removed from startup-sync Git commands"
         );
     }
 }

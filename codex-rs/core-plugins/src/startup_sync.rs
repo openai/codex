@@ -1,3 +1,5 @@
+use crate::git_transport::NeutralGitCwd;
+use crate::git_transport::sanitize_repository_environment;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
@@ -34,27 +36,6 @@ const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
-// These variables can redirect Git away from the repository selected by `-C`,
-// or inject command-scoped configuration into the sync commands.
-const REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES: &[&str] = &[
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG",
-    "GIT_CONFIG_COUNT",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_DIR",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_GRAFT_FILE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_NAMESPACE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_SHALLOW_FILE",
-    "GIT_WORK_TREE",
-];
 
 #[derive(Debug, Deserialize)]
 struct GitHubRepositorySummary {
@@ -595,11 +576,14 @@ fn read_local_git_or_sha_file(
 }
 
 fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
+    let neutral_cwd = NeutralGitCwd::new()
+        .map_err(|err| format!("failed to create neutral Git working directory: {err}"))?;
     let mut command = git_command(git_binary);
     command
         .arg("ls-remote")
         .arg("https://github.com/openai/plugins.git")
         .arg("HEAD");
+    neutral_cwd.configure_transport_command(&mut command);
     let output = run_git_command_with_timeout(
         &mut command,
         "git ls-remote curated plugins repo",
@@ -650,9 +634,7 @@ fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, String> {
 fn git_command(git_binary: &str) -> Command {
     let mut command = Command::new(git_binary);
     command.env("GIT_OPTIONAL_LOCKS", "0");
-    for name in REPOSITORY_LOCAL_GIT_ENVIRONMENT_VARIABLES {
-        command.env_remove(name);
-    }
+    sanitize_repository_environment(&mut command);
     command
 }
 
