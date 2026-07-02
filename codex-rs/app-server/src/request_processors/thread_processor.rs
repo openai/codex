@@ -164,6 +164,28 @@ fn merge_persisted_resume_metadata(
     }
 }
 
+fn merge_persisted_approvals_reviewer(
+    thread_history: &InitialHistory,
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &mut ConfigOverrides,
+) {
+    if typesafe_overrides.approvals_reviewer.is_some()
+        || request_overrides.is_some_and(|overrides| overrides.contains_key("approvals_reviewer"))
+    {
+        return;
+    }
+
+    let InitialHistory::Resumed(resumed_history) = thread_history else {
+        return;
+    };
+    typesafe_overrides.approvals_reviewer = resumed_history.history.iter().rev().find_map(|item| {
+        let RolloutItem::TurnContext(turn_context) = item else {
+            return None;
+        };
+        turn_context.approvals_reviewer
+    });
+}
+
 fn normalize_thread_list_cwd_filters(
     cwd: Option<ThreadListCwdFilter>,
 ) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
@@ -2936,6 +2958,11 @@ impl ThreadRequestProcessor {
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
     ) -> Option<ThreadMetadata> {
+        merge_persisted_approvals_reviewer(
+            thread_history,
+            request_overrides.as_ref(),
+            typesafe_overrides,
+        );
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
