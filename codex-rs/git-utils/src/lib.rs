@@ -3,6 +3,9 @@ mod apply_output;
 mod baseline;
 mod branch;
 mod errors;
+mod exact_filesystem_policy;
+mod exact_index_policy;
+mod exact_staging;
 mod fsmonitor;
 mod git_command;
 mod git_config;
@@ -12,6 +15,7 @@ mod merge_driver;
 mod operations;
 mod patch_paths;
 mod platform;
+mod reverse_staging;
 mod safe_git;
 
 pub use apply::ApplyGitRequest;
