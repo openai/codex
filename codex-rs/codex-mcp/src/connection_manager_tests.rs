@@ -398,22 +398,23 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
 
 #[tokio::test]
 async fn shared_elicitation_router_targets_the_exact_pending_request() {
+    struct Registration(Arc<AtomicUsize>);
+
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     let router = ElicitationRequestRouter::default();
     let outstanding = Arc::new(AtomicUsize::new(0));
-    let lifecycle = ElicitationLifecycle::new(
-        {
-            let outstanding = outstanding.clone();
-            move || {
-                outstanding.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        },
-        {
-            let outstanding = outstanding.clone();
-            move || {
-                outstanding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        },
-    );
+    let lifecycle = ElicitationLifecycle::new({
+        let outstanding = outstanding.clone();
+        move || {
+            outstanding.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Registration(outstanding.clone())
+        }
+    });
     let manager_a = ElicitationRequestManager::new(
         AskForApproval::OnRequest,
         PermissionProfile::default(),

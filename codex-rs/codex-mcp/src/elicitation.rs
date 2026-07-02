@@ -52,40 +52,31 @@ pub trait ElicitationReviewer: Send + Sync {
 
 pub type ElicitationReviewerHandle = Arc<dyn ElicitationReviewer>;
 
-/// Notifies the owning session while an MCP elicitation is waiting for a response.
+/// Holds an owner-provided registration while an MCP elicitation is waiting for a response.
 #[derive(Clone)]
 pub struct ElicitationLifecycle {
-    on_started: Arc<dyn Fn() + Send + Sync>,
-    on_finished: Arc<dyn Fn() + Send + Sync>,
+    register: Arc<dyn Fn() -> Box<dyn Send + Sync> + Send + Sync>,
 }
 
 impl ElicitationLifecycle {
-    pub fn new(
-        on_started: impl Fn() + Send + Sync + 'static,
-        on_finished: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new<T>(register: impl Fn() -> T + Send + Sync + 'static) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
         Self {
-            on_started: Arc::new(on_started),
-            on_finished: Arc::new(on_finished),
+            register: Arc::new(move || Box::new(register())),
         }
     }
 
     fn start(&self) -> ActiveElicitation {
-        (self.on_started)();
         ActiveElicitation {
-            lifecycle: self.clone(),
+            _registration: (self.register)(),
         }
     }
 }
 
 struct ActiveElicitation {
-    lifecycle: ElicitationLifecycle,
-}
-
-impl Drop for ActiveElicitation {
-    fn drop(&mut self) {
-        (self.lifecycle.on_finished)();
-    }
+    _registration: Box<dyn Send + Sync>,
 }
 
 /// Routes model-visible elicitation response tokens to their exact pending responders.

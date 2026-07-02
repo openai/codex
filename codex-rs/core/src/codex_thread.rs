@@ -163,7 +163,13 @@ pub struct CodexThread {
     pub(crate) session_source: SessionSource,
     session_configured: SessionConfiguredEvent,
     rollout_path: Option<PathBuf>,
-    out_of_band_elicitations: Mutex<Vec<ElicitationRegistration>>,
+    out_of_band_elicitations: Mutex<OutOfBandElicitations>,
+}
+
+#[derive(Default)]
+struct OutOfBandElicitations {
+    count: i64,
+    registration: Option<ElicitationRegistration>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -188,7 +194,7 @@ impl CodexThread {
             session_source,
             session_configured,
             rollout_path,
-            out_of_band_elicitations: Mutex::new(Vec::new()),
+            out_of_band_elicitations: Mutex::new(OutOfBandElicitations::default()),
         }
     }
 
@@ -656,22 +662,30 @@ impl CodexThread {
         self.codex.enabled(feature)
     }
 
-    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
+    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
         let mut elicitations = self.out_of_band_elicitations.lock().await;
-        elicitations.push(self.codex.session.services.elicitations.register());
-        u64::try_from(elicitations.len())
-            .map_err(|_| CodexErr::Fatal("out-of-band elicitation count overflowed".to_string()))
+        let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
+            CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
+        })?;
+        if elicitations.count == 0 {
+            elicitations.registration = Some(self.codex.session.services.elicitations.register());
+        }
+        elicitations.count = incremented;
+        Ok(incremented)
     }
 
-    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
+    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
         let mut elicitations = self.out_of_band_elicitations.lock().await;
-        if elicitations.pop().is_none() {
+        if elicitations.count == 0 {
             return Err(CodexErr::InvalidRequest(
                 "out-of-band elicitation count is already zero".to_string(),
             ));
         }
 
-        u64::try_from(elicitations.len())
-            .map_err(|_| CodexErr::Fatal("out-of-band elicitation count overflowed".to_string()))
+        elicitations.count -= 1;
+        if elicitations.count == 0 {
+            elicitations.registration = None;
+        }
+        Ok(elicitations.count)
     }
 }

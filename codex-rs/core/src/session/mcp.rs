@@ -192,12 +192,8 @@ impl Session {
     }
 
     pub(crate) fn mcp_elicitation_lifecycle(&self) -> codex_mcp::ElicitationLifecycle {
-        let started = self.services.elicitations.clone();
-        let finished = self.services.elicitations.clone();
-        codex_mcp::ElicitationLifecycle::new(
-            move || started.increment(),
-            move || finished.decrement(),
-        )
+        let elicitations = self.services.elicitations.clone();
+        codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
     }
 
     #[expect(

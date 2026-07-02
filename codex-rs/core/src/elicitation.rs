@@ -20,7 +20,7 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    outstanding: u64,
+    outstanding: i64,
 }
 
 pub(crate) struct ElicitationRegistration {
@@ -45,7 +45,7 @@ impl ElicitationService {
         }
     }
 
-    pub(crate) fn increment(&self) {
+    fn increment(&self) {
         let mut state = self
             .inner
             .state
@@ -54,7 +54,7 @@ impl ElicitationService {
         let was_clear = state.outstanding == 0;
         assert_ne!(
             state.outstanding,
-            u64::MAX,
+            i64::MAX,
             "outstanding elicitation count overflowed"
         );
         state.outstanding += 1;
@@ -72,7 +72,7 @@ impl ElicitationService {
         let _ = paused.wait_for(|paused| !*paused).await;
     }
 
-    pub(crate) fn decrement(&self) {
+    fn decrement(&self) {
         let mut state = self
             .inner
             .state
