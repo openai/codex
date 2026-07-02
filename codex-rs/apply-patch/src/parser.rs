@@ -111,7 +111,7 @@ impl Hunk {
 #[cfg(test)]
 use Hunk::*;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct UpdateFileChunk {
     /// A single line of context used to narrow down the position of the chunk
     /// (this is usually a class, method, or function definition.)
@@ -122,9 +122,22 @@ pub struct UpdateFileChunk {
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
 
+    /// Pairs of indices into `old_lines` and `new_lines` that identify lines
+    /// parsed as context rather than inferred to be equal by their contents.
+    pub(crate) context_line_indices: Vec<(usize, usize)>,
+
     /// If set to true, `old_lines` must occur at the end of the source file.
     /// (Tolerance around trailing newlines should be encouraged.)
     pub is_end_of_file: bool,
+}
+
+impl UpdateFileChunk {
+    pub(crate) fn push_context_line(&mut self, line: String) {
+        self.context_line_indices
+            .push((self.old_lines.len(), self.new_lines.len()));
+        self.old_lines.push(line.clone());
+        self.new_lines.push(line);
+    }
 }
 
 pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
@@ -345,6 +358,7 @@ fn test_parse_patch() {
                     change_context: Some("def f():".to_string()),
                     old_lines: vec!["    pass".to_string()],
                     new_lines: vec!["    return 123".to_string()],
+                    context_line_indices: vec![],
                     is_end_of_file: false
                 }]
             }
@@ -372,6 +386,7 @@ fn test_parse_patch() {
                     change_context: None,
                     old_lines: vec![],
                     new_lines: vec!["line".to_string()],
+                    context_line_indices: vec![],
                     is_end_of_file: false
                 }],
             },
@@ -402,6 +417,7 @@ fn test_parse_patch() {
                 change_context: None,
                 old_lines: vec!["import foo".to_string()],
                 new_lines: vec!["import foo".to_string(), "bar".to_string()],
+                context_line_indices: vec![(0, 0)],
                 is_end_of_file: false,
             }],
         }]
@@ -422,6 +438,7 @@ fn test_parse_patch_preserves_end_of_file_marker() {
                     change_context: None,
                     old_lines: Vec::new(),
                     new_lines: vec!["quux".to_string()],
+                    context_line_indices: vec![],
                     is_end_of_file: true,
                 }],
             }],
@@ -470,6 +487,7 @@ fn test_parse_patch_accepts_relative_and_absolute_hunk_paths() {
                     change_context: None,
                     old_lines: vec!["old".to_string()],
                     new_lines: vec!["new".to_string()],
+                    context_line_indices: vec![],
                     is_end_of_file: false
                 }]
             },
@@ -548,6 +566,7 @@ fn test_parse_patch_lenient() {
             change_context: None,
             old_lines: vec!["import foo".to_string()],
             new_lines: vec!["import foo".to_string(), "bar".to_string()],
+            context_line_indices: vec![(0, 0)],
             is_end_of_file: false,
         }],
     }];
