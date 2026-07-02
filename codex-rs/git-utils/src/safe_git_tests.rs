@@ -4,6 +4,55 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::process::Output;
+
+const FILTER_MARKER_KEY: &str = "codex.sentinelprobe-ran";
+const FILTER_MARKER_COMMAND: &str =
+    "git config codex.sentinelprobe-ran true && git hash-object --stdin";
+
+fn run_git(cwd: &Path, args: &[&str]) -> Output {
+    let mut command = std::process::Command::new("git");
+    isolate_git_command_environment(&mut command);
+    command
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("run Git")
+}
+
+fn run_git_success(cwd: &Path, args: &[&str]) -> Output {
+    let output = run_git(cwd, args);
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn init_filter_repo() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().expect("tempdir");
+    run_git_success(repo.path(), &["init"]);
+    std::fs::write(repo.path().join("file.txt"), "content\n").expect("write file");
+    repo
+}
+
+fn configure_marker_filter(cwd: &Path, driver: &str) {
+    run_git_success(
+        cwd,
+        &[
+            "config",
+            &format!("filter.{driver}.clean"),
+            FILTER_MARKER_COMMAND,
+        ],
+    );
+}
+
+fn marker_filter_ran(cwd: &Path) -> bool {
+    run_git(cwd, &["config", "--get", FILTER_MARKER_KEY])
+        .status
+        .success()
+}
 
 #[test]
 fn selected_filter_policy_allows_unused_and_rejects_selected_at_every_scope() {
@@ -12,6 +61,7 @@ fn selected_filter_policy_allows_unused_and_rejects_selected_at_every_scope() {
     std::fs::write(&config, "").expect("config file");
 
     for scope in [
+        GitConfigScope::Unknown,
         GitConfigScope::System,
         GitConfigScope::Global,
         GitConfigScope::Local,
@@ -137,6 +187,211 @@ fn filter_attribute_parser_rejects_malformed_or_unexpected_records() {
     }
 }
 
+#[test]
+fn sentinel_probe_primitives_preserve_order_budget_and_truth_table() {
+    assert_eq!(
+        classify_sentinel_filter_probes(
+            /*required_succeeded*/ true, /*optional_succeeded*/ None,
+        ),
+        SentinelFilterProbeResolution::SpecialAttributeState
+    );
+    assert_eq!(
+        classify_sentinel_filter_probes(
+            /*required_succeeded*/ false, /*optional_succeeded*/ None,
+        ),
+        SentinelFilterProbeResolution::NeedsOptionalProbe
+    );
+    assert_eq!(
+        classify_sentinel_filter_probes(
+            /*required_succeeded*/ false,
+            /*optional_succeeded*/ Some(true),
+        ),
+        SentinelFilterProbeResolution::LiteralDriver
+    );
+    assert_eq!(
+        classify_sentinel_filter_probes(
+            /*required_succeeded*/ false,
+            /*optional_succeeded*/ Some(false),
+        ),
+        SentinelFilterProbeResolution::ProbeFailure
+    );
+
+    let neutralization = vec![
+        "-c".to_string(),
+        "include.path=/private/filter-neutralization.gitconfig".to_string(),
+    ];
+    assert_eq!(
+        sentinel_filter_probe_config_args(&neutralization, "set", /*required*/ true)
+            .expect("sentinel config args"),
+        vec![
+            "-c",
+            "include.path=/private/filter-neutralization.gitconfig",
+            "-c",
+            "filter.set.required=true",
+        ]
+    );
+    assert_eq!(
+        sentinel_filter_probe_config_args(&neutralization, "ordinary", /*required*/ true)
+            .expect_err("reject non-sentinel config argument")
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    let mut budget = SentinelFilterProbeBudget::default();
+    assert_eq!(SentinelFilterProbeBudget::max_probes(), 16);
+    for _ in 0..SentinelFilterProbeBudget::max_probes() {
+        budget.ensure_probe_available().expect("probe in budget");
+        budget.record_completed_probe();
+    }
+    assert_eq!(
+        budget
+            .ensure_probe_available()
+            .expect_err("hard probe budget")
+            .to_string(),
+        "refusing to continue Git filter sentinel disambiguation after 16 child probes (hard limit: 16)"
+    );
+}
+
+#[test]
+fn sentinel_special_states_and_literal_driver_names_remain_distinct() {
+    for (driver, special_rule) in [
+        ("set", "file.txt filter\n"),
+        ("unset", "file.txt -filter\n"),
+        ("unspecified", ""),
+    ] {
+        let repo = init_filter_repo();
+        let root = repo.path();
+        configure_marker_filter(root, driver);
+        let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+
+        std::fs::write(root.join(".gitattributes"), special_rule).expect("write special attribute");
+        ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[])
+            .expect("allow special attribute state");
+        assert!(!marker_filter_ran(root), "special {driver}");
+
+        std::fs::write(
+            root.join(".gitattributes"),
+            format!("file.txt filter={driver}\n"),
+        )
+        .expect("write literal attribute");
+        let result =
+            ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[]);
+        let error = match result {
+            Ok(_) => panic!("accepted literal sentinel-named driver {driver}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{driver}");
+        assert!(!marker_filter_ran(root), "literal {driver}");
+    }
+}
+
+#[test]
+fn sentinel_probe_neutralizes_every_known_driver_after_attribute_swap() {
+    for alternate_driver in ["race", "x=y"] {
+        let repo = init_filter_repo();
+        let root = repo.path();
+        configure_marker_filter(root, "set");
+        configure_marker_filter(root, alternate_driver);
+        std::fs::write(root.join(".gitattributes"), "file.txt filter\n")
+            .expect("write initial attribute");
+
+        let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+        let entries = read_filter_config(&git, root, &[]).expect("filter config");
+        let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
+        let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+            .expect("filter neutralization");
+        let output = run_git_success(root, &["check-attr", "-z", "filter", "--", "file.txt"]);
+        let attributes = parse_filter_attributes(&output.stdout, &[b"file.txt".to_vec()])
+            .expect("initial attribute snapshot");
+
+        std::fs::write(
+            root.join(".gitattributes"),
+            format!("file.txt filter={alternate_driver}\n"),
+        )
+        .expect("swap attribute after snapshot");
+        let resolved = resolve_filter_attribute_sentinels(
+            &git,
+            root,
+            attributes,
+            &[],
+            &executable_drivers,
+            &neutralization,
+        )
+        .expect("resolve stale sentinel snapshot safely");
+        assert!(resolved.is_empty(), "{alternate_driver}");
+        assert!(!marker_filter_ran(root), "{alternate_driver}");
+    }
+}
+
+#[test]
+fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
+    let repo = init_filter_repo();
+    let root = repo.path();
+    configure_marker_filter(root, "unspecified");
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
+    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+        .expect("filter neutralization");
+    let attributes = (0..=SentinelFilterProbeBudget::max_probes())
+        .map(|index| {
+            (
+                format!("ordinary-{index}.txt").into_bytes(),
+                FilterAttributeValue::AmbiguousSentinel("unspecified".to_string()),
+            )
+        })
+        .collect();
+
+    let error = resolve_filter_attribute_sentinels(
+        &git,
+        root,
+        attributes,
+        &[],
+        &executable_drivers,
+        &neutralization,
+    )
+    .expect_err("refuse sentinel work beyond hard child-probe budget");
+    assert_eq!(
+        error.to_string(),
+        "refusing to continue Git filter sentinel disambiguation after 16 child probes (hard limit: 16)"
+    );
+    assert!(!marker_filter_ran(root));
+}
+
+#[test]
+fn unrelated_sentinel_probe_failures_remain_generic_and_fail_closed() {
+    let repo = init_filter_repo();
+    let root = repo.path();
+    configure_marker_filter(root, "set");
+    std::fs::write(root.join(".gitattributes"), "file.txt filter\n")
+        .expect("write special attribute");
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
+    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+        .expect("filter neutralization");
+    let mut budget = SentinelFilterProbeBudget::default();
+    let malformed_config = ["-c".to_string(), "=".to_string()];
+
+    let error = sentinel_spelling_selects_filter_driver(
+        &git,
+        root,
+        b"file.txt",
+        "set",
+        &malformed_config,
+        &neutralization,
+        &mut budget,
+    )
+    .expect_err("malformed config must fail both probes");
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(
+        error
+            .to_string()
+            .starts_with("git filter attribute selection probe failed with required status")
+    );
+    assert!(!marker_filter_ran(root));
+}
+
 fn filter_entries(
     scope: GitConfigScope,
     origin: &Path,
@@ -144,9 +399,9 @@ fn filter_entries(
     value: &str,
 ) -> BTreeMap<String, GitConfigEntry> {
     let origin = if origin == Path::new("command line:") {
-        "command line:".to_string()
+        crate::git_config::GitConfigOrigin::CommandLine
     } else {
-        format!("file:{}", origin.display())
+        crate::git_config::GitConfigOrigin::File(origin.to_path_buf())
     };
     BTreeMap::from([(
         key.to_string(),

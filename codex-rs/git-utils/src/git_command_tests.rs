@@ -153,6 +153,16 @@ fn locations_for_root(root: &Path) -> RepositoryAuthority {
         .expect("test repository authority")
 }
 
+fn config_authority_for_root(root: &Path) -> RepositoryAuthority {
+    let mut roots = vec![root.to_path_buf()];
+    let canonical = std::fs::canonicalize(root).expect("canonical root");
+    if !roots.contains(&canonical) {
+        roots.push(canonical);
+    }
+    RepositoryAuthority::from_test_locations(roots.clone(), roots, vec![root.join(".git")])
+        .expect("config repository authority")
+}
+
 fn raw_parent_traversal(root: &Path, sibling: &str) -> PathBuf {
     let separator = std::path::MAIN_SEPARATOR.to_string();
     let mut path = root.as_os_str().to_os_string();
@@ -290,6 +300,97 @@ fn git_metadata_marker_parser_preserves_leading_path_space() {
         PathBuf::from(" relative/common")
     );
     assert!(parse_git_marker_path(b"gitdir:/missing-space\n", b"gitdir: ").is_err());
+}
+
+#[test]
+fn config_source_authority_requires_an_absolute_raw_path() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+    let path = Path::new("relative/config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(path, "test config")
+        .expect_err("relative config path");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("test config"), "{error}");
+    assert!(error.to_string().contains("relative/config"), "{error}");
+}
+
+#[test]
+fn config_source_authority_preserves_and_rejects_a_worktree_crossing_spelling() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let safe = fixture.path().join("safe");
+    std::fs::create_dir_all(root.join("nested")).expect("create repository descendant");
+    std::fs::create_dir_all(&safe).expect("create safe directory");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+    let raw = root
+        .join("nested")
+        .join("..")
+        .join("..")
+        .join("safe/config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(&raw, "crossing config")
+        .expect_err("worktree-crossing config path");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("crossing config"), "{error}");
+    assert!(
+        error.to_string().contains(&raw.display().to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn config_source_authority_allows_protected_metadata_and_unrelated_external_paths() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let external = fixture.path().join("external/config");
+    std::fs::create_dir_all(&root).expect("create repository");
+    std::fs::create_dir_all(external.parent().expect("external parent"))
+        .expect("create external directory");
+    run_git(&root, &["init", "-q"]);
+    let authority = config_authority_for_root(&root);
+
+    authority
+        .ensure_config_source_is_not_worktree_controlled(
+            &root.join(".git/config"),
+            "protected metadata config",
+        )
+        .expect("protected metadata config");
+    authority
+        .ensure_config_source_is_not_worktree_controlled(&external, "external config")
+        .expect("unrelated external config");
+}
+
+#[test]
+fn config_source_authority_rejects_an_unregistered_related_repository_root() {
+    let fixture = tempdir_for_native_git();
+    let root = fixture.path().join("repo");
+    let alias = fixture.path().join("unregistered-related-root");
+    std::fs::create_dir_all(&root).expect("create repository");
+    std::fs::create_dir_all(&alias).expect("create related root");
+    run_git(&root, &["init", "-q"]);
+    std::fs::write(
+        alias.join(".git"),
+        format!("gitdir: {}\n", root.join(".git").display()),
+    )
+    .expect("write related metadata marker");
+    let authority = config_authority_for_root(&root);
+    let path = alias.join("config");
+
+    let error = authority
+        .ensure_config_source_is_not_worktree_controlled(&path, "related config")
+        .expect_err("unregistered related repository config");
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(error.to_string().contains("related config"), "{error}");
 }
 
 fn selected_git(locations: &RepositoryAuthority, directories: &[&Path]) -> PathBuf {

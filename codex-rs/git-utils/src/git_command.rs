@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use crate::errors::GitReadError;
 #[cfg(test)]
@@ -57,6 +58,16 @@ impl GitCommand {
         self.inner.env(key, value);
         self
     }
+
+    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin(&mut self, config: impl Into<Stdio>) -> &mut Self {
+        self.inner.stdin(config);
+        self
+    }
 }
 
 impl GitRunner {
@@ -95,6 +106,15 @@ impl GitRunner {
         let mut command = self.command();
         command.arg("-C").arg(cwd);
         Ok(command)
+    }
+
+    pub(crate) fn ensure_config_source_is_not_worktree_controlled(
+        &self,
+        path: &Path,
+        description: &str,
+    ) -> io::Result<()> {
+        self.authority
+            .ensure_config_source_is_not_worktree_controlled(path, description)
     }
 
     pub(crate) fn output(&self, mut command: GitCommand) -> io::Result<std::process::Output> {

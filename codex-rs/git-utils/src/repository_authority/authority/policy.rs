@@ -33,6 +33,29 @@ impl RepositoryAuthority {
         Ok(canonical)
     }
 
+    pub(crate) fn ensure_config_source_is_not_worktree_controlled(
+        &self,
+        path: &Path,
+        description: &str,
+    ) -> io::Result<()> {
+        if !path.is_absolute() {
+            return Err(worktree_controlled_config_source(path, description));
+        }
+        let inspection = self.route_boundaries.inspect_route(path)?;
+        if inspection.crosses_worktree {
+            return Err(worktree_controlled_config_source(path, description));
+        }
+        for observed in inspection.observed_paths {
+            if self.route_boundaries.contains_known_boundary(&observed)? {
+                continue;
+            }
+            if self.has_related_repository_ancestor(&observed)? {
+                return Err(worktree_controlled_config_source(path, description));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn path_is_untrusted_for_executable_result(&self, path: &Path) -> io::Result<bool> {
         let inspection = self.route_boundaries.inspect_route(path)?;
         if inspection.touches_worktree || inspection.crosses_metadata {
@@ -144,4 +167,14 @@ impl RepositoryAuthority {
         }
         Ok(())
     }
+}
+
+fn worktree_controlled_config_source(path: &Path, description: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "refusing to use worktree-controlled {description}: {}",
+            path.display()
+        ),
+    )
 }
