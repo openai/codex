@@ -691,7 +691,7 @@ impl<'git> GuardedGitConfig<'git> {
         let mut command = self.sources.git.async_command_for_cwd(&requested_cwd)?;
         command
             .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(self.status_config_args(FsmonitorOverride::Disabled, None)?)
+            .args(self.status_config_args(FsmonitorOverride::Disabled, /*neutralizer*/ None)?)
             .args(["rev-parse", "--show-toplevel"]);
         let output = self
             .sources
@@ -728,7 +728,8 @@ impl<'git> GuardedGitConfig<'git> {
                 "tracked paths must be read before status policy installation",
             ));
         }
-        let mut command = self.pending_status_command(FsmonitorOverride::Disabled, None)?;
+        let mut command =
+            self.pending_status_command(FsmonitorOverride::Disabled, /*neutralizer*/ None)?;
         command
             .disable_optional_locks()
             .args(["ls-files", "-z", "--cached"]);
@@ -1284,13 +1285,10 @@ impl FsmonitorProbeRunner for StatusFsmonitorProbeRunner<'_, '_> {
 }
 
 fn command_failure(description: &str, output: &std::process::Output) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Other,
-        StatusPolicyCommandFailure {
-            description: description.to_string(),
-            exit_code: output.status.code(),
-        },
-    )
+    io::Error::other(StatusPolicyCommandFailure {
+        description: description.to_string(),
+        exit_code: output.status.code(),
+    })
 }
 
 fn git_path_from_line_output(output: &[u8]) -> io::Result<PathBuf> {

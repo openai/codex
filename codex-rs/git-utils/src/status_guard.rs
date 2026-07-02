@@ -24,7 +24,8 @@ pub(crate) async fn prepare_status_config<'git>(
         .map_err(|error| {
             if error
                 .get_ref()
-                .is_some_and(|source| source.is::<NoActiveStatusWorktree>())
+                .and_then(|source| source.downcast_ref::<NoActiveStatusWorktree>())
+                .is_some()
             {
                 GitReadError::NotRepository {
                     path: requested_cwd.to_path_buf(),
