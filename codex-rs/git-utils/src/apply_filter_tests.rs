@@ -5,6 +5,7 @@ use std::fs::File;
 use std::fs::FileTimes;
 use std::path::Path;
 use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
