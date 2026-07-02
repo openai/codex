@@ -421,13 +421,21 @@ fn sanitize_config_summary_value(value: &str) -> String {
     value
         .chars()
         .map(|ch| {
-            if ch.is_control()
+            if ch.is_control() // C0/C1 controls, including newlines and escape.
                 || matches!(
                     ch,
-                    '\u{061C}'
-                        | '\u{200E}'..='\u{200F}'
-                        | '\u{202A}'..='\u{202E}'
-                        | '\u{2066}'..='\u{2069}'
+                    '\u{061C}' // Arabic letter mark.
+                        | '\u{200E}' // Left-to-right mark.
+                        | '\u{200F}' // Right-to-left mark.
+                        | '\u{202A}' // Left-to-right embedding.
+                        | '\u{202B}' // Right-to-left embedding.
+                        | '\u{202C}' // Pop directional formatting.
+                        | '\u{202D}' // Left-to-right override.
+                        | '\u{202E}' // Right-to-left override.
+                        | '\u{2066}' // Left-to-right isolate.
+                        | '\u{2067}' // Right-to-left isolate.
+                        | '\u{2068}' // First strong isolate.
+                        | '\u{2069}' // Pop directional isolate.
                 )
             {
                 '�'
