@@ -31,6 +31,13 @@ pub enum AuthMode {
     #[ts(rename = "chatgptAuthTokens")]
     #[strum(serialize = "chatgptAuthTokens")]
     ChatgptAuthTokens,
+    /// [UNSTABLE] Backend auth supplied programmatically by the caller.
+    ///
+    /// Request headers are kept in memory and are not persisted or refreshed by Codex.
+    #[serde(rename = "externalProvided")]
+    #[ts(rename = "externalProvided")]
+    #[strum(serialize = "externalProvided")]
+    ExternalProvided,
     /// Programmatic Codex auth backed by a registered Agent Identity.
     #[serde(rename = "agentIdentity")]
     #[ts(rename = "agentIdentity")]
@@ -53,7 +60,9 @@ impl AuthMode {
     pub fn has_chatgpt_account(self) -> bool {
         match self {
             Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::AgentIdentity | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::ExternalProvided | Self::AgentIdentity | Self::BedrockApiKey => {
+                false
+            }
         }
     }
 
@@ -64,7 +73,7 @@ impl AuthMode {
             | Self::ChatgptAuthTokens
             | Self::AgentIdentity
             | Self::PersonalAccessToken => true,
-            Self::ApiKey | Self::BedrockApiKey => false,
+            Self::ApiKey | Self::ExternalProvided | Self::BedrockApiKey => false,
         }
     }
 }

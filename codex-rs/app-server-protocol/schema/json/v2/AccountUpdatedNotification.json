@@ -26,6 +26,13 @@
           "type": "string"
         },
         {
+          "description": "[UNSTABLE] Backend auth supplied programmatically by the caller.\n\nRequest headers are kept in memory and are not persisted or refreshed by Codex.",
+          "enum": [
+            "externalProvided"
+          ],
+          "type": "string"
+        },
+        {
           "description": "Programmatic Codex auth backed by a registered Agent Identity.",
           "enum": [
             "agentIdentity"
