@@ -787,6 +787,18 @@ fn remote_installed_plugin_in_marketplace(
     }
 }
 
+fn seed_remote_installed_plugins_cache(
+    manager: &PluginsManager,
+    plugins: Vec<RemoteInstalledPlugin>,
+) {
+    let snapshot_generation = manager.remote_installed_plugin_snapshot_cache.generation();
+    assert!(
+        manager
+            .write_remote_installed_plugins_cache(snapshot_generation, plugins)
+            .is_some()
+    );
+}
+
 fn write_cached_plugin(codex_home: &Path, marketplace_name: &str, plugin_name: &str) {
     write_plugin_with_version(
         &codex_home
@@ -1067,7 +1079,7 @@ plugins = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![remote_installed_linear_plugin()]);
+    seed_remote_installed_plugins_cache(&manager, vec![remote_installed_linear_plugin()]);
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
@@ -1268,10 +1280,13 @@ enabled = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        remote_installed_plugin("linear"),
-        remote_installed_plugin("remote-only"),
-    ]);
+    seed_remote_installed_plugins_cache(
+        &manager,
+        vec![
+            remote_installed_plugin("linear"),
+            remote_installed_plugin("remote-only"),
+        ],
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -1318,10 +1333,13 @@ enabled = true
         Some(Product::Codex),
         Some(AuthMode::Chatgpt),
     );
-    manager.write_remote_installed_plugins_cache(vec![
-        remote_installed_plugin("linear"),
-        remote_installed_plugin("remote-only"),
-    ]);
+    seed_remote_installed_plugins_cache(
+        &manager,
+        vec![
+            remote_installed_plugin("linear"),
+            remote_installed_plugin("remote-only"),
+        ],
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -1407,7 +1425,7 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
         screenshot_urls: Vec::new(),
     });
     plugin.keywords = vec!["issues".to_string()];
-    manager.write_remote_installed_plugins_cache(vec![plugin]);
+    seed_remote_installed_plugins_cache(&manager, vec![plugin]);
 
     let marketplaces = manager
         .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_GLOBAL_MARKETPLACE_NAME])
@@ -1459,16 +1477,19 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
 async fn build_remote_installed_plugin_marketplaces_from_cache_filters_by_marketplace_name() {
     let codex_home = TempDir::new().unwrap();
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        remote_installed_plugin_in_marketplace(
-            "workspace-linear",
-            REMOTE_WORKSPACE_MARKETPLACE_NAME,
-        ),
-        remote_installed_plugin_in_marketplace(
-            "shared-linear",
-            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
-        ),
-    ]);
+    seed_remote_installed_plugins_cache(
+        &manager,
+        vec![
+            remote_installed_plugin_in_marketplace(
+                "workspace-linear",
+                REMOTE_WORKSPACE_MARKETPLACE_NAME,
+            ),
+            remote_installed_plugin_in_marketplace(
+                "shared-linear",
+                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+            ),
+        ],
+    );
 
     let marketplaces = manager
         .build_remote_installed_plugin_marketplaces_from_cache(&[REMOTE_WORKSPACE_MARKETPLACE_NAME])
@@ -5046,7 +5067,7 @@ plugins = true
     let manager = PluginsManager::new(tmp.path().to_path_buf());
     let mut installed_linear = remote_installed_plugin("linear");
     installed_linear.id = "plugin_linear".to_string();
-    manager.write_remote_installed_plugins_cache(vec![installed_linear]);
+    seed_remote_installed_plugins_cache(&manager, vec![installed_linear]);
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let disabled_tools = [ToolSuggestDisabledTool::plugin(
         "github@openai-curated-remote",

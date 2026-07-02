@@ -63,6 +63,7 @@ async fn list_tool_suggest_discoverable_plugins_includes_cached_remote_global_pl
     use wiremock::matchers::method;
     use wiremock::matchers::path;
     use wiremock::matchers::query_param;
+    use wiremock::matchers::query_param_is_missing;
 
     let codex_home = tempdir().expect("tempdir should succeed");
     write_file(
@@ -243,20 +244,20 @@ plugins = true
             .all(|plugin| plugin.id != "github@openai-curated-remote")
     );
 
-    for scope in ["GLOBAL", "USER", "WORKSPACE"] {
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "plugins": [],
-                "pagination": {
-                    "next_page_token": null
-                }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param_is_missing("scope"))
+        .and(query_param("includeDownloadUrls", "true"))
+        .and(query_param("limit", "1000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [],
+            "pagination": {
+                "next_page_token": null
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     plugins_manager
         .build_and_cache_remote_installed_plugin_marketplaces(
             &config.plugins_config_input(),

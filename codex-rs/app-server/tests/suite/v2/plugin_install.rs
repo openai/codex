@@ -61,6 +61,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+use wiremock::matchers::query_param_is_missing;
 
 // Plugin install tests wait on connector discovery after the install response path
 // starts, which is noticeably slower on Windows CI.
@@ -2231,22 +2232,31 @@ async fn mount_remote_plugin_detail_with_options(
 }
 
 async fn mount_empty_remote_installed_plugins(server: &MockServer) {
-    Mock::given(method("GET"))
-        .and(path("/backend-api/ps/plugins/installed"))
-        .and(query_param("scope", "GLOBAL"))
-        .and(header("authorization", "Bearer chatgpt-token"))
-        .and(header("chatgpt-account-id", "account-123"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            r#"{
+    let body = r#"{
   "plugins": [],
   "pagination": {
     "limit": 50,
     "next_page_token": null
   }
-}"#,
-        ))
-        .mount(server)
-        .await;
+}"#;
+    for scope in [Some("GLOBAL"), None] {
+        let request = Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(header("authorization", "Bearer chatgpt-token"))
+            .and(header("chatgpt-account-id", "account-123"))
+            .and(header("oai-product-sku", "codex"));
+        let request = match scope {
+            Some(scope) => request.and(query_param("scope", scope)),
+            None => request
+                .and(query_param_is_missing("scope"))
+                .and(query_param("includeDownloadUrls", "true"))
+                .and(query_param("limit", "1000")),
+        };
+        request
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(server)
+            .await;
+    }
 }
 
 async fn mount_remote_plugin_install(server: &MockServer, remote_plugin_id: &str) {

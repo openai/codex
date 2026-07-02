@@ -4,11 +4,13 @@ use super::REMOTE_WORKSPACE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME;
 use super::REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME;
+use super::RemoteInstalledPluginSnapshotCache;
 use super::RemotePluginCatalogError;
 use super::RemotePluginScope;
 use super::RemotePluginServiceConfig;
 use super::ensure_chatgpt_auth;
 use super::fetch_installed_plugins_for_scope_with_download_url;
+use super::installed_snapshot::snapshot_invalidated_error;
 use super::remote_plugin_canonical_marketplace_name;
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
@@ -83,6 +85,7 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
+    installed_snapshot_cache: Arc<RemoteInstalledPluginSnapshotCache>,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
     let Some(auth) = auth else {
@@ -96,8 +99,13 @@ pub(crate) fn maybe_start_remote_installed_plugin_bundle_sync(
     }
 
     tokio::spawn(async move {
-        let result =
-            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
+        let result = sync_remote_installed_plugin_bundles_once_with_snapshot(
+            codex_home,
+            &config,
+            Some(&auth),
+            Some(installed_snapshot_cache.as_ref()),
+        )
+        .await;
         match result {
             Ok(outcome) => {
                 if outcome.changed_local_cache()
@@ -128,33 +136,47 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
-    let auth = ensure_chatgpt_auth(auth)?;
-    let global = async {
-        let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let workspace = async {
-        let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let user = async {
-        let scope = RemotePluginScope::User;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
+    sync_remote_installed_plugin_bundles_once_with_snapshot(
+        codex_home, config, auth, /*installed_snapshot_cache*/ None,
+    )
+    .await
+}
 
-    let (global, workspace, user) = tokio::try_join!(global, workspace, user)?;
+async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
+    codex_home: PathBuf,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    installed_snapshot_cache: Option<&RemoteInstalledPluginSnapshotCache>,
+) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
+    let auth = ensure_chatgpt_auth(auth)?;
+    let installed_snapshot = installed_snapshot_cache.map(|installed_snapshot_cache| {
+        (
+            installed_snapshot_cache,
+            installed_snapshot_cache.generation(),
+        )
+    });
+    let installed_plugin_groups = if let Some((installed_snapshot_cache, _)) = installed_snapshot {
+        vec![
+            installed_snapshot_cache
+                .get_or_fetch(config, auth)
+                .await?
+                .as_ref()
+                .to_vec(),
+        ]
+    } else {
+        let fetch_scope = |scope| {
+            fetch_installed_plugins_for_scope_with_download_url(
+                config, auth, scope, /*include_download_urls*/ true,
+            )
+        };
+        let (global, workspace, user) = tokio::try_join!(
+            fetch_scope(RemotePluginScope::Global),
+            fetch_scope(RemotePluginScope::Workspace),
+            fetch_scope(RemotePluginScope::User),
+        )?;
+        vec![global, workspace, user]
+    };
+    ensure_installed_snapshot_current(installed_snapshot)?;
     let store = PluginStore::try_new(codex_home.clone())?;
     let mut installed_plugin_names_by_marketplace =
         BTreeMap::<String, BTreeSet<String>>::from_iter([
@@ -183,8 +205,9 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
-    for (_scope, installed_plugins) in [global, workspace, user] {
+    for installed_plugins in installed_plugin_groups {
         for installed_plugin in installed_plugins {
+            ensure_installed_snapshot_current(installed_snapshot)?;
             let plugin = installed_plugin.plugin;
             let marketplace_name = remote_plugin_canonical_marketplace_name(&plugin)?.to_string();
             installed_plugin_names_by_marketplace
@@ -270,6 +293,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         }
     }
 
+    ensure_installed_snapshot_current(installed_snapshot)?;
     let removed_cache_plugin_ids = tokio::task::spawn_blocking(move || {
         remove_stale_remote_plugin_caches(
             codex_home.as_path(),
@@ -284,6 +308,17 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         removed_cache_plugin_ids,
         failed_remote_plugin_ids: failed_remote_plugin_ids.into_iter().collect(),
     })
+}
+
+fn ensure_installed_snapshot_current(
+    installed_snapshot: Option<(&RemoteInstalledPluginSnapshotCache, u64)>,
+) -> Result<(), RemoteInstalledPluginBundleSyncError> {
+    if let Some((installed_snapshot_cache, generation)) = installed_snapshot
+        && generation != installed_snapshot_cache.generation()
+    {
+        return Err(snapshot_invalidated_error().into());
+    }
+    Ok(())
 }
 
 pub fn mark_remote_plugin_cache_mutation_in_flight(

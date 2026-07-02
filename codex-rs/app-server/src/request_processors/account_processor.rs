@@ -198,6 +198,9 @@ impl AccountRequestProcessor {
             .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
         thread_manager
             .plugins_manager()
+            .clear_remote_installed_plugins_cache();
+        thread_manager
+            .plugins_manager()
             .clear_recommended_plugins_cache();
 
         match config_manager
