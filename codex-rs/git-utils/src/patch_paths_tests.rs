@@ -714,6 +714,22 @@ fn stage_effective_paths(
 
 #[test]
 fn standalone_stage_paths_uses_one_source_authorization_and_one_filter_read() {
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        let config_dir = tempfile::tempdir().expect("config tempdir");
+        let global_config = config_dir.path().join("global.gitconfig");
+        let system_config = config_dir.path().join("system.gitconfig");
+        std::fs::write(&global_config, "").expect("empty global config");
+        std::fs::write(&system_config, "").expect("empty system config");
+        run_isolated_test(
+            "patch_paths::tests::standalone_stage_paths_uses_one_source_authorization_and_one_filter_read",
+            &[
+                ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+                ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+            ],
+        );
+        return;
+    }
+
     let repo = init_repo();
     let root = repo.path();
     std::fs::write(root.join("single.txt"), "single\n").expect("write staged file");
@@ -729,6 +745,22 @@ fn standalone_stage_paths_uses_one_source_authorization_and_one_filter_read() {
 
 #[test]
 fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
+    if std::env::var_os("CODEX_GIT_UTILS_PATH_ENV_CHILD").is_none() {
+        let config_dir = tempfile::tempdir().expect("config tempdir");
+        let global_config = config_dir.path().join("global.gitconfig");
+        let system_config = config_dir.path().join("system.gitconfig");
+        std::fs::write(&global_config, "").expect("empty global config");
+        std::fs::write(&system_config, "").expect("empty system config");
+        run_isolated_test(
+            "patch_paths::tests::composed_staging_freshly_observes_a_new_clean_driver_and_attribute",
+            &[
+                ("GIT_CONFIG_GLOBAL", global_config.as_os_str()),
+                ("GIT_CONFIG_SYSTEM", system_config.as_os_str()),
+            ],
+        );
+        return;
+    }
+
     let repo = init_repo();
     let root = repo.path();
     std::fs::write(root.join("file.txt"), "base\n").expect("write base file");
