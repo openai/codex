@@ -14,8 +14,8 @@ use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::merge_driver::ensure_no_selected_merge_drivers;
-use crate::patch_paths::extract_effective_paths_from_patch;
-use crate::patch_paths::stage_effective_paths_for_reverse;
+use crate::patch_paths::extract_patch_path_inventory;
+use crate::reverse_staging::stage_effective_paths_for_reverse;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::ensure_no_selected_executable_git_filters;
 #[cfg(test)]
@@ -55,9 +55,10 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
+    let patch_path_inventory = extract_patch_path_inventory(&git, &patch_path, req.revert)?;
+    let patch_paths = &patch_path_inventory.effective_paths;
     let filter_guard =
-        ensure_no_selected_executable_git_filters(&git, &git_root, &patch_paths, &cfg_parts)?;
+        ensure_no_selected_executable_git_filters(&git, &git_root, patch_paths, &cfg_parts)?;
     cfg_parts.extend(safe_git_config_parts());
     cfg_parts.extend_from_slice(filter_guard.git_config_args());
     let patch_arg = patch_path.to_string_lossy().to_string();
@@ -106,7 +107,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 
     let mut args = vec!["apply".to_string()];
     let merge_guard = if plain_check_code != 0 {
-        let guard = ensure_no_selected_merge_drivers(&git, &git_root, &patch_paths, &cfg_parts)?;
+        let guard = ensure_no_selected_merge_drivers(&git, &git_root, patch_paths, &cfg_parts)?;
         if let Some(guard) = &guard {
             cfg_parts.extend_from_slice(guard.git_config_args());
         }
@@ -114,17 +115,12 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
         guard
     } else {
         args.push("--index".to_string());
-        // Direct applications otherwise succeed silently, which leaves the
-        // caller unable to report which files were changed. `--verbose`
-        // emits the same parser-compatible "Applied patch ... cleanly"
-        // records that the three-way path already provides.
-        args.push("--verbose".to_string());
         None
     };
     if req.revert {
         // Stage only after the worktree-only applicability decision. The
         // guarded config is shared with the final Git command.
-        stage_effective_paths_for_reverse(&git, &git_root, &patch_paths, &cfg_parts)?;
+        stage_effective_paths_for_reverse(&git, &git_root, patch_paths, &cfg_parts)?;
     }
     if req.revert {
         args.push("-R".to_string());
@@ -135,8 +131,11 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let (code, stdout, stderr) = run_git(&git, &git_root, &cfg_parts, &args)?;
     drop(merge_guard);
 
-    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) =
-        parse_git_apply_output(&stdout, &stderr);
+    let (mut applied_paths, mut skipped_paths, mut conflicted_paths) = if code == 0 {
+        (patch_path_inventory.primary_paths, Vec::new(), Vec::new())
+    } else {
+        parse_git_apply_output(&stdout, &stderr)
+    };
     applied_paths.sort();
     applied_paths.dedup();
     skipped_paths.sort();
@@ -290,6 +289,10 @@ mod transport_tests;
 #[cfg(test)]
 #[path = "apply_filter_tests.rs"]
 mod filter_tests;
+
+#[cfg(test)]
+#[path = "reverse_apply_tests.rs"]
+mod reverse_apply_tests;
 
 #[cfg(test)]
 mod tests {

@@ -241,7 +241,7 @@ fn clean_reverse_stages_missing_delete_and_rename_endpoints() {
             .expect("clean topology reverse");
 
         assert_eq!(result.exit_code, 0, "{topology:?}: {}", result.stderr);
-        assert_eq!(result.applied_paths.len(), 1, "{topology:?}");
+        assert_eq!(result.applied_paths, vec!["old.txt"], "{topology:?}");
         assert!(result.cmd_for_log.contains("--index"), "{topology:?}");
         assert!(!result.cmd_for_log.contains("--3way"), "{topology:?}");
         assert_eq!(

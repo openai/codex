@@ -1,5 +1,6 @@
 //! Effective patch-path discovery and safe staging guards.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,33 +12,58 @@ use crate::exact_staging::update_index_exact_paths;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
 
-pub(crate) fn extract_effective_paths_from_patch(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchPathInventory {
+    pub(crate) primary_paths: Vec<String>,
+    pub(crate) effective_paths: Vec<String>,
+}
+
+pub(crate) fn extract_patch_path_inventory(
     git: &GitRunner,
     patch_path: &Path,
     revert: bool,
-) -> io::Result<Vec<String>> {
-    let forward_paths = git_apply_numstat_paths(git, patch_path, revert)?;
+) -> io::Result<PatchPathInventory> {
+    let primary_paths = git_apply_numstat_paths(git, patch_path, revert)?;
     // `git apply --numstat` reports only the destination of a rename. Parse the
     // opposite orientation too so both endpoints are included in the result.
-    let reverse_paths = git_apply_numstat_paths(git, patch_path, !revert)?;
-    if forward_paths.len() != reverse_paths.len() {
+    let opposite_paths = git_apply_numstat_paths(git, patch_path, !revert)?;
+    if primary_paths.len() != opposite_paths.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "forward and reverse patch parsing returned different path counts",
         ));
     }
-    let effective_paths: std::collections::BTreeSet<String> =
-        forward_paths.into_iter().chain(reverse_paths).collect();
+    let primary_paths = primary_paths
+        .into_iter()
+        .map(validate_patch_path)
+        .collect::<io::Result<BTreeSet<_>>>()?;
+    let opposite_paths = opposite_paths
+        .into_iter()
+        .map(validate_patch_path)
+        .collect::<io::Result<BTreeSet<_>>>()?;
+    let effective_paths = primary_paths
+        .iter()
+        .cloned()
+        .chain(opposite_paths)
+        .collect::<BTreeSet<_>>();
     if effective_paths.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "patch does not identify any paths",
         ));
     }
-    effective_paths
-        .into_iter()
-        .map(validate_patch_path)
-        .collect()
+    Ok(PatchPathInventory {
+        primary_paths: primary_paths.into_iter().collect(),
+        effective_paths: effective_paths.into_iter().collect(),
+    })
+}
+
+pub(crate) fn extract_effective_paths_from_patch(
+    git: &GitRunner,
+    patch_path: &Path,
+    revert: bool,
+) -> io::Result<Vec<String>> {
+    Ok(extract_patch_path_inventory(git, patch_path, revert)?.effective_paths)
 }
 
 /// Best-effort extraction of the paths Git would apply.
@@ -119,7 +145,7 @@ fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
             )
         })?;
         if path.is_empty() {
-            let old = records
+            let _old = records
                 .next()
                 .filter(|path| !path.is_empty())
                 .ok_or_else(|| {
@@ -137,7 +163,6 @@ fn parse_numstat_paths(output: &[u8]) -> io::Result<Vec<String>> {
                         "git apply returned an incomplete rename path record",
                     )
                 })?;
-            insert_numstat_path(&mut paths, old)?;
             insert_numstat_path(&mut paths, new)?;
         } else {
             insert_numstat_path(&mut paths, path)?;
@@ -274,12 +299,12 @@ pub(crate) fn stage_effective_paths(
 }
 
 #[cfg(not(windows))]
-fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     file_type.is_dir()
 }
 
 #[cfg(unix)]
-fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
     // Git stages an exact Unix symlink as a mode-120000 blob containing the
     // link target. The whole-command neutralizer covers unrelated racy index
     // entries while this target is omitted from the selected-filter refusal.
@@ -287,14 +312,14 @@ fn leaf_may_run_git_content_filter(file_type: std::fs::FileType) -> bool {
 }
 
 #[cfg(not(unix))]
-fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_may_run_git_content_filter(_file_type: std::fs::FileType) -> bool {
     // Keep the conservative policy on platforms whose symlink staging
     // behavior can depend on repository and host configuration.
     true
 }
 
 #[cfg(windows)]
-fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
+pub(crate) fn leaf_is_traversable_directory(file_type: std::fs::FileType) -> bool {
     use std::os::windows::fs::FileTypeExt;
 
     // Git traverses junctions and container-mapped directory symlinks. Refuse
@@ -346,7 +371,7 @@ pub(crate) struct ConfinedPatchPaths {
 }
 
 impl ConfinedPatchPaths {
-    fn into_exact_leaves(self) -> io::Result<Vec<String>> {
+    pub(crate) fn into_exact_leaves(self) -> io::Result<Vec<String>> {
         self.entries
             .into_iter()
             .map(|entry| {

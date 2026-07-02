@@ -134,10 +134,7 @@ fn effective_paths_cover_supported_patch_headers() {
 
     let nul_rename_paths = parse_numstat_paths(b"0\t0\t\0old name.txt\0new name.txt\0")
         .expect("parse NUL-delimited rename paths");
-    assert_eq!(
-        nul_rename_paths,
-        vec!["old name.txt".to_string(), "new name.txt".to_string()]
-    );
+    assert_eq!(nul_rename_paths, vec!["new name.txt".to_string()]);
 }
 
 #[test]

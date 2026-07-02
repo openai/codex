@@ -15,6 +15,7 @@ mod merge_driver;
 mod operations;
 mod patch_paths;
 mod platform;
+mod reverse_staging;
 mod safe_git;
 
 pub use apply::ApplyGitRequest;
