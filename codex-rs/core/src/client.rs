@@ -1912,6 +1912,7 @@ where
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
+        let (request_start, mut ttft_ms) = (Instant::now(), None);
         let mut api_stream = api_stream;
         let upstream_request_id = upstream_request_id.as_deref();
         if let Some(upstream_request_id) = upstream_request_id {
@@ -1961,6 +1962,7 @@ where
                             Some(usage.cached_input_tokens),
                             Some(usage.reasoning_output_tokens),
                             usage.total_tokens,
+                            ttft_ms,
                         );
                     }
                     inference_trace_attempt.record_completed(
@@ -1988,6 +1990,11 @@ where
                     }
                 }
                 Ok(event) => {
+                    if matches!(&event, ResponseEvent::OutputItemAdded(_)) && ttft_ms.is_none() {
+                        ttft_ms = Some(
+                            i64::try_from(request_start.elapsed().as_millis()).unwrap_or(i64::MAX),
+                        );
+                    }
                     if tx_event.send(Ok(event)).await.is_err() {
                         inference_trace_attempt.record_cancelled(
                             STREAM_DROPPED_REASON,
