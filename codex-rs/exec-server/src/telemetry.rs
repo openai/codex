@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_otel::MetricsClient;
+use tracing::info;
 use tracing::warn;
 
 const CONNECTIONS_ACTIVE_METRIC: &str = "exec_server_connections_active";
@@ -96,8 +97,19 @@ pub(crate) struct ConnectionMetricGuard {
 
 pub(crate) struct ProcessMetricGuard {
     telemetry: ExecServerTelemetry,
+    log_context: Option<ProcessLogContext>,
     started_at: Instant,
     result: &'static str,
+}
+
+struct ProcessLogContext {
+    process_id: String,
+    trace_id: String,
+}
+
+pub(crate) struct RequestLogContext {
+    request_id: String,
+    traceparent: Option<String>,
 }
 
 impl ExecServerTelemetry {
@@ -129,10 +141,22 @@ impl ExecServerTelemetry {
 
     pub(crate) fn request_completed(
         &self,
+        log_context: Option<&RequestLogContext>,
         method: &'static str,
         result: &'static str,
         duration: Duration,
     ) {
+        if let Some(log_context) = log_context {
+            info!(
+                event.name = "codex.exec_server_request",
+                request_id = %log_context.request_id,
+                method,
+                result,
+                duration_ms = duration.as_secs_f64() * 1000.0,
+                traceparent = log_context.traceparent.as_deref().unwrap_or(""),
+                "exec-server request completed"
+            );
+        }
         self.with_inner(|inner| {
             let tags = [("method", method), ("result", result)];
             inner.counter(REQUESTS_TOTAL_METRIC, REQUESTS_TOTAL_DESCRIPTION, &tags);
@@ -143,6 +167,17 @@ impl ExecServerTelemetry {
                 &tags,
             );
         });
+    }
+
+    pub(crate) fn request_log_context(
+        &self,
+        request_id: &impl std::fmt::Display,
+        traceparent: Option<&str>,
+    ) -> Option<RequestLogContext> {
+        self.info_events_enabled().then(|| RequestLogContext {
+            request_id: request_id.to_string(),
+            traceparent: traceparent.map(str::to_string),
+        })
     }
 
     pub(crate) fn remote_registration_completed(&self, result: &'static str, duration: Duration) {
@@ -163,18 +198,37 @@ impl ExecServerTelemetry {
         });
     }
 
-    pub(crate) fn process_started(&self) -> ProcessMetricGuard {
+    pub(crate) fn process_started(&self, process_id: &str) -> ProcessMetricGuard {
         self.with_inner(|inner| {
             inner.adjust_process_count(/*delta*/ 1);
         });
         ProcessMetricGuard {
             telemetry: self.clone(),
+            log_context: self.info_events_enabled().then(|| ProcessLogContext {
+                process_id: process_id.to_string(),
+                trace_id: codex_otel::current_span_trace_id().unwrap_or_default(),
+            }),
             started_at: Instant::now(),
             result: "unknown",
         }
     }
 
-    fn process_finished(&self, result: &'static str, duration: Duration) {
+    fn process_finished(
+        &self,
+        log_context: Option<&ProcessLogContext>,
+        result: &'static str,
+        duration: Duration,
+    ) {
+        if let Some(log_context) = log_context {
+            info!(
+                event.name = "codex.exec_server_process",
+                process_id = %log_context.process_id,
+                trace_id = %log_context.trace_id,
+                result,
+                duration_ms = duration.as_secs_f64() * 1000.0,
+                "exec-server process completed"
+            );
+        }
         self.with_inner(|inner| {
             inner.adjust_process_count(/*delta*/ -1);
             inner.counter(
@@ -189,6 +243,10 @@ impl ExecServerTelemetry {
                 &[("result", result)],
             );
         });
+    }
+
+    pub(crate) fn info_events_enabled(&self) -> bool {
+        tracing::enabled!(tracing::Level::INFO)
     }
 
     fn connection_finished(&self, transport: ConnectionTransport) {
@@ -236,8 +294,11 @@ impl ProcessMetricGuard {
 
 impl Drop for ProcessMetricGuard {
     fn drop(&mut self) {
-        self.telemetry
-            .process_finished(self.result, self.started_at.elapsed());
+        self.telemetry.process_finished(
+            self.log_context.as_ref(),
+            self.result,
+            self.started_at.elapsed(),
+        );
     }
 }
 
@@ -338,3 +399,7 @@ fn register_active_gauge(
         warn!(metric = name, "failed to register exec-server gauge");
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;
