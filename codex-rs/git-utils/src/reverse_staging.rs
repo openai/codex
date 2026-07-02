@@ -214,7 +214,7 @@ fn read_reverse_index_entries(
     paths: &[String],
     git_config_args: &[String],
 ) -> io::Result<BTreeMap<String, Vec<ReverseIndexEntry>>> {
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .args(git_config_args)
         .args([
@@ -225,8 +225,7 @@ fn read_reverse_index_entries(
             "-z",
             "--",
         ])
-        .args(paths)
-        .current_dir(git_root);
+        .args(paths);
     let output = git.output(command)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
@@ -371,14 +370,13 @@ fn run_path_list_command(
     args: &[&str],
     operation: &str,
 ) -> io::Result<Vec<u8>> {
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .args(git_config_args)
         .args(extra_git_args)
         .args(args)
         .arg("--")
-        .args(paths)
-        .current_dir(git_root);
+        .args(paths);
     let output = git.output(command)?;
     if !output.status.success() {
         return Err(io::Error::other(format!(

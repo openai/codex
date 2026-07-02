@@ -11,6 +11,7 @@ use crate::apply::write_temp_patch;
 use crate::exact_staging::update_index_exact_paths;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
+use crate::git_config_sources::ensure_no_worktree_config_sources;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PatchPathInventory {
@@ -18,15 +19,21 @@ pub(crate) struct PatchPathInventory {
     pub(crate) effective_paths: Vec<String>,
 }
 
+/// Extract requested-orientation and effective paths with Git from a cwd whose
+/// config sources have already been authorized for `git_config_args`.
 pub(crate) fn extract_patch_path_inventory(
     git: &GitRunner,
+    authorized_cwd: &Path,
     patch_path: &Path,
     revert: bool,
+    git_config_args: &[String],
 ) -> io::Result<PatchPathInventory> {
-    let primary_paths = git_apply_numstat_paths(git, patch_path, revert)?;
+    let primary_paths =
+        git_apply_numstat_paths(git, authorized_cwd, patch_path, revert, git_config_args)?;
     // `git apply --numstat` reports only the destination of a rename. Parse the
     // opposite orientation too so both endpoints are included in the result.
-    let opposite_paths = git_apply_numstat_paths(git, patch_path, !revert)?;
+    let opposite_paths =
+        git_apply_numstat_paths(git, authorized_cwd, patch_path, !revert, git_config_args)?;
     if primary_paths.len() != opposite_paths.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -60,10 +67,15 @@ pub(crate) fn extract_patch_path_inventory(
 
 pub(crate) fn extract_effective_paths_from_patch(
     git: &GitRunner,
+    authorized_cwd: &Path,
     patch_path: &Path,
     revert: bool,
+    git_config_args: &[String],
 ) -> io::Result<Vec<String>> {
-    Ok(extract_patch_path_inventory(git, patch_path, revert)?.effective_paths)
+    Ok(
+        extract_patch_path_inventory(git, authorized_cwd, patch_path, revert, git_config_args)?
+            .effective_paths,
+    )
 }
 
 /// Best-effort extraction of the paths Git would apply.
@@ -71,33 +83,43 @@ pub(crate) fn extract_effective_paths_from_patch(
 /// Security-sensitive callers must use the fallible internal extractor so an
 /// invalid or ambiguous patch is rejected instead of becoming an empty list.
 pub fn extract_paths_from_patch(diff_text: &str) -> Vec<String> {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    extract_paths_from_patch_from_cwd(diff_text, &cwd)
+}
+
+fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String> {
     let Ok((tmpdir, patch_path)) = write_temp_patch(diff_text) else {
         return Vec::new();
     };
-    let paths = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| GitRunner::for_cwd(&cwd).ok())
-        .and_then(|git| {
-            extract_effective_paths_from_patch(&git, &patch_path, /*revert*/ false).ok()
-        })
-        .unwrap_or_default();
+    let paths = (|| -> io::Result<Vec<String>> {
+        let git = GitRunner::for_cwd_io(cwd)?;
+        let git_root = crate::get_git_repo_root(cwd)
+            .ok_or_else(|| io::Error::other("not a Git repository"))?;
+        let git_root = std::fs::canonicalize(git_root)?;
+        ensure_no_worktree_config_sources(&git, &git_root, &[])?;
+        extract_effective_paths_from_patch(&git, &git_root, &patch_path, /*revert*/ false, &[])
+    })()
+    .unwrap_or_default();
     drop(tmpdir);
     paths
 }
 
 fn git_apply_numstat_paths(
     git: &GitRunner,
+    authorized_cwd: &Path,
     patch_path: &Path,
     revert: bool,
+    git_config_args: &[String],
 ) -> io::Result<Vec<String>> {
-    let mut cmd = git.command();
+    let mut cmd = git.command_for_cwd(authorized_cwd)?;
+    cmd.args(git_config_args);
     cmd.args(["apply", "--numstat", "-z"]);
     if revert {
         cmd.arg("-R");
     }
-    cmd.arg("--")
-        .arg(patch_path)
-        .current_dir(patch_path.parent().unwrap_or_else(|| Path::new(".")));
+    cmd.arg("--").arg(patch_path);
     let out = git.output(cmd)?;
     if !out.status.success() {
         return Err(io::Error::new(
@@ -253,10 +275,18 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 /// Stage only the files that actually exist on disk for the given diff.
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let git = GitRunner::for_cwd_io(git_root)?;
+    let git_config_args = safe_git_config_parts();
+    ensure_no_worktree_config_sources(&git, git_root, &git_config_args)?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
-    let paths = extract_effective_paths_from_patch(&git, &patch_path, /*revert*/ true)?;
+    let paths = extract_effective_paths_from_patch(
+        &git,
+        git_root,
+        &patch_path,
+        /*revert*/ true,
+        &git_config_args,
+    )?;
     let _guard = tmpdir;
-    stage_effective_paths(&git, git_root, &paths, &safe_git_config_parts())
+    stage_effective_paths(&git, git_root, &paths, &git_config_args)
 }
 
 pub(crate) fn stage_effective_paths(

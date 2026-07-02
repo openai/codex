@@ -12,6 +12,7 @@ use crate::exact_index_policy::ExactIndexPolicy;
 use crate::exact_index_policy::effective_git_bool;
 use crate::exact_index_policy::resolve_exact_index_policy;
 use crate::git_command::GitRunner;
+use crate::git_config_sources::ensure_no_worktree_config_sources;
 use crate::patch_paths::validate_patch_path;
 use crate::safe_git::ensure_no_selected_git_add_filters;
 
@@ -66,6 +67,8 @@ pub(crate) fn update_index_exact_paths(
             "content-filter staging path is not in the exact staging set",
         ));
     }
+
+    ensure_no_worktree_config_sources(git, git_root, git_config_args)?;
 
     let (paths, content_filter_paths) = match resolve_exact_index_policy(
         git,
@@ -135,14 +138,13 @@ fn ignored_untracked_paths(
         .map(|path| format!("./{path}"))
         .collect::<Vec<_>>();
     let input = nul_path_input(&probe_paths)?;
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         // `check-ignore --stdin` consumes pathnames rather than pathspecs and
         // rejects the global literal-pathspec mode as unsupported magic.
         .args(["check-ignore", "--stdin", "-z"])
-        .current_dir(git_root)
         .stdin(Stdio::from(input));
     let output = git.output(command)?;
     match output.status.code() {
@@ -183,12 +185,11 @@ fn sparse_checkout_policy(
     // `git-sparse-checkout` helper. Repository-controlled PATH entries are
     // outside the trusted executable boundary. `--list-cmds=builtins` is a
     // main-program capability query and cannot dispatch an external command.
-    let mut builtins_command = git.command();
+    let mut builtins_command = git.command_for_cwd(git_root)?;
     builtins_command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
-        .arg("--list-cmds=builtins")
-        .current_dir(git_root);
+        .arg("--list-cmds=builtins");
     let builtins = git.output(builtins_command)?;
     let sparse_checkout_is_builtin = builtins.status.success()
         && std::str::from_utf8(&builtins.stdout)
@@ -202,12 +203,11 @@ fn sparse_checkout_policy(
     }
 
     let input = nul_path_input(paths)?;
-    let mut command = git.command();
+    let mut command = git.command_for_cwd(git_root)?;
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(git_config_args)
         .args(["sparse-checkout", "check-rules", "-z"])
-        .current_dir(git_root)
         .stdin(Stdio::from(input));
     let output = git.output(command)?;
     if !output.status.success() {

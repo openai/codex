@@ -34,6 +34,22 @@ fn run_success(cwd: &Path, args: &[&str]) -> String {
     stdout
 }
 
+fn run_success_with_apply_config(cwd: &Path, args: &[&str]) -> String {
+    let mut configured_args = crate::apply::configured_git_config_parts();
+    configured_args.extend(args.iter().map(ToString::to_string));
+    let configured_args = configured_args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    run_success(cwd, &configured_args)
+}
+
+fn read_file_normalized(path: &Path) -> String {
+    std::fs::read_to_string(path)
+        .expect("read file")
+        .replace("\r\n", "\n")
+}
+
 fn init_repo() -> tempfile::TempDir {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let root = repo.path();
@@ -191,12 +207,9 @@ fn clean_reverse_checks_worktree_before_staging_and_skips_merge_driver() {
     assert_eq!(result.applied_paths, vec!["file.txt"]);
     assert!(result.cmd_for_log.contains("--index"));
     assert!(!result.cmd_for_log.contains("--3way"));
-    assert_eq!(
-        std::fs::read_to_string(root.join("file.txt")).expect("read restored file"),
-        "old\n"
-    );
+    assert_eq!(read_file_normalized(&root.join("file.txt")), "old\n");
     assert!(!configured_marker_exists(root, "codex.oldmergeran"));
-    assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+    assert!(run_success_with_apply_config(root, &["status", "--porcelain"]).is_empty());
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -245,14 +258,14 @@ fn clean_reverse_stages_missing_delete_and_rename_endpoints() {
         assert!(result.cmd_for_log.contains("--index"), "{topology:?}");
         assert!(!result.cmd_for_log.contains("--3way"), "{topology:?}");
         assert_eq!(
-            std::fs::read_to_string(root.join("old.txt")).expect("restored old file"),
+            read_file_normalized(&root.join("old.txt")),
             "old\n",
             "{topology:?}"
         );
         assert!(!root.join("new.txt").exists(), "{topology:?}");
         assert!(!configured_marker_exists(root, "codex.oldmergeran"));
         assert!(
-            run_success(root, &["status", "--porcelain"]).is_empty(),
+            run_success_with_apply_config(root, &["status", "--porcelain"]).is_empty(),
             "{topology:?}"
         );
     }
@@ -283,7 +296,7 @@ fn selected_empty_and_equals_named_drivers_reject_without_marker_or_index_mutati
             before_contents,
             "{driver:?}"
         );
-        assert!(run_success(root, &["status", "--porcelain"]).is_empty());
+        assert!(run_success_with_apply_config(root, &["status", "--porcelain"]).is_empty());
     }
 }
 

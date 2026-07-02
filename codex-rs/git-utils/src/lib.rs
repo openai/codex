@@ -9,12 +9,16 @@ mod exact_staging;
 mod fsmonitor;
 mod git_command;
 mod git_config;
+mod git_config_sources;
+mod git_executable;
 mod info;
 mod local_only;
 mod merge_driver;
 mod operations;
 mod patch_paths;
+mod path_authority;
 mod platform;
+mod repository_authority;
 mod reverse_staging;
 mod safe_git;
 
