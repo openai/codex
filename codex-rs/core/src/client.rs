@@ -1123,46 +1123,48 @@ impl ModelClientSession {
         }
     }
 
+    /// Checks whether the current request is an incremental extension of the previous request.
+    /// We only reuse an incremental input delta when non-input request fields are unchanged and
+    /// `input` is a strict extension of the previous known input. Server-returned output items
+    /// are treated as part of the baseline so we do not resend them.
     fn get_incremental_items(
         &self,
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
         allow_empty_delta: bool,
     ) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request is an incremental extension of the previous request.
-        // We only reuse an incremental input delta when non-input request fields are unchanged and
-        // `input` is a strict
-        // extension of the previous known input. Server-returned output items are treated as part
-        // of the baseline so we do not resend them.
         let previous_request = self.websocket_session.last_request.as_ref()?;
         if !responses_request_properties_match(previous_request, request) {
             trace!("incremental request failed, websocket reuse properties didn't match");
             return None;
         }
 
-        let Some(after_previous_input) = request
-            .input
-            .strip_prefix(previous_request.input.as_slice())
-        else {
-            trace!("incremental request failed, items didn't match");
-            return None;
-        };
-
-        let mut response_items =
-            last_response.map_or_else(Vec::new, |response| response.items_added.clone());
-        response_items
+        // To compare the inputs, we concatenate the previous request items with the response items,
+        // then compare that against the equivalent slice of request items, ignoring metadata. If
+        // they match, we can consider the remaining items the incremental request.
+        let mut previous_items = previous_request.input.clone();
+        if let Some(response) = last_response {
+            previous_items.extend_from_slice(&response.items_added);
+        }
+        previous_items
             .iter_mut()
             .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
 
-        let mut request_items = after_previous_input.to_vec();
-        // clear metadata from items that we will compare and strip
-        for request_item in request_items.iter_mut().take(response_items.len()) {
-            request_item.clear_internal_chat_message_metadata_passthrough();
-        }
-        let Some(incremental_items) = request_items.strip_prefix(response_items.as_slice()) else {
-            trace!("incremental request failed, items didn't match");
+        let Some((request_items_to_compare, incremental_items)) =
+            request.input.split_at_checked(previous_items.len())
+        else {
+            trace!("incremental request failed, incompatible request length");
             return None;
         };
+        let mut request_prefix = request_items_to_compare.to_vec();
+        request_prefix
+            .iter_mut()
+            .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+
+        if previous_items != request_prefix {
+            trace!("incremental request failed, items didn't match");
+            return None;
+        }
         if !allow_empty_delta && incremental_items.is_empty() {
             return None;
         }
