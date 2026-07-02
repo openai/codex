@@ -716,7 +716,7 @@ async fn turn_and_completed_response_spans_record_token_usage() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn handle_responses_span_records_response_kind_and_tool_name() {
     let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()
