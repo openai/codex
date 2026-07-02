@@ -50,6 +50,8 @@ pub(crate) enum GitReadError {
     InvalidRepositoryMetadata { path: PathBuf, reason: String },
     #[error("{path:?} is not a Git repository")]
     NotRepository { path: PathBuf },
+    #[error("invalid Git configuration environment: {reason}")]
+    InvalidConfigEnvironment { reason: String },
 }
 
 impl GitReadError {
@@ -59,7 +61,9 @@ impl GitReadError {
             Self::UnprovenPrimaryAuthority { .. } | Self::UnsafeRepositoryMetadata { .. } => {
                 std::io::ErrorKind::PermissionDenied
             }
-            Self::InvalidRepositoryMetadata { .. } => std::io::ErrorKind::InvalidData,
+            Self::InvalidRepositoryMetadata { .. } | Self::InvalidConfigEnvironment { .. } => {
+                std::io::ErrorKind::InvalidData
+            }
         }
     }
 

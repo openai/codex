@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,7 +12,9 @@ pub(super) fn default_system_config_source_candidates(
     git: &GitRunner,
     cwd: &Path,
 ) -> io::Result<Vec<(&'static str, PathBuf)>> {
-    if git_env_bool("GIT_CONFIG_NOSYSTEM")? || std::env::var_os("GIT_CONFIG_SYSTEM").is_some() {
+    if git_env_bool(git, "GIT_CONFIG_NOSYSTEM")?
+        || git.config_environment_value("GIT_CONFIG_SYSTEM").is_some()
+    {
         return Ok(Vec::new());
     }
     // `GIT_CONFIG_SYSTEM` was added to `git var` in Git 2.42. The PSEC-4394
@@ -33,16 +36,19 @@ pub(super) fn selected_git_home_config_candidates(
     git: &GitRunner,
     cwd: &Path,
 ) -> io::Result<Vec<PathBuf>> {
-    if std::env::var_os("GIT_CONFIG_GLOBAL").is_some() {
+    if git.config_environment_value("GIT_CONFIG_GLOBAL").is_some() {
         return Ok(Vec::new());
     }
     #[cfg(not(windows))]
-    if std::env::var_os("HOME").is_none() {
+    if git.config_environment_value("HOME").is_none() {
         return Ok(Vec::new());
     }
     let dot_gitconfig = selected_git_path_candidate(git, cwd, "~/.gitconfig")?;
     let mut candidates = vec![dot_gitconfig.clone()];
-    if std::env::var_os("XDG_CONFIG_HOME").is_none_or(|path| path.is_empty()) {
+    if git
+        .config_environment_value("XDG_CONFIG_HOME")
+        .is_none_or(OsStr::is_empty)
+    {
         let home = dot_gitconfig
             .parent()
             .ok_or_else(|| invalid_config_source("selected Git HOME has no parent"))?;
@@ -55,7 +61,9 @@ pub(super) fn selected_git_prefix_system_candidate(
     git: &GitRunner,
     cwd: &Path,
 ) -> io::Result<Option<PathBuf>> {
-    if git_env_bool("GIT_CONFIG_NOSYSTEM")? || std::env::var_os("GIT_CONFIG_SYSTEM").is_some() {
+    if git_env_bool(git, "GIT_CONFIG_NOSYSTEM")?
+        || git.config_environment_value("GIT_CONFIG_SYSTEM").is_some()
+    {
         return Ok(None);
     }
     selected_git_path_candidate(git, cwd, "%(prefix)/etc/gitconfig").map(Some)
@@ -149,24 +157,25 @@ fn parse_git_var_paths(output: &[u8]) -> io::Result<Vec<PathBuf>> {
         .collect()
 }
 
-pub(super) fn legacy_primary_config_source_candidates() -> io::Result<Vec<(&'static str, PathBuf)>>
-{
+pub(super) fn legacy_primary_config_source_candidates(
+    git: &GitRunner,
+) -> io::Result<Vec<(&'static str, PathBuf)>> {
     let mut candidates = Vec::new();
-    match std::env::var_os("GIT_CONFIG_GLOBAL") {
+    match git.config_environment_value("GIT_CONFIG_GLOBAL") {
         Some(path) if !path.is_empty() => {
             candidates.push(("GIT_CONFIG_GLOBAL", PathBuf::from(path)));
         }
         Some(_) => {}
         None => {
-            let homes = git_home_directories();
-            match std::env::var_os("XDG_CONFIG_HOME") {
+            let homes = git_home_directories(git);
+            match git.config_environment_value("XDG_CONFIG_HOME") {
                 Some(xdg) if !xdg.is_empty() => candidates.push((
                     "XDG_CONFIG_HOME Git config",
                     PathBuf::from(xdg).join("git/config"),
                 )),
                 _ => {
                     #[cfg(windows)]
-                    if let Some(app_data) = std::env::var_os("APPDATA")
+                    if let Some(app_data) = git.config_environment_value("APPDATA")
                         && !app_data.is_empty()
                     {
                         candidates.push((
@@ -187,15 +196,15 @@ pub(super) fn legacy_primary_config_source_candidates() -> io::Result<Vec<(&'sta
             }
         }
     }
-    if !git_env_bool("GIT_CONFIG_NOSYSTEM")? {
-        match std::env::var_os("GIT_CONFIG_SYSTEM") {
+    if !git_env_bool(git, "GIT_CONFIG_NOSYSTEM")? {
+        match git.config_environment_value("GIT_CONFIG_SYSTEM") {
             Some(path) if !path.is_empty() => {
                 candidates.push(("GIT_CONFIG_SYSTEM", PathBuf::from(path)));
             }
             Some(_) => {}
             None => {
                 #[cfg(windows)]
-                if let Some(program_data) = std::env::var_os("PROGRAMDATA")
+                if let Some(program_data) = git.config_environment_value("PROGRAMDATA")
                     && !program_data.is_empty()
                 {
                     candidates.push((
@@ -209,24 +218,25 @@ pub(super) fn legacy_primary_config_source_candidates() -> io::Result<Vec<(&'sta
     Ok(candidates)
 }
 
-fn git_home_directories() -> Vec<std::ffi::OsString> {
-    if let Some(home) = std::env::var_os("HOME") {
-        return vec![home];
+fn git_home_directories(git: &GitRunner) -> Vec<std::ffi::OsString> {
+    if let Some(home) = git.config_environment_value("HOME") {
+        return vec![home.to_owned()];
     }
     #[cfg(windows)]
     {
         let mut homes = Vec::new();
-        if let (Some(drive), Some(path)) =
-            (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
-        {
-            let mut home = drive;
+        if let (Some(drive), Some(path)) = (
+            git.config_environment_value("HOMEDRIVE"),
+            git.config_environment_value("HOMEPATH"),
+        ) {
+            let mut home = drive.to_owned();
             home.push(path);
             homes.push(home);
         }
-        if let Some(profile) = std::env::var_os("USERPROFILE")
-            && !homes.contains(&profile)
+        if let Some(profile) = git.config_environment_value("USERPROFILE")
+            && !homes.iter().any(|home| home == profile)
         {
-            homes.push(profile);
+            homes.push(profile.to_owned());
         }
         homes
     }
@@ -242,8 +252,8 @@ fn home_config_path(home: &std::ffi::OsStr, suffix: &str) -> PathBuf {
     }
 }
 
-fn git_env_bool(name: &str) -> io::Result<bool> {
-    let Some(value) = std::env::var_os(name) else {
+fn git_env_bool(git: &GitRunner, name: &str) -> io::Result<bool> {
+    let Some(value) = git.config_environment_value(name) else {
         return Ok(false);
     };
     let value = value

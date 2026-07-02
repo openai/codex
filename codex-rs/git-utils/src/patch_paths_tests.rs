@@ -1,8 +1,15 @@
 use super::*;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
+use crate::apply::safe_git_config_parts;
 use crate::exact_staging::StagePathsResult;
-use crate::exact_staging::update_index_exact_paths;
+use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::exact_staging::update_index_exact_paths_standalone;
+use crate::guarded_config::config_source_authorization_count;
+use crate::guarded_config::reset_config_source_authorization_count;
+use crate::safe_git::filter_policy_overlay_count;
+use crate::safe_git::filter_policy_read_count;
+use crate::safe_git::reset_filter_policy_counts;
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
@@ -70,8 +77,8 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
     let git_root =
         crate::get_git_repo_root(cwd).ok_or_else(|| io::Error::other("not a Git repository"))?;
     let git_root = std::fs::canonicalize(git_root)?;
-    ensure_no_worktree_config_sources(&git, &git_root, &[])?;
-    let paths = extract_effective_paths_from_patch(&git, &git_root, &patch_path, revert, &[])?;
+    let config = GuardedGitConfig::authorize(&git, &git_root, Vec::new())?;
+    let paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, revert)?;
     drop(tmpdir);
     Ok(paths)
 }
@@ -79,6 +86,152 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
 fn best_effort_paths(diff: &str) -> Vec<String> {
     let repo = init_repo();
     extract_paths_from_patch_from_cwd(diff, repo.path())
+}
+
+#[cfg(unix)]
+#[test]
+fn best_effort_extraction_selects_the_physical_repo_from_a_symlinked_nested_cwd() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let outer = fixture.path().join("outer");
+    let target = fixture.path().join("target");
+    let nested = target.join("nested");
+    std::fs::create_dir_all(&outer).expect("outer");
+    std::fs::create_dir_all(&nested).expect("nested");
+    assert_eq!(run(&outer, &["git", "init", "-q"]).0, 0);
+    assert_eq!(run(&target, &["git", "init", "-q"]).0, 0);
+    let lexical_cwd = outer.join("linked-nested");
+    std::os::unix::fs::symlink(&nested, &lexical_cwd).expect("symlink nested cwd");
+
+    assert_eq!(
+        extract_paths_from_patch_from_cwd(&new_file_diff("physical.txt"), &lexical_cwd),
+        vec!["physical.txt".to_string()]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_stage_paths_preserves_a_symlinked_repository_route() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let outer = fixture.path().join("outer");
+    let target = fixture.path().join("target");
+    std::fs::create_dir_all(&outer).expect("outer");
+    std::fs::create_dir_all(&target).expect("target");
+    assert_eq!(run(&outer, &["git", "init", "-q"]).0, 0);
+    assert_eq!(run(&target, &["git", "init", "-q"]).0, 0);
+    std::fs::write(target.join("routed.txt"), "routed\n").expect("write target file");
+    let lexical_root = fixture.path().join("linked-root");
+    std::os::unix::fs::symlink(&target, &lexical_root).expect("symlink repository root");
+
+    reset_config_source_authorization_count();
+    stage_paths(&lexical_root, &new_file_diff("routed.txt")).expect("stage through symlink route");
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(
+        run(&target, &["git", "diff", "--cached", "--name-only"]).1,
+        "routed.txt\n"
+    );
+    assert!(
+        run(&outer, &["git", "diff", "--cached", "--name-only"])
+            .1
+            .is_empty()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn standalone_stage_paths_preserves_a_junction_repository_route() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let outer = fixture.path().join("outer");
+    let target = fixture.path().join("target");
+    std::fs::create_dir_all(&outer).expect("outer");
+    std::fs::create_dir_all(&target).expect("target");
+    assert_eq!(run(&outer, &["git", "init", "-q"]).0, 0);
+    assert_eq!(run(&target, &["git", "init", "-q"]).0, 0);
+    std::fs::write(target.join("routed.txt"), "routed\n").expect("write target file");
+    let lexical_root = fixture.path().join("linked-root");
+    let _junction = create_dir_alias(&target, &lexical_root);
+
+    reset_config_source_authorization_count();
+    stage_paths(&lexical_root, &new_file_diff("routed.txt")).expect("stage through junction route");
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(
+        run(&target, &["git", "diff", "--cached", "--name-only"]).1,
+        "routed.txt\n"
+    );
+    assert!(
+        run(&outer, &["git", "diff", "--cached", "--name-only"])
+            .1
+            .is_empty()
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn standalone_stage_paths_preserves_an_independent_repository_alias() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let independent = fixture.path().join("independent");
+    let target = fixture.path().join("target");
+    std::fs::create_dir_all(&independent).expect("independent");
+    std::fs::create_dir_all(&target).expect("target");
+    assert_eq!(run(&independent, &["git", "init", "-q"]).0, 0);
+    assert_eq!(run(&target, &["git", "init", "-q"]).0, 0);
+    std::fs::write(target.join("routed.txt"), "routed\n").expect("write target file");
+    let lexical_root = independent.join("linked-root");
+    let _route = create_dir_alias(&target, &lexical_root);
+
+    stage_paths(&lexical_root, &new_file_diff("routed.txt"))
+        .expect("independent repository alias remains supported");
+    assert_eq!(
+        run(&target, &["git", "diff", "--cached", "--name-only"]).1,
+        "routed.txt\n"
+    );
+    assert!(
+        run(&independent, &["git", "diff", "--cached", "--name-only"])
+            .1
+            .is_empty()
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn standalone_stage_paths_rejects_a_route_crossing_a_related_worktree() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let primary = fixture.path().join("primary");
+    let linked = fixture.path().join("linked");
+    std::fs::create_dir_all(&primary).expect("primary");
+    assert_eq!(run(&primary, &["git", "init", "-q"]).0, 0);
+    assert_eq!(
+        run(
+            &primary,
+            &["git", "config", "user.email", "codex@example.com"]
+        )
+        .0,
+        0
+    );
+    assert_eq!(run(&primary, &["git", "config", "user.name", "Codex"]).0, 0);
+    std::fs::write(primary.join("seed.txt"), "seed\n").expect("write seed");
+    assert_eq!(run(&primary, &["git", "add", "seed.txt"]).0, 0);
+    assert_eq!(run(&primary, &["git", "commit", "-m", "seed"]).0, 0);
+    let linked_arg = linked.to_string_lossy().into_owned();
+    assert_eq!(
+        run(
+            &primary,
+            &["git", "worktree", "add", "--detach", &linked_arg]
+        )
+        .0,
+        0
+    );
+    std::fs::write(linked.join("routed.txt"), "routed\n").expect("write linked file");
+    let crossing_route = primary.join("linked-route");
+    let _route = create_dir_alias(&linked, &crossing_route);
+
+    let error = stage_paths(&crossing_route, &new_file_diff("routed.txt"))
+        .expect_err("related-worktree crossing must reject");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        run(&linked, &["git", "diff", "--cached", "--name-only"])
+            .1
+            .is_empty()
+    );
 }
 
 #[test]
@@ -533,9 +686,11 @@ fn index_entry(root: &Path, path: &str) -> String {
 
 fn exact_stage(root: &Path, paths: &[&str], content_filter_paths: &[&str]) -> StagePathsResult {
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    update_index_exact_paths(
-        &git,
-        root,
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorized config");
+    update_index_exact_paths_standalone(
+        &mut config,
         &paths
             .iter()
             .map(|path| (*path).to_string())
@@ -544,9 +699,217 @@ fn exact_stage(root: &Path, paths: &[&str], content_filter_paths: &[&str]) -> St
             .iter()
             .map(|path| (*path).to_string())
             .collect::<Vec<_>>(),
-        &safe_git_config_parts(),
     )
     .expect("run exact staging primitive")
+}
+
+fn stage_effective_paths(
+    git: &GitRunner,
+    root: &Path,
+    paths: &[String],
+    legacy_config_args: &[String],
+) -> io::Result<()> {
+    let _ = legacy_config_args;
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut config = GuardedGitConfig::authorize(git, &canonical_root, Vec::new())?;
+    stage_effective_paths_standalone(&mut config, paths)
+}
+
+#[test]
+fn standalone_stage_paths_uses_one_source_authorization_and_one_filter_read() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("single.txt"), "single\n").expect("write staged file");
+
+    reset_config_source_authorization_count();
+    reset_filter_policy_counts();
+    stage_paths(root, &new_file_diff("single.txt")).expect("standalone exact staging");
+
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(filter_policy_read_count(), 1);
+    assert_eq!(filter_policy_overlay_count(), 0);
+}
+
+#[test]
+fn composed_staging_freshly_observes_a_new_clean_driver_and_attribute() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), "base\n").expect("write base file");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    std::fs::write(root.join("file.txt"), "changed\n").expect("modify file");
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    reset_config_source_authorization_count();
+    reset_filter_policy_counts();
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("apply snapshot without filters");
+
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.fresh.clean",
+                "git config codex.stage-filter-ran true && git hash-object --stdin",
+            ],
+        )
+        .0,
+        0
+    );
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=fresh\n")
+        .expect("select fresh filter");
+
+    let error = update_index_exact_paths_from_apply(
+        &mut config,
+        &["file.txt".to_string()],
+        &["file.txt".to_string()],
+    )
+    .expect_err("fresh clean driver must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(filter_policy_read_count(), 2);
+    assert_eq!(filter_policy_overlay_count(), 1);
+    assert_ne!(
+        run(root, &["git", "config", "--get", "codex.stage-filter-ran"]).0,
+        0,
+        "fresh policy must not execute the filter"
+    );
+}
+
+#[test]
+fn composed_staging_required_read_ignores_the_apply_overlay_and_is_fresh() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), "base\n").expect("write base file");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    std::fs::write(root.join("file.txt"), "changed\n").expect("modify file");
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.demo.smudge",
+                "git config codex.stage-smudge-ran true && git hash-object --stdin",
+            ],
+        )
+        .0,
+        0
+    );
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    reset_config_source_authorization_count();
+    reset_filter_policy_counts();
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("unselected apply filter snapshot");
+
+    std::fs::write(root.join(".gitattributes"), "file.txt filter=demo\n")
+        .expect("select smudge-only filter");
+    assert_eq!(
+        run(root, &["git", "config", "filter.demo.required", "true"]).0,
+        0
+    );
+
+    let error = update_index_exact_paths_from_apply(
+        &mut config,
+        &["file.txt".to_string()],
+        &["file.txt".to_string()],
+    )
+    .expect_err("fresh required=true must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(config_source_authorization_count(), 1);
+    assert_eq!(filter_policy_read_count(), 2);
+    assert_eq!(filter_policy_overlay_count(), 2);
+    assert_ne!(
+        run(root, &["git", "config", "--get", "codex.stage-smudge-ran"]).0,
+        0,
+        "smudge helper must remain neutralized"
+    );
+}
+
+#[test]
+fn composed_exact_staging_refuses_requested_and_mapped_paths_outside_apply_universe() {
+    let requested_repo = init_repo();
+    let requested_root = requested_repo.path();
+    let requested_git = GitRunner::for_cwd_io(requested_root).expect("trusted Git");
+    let mut requested_config = GuardedGitConfig::authorize(
+        &requested_git,
+        &std::fs::canonicalize(requested_root).expect("canonical root"),
+        Vec::new(),
+    )
+    .expect("authorization");
+    requested_config
+        .authorize_filter_paths(&["allowed.txt".to_string()])
+        .expect("apply snapshot");
+    let requested_error = update_index_exact_paths_from_apply(
+        &mut requested_config,
+        &["allowed.txt".to_string(), "outside.txt".to_string()],
+        &["outside.txt".to_string()],
+    )
+    .expect_err("requested off-universe path must refuse");
+    assert_eq!(requested_error.kind(), io::ErrorKind::PermissionDenied);
+
+    let mapped_repo = init_repo();
+    let mapped_root = mapped_repo.path();
+    std::fs::write(mapped_root.join("File.txt"), "tracked\n").expect("write tracked spelling");
+    assert_eq!(run(mapped_root, &["git", "add", "File.txt"]).0, 0);
+    assert_eq!(run(mapped_root, &["git", "commit", "-m", "base"]).0, 0);
+    std::fs::write(mapped_root.join("file.txt"), "alias\n").expect("write alias spelling");
+    assert_eq!(
+        run(mapped_root, &["git", "config", "core.ignoreCase", "true"]).0,
+        0
+    );
+    let mapped_git = GitRunner::for_cwd_io(mapped_root).expect("trusted Git");
+    let mut mapped_config = GuardedGitConfig::authorize(
+        &mapped_git,
+        &std::fs::canonicalize(mapped_root).expect("canonical root"),
+        Vec::new(),
+    )
+    .expect("authorization");
+    mapped_config
+        .authorize_filter_paths(&["file.txt".to_string()])
+        .expect("narrow apply snapshot");
+    let mapped_error = update_index_exact_paths_from_apply(
+        &mut mapped_config,
+        &["File.txt".to_string(), "file.txt".to_string()],
+        &["file.txt".to_string()],
+    )
+    .expect_err("mapped off-universe path must refuse");
+    assert_eq!(mapped_error.kind(), io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn composed_exact_staging_refuses_zero_or_two_prior_snapshots_even_when_empty() {
+    let repo = init_repo();
+    let root = repo.path();
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+
+    let mut zero =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    let error = update_index_exact_paths_from_apply(&mut zero, &[], &[])
+        .expect_err("zero snapshots must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    let mut two =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    two.authorize_filter_paths(&[]).expect("apply snapshot");
+    two.authorize_git_add_filter_paths(&[])
+        .expect("Git-add snapshot");
+    let error = update_index_exact_paths_from_apply(&mut two, &[], &[])
+        .expect_err("two snapshots must refuse");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
 fn assert_exact_refused_unchanged(
