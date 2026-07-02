@@ -3,20 +3,19 @@ use std::collections::BTreeSet;
 use std::io;
 use std::io::Seek;
 use std::io::Write;
-use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
 
-use crate::git_command::GitRunner;
 use crate::git_config::GitConfigEntry;
-use crate::git_config::read_effective_config_with_fallback as read_effective_config_unchecked;
-use crate::git_config_sources::ensure_no_worktree_config_sources;
+use crate::guarded_config::GuardedGitConfig;
+use crate::guarded_config::SealedFilterConfigOverride;
 
 #[path = "filter_sentinel.rs"]
 mod filter_sentinel;
 pub(crate) use filter_sentinel::SentinelFilterProbeBudget;
 pub(crate) use filter_sentinel::SentinelFilterProbeResolution;
 pub(crate) use filter_sentinel::classify_sentinel_filter_probes;
+#[cfg(test)]
 pub(crate) use filter_sentinel::sentinel_filter_probe_config_args;
 pub(crate) const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 pub(crate) const EXECUTABLE_FILTER_CONFIG_PATTERN: &str =
@@ -28,21 +27,32 @@ pub(crate) enum FilterAttributeValue {
     AmbiguousSentinel(String),
 }
 
-pub(crate) struct GitFilterNeutralization {
-    git_config_args: Vec<String>,
-    _config_dir: Option<tempfile::TempDir>,
-    filter_config: BTreeMap<String, GitConfigEntry>,
-}
+/// Complete executable-filter inventory derived from one authorized effective
+/// config read. The private field prevents a caller from minting an incomplete
+/// inventory and treating its neutralizer as complete.
+pub(crate) struct ExecutableFilterDrivers(BTreeSet<String>);
 
-impl GitFilterNeutralization {
-    pub(crate) fn git_config_args(&self) -> &[String] {
-        &self.git_config_args
+impl ExecutableFilterDrivers {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &String> {
+        self.0.iter()
     }
 
-    pub(crate) fn filter_value(&self, driver: &str, name: &str) -> Option<&str> {
-        self.filter_config
-            .get(&format!("filter.{driver}.{name}"))
-            .map(|entry| entry.value.as_str())
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn contains(&self, driver: &str) -> bool {
+        self.0.contains(driver)
+    }
+}
+
+pub(crate) struct FilterPolicySnapshot {
+    neutralizer: Option<SealedFilterConfigOverride>,
+}
+
+impl FilterPolicySnapshot {
+    pub(crate) fn neutralizer(&self) -> Option<&SealedFilterConfigOverride> {
+        self.neutralizer.as_ref()
     }
 }
 
@@ -73,35 +83,22 @@ pub(crate) fn isolate_git_command_environment(command: &mut Command) {
     }
 }
 
-pub(crate) fn ensure_no_selected_executable_git_filters(
-    git: &GitRunner,
-    cwd: &Path,
+pub(crate) fn build_filter_policy_snapshot(
+    config: &GuardedGitConfig<'_>,
     paths: &[String],
-    git_config_args: &[String],
-) -> io::Result<GitFilterNeutralization> {
-    let entries = read_filter_config(git, cwd, git_config_args)?;
+) -> io::Result<FilterPolicySnapshot> {
+    let entries = read_filter_config(config)?;
     let executable_drivers = executable_filter_drivers(&entries)?;
     if executable_drivers.is_empty() {
-        return Ok(GitFilterNeutralization {
-            git_config_args: Vec::new(),
-            _config_dir: None,
-            filter_config: entries,
-        });
+        return Ok(FilterPolicySnapshot { neutralizer: None });
     }
-    let guard = executable_filter_guard(git, cwd, entries, &executable_drivers)?;
+    let neutralizer = config.build_filter_override(&executable_drivers)?;
     let paths = paths
         .iter()
         .map(|path| path.as_bytes().to_vec())
         .collect::<Vec<_>>();
-    let attributes = read_filter_attributes(
-        git,
-        cwd,
-        &paths,
-        git_config_args,
-        &executable_drivers,
-        &guard,
-    )?;
-    if let Some((driver, path)) = selected_executable_filter(&guard.filter_config, &attributes)? {
+    let attributes = read_filter_attributes(config, &paths, &executable_drivers, &neutralizer)?;
+    if let Some((driver, path)) = selected_executable_filter(&entries, &attributes)? {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             format!(
@@ -110,105 +107,22 @@ pub(crate) fn ensure_no_selected_executable_git_filters(
             ),
         ));
     }
-    Ok(guard)
-}
-
-fn executable_filter_guard(
-    git: &GitRunner,
-    cwd: &Path,
-    filter_config: BTreeMap<String, GitConfigEntry>,
-    executable_drivers: &BTreeSet<String>,
-) -> io::Result<GitFilterNeutralization> {
-    let config_dir = tempfile::tempdir()?;
-    let config_path = config_dir.path().join("filter-neutralization.gitconfig");
-    std::fs::write(&config_path, [])?;
-    let guard = GitFilterNeutralization {
-        git_config_args: vec![
-            "-c".to_string(),
-            format!(
-                "include.path={}",
-                config_path
-                    .to_str()
-                    .ok_or_else(|| invalid_filter_output("non-UTF-8 filter guard path"))?
-            ),
-        ],
-        _config_dir: Some(config_dir),
-        filter_config,
-    };
-    for driver in executable_drivers {
-        debug_assert!(["clean", "smudge", "process"].into_iter().any(|name| {
-            guard
-                .filter_value(driver, name)
-                .is_some_and(|value| !value.is_empty())
-        }));
-        for command in ["clean", "smudge", "process"] {
-            guard.write_config_value(git, cwd, &config_path, driver, command, "")?;
-        }
-        guard.write_config_value(git, cwd, &config_path, driver, "required", "false")?;
-    }
-    Ok(guard)
-}
-
-impl GitFilterNeutralization {
-    fn write_config_value(
-        &self,
-        git: &GitRunner,
-        cwd: &Path,
-        config_path: &Path,
-        driver: &str,
-        name: &str,
-        value: &str,
-    ) -> io::Result<()> {
-        let mut command = git.command_for_cwd(cwd)?;
-        command.args(["config", "--file"]).arg(config_path).args([
-            "--add",
-            &format!("filter.{driver}.{name}"),
-            value,
-        ]);
-        let output = git.output(command)?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "failed to write Git filter neutralization for {driver:?} (status {}): {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
-    }
+    Ok(FilterPolicySnapshot {
+        neutralizer: Some(neutralizer),
+    })
 }
 
 fn read_filter_config(
-    git: &GitRunner,
-    cwd: &Path,
-    git_config_args: &[String],
+    config: &GuardedGitConfig<'_>,
 ) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    read_effective_config_with_fallback(
-        git,
-        cwd,
-        git_config_args,
-        EXECUTABLE_FILTER_CONFIG_PATTERN,
-        "filter",
-    )
-}
-
-pub(crate) fn read_effective_config_with_fallback(
-    git: &GitRunner,
-    cwd: &Path,
-    git_config_args: &[String],
-    pattern: &str,
-    probe: &str,
-) -> io::Result<BTreeMap<String, GitConfigEntry>> {
-    ensure_no_worktree_config_sources(git, cwd, git_config_args)?;
-    read_effective_config_unchecked(git, cwd, git_config_args, pattern, probe)
+    config.read_effective(EXECUTABLE_FILTER_CONFIG_PATTERN, "filter")
 }
 
 fn read_filter_attributes(
-    git: &GitRunner,
-    cwd: &Path,
+    config: &GuardedGitConfig<'_>,
     paths: &[Vec<u8>],
-    git_config_args: &[String],
-    executable_drivers: &BTreeSet<String>,
-    neutralization: &GitFilterNeutralization,
+    executable_drivers: &ExecutableFilterDrivers,
+    neutralization: &SealedFilterConfigOverride,
 ) -> io::Result<BTreeMap<Vec<u8>, String>> {
     if paths.is_empty() {
         return Ok(BTreeMap::new());
@@ -217,22 +131,12 @@ fn read_filter_attributes(
     write_nul_paths(&mut input, paths)?;
     input.rewind()?;
 
-    let mut command = git.command_for_cwd(cwd)?;
+    let mut command = config.filter_attribute_command()?;
     command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args(git_config_args)
-        .args([
-            "-c",
-            &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-            "-c",
-            "core.fsmonitor=false",
-            "check-attr",
-            "--stdin",
-            "-z",
-            "filter",
-        ])
+        .disable_optional_locks()
+        .args(["--stdin", "-z", "filter"])
         .stdin(Stdio::from(input));
-    let output = git.output(command)?;
+    let output = command.output()?;
     if !output.status.success() {
         return Err(io::Error::other(format!(
             "git filter attribute probe failed with status {}: {}",
@@ -241,23 +145,14 @@ fn read_filter_attributes(
         )));
     }
     let attributes = parse_filter_attributes(&output.stdout, paths)?;
-    resolve_filter_attribute_sentinels(
-        git,
-        cwd,
-        attributes,
-        git_config_args,
-        executable_drivers,
-        neutralization,
-    )
+    resolve_filter_attribute_sentinels(config, attributes, executable_drivers, neutralization)
 }
 
 fn resolve_filter_attribute_sentinels(
-    git: &GitRunner,
-    cwd: &Path,
+    config: &GuardedGitConfig<'_>,
     attributes: BTreeMap<Vec<u8>, FilterAttributeValue>,
-    git_config_args: &[String],
-    executable_drivers: &BTreeSet<String>,
-    neutralization: &GitFilterNeutralization,
+    executable_drivers: &ExecutableFilterDrivers,
+    neutralization: &SealedFilterConfigOverride,
 ) -> io::Result<BTreeMap<Vec<u8>, String>> {
     let mut resolved = BTreeMap::new();
     let mut probe_budget = SentinelFilterProbeBudget::default();
@@ -269,11 +164,9 @@ fn resolve_filter_attribute_sentinels(
             FilterAttributeValue::AmbiguousSentinel(driver) => {
                 if executable_drivers.contains(&driver)
                     && sentinel_spelling_selects_filter_driver(
-                        git,
-                        cwd,
+                        config,
                         &path,
                         &driver,
-                        git_config_args,
                         neutralization,
                         &mut probe_budget,
                     )?
@@ -289,20 +182,16 @@ fn resolve_filter_attribute_sentinels(
 /// Disambiguate Git's sentinel spellings with required/optional probes. The
 /// shared guard blanks every known executable driver before either probe.
 fn sentinel_spelling_selects_filter_driver(
-    git: &GitRunner,
-    cwd: &Path,
+    config: &GuardedGitConfig<'_>,
     path: &[u8],
     driver: &str,
-    git_config_args: &[String],
-    neutralization: &GitFilterNeutralization,
+    neutralization: &SealedFilterConfigOverride,
     probe_budget: &mut SentinelFilterProbeBudget,
 ) -> io::Result<bool> {
     let probe = SentinelSelectionProbe {
-        git,
-        cwd,
+        config,
         path,
         driver,
-        git_config_args,
         neutralization,
     };
     let required = probe.run(/*required*/ true, probe_budget)?;
@@ -328,12 +217,10 @@ fn sentinel_spelling_selects_filter_driver(
 }
 
 struct SentinelSelectionProbe<'a> {
-    git: &'a GitRunner,
-    cwd: &'a Path,
+    config: &'a GuardedGitConfig<'a>,
     path: &'a [u8],
     driver: &'a str,
-    git_config_args: &'a [String],
-    neutralization: &'a GitFilterNeutralization,
+    neutralization: &'a SealedFilterConfigOverride,
 }
 
 impl SentinelSelectionProbe<'_> {
@@ -342,29 +229,26 @@ impl SentinelSelectionProbe<'_> {
         required: bool,
         probe_budget: &mut SentinelFilterProbeBudget,
     ) -> io::Result<std::process::Output> {
-        let probe_config_args = sentinel_filter_probe_config_args(
-            self.neutralization.git_config_args(),
+        if !matches!(self.driver, "set" | "unset" | "unspecified") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git filter sentinel probe requested for a non-sentinel driver",
+            ));
+        }
+        let path = git_path_argument(self.path)?;
+        let mut command = self.config.command_for_sentinel_filter_probe(
+            self.neutralization,
             self.driver,
             required,
         )?;
-        let path = git_path_argument(self.path)?;
-        let mut command = self.git.command_for_cwd(self.cwd)?;
         command
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .args(self.git_config_args)
-            .args([
-                "-c",
-                &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-                "-c",
-                "core.fsmonitor=false",
-            ])
-            .args(&probe_config_args)
-            .args(["hash-object", "--stdin"])
+            .disable_optional_locks()
+            .arg("--stdin")
             .arg("--path")
             .arg(path)
             .stdin(Stdio::null());
         probe_budget.ensure_probe_available()?;
-        let output = self.git.output(command)?;
+        let output = command.output()?;
         probe_budget.record_completed_probe();
         Ok(output)
     }
@@ -397,9 +281,9 @@ fn selected_executable_filter(
     Ok(None)
 }
 
-pub(crate) fn executable_filter_drivers(
+fn executable_filter_drivers(
     entries: &BTreeMap<String, GitConfigEntry>,
-) -> io::Result<BTreeSet<String>> {
+) -> io::Result<ExecutableFilterDrivers> {
     let mut executable_drivers = BTreeSet::new();
     for entry in entries.values() {
         if entry.key.ends_with(".required") {
@@ -410,7 +294,7 @@ pub(crate) fn executable_filter_drivers(
             executable_drivers.insert(driver);
         }
     }
-    Ok(executable_drivers)
+    Ok(ExecutableFilterDrivers(executable_drivers))
 }
 
 fn filter_driver_name(key: &str) -> io::Result<String> {

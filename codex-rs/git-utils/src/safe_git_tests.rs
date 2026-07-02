@@ -1,5 +1,7 @@
 use super::*;
+use crate::git_command::GitRunner;
 use crate::git_config::GitConfigScope;
+use crate::guarded_config::GuardedGitConfig;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -109,7 +111,7 @@ fn selected_filter_policy_allows_effective_empty_value() {
 }
 
 #[test]
-fn filter_snapshot_retains_required_without_treating_it_as_executable() {
+fn filter_config_retains_required_without_treating_it_as_executable() {
     let mut entries = filter_entries(
         GitConfigScope::Local,
         Path::new("config"),
@@ -123,17 +125,16 @@ fn filter_snapshot_retains_required_without_treating_it_as_executable() {
         "true",
     ));
     assert_eq!(
-        executable_filter_drivers(&entries).expect("executable drivers"),
+        executable_filter_drivers(&entries)
+            .expect("executable drivers")
+            .0,
         BTreeSet::from(["demo".to_string()])
     );
-    let neutralization = GitFilterNeutralization {
-        git_config_args: Vec::new(),
-        _config_dir: None,
-        filter_config: entries,
-    };
     assert_eq!(
-        neutralization.filter_value("demo", "required"),
-        Some("true")
+        entries
+            .get("filter.demo.required")
+            .map(|entry| entry.value.as_str()),
+        Some("true"),
     );
 
     let required_only = filter_entries(
@@ -263,9 +264,12 @@ fn sentinel_special_states_and_literal_driver_names_remain_distinct() {
         let root = repo.path();
         configure_marker_filter(root, driver);
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+        let mut config =
+            GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
 
         std::fs::write(root.join(".gitattributes"), special_rule).expect("write special attribute");
-        ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[])
+        config
+            .authorize_filter_paths(&["file.txt".to_string()])
             .expect("allow special attribute state");
         assert!(!marker_filter_ran(root), "special {driver}");
 
@@ -274,8 +278,7 @@ fn sentinel_special_states_and_literal_driver_names_remain_distinct() {
             format!("file.txt filter={driver}\n"),
         )
         .expect("write literal attribute");
-        let result =
-            ensure_no_selected_executable_git_filters(&git, root, &["file.txt".to_string()], &[]);
+        let result = config.authorize_filter_paths(&["file.txt".to_string()]);
         let error = match result {
             Ok(_) => panic!("accepted literal sentinel-named driver {driver}"),
             Err(error) => error,
@@ -296,9 +299,12 @@ fn sentinel_probe_neutralizes_every_known_driver_after_attribute_swap() {
             .expect("write initial attribute");
 
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        let entries = read_filter_config(&git, root, &[]).expect("filter config");
+        let config =
+            GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+        let entries = read_filter_config(&config).expect("filter config");
         let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-        let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+        let neutralization = config
+            .build_filter_override(&executable_drivers)
             .expect("filter neutralization");
         let output = run_git_success(root, &["check-attr", "-z", "filter", "--", "file.txt"]);
         let attributes = parse_filter_attributes(&output.stdout, &[b"file.txt".to_vec()])
@@ -310,10 +316,8 @@ fn sentinel_probe_neutralizes_every_known_driver_after_attribute_swap() {
         )
         .expect("swap attribute after snapshot");
         let resolved = resolve_filter_attribute_sentinels(
-            &git,
-            root,
+            &config,
             attributes,
-            &[],
             &executable_drivers,
             &neutralization,
         )
@@ -329,9 +333,12 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
     let root = repo.path();
     configure_marker_filter(root, "unspecified");
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+    let entries = read_filter_config(&config).expect("filter config");
     let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+    let neutralization = config
+        .build_filter_override(&executable_drivers)
         .expect("filter neutralization");
     let attributes = (0..=SentinelFilterProbeBudget::max_probes())
         .map(|index| {
@@ -343,10 +350,8 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
         .collect();
 
     let error = resolve_filter_attribute_sentinels(
-        &git,
-        root,
+        &config,
         attributes,
-        &[],
         &executable_drivers,
         &neutralization,
     )
@@ -359,36 +364,31 @@ fn high_cardinality_ordinary_sentinels_stop_at_hard_child_probe_budget() {
 }
 
 #[test]
-fn unrelated_sentinel_probe_failures_remain_generic_and_fail_closed() {
+fn sentinel_probe_rejects_non_sentinel_driver_before_launch() {
     let repo = init_filter_repo();
     let root = repo.path();
     configure_marker_filter(root, "set");
     std::fs::write(root.join(".gitattributes"), "file.txt filter\n")
         .expect("write special attribute");
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let entries = read_filter_config(&git, root, &[]).expect("filter config");
+    let config =
+        GuardedGitConfig::authorize(&git, root, Vec::new()).expect("authorized config sources");
+    let entries = read_filter_config(&config).expect("filter config");
     let executable_drivers = executable_filter_drivers(&entries).expect("executable drivers");
-    let neutralization = executable_filter_guard(&git, root, entries, &executable_drivers)
+    let neutralization = config
+        .build_filter_override(&executable_drivers)
         .expect("filter neutralization");
     let mut budget = SentinelFilterProbeBudget::default();
-    let malformed_config = ["-c".to_string(), "=".to_string()];
 
     let error = sentinel_spelling_selects_filter_driver(
-        &git,
-        root,
+        &config,
         b"file.txt",
-        "set",
-        &malformed_config,
+        "ordinary",
         &neutralization,
         &mut budget,
     )
-    .expect_err("malformed config must fail both probes");
-    assert_eq!(error.kind(), io::ErrorKind::Other);
-    assert!(
-        error
-            .to_string()
-            .starts_with("git filter attribute selection probe failed with required status")
-    );
+    .expect_err("reject non-sentinel probe");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(!marker_filter_ran(root));
 }
 
