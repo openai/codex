@@ -283,6 +283,13 @@ impl ToolCallTimingGuard {
 impl Drop for ToolCallTimingGuard {
     fn drop(&mut self) {
         let completed_at = Instant::now();
+        // Snapshot once so a concurrently-starting dispatch cannot make one
+        // event internally inconsistent.
+        let execution_started_at = self
+            .execution_started_at
+            .get()
+            .copied()
+            .filter(|execution_started_at| *execution_started_at <= completed_at);
         info!(
             event.name = "codex.tool_call",
             trace_id = %codex_otel::current_span_trace_id().unwrap_or_default(),
@@ -293,18 +300,18 @@ impl Drop for ToolCallTimingGuard {
             tool_source = "direct",
             code_mode_cell_id = "",
             code_mode_runtime_tool_call_id = "",
-            execution_started = self.execution_started_at.get().is_some(),
-            dispatch_duration_ms = self.execution_started_at.get().map_or_else(
+            execution_started = execution_started_at.is_some(),
+            dispatch_duration_ms = execution_started_at.map_or_else(
                 || u64::try_from(completed_at.duration_since(self.started_at).as_millis()).unwrap_or(u64::MAX),
                 |execution_started_at| {
                     u64::try_from(execution_started_at.duration_since(self.started_at).as_millis())
                         .unwrap_or(u64::MAX)
                 },
             ),
-            handler_duration_ms = self.execution_started_at.get().map_or(
+            handler_duration_ms = execution_started_at.map_or(
                 0,
                 |execution_started_at| {
-                    u64::try_from(completed_at.duration_since(*execution_started_at).as_millis())
+                    u64::try_from(completed_at.duration_since(execution_started_at).as_millis())
                         .unwrap_or(u64::MAX)
                 },
             ),
