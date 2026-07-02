@@ -1000,8 +1000,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
         stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     }
 
-    // Turn two: this responds to a turn with metadata, and succeeds
-    // fill turn id
+    // Turn two: the response and reconstructed history have matching metadata.
     let mut first_assistant_output = assistant_message_item("msg-1", "assistant output");
     first_assistant_output.set_turn_id_if_missing("turn-1");
 
@@ -1016,8 +1015,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
         stream_until_complete(&mut client_session, &harness, &prompt_two).await;
     }
 
-    // Turn three: this responds to a turn without metadata, and fails
-    // fill turn id
+    // Turn three: the reconstructed history has metadata that the response omitted.
     let mut second_assistant_output = assistant_message_item("msg-2", "second assistant output");
     second_assistant_output.set_turn_id_if_missing("turn-2");
 
