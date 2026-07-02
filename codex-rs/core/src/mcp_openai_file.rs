@@ -3,8 +3,8 @@
 //! Strategy:
 //! - Inspect `_meta["openai/fileParams"]` to discover which tool arguments are
 //!   file inputs.
-//! - At tool execution time, read those files from the primary environment,
-//!   upload them to OpenAI file storage,
+//! - At tool execution time, read local files from the primary environment or
+//!   decode SEP-2356-style RFC 2397 data URIs, upload them to OpenAI file storage,
 //!   and rewrite only the declared arguments into the provided-file payload
 //!   shape expected by the downstream Apps tool.
 //!
@@ -13,11 +13,15 @@
 
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::OPENAI_FILE_UPLOAD_LIMIT_BYTES;
 use codex_api::upload_openai_file;
 use codex_login::CodexAuth;
 use codex_utils_path_uri::PathUri;
+use futures::stream;
 use serde_json::Value as JsonValue;
+use tokio_util::bytes::Bytes;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     sess: &Session,
@@ -105,17 +109,44 @@ async fn build_uploaded_argument_value(
     index: Option<usize>,
     file_path: &str,
 ) -> Result<JsonValue, String> {
+    let file_label = if file_path.starts_with("data:") {
+        "inline data URI"
+    } else {
+        file_path
+    };
     let contextualize_error = |error: String| match index {
         Some(index) => {
-            format!("failed to upload `{file_path}` for `{field_name}[{index}]`: {error}")
+            format!("failed to upload `{file_label}` for `{field_name}[{index}]`: {error}")
         }
-        None => format!("failed to upload `{file_path}` for `{field_name}`: {error}"),
+        None => format!("failed to upload `{file_label}` for `{field_name}`: {error}"),
     };
     let Some(auth) = auth else {
         return Err("ChatGPT auth is required to upload files for Codex Apps tools".to_string());
     };
     if !auth.uses_codex_backend() {
         return Err("ChatGPT auth is required to upload files for Codex Apps tools".to_string());
+    }
+    if let Some(inline_file) = parse_sep2356_data_uri(file_path).map_err(&contextualize_error)? {
+        let file_size_bytes = inline_file.bytes.len() as u64;
+        let contents = stream::once(async move { Ok(inline_file.bytes) });
+        let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
+        let uploaded = upload_openai_file(
+            turn_context.config.chatgpt_base_url.trim_end_matches('/'),
+            upload_auth.as_ref(),
+            inline_file.file_name,
+            file_size_bytes,
+            contents,
+        )
+        .await
+        .map_err(|error| contextualize_error(error.to_string()))?;
+        return Ok(serde_json::json!({
+            "download_url": uploaded.download_url,
+            "file_id": uploaded.file_id,
+            "mime_type": uploaded.mime_type,
+            "file_name": uploaded.file_name,
+            "uri": uploaded.uri,
+            "file_size_bytes": uploaded.file_size_bytes,
+        }));
     }
     let Some(turn_environment) = turn_context.environments.primary() else {
         return Err(contextualize_error(
@@ -178,6 +209,81 @@ async fn build_uploaded_argument_value(
     }))
 }
 
+#[derive(Debug)]
+struct Sep2356InlineFile {
+    file_name: String,
+    bytes: Bytes,
+}
+
+fn parse_sep2356_data_uri(value: &str) -> Result<Option<Sep2356InlineFile>, String> {
+    let Some(data_uri) = value.strip_prefix("data:") else {
+        return Ok(None);
+    };
+    let (metadata, encoded_bytes) = data_uri
+        .split_once(',')
+        .ok_or_else(|| "inline file data URI is missing a comma separator".to_string())?;
+    let mut file_name = None;
+    let mut is_base64 = false;
+    for parameter in metadata.split(';').skip(1) {
+        if parameter.eq_ignore_ascii_case("base64") {
+            is_base64 = true;
+            continue;
+        }
+        if let Some(encoded_name) = parameter.strip_prefix("name=") {
+            file_name = Some(percent_decode_data_uri_name(encoded_name)?);
+        }
+    }
+    let file_name = file_name.filter(|value| !value.is_empty()).ok_or_else(|| {
+        "inline file data URI must include a non-empty name parameter".to_string()
+    })?;
+    let bytes = if is_base64 {
+        BASE64_STANDARD
+            .decode(encoded_bytes.as_bytes())
+            .map_err(|error| format!("inline file data URI has invalid base64: {error}"))?
+    } else {
+        percent_decode_data_uri_bytes(encoded_bytes)?
+    };
+    if bytes.len() as u64 > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
+        return Err(format!(
+            "inline file is too large: {} bytes exceeds the limit of {} bytes",
+            bytes.len(),
+            OPENAI_FILE_UPLOAD_LIMIT_BYTES,
+        ));
+    }
+    Ok(Some(Sep2356InlineFile {
+        file_name,
+        bytes: Bytes::from(bytes),
+    }))
+}
+
+fn percent_decode_data_uri_name(value: &str) -> Result<String, String> {
+    String::from_utf8(percent_decode_data_uri_bytes(value)?)
+        .map_err(|_| "inline file data URI name is not valid UTF-8".to_string())
+}
+
+fn percent_decode_data_uri_bytes(value: &str) -> Result<Vec<u8>, String> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let encoded_byte = bytes
+            .get(index + 1..index + 3)
+            .ok_or_else(|| "inline file data URI has incomplete percent encoding".to_string())?;
+        let encoded_byte = std::str::from_utf8(encoded_byte)
+            .map_err(|_| "inline file data URI has invalid percent encoding".to_string())?;
+        let byte = u8::from_str_radix(encoded_byte, 16)
+            .map_err(|_| "inline file data URI has invalid percent encoding".to_string())?;
+        decoded.push(byte);
+        index += 3;
+    }
+    Ok(decoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +310,39 @@ mod tests {
             PathUri::from_abs_path(&cwd),
             primary.shell.clone(),
         );
+    }
+
+    #[test]
+    fn parse_sep2356_data_uri_decodes_name_and_bytes() {
+        let inline_file =
+            parse_sep2356_data_uri("data:image/png;name=generated%20image.png;base64,aGVsbG8=")
+                .expect("data URI should parse")
+                .expect("data URI should produce an inline file");
+
+        assert_eq!(inline_file.file_name, "generated image.png");
+        assert_eq!(inline_file.bytes, Bytes::from_static(b"hello"));
+    }
+
+    #[test]
+    fn parse_sep2356_data_uri_requires_name_and_rejects_invalid_base64() {
+        let missing_name = parse_sep2356_data_uri("data:image/png;base64,aGVsbG8=")
+            .expect_err("data URI without name should fail");
+        let invalid_base64 =
+            parse_sep2356_data_uri("data:image/png;name=image.png;base64,not-base64")
+                .expect_err("invalid base64 data URI should fail");
+
+        assert!(missing_name.contains("name"));
+        assert!(invalid_base64.contains("base64"));
+    }
+
+    #[test]
+    fn parse_sep2356_data_uri_accepts_percent_encoded_payloads() {
+        let inline_file = parse_sep2356_data_uri("data:text/plain;name=hello.txt,hello%20world")
+            .expect("data URI should parse")
+            .expect("data URI should produce an inline file");
+
+        assert_eq!(inline_file.file_name, "hello.txt");
+        assert_eq!(inline_file.bytes, Bytes::from_static(b"hello world"));
     }
 
     #[tokio::test]
@@ -301,6 +440,80 @@ mod tests {
                 "mime_type": "text/csv",
                 "file_name": "file_report.csv",
                 "uri": "sediment://file_123",
+                "file_size_bytes": 5,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_argument_value_uploads_sep2356_data_uri_without_a_path() {
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::body_json;
+        use wiremock::matchers::header;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .and(body_json(serde_json::json!({
+                "file_name": "generated image.png",
+                "file_size": 5,
+                "use_case": "codex",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": "file_456",
+                "upload_url": format!("{}/upload/file_456", server.uri()),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_456"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_456/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_456", server.uri()),
+                "file_name": "generated image.png",
+                "mime_type": "image/png",
+                "file_size_bytes": 5,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+        turn_context.config = Arc::new(config);
+
+        let rewritten = build_uploaded_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "data:image/png;name=generated%20image.png;base64,aGVsbG8=",
+        )
+        .await
+        .expect("rewrite should upload the inline file");
+
+        assert_eq!(
+            rewritten,
+            serde_json::json!({
+                "download_url": format!("{}/download/file_456", server.uri()),
+                "file_id": "file_456",
+                "mime_type": "image/png",
+                "file_name": "generated image.png",
+                "uri": "sediment://file_456",
                 "file_size_bytes": 5,
             })
         );
