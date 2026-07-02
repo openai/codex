@@ -19,7 +19,6 @@ use crate::slash_command::SlashCommand;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 
-use super::super::footer::esc_hint_mode;
 use super::super::footer::reset_mode_after_activity;
 use super::ActivePopup;
 use super::ChatComposer;
@@ -215,14 +214,14 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
-            if next_mode != self.footer.mode {
-                self.footer.mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer.mode = reset_mode_after_activity(self.footer.mode);
+            // Always dismiss the popup without changing the draft.
+            let first_line = self.draft.textarea.text().lines().next().unwrap_or("");
+            self.popups.dismissed_command_token =
+                command_popup_filter_text(first_line, /*cursor*/ 0);
+            self.popups.active = ActivePopup::None;
+            return (InputResult::None, true);
         }
+        self.footer.mode = reset_mode_after_activity(self.footer.mode);
         let ActivePopup::Command(popup) = &mut self.popups.active else {
             unreachable!();
         };
@@ -249,13 +248,6 @@ impl ChatComposer {
                 ..
             } => {
                 popup.move_down();
-                (InputResult::None, true)
-            }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
-                // Dismiss the slash popup; keep the current input untouched.
-                self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -602,6 +594,17 @@ mod tests {
 
     fn composer_with_draft_tail(prefix: &str, draft: &str) -> ChatComposer {
         composer_with_text_at_cursor(&format!("{prefix}{draft}"), prefix.len())
+    }
+
+    #[test]
+    fn esc_dismisses_slash_popup_while_idle() {
+        let mut composer = composer_with_text_at_cursor("/rev", "/rev".len());
+        assert!(composer.popup_active());
+
+        assert_eq!(press(&mut composer, KeyCode::Esc), InputResult::None);
+
+        assert!(!composer.popup_active());
+        assert_eq!(composer.draft.textarea.text(), "/rev");
     }
 
     #[test]
