@@ -346,10 +346,13 @@ async fn try_get_has_changes_within_deadline(
     cwd: &Path,
     phase: &AtomicU8,
 ) -> Result<bool, GitReadError> {
+    // Preserve the caller's lexical spelling for authority discovery. A
+    // repository-controlled symlink prefix can disappear under
+    // canonicalization, but it must still constrain primary Git selection.
     let requested_cwd = std::fs::canonicalize(cwd).map_err(|_| GitReadError::NotRepository {
         path: cwd.to_path_buf(),
     })?;
-    let git = GitRunner::for_cwd(&requested_cwd)?;
+    let git = GitRunner::for_cwd(cwd)?;
     let mut config = Box::pin(prepare_status_config(&git, &requested_cwd)).await?;
     phase.store(StatusReadPhase::Fsmonitor as u8, Ordering::Relaxed);
     detect_status_fsmonitor(&mut config).await;

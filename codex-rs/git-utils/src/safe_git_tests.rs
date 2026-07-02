@@ -748,6 +748,79 @@ async fn checked_has_changes_accepts_non_utf8_repository_root() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn checked_has_changes_preserves_lexical_repository_ancestry_for_git_selection() {
+    if std::env::var_os("CODEX_GIT_UTILS_SAFE_GIT_ENV_CHILD").is_none() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let outer = fixture.path().join("outer");
+        let physical_nested = fixture.path().join("physical-nested");
+        let lexical_nested = outer.join("nested");
+        let outer_bin = outer.join("bin");
+        std::fs::create_dir_all(&outer_bin).expect("create outer repository bin");
+        std::fs::create_dir_all(&physical_nested).expect("create nested repository");
+        run_git_async(&outer, &["init", "-q"]).await;
+        run_git_async(&physical_nested, &["init", "-q"]).await;
+        std::os::unix::fs::symlink(&physical_nested, &lexical_nested)
+            .expect("symlink nested repository");
+
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .expect("resolve Git executable");
+        assert!(output.status.success(), "resolve Git executable");
+        let real_git = PathBuf::from(
+            String::from_utf8(output.stdout)
+                .expect("Git path UTF-8")
+                .trim(),
+        );
+        let marker = fixture.path().join("outer-git-ran");
+        let outer_git = outer_bin.join("git");
+        std::fs::write(
+            &outer_git,
+            "#!/bin/sh\nprintf ran > \"$CODEX_GIT_UTILS_LEXICAL_GIT_MARKER\"\nexec \"$CODEX_GIT_UTILS_REAL_GIT\" \"$@\"\n",
+        )
+        .expect("write outer Git wrapper");
+        let mut permissions = std::fs::metadata(&outer_git)
+            .expect("outer Git metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&outer_git, permissions).expect("make outer Git executable");
+
+        let search_path = std::env::join_paths([
+            outer_bin.as_path(),
+            real_git.parent().expect("Git executable directory"),
+        ])
+        .expect("construct controlled PATH");
+        run_isolated_test(
+            "safe_git::tests::checked_has_changes_preserves_lexical_repository_ancestry_for_git_selection",
+            &[
+                ("CODEX_GIT_UTILS_TARGET_REPO", lexical_nested.as_os_str()),
+                ("CODEX_GIT_UTILS_LEXICAL_GIT_MARKER", marker.as_os_str()),
+                ("CODEX_GIT_UTILS_REAL_GIT", real_git.as_os_str()),
+                ("PATH", search_path.as_os_str()),
+            ],
+        );
+        assert!(
+            !marker.exists(),
+            "Git from the lexical enclosing repository must not run"
+        );
+        return;
+    }
+
+    let lexical_nested =
+        PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"));
+    assert_eq!(try_get_has_changes(&lexical_nested).await, Ok(false));
+    let marker =
+        PathBuf::from(std::env::var_os("CODEX_GIT_UTILS_LEXICAL_GIT_MARKER").expect("Git marker"));
+    assert!(
+        !marker.exists(),
+        "Git from the lexical enclosing repository must not run"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn root_probe_distinguishes_repository_command_failure() {
     use std::os::unix::fs::PermissionsExt;
 
