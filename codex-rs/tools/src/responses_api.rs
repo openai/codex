@@ -48,6 +48,12 @@ pub enum LoadableToolSpec {
     Namespace(ResponsesApiNamespace),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamespaceToolSpecMode {
+    Preserve,
+    Flatten,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiNamespace {
     pub name: String,
@@ -102,6 +108,43 @@ pub fn coalesce_loadable_tool_specs(
         }
     }
     coalesced_specs
+}
+
+pub fn serialize_loadable_tool_specs(
+    specs: impl IntoIterator<Item = LoadableToolSpec>,
+    namespace_tool_spec_mode: NamespaceToolSpecMode,
+) -> Vec<LoadableToolSpec> {
+    let specs = coalesce_loadable_tool_specs(specs);
+    match namespace_tool_spec_mode {
+        NamespaceToolSpecMode::Preserve => specs,
+        NamespaceToolSpecMode::Flatten => specs
+            .into_iter()
+            .flat_map(|spec| match spec {
+                LoadableToolSpec::Function(tool) => vec![LoadableToolSpec::Function(tool)],
+                LoadableToolSpec::Namespace(namespace) => {
+                    flatten_responses_api_namespace(namespace)
+                        .into_iter()
+                        .map(LoadableToolSpec::Function)
+                        .collect()
+                }
+            })
+            .collect(),
+    }
+}
+
+pub fn flatten_responses_api_namespace(namespace: ResponsesApiNamespace) -> Vec<ResponsesApiTool> {
+    namespace
+        .tools
+        .into_iter()
+        .map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(mut tool) => {
+                tool.name = ToolName::namespaced(namespace.name.as_str(), tool.name)
+                    .canonical_flat_name()
+                    .into_owned();
+                tool
+            }
+        })
+        .collect()
 }
 
 pub fn mcp_tool_to_responses_api_tool(

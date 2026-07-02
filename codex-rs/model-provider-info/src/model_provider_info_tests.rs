@@ -29,6 +29,7 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -63,6 +64,7 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -100,6 +102,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -168,6 +171,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     };
 
     assert!(provider.supports_remote_compaction());
@@ -193,6 +197,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     };
 
     assert!(!provider.supports_remote_compaction());
@@ -301,6 +306,7 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            namespace_tools: None,
         }
     );
 }
@@ -405,7 +411,7 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             configured_model_providers,
         ),
         Err(
-            "model_providers.amazon-bedrock only supports changing `aws.profile` and `aws.region`; other non-default provider fields are not supported"
+            "model_providers.amazon-bedrock only supports changing `aws.profile`, `aws.region`, and `namespace_tools`; other non-default provider fields are not supported"
                 .to_string()
         )
     );

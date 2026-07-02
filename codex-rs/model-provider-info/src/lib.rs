@@ -138,6 +138,9 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+    /// Whether this provider accepts Codex's `type: "namespace"` tool wrapper.
+    #[serde(default)]
+    pub namespace_tools: Option<bool>,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -359,6 +362,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            namespace_tools: None,
         }
     }
 
@@ -389,6 +393,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            namespace_tools: None,
         }
     }
 
@@ -458,7 +463,7 @@ pub fn built_in_model_providers(
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
 /// generally overridable, but the built-in Amazon Bedrock provider allows the
-/// user to set `aws.profile` and `aws.region`.
+/// user to set `aws.profile`, `aws.region`, and `namespace_tools`.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
@@ -466,22 +471,27 @@ pub fn merge_configured_model_providers(
     for (key, mut provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
             let aws_override = provider.aws.take();
+            let namespace_tools_override = provider.namespace_tools.take();
             if provider != ModelProviderInfo::default() {
                 return Err(format!(
                     "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing \
-`aws.profile` and `aws.region`; other non-default provider fields are not supported"
+`aws.profile`, `aws.region`, and `namespace_tools`; other non-default provider fields are not supported"
                 ));
             }
 
-            if let Some(aws_override) = aws_override
-                && let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
-                && let Some(built_in_aws) = built_in_provider.aws.as_mut()
-            {
-                if let Some(profile) = aws_override.profile {
-                    built_in_aws.profile = Some(profile);
+            if let Some(built_in_provider) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID) {
+                if namespace_tools_override.is_some() {
+                    built_in_provider.namespace_tools = namespace_tools_override;
                 }
-                if let Some(region) = aws_override.region {
-                    built_in_aws.region = Some(region);
+                if let Some(aws_override) = aws_override
+                    && let Some(built_in_aws) = built_in_provider.aws.as_mut()
+                {
+                    if let Some(profile) = aws_override.profile {
+                        built_in_aws.profile = Some(profile);
+                    }
+                    if let Some(region) = aws_override.region {
+                        built_in_aws.region = Some(region);
+                    }
                 }
             }
         } else {
@@ -530,6 +540,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        namespace_tools: None,
     }
 }
 

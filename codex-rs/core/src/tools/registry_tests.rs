@@ -179,6 +179,85 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     );
 }
 
+#[test]
+fn handler_resolves_flat_aliases_when_namespace_specs_are_flattened() {
+    let namespaced_name = codex_tools::ToolName::namespaced("mcp__calendar", "create_event");
+    let handler = Arc::new(TestHandler {
+        tool_name: namespaced_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::from_tools_with_namespace_tool_spec_mode(
+        [handler.clone()],
+        codex_tools::NamespaceToolSpecMode::Flatten,
+        &std::collections::BTreeSet::new(),
+    );
+
+    let flat_name = codex_tools::ToolName::plain("mcp__calendar__create_event");
+    let flat = registry.tool(&flat_name);
+    let resolved = registry.resolved_tool(&flat_name);
+
+    assert!(
+        flat.as_ref()
+            .is_some_and(|flat| Arc::ptr_eq(flat, &handler))
+    );
+    assert_eq!(
+        resolved.map(|(tool_name, _)| tool_name),
+        Some(namespaced_name)
+    );
+}
+
+#[test]
+fn suppressed_flat_aliases_keep_logical_runtimes_registered() {
+    let first_name = codex_tools::ToolName::namespaced("agents", "spawn_agent");
+    let second_name = codex_tools::ToolName::namespaced("agents_", "spawn_agent");
+    let first_handler = Arc::new(TestHandler {
+        tool_name: first_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let second_handler = Arc::new(TestHandler {
+        tool_name: second_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::from_tools_with_namespace_tool_spec_mode(
+        [first_handler, second_handler],
+        codex_tools::NamespaceToolSpecMode::Flatten,
+        &std::collections::BTreeSet::from(["agents__spawn_agent".to_string()]),
+    );
+
+    assert_eq!(
+        registry.tool_names_for_test(),
+        vec![first_name.clone(), second_name.clone()]
+    );
+    assert!(registry.tool(&first_name).is_some());
+    assert!(registry.tool(&second_name).is_some());
+    assert!(
+        registry
+            .tool(&codex_tools::ToolName::plain("agents__spawn_agent"))
+            .is_none()
+    );
+}
+
+#[test]
+fn flattened_model_visible_name_is_only_a_hook_matcher_alias() {
+    let requested_tool_name = codex_tools::ToolName::plain("web__run");
+    let resolved_tool_name = codex_tools::ToolName::namespaced("web", "run");
+    let mut hook_tool_name = HookToolName::new("webrun");
+
+    add_model_visible_flat_alias(
+        &mut hook_tool_name,
+        &requested_tool_name,
+        &resolved_tool_name,
+    );
+
+    assert_eq!(hook_tool_name.name(), "webrun");
+    assert_eq!(hook_tool_name.matcher_aliases(), ["web__run".to_string()]);
+
+    let mut exact_hook_tool_name = HookToolName::new("webrun");
+    add_model_visible_flat_alias(
+        &mut exact_hook_tool_name,
+        &resolved_tool_name,
+        &resolved_tool_name,
+    );
+    assert!(exact_hook_tool_name.matcher_aliases().is_empty());
+}
+
 #[tokio::test]
 async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
     let (session, turn) = crate::session::tests::make_session_and_context().await;

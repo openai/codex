@@ -199,7 +199,10 @@ fn has_model_resume_override(
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
 
-fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
+fn validate_dynamic_tools(
+    tools: &[DynamicToolSpec],
+    namespace_tools_enabled: bool,
+) -> Result<(), String> {
     const DYNAMIC_TOOL_NAME_MAX_LEN: usize = 128;
     const DYNAMIC_TOOL_NAMESPACE_MAX_LEN: usize = 64;
     const DYNAMIC_TOOL_NAMESPACE_DESCRIPTION_MAX_LEN: usize = 1024;
@@ -252,6 +255,8 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
         tool: &'a DynamicToolFunctionSpec,
         namespace: Option<&str>,
         seen: &mut HashSet<&'a str>,
+        seen_canonical_flat_names: &mut HashSet<String>,
+        namespace_tools_enabled: bool,
     ) -> Result<(), String> {
         let name = tool.name.trim();
         if name.is_empty() {
@@ -275,6 +280,23 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
             }
             return Err(format!("duplicate dynamic tool name: {name}"));
         }
+        if !namespace_tools_enabled {
+            let canonical_flat_name =
+                codex_tools::ToolName::new(namespace.map(str::to_string), name)
+                    .canonical_flat_name()
+                    .into_owned();
+            validate_dynamic_tool_identifier(
+                &canonical_flat_name,
+                "dynamic tool canonical flat name",
+                DYNAMIC_TOOL_NAME_MAX_LEN,
+            )?;
+            if !seen_canonical_flat_names.insert(canonical_flat_name.clone()) {
+                return Err(format!(
+                    "duplicate dynamic tool canonical flat name: {}",
+                    escape_identifier_for_error(&canonical_flat_name),
+                ));
+            }
+        }
         if tool.defer_loading && namespace.is_none() {
             return Err(format!(
                 "deferred dynamic tool must include a namespace: {name}"
@@ -291,10 +313,17 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
 
     let mut seen_tools = HashSet::new();
     let mut seen_namespaces = HashSet::new();
+    let mut seen_canonical_flat_names = HashSet::new();
     for spec in tools {
         match spec {
             DynamicToolSpec::Function(tool) => {
-                validate_dynamic_tool(tool, /*namespace*/ None, &mut seen_tools)?;
+                validate_dynamic_tool(
+                    tool,
+                    /*namespace*/ None,
+                    &mut seen_tools,
+                    &mut seen_canonical_flat_names,
+                    namespace_tools_enabled,
+                )?;
             }
             DynamicToolSpec::Namespace(namespace) => {
                 let name = namespace.name.trim();
@@ -338,7 +367,13 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
                 let mut seen_namespace_tools = HashSet::new();
                 for tool in &namespace.tools {
                     let DynamicToolNamespaceTool::Function(tool) = tool;
-                    validate_dynamic_tool(tool, Some(name), &mut seen_namespace_tools)?;
+                    validate_dynamic_tool(
+                        tool,
+                        Some(name),
+                        &mut seen_namespace_tools,
+                        &mut seen_canonical_flat_names,
+                        namespace_tools_enabled,
+                    )?;
                 }
             }
         }
@@ -1146,7 +1181,12 @@ impl ThreadRequestProcessor {
         });
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         if !dynamic_tools.is_empty() {
-            validate_dynamic_tools(&dynamic_tools).map_err(invalid_request)?;
+            let namespace_tools_enabled =
+                create_model_provider(config.model_provider.clone(), /*auth_manager*/ None)
+                    .capabilities()
+                    .namespace_tools;
+            validate_dynamic_tools(&dynamic_tools, namespace_tools_enabled)
+                .map_err(invalid_request)?;
         }
         // Count callable functions rather than top-level namespace containers.
         let dynamic_tool_count: usize = dynamic_tools

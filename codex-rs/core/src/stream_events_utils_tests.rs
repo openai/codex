@@ -282,17 +282,20 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let router = Arc::new(ToolRouter::from_context(
-        step_context.as_ref(),
-        crate::tools::router::ToolRouterParams {
-            tool_suggest_candidates: None,
-            mcp_tools: None,
-            deferred_mcp_tools: None,
-            extension_tool_executors: Vec::new(),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-        &Default::default(),
-    ));
+    let router = Arc::new(
+        ToolRouter::from_context(
+            step_context.as_ref(),
+            crate::tools::router::ToolRouterParams {
+                tool_suggest_candidates: None,
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                extension_tool_executors: Vec::new(),
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+            &Default::default(),
+        )
+        .expect("test tool router should build"),
+    );
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let tool_runtime = ToolCallRuntime::new(router, Arc::clone(&session), step_context, tracker);
     let item = assistant_output_text("original assistant text");
