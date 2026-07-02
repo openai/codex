@@ -54,10 +54,53 @@ const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
 // Keep in sync with the Codex CLI Hydra redirect URI allow-list.
 const FALLBACK_PORT: u16 = 1457;
+const CODEX_OPEN_APP_URL: &str = "https://chatgpt.com/codex/open-app";
 static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(include_str!("assets/error.html"))
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum LoginSuccessPage {
+    Local,
+    Hosted {
+        url: url::Url,
+        app_brand: LoginSuccessPageBrand,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LoginSuccessPageBrand {
+    Codex,
+    Chatgpt,
+}
+
+impl LoginSuccessPageBrand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Chatgpt => "chatgpt",
+        }
+    }
+}
+
+impl LoginSuccessPage {
+    pub fn hosted(app_brand: LoginSuccessPageBrand) -> Self {
+        Self::hosted_at(CODEX_OPEN_APP_URL, app_brand)
+            .unwrap_or_else(|err| panic!("default Codex open app URL must parse: {err}"))
+    }
+
+    pub fn hosted_at(url: &str, app_brand: LoginSuccessPageBrand) -> io::Result<Self> {
+        url::Url::parse(url)
+            .map(|url| Self::Hosted { url, app_brand })
+            .map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid Codex open app URL: {err}"),
+                )
+            })
+    }
+}
 
 /// Options for launching the local login callback server.
 #[derive(Debug, Clone)]
@@ -70,6 +113,7 @@ pub struct ServerOptions {
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
+    pub login_success_page: LoginSuccessPage,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
     pub auth_route_config: Option<AuthRouteConfig>,
@@ -94,6 +138,7 @@ impl ServerOptions {
             force_state: None,
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
+            login_success_page: LoginSuccessPage::Local,
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
             auth_route_config,
@@ -207,11 +252,24 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 
                         let url_raw = req.url().to_string();
                         let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+                            process_request(
+                                &url_raw,
+                                &opts,
+                                &redirect_uri,
+                                &pkce,
+                                actual_port,
+                                &state,
+                            )
+                            .await;
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
                                 let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                None
+                            }
+                            HandledRequest::RedirectWithHeader(header) => {
+                                let redirect = Response::empty(302).with_header(header);
+                                let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
                                 None
                             }
                             HandledRequest::ResponseAndExit {
@@ -220,15 +278,36 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                                 result,
                             } => {
                                 let _ = tokio::task::spawn_blocking(move || {
-                                    send_response_with_disconnect(req, headers, body)
+                                    send_response_with_disconnect(
+                                        req,
+                                        StatusCode(200),
+                                        headers,
+                                        body,
+                                    )
                                 })
                                 .await;
                                 Some(result)
                             }
-                            HandledRequest::RedirectWithHeader(header) => {
-                                let redirect = Response::empty(302).with_header(header);
-                                let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
-                                None
+                            HandledRequest::RedirectAndExit(header) => {
+                                match tokio::task::spawn_blocking(move || {
+                                    send_response_with_disconnect(
+                                        req,
+                                        StatusCode(302),
+                                        vec![header],
+                                        Vec::new(),
+                                    )
+                                })
+                                .await
+                                {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(err)) => {
+                                        warn!("failed to send hosted login redirect: {err}");
+                                    }
+                                    Err(err) => {
+                                        warn!("hosted login redirect task failed: {err}");
+                                    }
+                                }
+                                Some(Ok(()))
                             }
                         };
 
@@ -258,11 +337,18 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
     RedirectWithHeader(Header),
+    RedirectAndExit(Header),
     ResponseAndExit {
         headers: Vec<Header>,
         body: Vec<u8>,
         result: io::Result<()>,
     },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum LoginSuccessRedirect {
+    Local(String),
+    Hosted(String),
 }
 
 async fn process_request(
@@ -392,15 +478,26 @@ async fn process_request(
                         );
                     }
 
-                    let success_url = compose_success_url(
+                    let redirect = compose_success_url(
                         actual_port,
                         &opts.issuer,
                         &tokens.id_token,
                         &tokens.access_token,
                         opts.codex_streamlined_login,
+                        &opts.login_success_page,
                     );
-                    match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
-                        Ok(header) => HandledRequest::RedirectWithHeader(header),
+                    let url = match &redirect {
+                        LoginSuccessRedirect::Local(url) | LoginSuccessRedirect::Hosted(url) => url,
+                    };
+                    match tiny_http::Header::from_bytes(&b"Location"[..], url.as_bytes()) {
+                        Ok(header) => match redirect {
+                            LoginSuccessRedirect::Local(_) => {
+                                HandledRequest::RedirectWithHeader(header)
+                            }
+                            LoginSuccessRedirect::Hosted(_) => {
+                                HandledRequest::RedirectAndExit(header)
+                            }
+                        },
                         Err(_) => login_error_response(
                             "Sign-in completed but redirecting back to Codex failed.",
                             io::ErrorKind::Other,
@@ -465,10 +562,10 @@ async fn process_request(
 /// server-side connection persistence, but it does not.
 fn send_response_with_disconnect(
     req: Request,
+    status: StatusCode,
     mut headers: Vec<Header>,
     body: Vec<u8>,
 ) -> io::Result<()> {
-    let status = StatusCode(200);
     let mut writer = req.into_writer();
     let reason = status.default_reason_phrase();
     write!(writer, "HTTP/1.1 {} {}\r\n", status.0, reason)?;
@@ -856,9 +953,9 @@ fn compose_success_url(
     id_token: &str,
     access_token: &str,
     codex_streamlined_login: bool,
-) -> String {
+    login_success_page: &LoginSuccessPage,
+) -> LoginSuccessRedirect {
     let token_claims = jwt_auth_claims(id_token);
-    let access_claims = jwt_auth_claims(access_token);
 
     let org_id = token_claims
         .get("organization_id")
@@ -877,6 +974,17 @@ fn compose_success_url(
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
+    if !needs_setup && let LoginSuccessPage::Hosted { url, app_brand } = login_success_page {
+        let mut success_url = url.clone();
+        success_url.set_query(None);
+        success_url
+            .query_pairs_mut()
+            .append_pair("source", "login")
+            .append_pair("app_brand", app_brand.as_str());
+        return LoginSuccessRedirect::Hosted(success_url.into());
+    }
+
+    let access_claims = jwt_auth_claims(access_token);
     let plan_type = access_claims
         .get("chatgpt_plan_type")
         .and_then(|v| v.as_str())
@@ -901,10 +1009,10 @@ fn compose_success_url(
     }
     let qs = params
         .drain(..)
-        .map(|(k, v)| format!("{}={}", k, urlencoding::encode(&v)))
+        .map(|(key, value)| format!("{key}={}", urlencoding::encode(&value)))
         .collect::<Vec<_>>()
         .join("&");
-    format!("http://localhost:{port}/success?{qs}")
+    LoginSuccessRedirect::Local(format!("http://localhost:{port}/success?{qs}"))
 }
 
 fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
@@ -1182,9 +1290,14 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::DEFAULT_ISSUER;
+    use super::LoginSuccessPage;
+    use super::LoginSuccessPageBrand;
+    use super::LoginSuccessRedirect;
     use super::TokenEndpointErrorDetail;
     use super::compose_success_url;
     use super::html_escape;
@@ -1294,16 +1407,21 @@ mod tests {
     }
 
     #[test]
-    fn compose_success_url_omits_streamlined_success_by_default() {
-        let url = url::Url::parse(&compose_success_url(
+    fn compose_success_url_uses_local_page_by_default() {
+        let LoginSuccessRedirect::Local(url) = compose_success_url(
             /*port*/ 1455,
             DEFAULT_ISSUER,
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             /*codex_streamlined_login*/ false,
-        ))
-        .expect("success url should parse");
+            &LoginSuccessPage::Local,
+        ) else {
+            panic!("expected local success redirect");
+        };
+        let url = url::Url::parse(&url).expect("success URL should parse");
 
+        assert_eq!(url.host_str(), Some("localhost"));
+        assert_eq!(url.path(), "/success");
         assert_eq!(
             url.query_pairs()
                 .find(|(key, _)| key == "codex_streamlined_login"),
@@ -1312,19 +1430,86 @@ mod tests {
     }
 
     #[test]
-    fn compose_success_url_includes_streamlined_success_when_requested() {
-        let url = url::Url::parse(&compose_success_url(
+    fn compose_success_url_uses_streamlined_local_page_when_requested() {
+        let LoginSuccessRedirect::Local(url) = compose_success_url(
             /*port*/ 1455,
             DEFAULT_ISSUER,
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
             /*codex_streamlined_login*/ true,
-        ))
-        .expect("success url should parse");
+            &LoginSuccessPage::Local,
+        ) else {
+            panic!("expected local success redirect");
+        };
+        let url = url::Url::parse(&url).expect("success URL should parse");
 
         assert_eq!(
             url.query_pairs()
                 .find(|(key, _)| key == "codex_streamlined_login")
+                .map(|(_, value)| value.into_owned()),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn compose_success_url_uses_hosted_page_when_requested() {
+        assert_eq!(
+            compose_success_url(
+                /*port*/ 1455,
+                DEFAULT_ISSUER,
+                "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+                "e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnt9fQ.sig",
+                /*codex_streamlined_login*/ false,
+                &LoginSuccessPage::hosted(LoginSuccessPageBrand::Chatgpt),
+            ),
+            LoginSuccessRedirect::Hosted(
+                "https://chatgpt.com/codex/open-app?source=login&app_brand=chatgpt".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn compose_success_url_keeps_setup_on_local_page() {
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let payload = encode(
+            serde_json::to_string(&json!({
+                "https://api.openai.com/auth": {
+                    "completed_platform_onboarding": false,
+                    "is_org_owner": true,
+                    "organization_id": "org_123",
+                    "project_id": "proj_123",
+                }
+            }))
+            .expect("payload should serialize")
+            .as_bytes(),
+        );
+        let access_payload = encode(
+            serde_json::to_string(&json!({
+                "https://api.openai.com/auth": {
+                    "chatgpt_plan_type": "team",
+                }
+            }))
+            .expect("payload should serialize")
+            .as_bytes(),
+        );
+        let id_token = format!("e30.{payload}.sig");
+        let LoginSuccessRedirect::Local(url) = compose_success_url(
+            /*port*/ 1455,
+            DEFAULT_ISSUER,
+            &id_token,
+            &format!("e30.{access_payload}.sig"),
+            /*codex_streamlined_login*/ true,
+            &LoginSuccessPage::hosted(LoginSuccessPageBrand::Codex),
+        ) else {
+            panic!("expected local success redirect");
+        };
+        let url = url::Url::parse(&url).expect("success URL should parse");
+
+        assert_eq!(url.host_str(), Some("localhost"));
+        assert_eq!(url.path(), "/success");
+        assert_eq!(
+            url.query_pairs()
+                .find(|(key, _)| key == "needs_setup")
                 .map(|(_, value)| value.into_owned()),
             Some("true".to_string())
         );
