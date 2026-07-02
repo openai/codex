@@ -6,7 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use tokio::time::timeout;
 
 use crate::GitReadError;
@@ -16,7 +16,7 @@ use crate::git_command::MAX_INTERNAL_GIT_OUTPUT_BYTES;
 use crate::repository_authority::is_authority_refusal;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 use crate::safe_git::FilterAttributeValue;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use crate::safe_git::GIT_COMMAND_TIMEOUT;
 use crate::safe_git::GitFilterNeutralization;
 use crate::safe_git::SelectedFilterPolicy;
@@ -35,7 +35,7 @@ use crate::safe_git::write_nul_paths;
 
 const MAX_STATUS_TRACKED_PATHS: usize = 250_000;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) async fn prepare_status_filter_guard(
     git: &GitRunner,
     cwd: &Path,

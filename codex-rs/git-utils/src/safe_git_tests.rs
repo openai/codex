@@ -6,8 +6,11 @@ use crate::get_has_changes;
 use crate::git_config::GitConfigScope;
 #[cfg(unix)]
 use crate::patch_paths::stage_paths;
+#[cfg(unix)]
 use crate::status_guard::git_root_from_stdout;
+#[cfg(unix)]
 use crate::status_guard::prepare_status_filter_guard;
+#[cfg(unix)]
 use crate::status_guard::resolve_git_root_async;
 use crate::try_get_has_changes;
 use pretty_assertions::assert_eq;

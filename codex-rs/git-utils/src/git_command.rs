@@ -199,7 +199,7 @@ impl GitRunner {
 
     /// Spawn a configured Tokio command after applying the final
     /// repository-selector environment lock.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn output_async(
         &self,
         mut command: GitAsyncCommand,

@@ -41,7 +41,7 @@ async fn bounded_async_output_rejects_the_first_byte_over_limit() {
     let write = tokio::spawn(async move {
         writer.write_all(b"12345").await.expect("write fixture");
     });
-    let error = read_bounded_output(reader, 4)
+    let error = read_bounded_output(reader, /*max_bytes*/ 4)
         .await
         .expect_err("fifth byte must exceed limit");
     write.await.expect("join fixture writer");

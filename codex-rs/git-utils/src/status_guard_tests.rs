@@ -101,7 +101,7 @@ fn io_error_mapping_preserves_authority_provenance() {
 #[tokio::test]
 async fn dropping_status_preparation_kills_the_active_git_child() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 0).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     let wrapper = temp_dir.path().join("git-wrapper");
     let pid_file = wrapper.with_extension("pid");
     let blocker = wrapper.with_extension("block");
@@ -181,7 +181,7 @@ async fn filter_marker_is_set(repo: &Path, key: &str) -> bool {
 #[tokio::test]
 async fn prepared_guard_neutralizes_filter_selected_after_the_probe() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 0).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     run_git(
         &repo,
         &[
@@ -216,7 +216,7 @@ async fn prepared_guard_neutralizes_filter_selected_after_the_probe() {
 #[tokio::test]
 async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 0).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     std::fs::write(repo.join(".gitattributes"), "test.txt filter=smudge-only\n")
         .expect("select smudge filter");
     run_git(&repo, &["add", ".gitattributes"]).await;
@@ -251,7 +251,7 @@ async fn optional_smudge_only_filter_is_allowed_but_required_is_refused() {
 #[tokio::test]
 async fn optional_smudge_required_value_is_queried_once_per_driver() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 2).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 2).await;
     std::fs::write(
         repo.join(".gitattributes"),
         "file-0.txt filter=smudge-only\nfile-1.txt filter=smudge-only\n",
@@ -296,7 +296,7 @@ async fn optional_smudge_required_value_is_queried_once_per_driver() {
 #[tokio::test]
 async fn sentinel_probe_neutralizes_a_race_selected_known_driver() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 0).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     std::fs::write(repo.join(".gitattributes"), "test.txt filter\n")
         .expect("write sentinel attribute");
     run_git(&repo, &["add", ".gitattributes"]).await;
@@ -379,7 +379,7 @@ async fn sentinel_probe_budget_fails_closed_at_the_exact_process_limit() {
 #[tokio::test]
 async fn ordinary_driver_uses_one_bulk_path_and_attribute_probe() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let repo = init_repo(&temp_dir, 24).await;
+    let repo = init_repo(&temp_dir, /*file_count*/ 24).await;
     run_git(
         &repo,
         &[

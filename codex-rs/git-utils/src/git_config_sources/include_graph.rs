@@ -34,7 +34,7 @@ impl IncludeGraphBudget {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn with_limit(limit: usize) -> Self {
         Self {
             remaining_directives: limit,

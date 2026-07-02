@@ -1538,7 +1538,7 @@ async fn async_include_budget_stops_before_over_limit_expansion_launch() {
         })
         .collect();
     let mut pending = Vec::new();
-    let mut budget = IncludeGraphBudget::with_limit(2);
+    let mut budget = IncludeGraphBudget::with_limit(/*limit*/ 2);
 
     let error = validate_include_entries_async(
         &git,
