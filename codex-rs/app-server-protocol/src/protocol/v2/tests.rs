@@ -3278,6 +3278,7 @@ fn plugin_list_params_ignore_removed_force_remote_sync_field() {
         PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         },
     );
 }
@@ -3294,6 +3295,7 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 PluginListMarketplaceKind::SharedWithMe,
                 PluginListMarketplaceKind::CreatedByMeRemote,
             ]),
+            force_refetch: false,
         })
         .unwrap(),
         json!({
@@ -3305,6 +3307,23 @@ fn plugin_list_params_serializes_marketplace_kind_filter() {
                 "shared-with-me",
                 "created-by-me-remote",
             ],
+        }),
+    );
+}
+
+#[test]
+fn plugin_list_params_serializes_force_refetch_when_enabled() {
+    assert_eq!(
+        serde_json::to_value(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+            force_refetch: true,
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "marketplaceKinds": null,
+            "forceRefetch": true,
         }),
     );
 }

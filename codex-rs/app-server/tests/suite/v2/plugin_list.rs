@@ -114,6 +114,7 @@ async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Resul
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -433,6 +434,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
                 AbsolutePathBuf::try_from(invalid_repo_root.path())?,
             ]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -547,6 +549,7 @@ async fn plugin_list_returns_empty_when_workspace_codex_plugins_disabled() -> Re
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -639,6 +642,7 @@ async fn plugin_list_reuses_cached_workspace_codex_plugins_setting() -> Result<(
             .send_plugin_list_request(PluginListParams {
                 cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
                 marketplace_kinds: None,
+                force_refetch: false,
             })
             .await?;
 
@@ -723,6 +727,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -838,6 +843,7 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -891,6 +897,7 @@ async fn plugin_list_returns_share_context_for_shared_local_plugin() -> Result<(
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -983,6 +990,7 @@ enabled = false
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1140,6 +1148,7 @@ enabled = false
                 AbsolutePathBuf::try_from(workspace_default.path())?,
             ]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1224,6 +1233,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1337,6 +1347,7 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1425,6 +1436,7 @@ enabled = true
         .send_plugin_list_request(PluginListParams {
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1615,6 +1627,7 @@ async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles()
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -1797,6 +1810,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -1944,6 +1958,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: PluginListResponse = to_response(
@@ -1977,6 +1992,7 @@ async fn plugin_list_uses_cached_global_remote_catalog_and_refreshes_it() -> Res
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: PluginListResponse = to_response(
@@ -2059,6 +2075,7 @@ async fn plugin_list_includes_openai_curated_remote_collection_when_remote_plugi
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -2148,6 +2165,7 @@ async fn plugin_list_propagates_openai_curated_remote_collection_errors_when_rem
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
+            force_refetch: false,
         })
         .await?;
     let err = timeout(
@@ -2188,6 +2206,7 @@ async fn plugin_list_skips_openai_curated_remote_collection_for_api_auth_when_re
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -2227,6 +2246,7 @@ async fn plugin_list_includes_api_curated_marketplace_for_api_auth_when_remote_p
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -2282,6 +2302,7 @@ async fn plugin_list_does_not_query_openai_curated_remote_collection_by_default(
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -2335,6 +2356,7 @@ async fn plugin_list_vertical_kind_noops_when_remote_plugin_enabled() -> Result<
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Vertical]),
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -2389,6 +2411,7 @@ async fn plugin_list_does_not_append_global_remote_when_marketplace_kinds_are_ex
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::Local]),
+            force_refetch: false,
         })
         .await?;
 
@@ -2810,6 +2833,7 @@ async fn plugin_list_fetches_workspace_directory_kind_when_remote_plugin_disable
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::WorkspaceDirectory]),
+            force_refetch: false,
         })
         .await?;
 
@@ -2853,6 +2877,68 @@ async fn plugin_list_fetches_workspace_directory_kind_when_remote_plugin_disable
                 .query()
                 .is_some_and(|query| query.contains("scope=GLOBAL")))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_force_refetch_refreshes_installed_cache_for_workspace_directory() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugins_enabled_config_with_base_url(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let workspace_plugin_body = workspace_remote_plugin_page_body(
+        "plugins~Plugin_11111111111111111111111111111111",
+        "workspace-linear",
+        "Workspace Linear",
+        "LISTED",
+        /*enabled*/ None,
+    );
+    let workspace_installed_body = workspace_remote_plugin_page_body(
+        "plugins~Plugin_11111111111111111111111111111111",
+        "workspace-linear",
+        "Workspace Linear",
+        "LISTED",
+        /*enabled*/ Some(true),
+    );
+    mount_remote_plugin_list(&server, "WORKSPACE", &workspace_plugin_body).await;
+    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
+    mount_empty_user_installed_plugins(&server).await;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![PluginListMarketplaceKind::WorkspaceDirectory]),
+            force_refetch: true,
+        })
+        .await?;
+
+    let response: PluginListResponse = to_response(
+        timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(response.marketplaces.len(), 1);
+    assert_eq!(response.marketplaces[0].name, "workspace-directory");
+
+    wait_for_remote_installed_scope_request_count_at_least(&server, "WORKSPACE", 2).await?;
     Ok(())
 }
 
@@ -2936,6 +3022,7 @@ plugin_sharing = false
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::CreatedByMeRemote]),
+            force_refetch: false,
         })
         .await?;
 
@@ -3063,6 +3150,7 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::SharedWithMe]),
+            force_refetch: false,
         })
         .await?;
 
@@ -3220,6 +3308,7 @@ plugin_sharing = false
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::SharedWithMe]),
+            force_refetch: false,
         })
         .await?;
 
@@ -3280,6 +3369,7 @@ plugin_sharing = true
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: Some(vec![PluginListMarketplaceKind::CreatedByMeRemote]),
+            force_refetch: false,
         })
         .await?;
 
@@ -3410,6 +3500,7 @@ async fn plugin_list_marks_remote_plugin_disabled_by_admin() -> Result<()> {
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -3470,6 +3561,7 @@ remote_plugin = true
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -3506,6 +3598,7 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -3546,6 +3639,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -3623,6 +3717,37 @@ async fn wait_for_remote_installed_scope_request(server: &MockServer, scope: &st
                         .query_pairs()
                         .any(|(name, value)| name == "scope" && value == scope)
             }) {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+async fn wait_for_remote_installed_scope_request_count_at_least(
+    server: &MockServer,
+    scope: &str,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                bail!("wiremock did not record requests");
+            };
+            let request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "GET"
+                        && request.url.path().ends_with("/ps/plugins/installed")
+                        && request
+                            .url
+                            .query_pairs()
+                            .any(|(name, value)| name == "scope" && value == scope)
+                })
+                .count();
+            if request_count >= expected_count {
                 return Ok::<(), anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

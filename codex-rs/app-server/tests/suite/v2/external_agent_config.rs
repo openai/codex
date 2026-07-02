@@ -504,6 +504,7 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         .send_plugin_list_request(PluginListParams {
             cwds: None,
             marketplace_kinds: None,
+            force_refetch: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -29,6 +31,8 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadStartParams;
@@ -1443,6 +1447,84 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn plugin_list_force_refetch_refreshes_codex_apps_tools() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_and_plugins_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let cached_request = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+            force_refetch: false,
+        })
+        .await?;
+    let cached_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cached_request)),
+    )
+    .await??;
+    let _cached_response: PluginListResponse = to_response(cached_response)?;
+    let calls_before_force_refetch = server_control.tool_list_calls();
+
+    let refetch_request = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+            force_refetch: true,
+        })
+        .await?;
+    let refetch_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refetch_request)),
+    )
+    .await??;
+    let _refetch_response: PluginListResponse = to_response(refetch_response)?;
+
+    assert!(
+        server_control.tool_list_calls() > calls_before_force_refetch,
+        "expected plugin/list forceRefetch to hard-refresh Codex Apps tools"
+    );
+
+    server_handle.abort();
+    Ok(())
+}
+
 async fn read_app_list_updated_notification(
     mcp: &mut TestAppServer,
 ) -> Result<AppListUpdatedNotification> {
@@ -1471,11 +1553,20 @@ struct AppsServerState {
 struct AppListMcpServer {
     tools: Arc<StdMutex<Vec<Tool>>>,
     tools_delay: Duration,
+    tool_list_calls: Arc<AtomicUsize>,
 }
 
 impl AppListMcpServer {
-    fn new(tools: Arc<StdMutex<Vec<Tool>>>, tools_delay: Duration) -> Self {
-        Self { tools, tools_delay }
+    fn new(
+        tools: Arc<StdMutex<Vec<Tool>>>,
+        tools_delay: Duration,
+        tool_list_calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            tools,
+            tools_delay,
+            tool_list_calls,
+        }
     }
 }
 
@@ -1483,6 +1574,7 @@ impl AppListMcpServer {
 struct AppsServerControl {
     response: Arc<StdMutex<serde_json::Value>>,
     tools: Arc<StdMutex<Vec<Tool>>>,
+    tool_list_calls: Arc<AtomicUsize>,
 }
 
 impl AppsServerControl {
@@ -1501,6 +1593,10 @@ impl AppsServerControl {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *tools_guard = tools;
     }
+
+    fn tool_list_calls(&self) -> usize {
+        self.tool_list_calls.load(Ordering::SeqCst)
+    }
 }
 
 impl ServerHandler for AppListMcpServer {
@@ -1516,7 +1612,9 @@ impl ServerHandler for AppListMcpServer {
     {
         let tools = self.tools.clone();
         let tools_delay = self.tools_delay;
+        let tool_list_calls = self.tool_list_calls.clone();
         async move {
+            tool_list_calls.fetch_add(1, Ordering::SeqCst);
             if tools_delay > Duration::ZERO {
                 tokio::time::sleep(tools_delay).await;
             }
@@ -1589,6 +1687,7 @@ async fn start_apps_server_with_delays_and_control_inner(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
+    let tool_list_calls = Arc::new(AtomicUsize::new(0));
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
@@ -1600,6 +1699,7 @@ async fn start_apps_server_with_delays_and_control_inner(
     let server_control = AppsServerControl {
         response,
         tools: tools.clone(),
+        tool_list_calls: tool_list_calls.clone(),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1608,7 +1708,14 @@ async fn start_apps_server_with_delays_and_control_inner(
     let mcp_service = StreamableHttpService::new(
         {
             let tools = tools.clone();
-            move || Ok(AppListMcpServer::new(tools.clone(), tools_delay))
+            let tool_list_calls = tool_list_calls.clone();
+            move || {
+                Ok(AppListMcpServer::new(
+                    tools.clone(),
+                    tools_delay,
+                    tool_list_calls.clone(),
+                ))
+            }
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
