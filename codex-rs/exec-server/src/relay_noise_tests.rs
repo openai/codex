@@ -17,6 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::HarnessKeyValidator;
 use super::MAX_FAILED_NOISE_HANDSHAKES;
 use super::MAX_HARNESS_KEY_AUTHORIZATION_BYTES;
+use super::RendezvousDisconnectReason;
 use super::run_multiplexed_environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -32,6 +33,86 @@ use crate::server::ConnectionProcessor;
 
 const ENVIRONMENT_ID: &str = "environment-1";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
+
+#[tokio::test]
+async fn missing_pong_disconnects_physical_relay() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let harness_connection = tokio::spawn(connect_async(websocket_url));
+    let (socket, _peer_addr) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (_harness_websocket, _response) = harness_connection.await??;
+
+    let environment_task = tokio::spawn(run_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        NoiseChannelIdentity::generate()?,
+        BlockingValidator {
+            calls: Arc::new(AtomicUsize::new(0)),
+            release: Arc::new(Notify::new()),
+        },
+    ));
+
+    assert_eq!(
+        timeout(Duration::from_secs(1), environment_task).await??,
+        RendezvousDisconnectReason::PongTimeout
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pong_keeps_physical_relay_connected() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let harness_connection = tokio::spawn(connect_async(websocket_url));
+    let (socket, _peer_addr) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (mut harness_websocket, _response) = harness_connection.await??;
+
+    let environment_task = tokio::spawn(run_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        NoiseChannelIdentity::generate()?,
+        BlockingValidator {
+            calls: Arc::new(AtomicUsize::new(0)),
+            release: Arc::new(Notify::new()),
+        },
+    ));
+
+    timeout(Duration::from_secs(1), async {
+        let mut pings = 0;
+        while pings < 6 {
+            match harness_websocket.next().await {
+                Some(Ok(Message::Ping(payload))) => {
+                    harness_websocket.send(Message::Pong(payload)).await?;
+                    pings += 1;
+                }
+                Some(Ok(Message::Pong(_) | Message::Frame(_))) => {}
+                Some(Ok(message)) => anyhow::bail!("expected keepalive ping, got {message:?}"),
+                Some(Err(error)) => return Err(error.into()),
+                None => anyhow::bail!("environment disconnected before six keepalive pings"),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    harness_websocket.close(None).await?;
+    assert_eq!(
+        timeout(Duration::from_secs(1), environment_task).await??,
+        RendezvousDisconnectReason::PeerClose
+    );
+    Ok(())
+}
 
 #[derive(Clone)]
 struct BlockingValidator {
