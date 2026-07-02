@@ -118,6 +118,103 @@ Or as an object directly in `plugin.json`:
 - Custom path values must follow the plugin root convention and naming/namespacing rules.
 - This repo’s scaffold writes `.codex-plugin/plugin.json`; treat that as the manifest location this skill generates.
 
+# Scheduled Task Template JSON sample spec
+
+```json
+{
+  "name": "Morning inbox triage",
+  "prompt": "Review my inbox since the previous workday and surface messages that need attention, with a prioritized next-action list.",
+  "schedule": {
+    "type": "weekdays",
+    "time": "08:30"
+  }
+}
+```
+
+## Field guide
+
+### Top-level fields
+
+- `name` (`string`): Nonempty user-facing template name.
+- `prompt` (`string`): Nonempty instruction copied into the user's Scheduled task.
+- `schedule` (`object`): Default cadence using one of the schedule shapes below.
+
+### `schedule` fields
+
+- `type` (`string`): One of `hourly`, `daily`, `weekdays`, or `weekly`.
+- `intervalHours` (`integer`): Positive interval required by `hourly` schedules.
+- `days` (`array` of `string`, optional for `hourly`): Nonempty, unique subset of `MO`, `TU`,
+  `WE`, `TH`, `FR`, `SA`, and `SU`.
+- `time` (`string`): Local wall-clock time in 24-hour `HH:MM` format from `00:00` through `23:59`.
+
+Hourly schedules may optionally restrict the days on which they run:
+
+```json
+{
+  "type": "hourly",
+  "intervalHours": 2,
+  "days": ["MO", "TU", "WE", "TH", "FR"]
+}
+```
+
+Omitting `days` from an hourly schedule runs it every day.
+
+Daily and weekday schedules require a local wall-clock time:
+
+```json
+{ "type": "daily", "time": "09:00" }
+```
+
+```json
+{ "type": "weekdays", "time": "09:00" }
+```
+
+Weekly schedules require one or more weekdays and a local wall-clock time:
+
+```json
+{
+  "type": "weekly",
+  "days": ["TU", "TH"],
+  "time": "16:45"
+}
+```
+
+### Path conventions and defaults
+
+- Place each template at `<plugin-root>/scheduled/<template-key>.json`.
+- Use a lowercase kebab-case filename stem as the template key.
+- Do not add a `scheduled` field to `plugin.json`; supporting Codex clients discover the reserved
+  root directory by convention.
+- Use strict standard JSON with no comments or unknown fields. Invalid templates are silently
+  omitted from the Codex UI.
+
+### Authoring guidance
+
+Add a template only when the user asks for recurring behavior and gives an unambiguous cadence. If
+the cadence is missing, ask instead of inventing one; do not turn a one-time request into a
+recurring template or split a broad request into multiple templates unless asked. Confirm the
+source scope, expected output, and whether it may make changes. A Scheduled template does not need
+to use another component from the same plugin; a plugin may simply bundle a useful collection of
+automations.
+
+Keep the default prompt concise but useful before personalization. Include the source and time
+window, what deserves attention, the expected output, and an explicit read-only boundary when
+appropriate. Avoid personal account identifiers, team names, destinations, and project-specific
+assumptions that belong in the user's customized instance.
+
+Write real templates rather than placeholders, then run
+`scripts/validate_plugin.py <plugin-path>`. When adding templates to an existing installed plugin,
+use the cachebuster and reinstall flow so Codex reads the updated materialized copy.
+
+### Instance semantics
+
+Plugin Scheduled task templates are currently consumed only by the Codex desktop app. The CLI can
+author and validate template JSON, but do not tell users they can browse templates or create
+Scheduled tasks from them in the CLI.
+
+Installing a plugin does not activate its templates. Each template is copied into an independent,
+user-owned Scheduled task, so later plugin changes do not update existing tasks.
+
 # Marketplace JSON sample spec
 
 `marketplace.json` depends on where the plugin should live. New plugin creation defaults to the

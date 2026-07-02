@@ -207,6 +207,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--with-hooks", action="store_true", help="Create hooks/ directory")
     parser.add_argument("--with-scripts", action="store_true", help="Create scripts/ directory")
     parser.add_argument("--with-assets", action="store_true", help="Create assets/ directory")
+    parser.add_argument(
+        "--with-scheduled",
+        action="store_true",
+        help="Create scheduled/ directory for Scheduled task template JSON files",
+    )
     parser.add_argument("--with-mcp", action="store_true", help="Create .mcp.json placeholder")
     parser.add_argument("--with-apps", action="store_true", help="Create .app.json placeholder")
     parser.add_argument(
@@ -281,6 +286,7 @@ def main() -> None:
         "hooks": args.with_hooks,
         "scripts": args.with_scripts,
         "assets": args.with_assets,
+        "scheduled": args.with_scheduled,
     }
     for folder, enabled in optional_directories.items():
         if enabled:

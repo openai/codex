@@ -1,6 +1,6 @@
 ---
 name: plugin-creator
-description: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, valid manifest defaults, and personal-marketplace entries by default. Use when Codex needs to create a new personal plugin, add optional plugin structure, generate or update marketplace entries for plugin ordering and availability metadata, or update an existing local plugin during development with the CLI-driven cachebuster and reinstall flow.
+description: Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional components such as skills, hooks, apps, MCP servers, Scheduled tasks, scripts, and assets, valid manifest defaults, and personal-marketplace entries by default. Use when Codex needs to create a new personal plugin, add optional plugin structure, generate or update marketplace entries, or update an existing local plugin with the cachebuster and reinstall flow.
 ---
 
 # Plugin Creator
@@ -56,7 +56,8 @@ On Windows, use the equivalent path under the user profile.
 python3 scripts/create_basic_plugin.py my-plugin \
   --path <parent-plugin-directory> \
   --marketplace-path <marketplace-json-path> \
-  --with-skills --with-hooks --with-scripts --with-assets --with-mcp --with-apps --with-marketplace
+  --with-skills --with-hooks --with-scripts --with-assets --with-mcp --with-apps \
+  --with-scheduled --with-marketplace
 ```
 
 `<parent-plugin-directory>` is the directory where the plugin folder `<plugin-name>` will be
@@ -98,6 +99,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
   - `hooks/`
   - `scripts/`
   - `assets/`
+  - `scheduled/`
   - `.mcp.json`
   - `.app.json`
 
@@ -186,6 +188,8 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - Do not remove required structure; keep `.codex-plugin/plugin.json` present.
 - Do not leave `[TODO: ...]` placeholders in plugin manifests.
 - Keep `apps` and `mcpServers` out of `plugin.json` unless their companion files are actually created.
+- Keep Scheduled task templates under `scheduled/`; do not declare them in `plugin.json`. Follow
+  `references/plugin-json-spec.md` for their schema and authoring guidance.
 - Omit unsupported plugin manifest fields that validation rejects, including `hooks`.
 - If creating files inside an existing plugin path, use `--force` only when overwrite is intentional.
 - Preserve any existing marketplace `interface.displayName`.
