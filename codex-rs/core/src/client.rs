@@ -1147,15 +1147,19 @@ impl ModelClientSession {
             trace!("incremental request failed, items didn't match");
             return None;
         };
+
         let mut response_items =
             last_response.map_or_else(Vec::new, |response| response.items_added.clone());
-        if !self.client.state.provider.info().is_openai() {
-            response_items
-                .iter_mut()
-                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+        response_items
+            .iter_mut()
+            .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
+
+        let mut request_items = after_previous_input.to_vec();
+        // clear metadata from items that we will compare and strip
+        for request_item in request_items.iter_mut().take(response_items.len()) {
+            request_item.clear_internal_chat_message_metadata_passthrough();
         }
-        let Some(incremental_items) = after_previous_input.strip_prefix(response_items.as_slice())
-        else {
+        let Some(incremental_items) = request_items.strip_prefix(response_items.as_slice()) else {
             trace!("incremental request failed, items didn't match");
             return None;
         };
