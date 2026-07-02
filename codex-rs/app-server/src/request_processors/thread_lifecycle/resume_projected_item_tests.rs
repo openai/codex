@@ -39,53 +39,6 @@ fn dynamic_tool_request() -> DynamicToolCallRequest {
     }
 }
 
-fn buffered_event(msg: EventMsg) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: "busy-turn".to_string(),
-            msg,
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    }
-}
-
-fn buffered_completed_item(turn_id: &str, item: TurnItem) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: ThreadId::new(),
-                turn_id: turn_id.to_string(),
-                item,
-                completed_at_ms: 2_000,
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    }
-}
-
-fn mcp_tool_item(id: &str, status: codex_protocol::items::McpToolCallStatus) -> TurnItem {
-    TurnItem::McpToolCall(McpToolCallItem {
-        id: id.to_string(),
-        server: "private".to_string(),
-        tool: "lookup".to_string(),
-        arguments: serde_json::json!({"secret": true}),
-        connector_id: None,
-        mcp_app_resource_uri: None,
-        link_id: None,
-        app_name: None,
-        template_id: None,
-        action_name: None,
-        plugin_id: None,
-        status,
-        result: None,
-        error: None,
-        duration: None,
-    })
-}
-
 #[test]
 fn busy_snapshot_covers_guardian_and_dynamic_tool_projected_items() {
     let guardian_started = guardian_assessment(GuardianAssessmentStatus::InProgress);
@@ -108,14 +61,23 @@ fn busy_snapshot_covers_guardian_and_dynamic_tool_projected_items() {
     });
     let turns = vec![turn];
 
-    for msg in [
-        EventMsg::GuardianAssessment(guardian_started),
-        EventMsg::GuardianAssessment(guardian_denied),
-        EventMsg::DynamicToolCallRequest(dynamic_request),
+    for (label, msg) in [
+        (
+            "guardian start",
+            EventMsg::GuardianAssessment(guardian_started),
+        ),
+        (
+            "guardian denial",
+            EventMsg::GuardianAssessment(guardian_denied),
+        ),
+        (
+            "dynamic tool request",
+            EventMsg::DynamicToolCallRequest(dynamic_request),
+        ),
     ] {
         assert!(
-            event_is_represented(&buffered_event(msg), &turns, None, ResumePayloadMode::Full,),
-            "the projected item lifecycle must be covered by the busy snapshot"
+            full_turns_cover_event(&represented_buffered_event("busy-turn", msg), &turns),
+            "{label} projected lifecycle must be covered by the busy snapshot"
         );
     }
 }
@@ -129,14 +91,20 @@ fn represented_guardian_and_dynamic_events_split_companion_and_item_recipients()
         request_live_for_resumed_connection: true,
     };
 
-    for msg in [
-        EventMsg::GuardianAssessment(guardian_assessment(GuardianAssessmentStatus::InProgress)),
-        EventMsg::DynamicToolCallRequest(dynamic_tool_request()),
+    for (label, msg) in [
+        (
+            "guardian assessment",
+            EventMsg::GuardianAssessment(guardian_assessment(GuardianAssessmentStatus::InProgress)),
+        ),
+        (
+            "dynamic tool request",
+            EventMsg::DynamicToolCallRequest(dynamic_tool_request()),
+        ),
     ] {
         let (companion_recipients, item_recipients) =
             buffered_event_delivery_recipients(&[existing, joining], Some(joining), &msg, coverage);
-        assert_eq!(companion_recipients, vec![existing, joining]);
-        assert_eq!(item_recipients, Some(vec![existing]));
+        assert_eq!(companion_recipients, vec![existing, joining], "{label}");
+        assert_eq!(item_recipients, Some(vec![existing]), "{label}");
     }
 
     let (companion_recipients, item_recipients) = buffered_event_delivery_recipients(

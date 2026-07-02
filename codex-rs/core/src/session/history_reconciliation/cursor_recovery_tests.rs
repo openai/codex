@@ -10,20 +10,10 @@ async fn reconcile_persisted_history_rejects_loaded_prefix_shorter_than_cursor()
 
     let mut full_rollout = completed_turn("turn-1", "first user", "first assistant");
     full_rollout.extend(completed_turn("turn-2", "second user", "second assistant"));
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&full_rollout));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    set_known_persisted_history(&session, &full_rollout).await;
     let shorter_rollout = completed_turn("turn-1", "first user", "first assistant");
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &shorter_rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &shorter_rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert_eq!(session.clone_history().await.raw_items(), local_history);
@@ -58,11 +48,7 @@ async fn persisted_cursor_does_not_advance_for_session_metadata_append() {
     let (session, _turn_context) = make_session_and_context().await;
     let prefix = completed_turn("turn-1", "first user", "first assistant");
     let cursor = persisted_history_cursor(&prefix);
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(cursor);
+    set_known_persisted_history(&session, &prefix).await;
     let rollout_guard = session.acquire_rollout_persistence_lock().await;
 
     session
@@ -79,21 +65,14 @@ async fn persisted_cursor_does_not_advance_for_session_metadata_append() {
 async fn failed_persisted_append_invalidates_cursor() {
     let (session, _turn_context) = make_session_and_context().await;
     let prefix = completed_turn("turn-1", "first user", "first assistant");
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&prefix));
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-
-    session
-        .invalidate_persisted_item_cursor(
-            &rollout_guard,
-            &[RolloutItem::ResponseItem(assistant_message(
-                "ambiguous append",
-            ))],
-        )
-        .await;
+    set_known_persisted_history(&session, &prefix).await;
+    invalidate_persisted_history_cursor(
+        &session,
+        &[RolloutItem::ResponseItem(assistant_message(
+            "ambiguous append",
+        ))],
+    )
+    .await;
 
     assert_eq!(
         session.state.lock().await.known_persisted_history_cursor(),
@@ -113,11 +92,7 @@ async fn failed_persisted_append_invalidates_cursor() {
 async fn persisted_cursor_uncertainty_only_upgrades_to_history_rewrite() {
     let (session, _turn_context) = make_session_and_context().await;
     let mut expected_rollout = completed_turn("turn-1", "first user", "first assistant");
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&expected_rollout));
+    set_known_persisted_history(&session, &expected_rollout).await;
     let rollout_guard = session.acquire_rollout_persistence_lock().await;
     let append = RolloutItem::ResponseItem(assistant_message("ambiguous append"));
     let successful_append = RolloutItem::ResponseItem(assistant_message("successful append"));
@@ -165,27 +140,11 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     let mut local_history = model_history_for_turn("first user", "first assistant");
     local_history.push(local_tail.clone());
     session.replace_history(local_history.clone(), None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&persisted_prefix));
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-    session
-        .invalidate_persisted_item_cursor(
-            &rollout_guard,
-            &[RolloutItem::ResponseItem(local_tail.clone())],
-        )
+    set_known_persisted_history(&session, &persisted_prefix).await;
+    invalidate_persisted_history_cursor(&session, &[RolloutItem::ResponseItem(local_tail.clone())])
         .await;
-    drop(rollout_guard);
 
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &persisted_prefix)
-        .await;
+    let outcome = reconcile_idle(&session, &persisted_prefix).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert_eq!(session.clone_history().await.raw_items(), local_history);
@@ -201,13 +160,7 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     // If a later read proves the exact ambiguous append reached storage, reconciliation can
     // re-establish the cursor without rewriting authoritative in-memory history.
     persisted_prefix.push(RolloutItem::ResponseItem(local_tail));
-    let retry_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle retry snapshot");
-    let retry_outcome = session
-        .reconcile_persisted_history(retry_snapshot, &persisted_prefix)
-        .await;
+    let retry_outcome = reconcile_idle(&session, &persisted_prefix).await;
     assert_eq!(retry_outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     {
         let state = session.state.lock().await;
@@ -224,27 +177,18 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     session
         .replace_history(local_history_with_second_append.clone(), None)
         .await;
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-    session
-        .invalidate_persisted_item_cursor(
-            &rollout_guard,
-            &[RolloutItem::ResponseItem(second_ambiguous_append.clone())],
-        )
-        .await;
-    drop(rollout_guard);
+    invalidate_persisted_history_cursor(
+        &session,
+        &[RolloutItem::ResponseItem(second_ambiguous_append.clone())],
+    )
+    .await;
     persisted_prefix.push(RolloutItem::ResponseItem(second_ambiguous_append));
     persisted_prefix.extend(completed_turn(
         "turn-2",
         "external user",
         "external assistant",
     ));
-    let extension_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle extension snapshot");
-    let extension_outcome = session
-        .reconcile_persisted_history(extension_snapshot, &persisted_prefix)
-        .await;
+    let extension_outcome = reconcile_idle(&session, &persisted_prefix).await;
     assert_eq!(
         extension_outcome,
         ThreadHistoryReconciliationOutcome::Refreshed
@@ -272,30 +216,14 @@ async fn uncertain_append_proven_by_cursor_allows_persisted_rollback_suffix() {
     let mut local_history = first_history.clone();
     local_history.extend(model_history_for_turn("second user", "second assistant"));
     session.replace_history(local_history, None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&first_turn));
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-    session
-        .invalidate_persisted_item_cursor(&rollout_guard, &second_turn)
-        .await;
-    drop(rollout_guard);
+    set_known_persisted_history(&session, &first_turn).await;
+    invalidate_persisted_history_cursor(&session, &second_turn).await;
 
-    let rollback = RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-        num_turns: 1,
-    }));
+    let rollback = rollback(/*num_turns*/ 1);
     let mut landed_rollout = first_turn;
     landed_rollout.extend(second_turn);
     landed_rollout.push(rollback);
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &landed_rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &landed_rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(session.clone_history().await.raw_items(), first_history);
@@ -316,27 +244,11 @@ async fn uncertain_history_rewrite_never_restores_pre_rollback_disk_history() {
     pre_rollback_rollout.extend(second_turn);
     let first_history = model_history_for_turn("first user", "first assistant");
     session.replace_history(first_history.clone(), None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&pre_rollback_rollout));
-    let rollback = RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-        num_turns: 1,
-    }));
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-    session
-        .invalidate_persisted_item_cursor(&rollout_guard, std::slice::from_ref(&rollback))
-        .await;
-    drop(rollout_guard);
+    set_known_persisted_history(&session, &pre_rollback_rollout).await;
+    let rollback = rollback(/*num_turns*/ 1);
+    invalidate_persisted_history_cursor(&session, std::slice::from_ref(&rollback)).await;
 
-    let stale_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    let stale_outcome = session
-        .reconcile_persisted_history(stale_snapshot, &pre_rollback_rollout)
-        .await;
+    let stale_outcome = reconcile_idle(&session, &pre_rollback_rollout).await;
 
     assert_eq!(stale_outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert_eq!(session.clone_history().await.raw_items(), first_history);
@@ -351,13 +263,7 @@ async fn uncertain_history_rewrite_never_restores_pre_rollback_disk_history() {
 
     let mut landed_rollout = pre_rollback_rollout;
     landed_rollout.push(rollback);
-    let landed_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle retry snapshot");
-    let landed_outcome = session
-        .reconcile_persisted_history(landed_snapshot, &landed_rollout)
-        .await;
+    let landed_outcome = reconcile_idle(&session, &landed_rollout).await;
 
     assert_eq!(
         landed_outcome,
@@ -378,27 +284,11 @@ async fn uncertain_event_only_rollback_requires_the_durable_marker() {
     let mut pre_rollback_rollout = vec![turn_started("event-only-turn")];
     pre_rollback_rollout.push(turn_complete("event-only-turn"));
     session.replace_history(Vec::new(), None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&pre_rollback_rollout));
-    let rollback = RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-        num_turns: 1,
-    }));
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
-    session
-        .invalidate_persisted_item_cursor(&rollout_guard, std::slice::from_ref(&rollback))
-        .await;
-    drop(rollout_guard);
+    set_known_persisted_history(&session, &pre_rollback_rollout).await;
+    let rollback = rollback(/*num_turns*/ 1);
+    invalidate_persisted_history_cursor(&session, std::slice::from_ref(&rollback)).await;
 
-    let stale_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    let stale_outcome = session
-        .reconcile_persisted_history(stale_snapshot, &pre_rollback_rollout)
-        .await;
+    let stale_outcome = reconcile_idle(&session, &pre_rollback_rollout).await;
 
     assert_eq!(stale_outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert!(session.clone_history().await.raw_items().is_empty());
@@ -416,13 +306,7 @@ async fn uncertain_event_only_rollback_requires_the_durable_marker() {
         );
     }
 
-    let landed_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle retry snapshot");
-    let landed_outcome = session
-        .reconcile_persisted_history(landed_snapshot, &expected_landed_rollout)
-        .await;
+    let landed_outcome = reconcile_idle(&session, &expected_landed_rollout).await;
 
     assert_eq!(
         landed_outcome,

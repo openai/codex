@@ -18,13 +18,7 @@ fn busy_history_read_retries_once_then_fails_closed_after_idle_transition() {
 
 #[test]
 fn resume_status_projects_buffered_terminal_turn_before_listener_tracking() {
-    let complete = EventMsg::TurnComplete(TurnCompleteEvent {
-        turn_id: "completed-turn".to_string(),
-        last_agent_message: None,
-        completed_at: Some(2),
-        duration_ms: Some(1_000),
-        time_to_first_token_ms: None,
-    });
+    let complete = turn_complete_event("completed-turn");
     let aborted = EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id: Some("aborted-turn".to_string()),
         reason: TurnAbortReason::Interrupted,
@@ -32,7 +26,7 @@ fn resume_status_projects_buffered_terminal_turn_before_listener_tracking() {
         duration_ms: Some(1_000),
     });
 
-    for terminal_event in [&complete, &aborted] {
+    for (label, terminal_event) in [("turn complete", &complete), ("turn aborted", &aborted)] {
         assert_eq!(
             project_thread_status_after_buffered_events(
                 ThreadStatus::Active {
@@ -41,20 +35,15 @@ fn resume_status_projects_buffered_terminal_turn_before_listener_tracking() {
                 /*has_live_in_progress_turn*/ false,
                 [terminal_event],
             ),
-            ThreadStatus::Idle
+            ThreadStatus::Idle,
+            "{label}"
         );
     }
 }
 
 #[test]
 fn resume_status_keeps_active_when_a_later_turn_started_or_is_live() {
-    let complete = EventMsg::TurnComplete(TurnCompleteEvent {
-        turn_id: "completed-turn".to_string(),
-        last_agent_message: None,
-        completed_at: Some(2),
-        duration_ms: Some(1_000),
-        time_to_first_token_ms: None,
-    });
+    let complete = turn_complete_event("completed-turn");
     let started = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: "next-turn".to_string(),
         trace_id: None,
@@ -140,14 +129,11 @@ async fn blocked_resume_worker_drains_high_volume_exec_deltas_to_existing_subscr
         }
         (buffered, exec_delta_replay)
     });
-    let delta = Event {
-        id: "large-output-turn".to_string(),
-        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-            call_id: "large-output-command".to_string(),
-            stream: ExecOutputStream::Stdout,
-            chunk: vec![b'x'; 8 * 1024],
-        }),
-    };
+    let delta = exec_delta_event(
+        "large-output-turn",
+        "large-output-command",
+        vec![b'x'; 8 * 1024],
+    );
     let mut max_queue_depth = 0;
     for _ in 0..100 {
         for _ in 0..100 {
@@ -227,14 +213,7 @@ async fn resume_exec_delta_replay_targets_only_the_joiner_and_skips_covered_outp
     ));
     let mut replay = ResumeExecDeltaReplay::default();
     for chunk in [b"missing".to_vec(), b"covered".to_vec()] {
-        replay.retain(&Event {
-            id: "active-turn".to_string(),
-            msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                call_id: "active-command".to_string(),
-                stream: ExecOutputStream::Stdout,
-                chunk,
-            }),
-        });
+        replay.retain(&exec_delta_event("active-turn", "active-command", chunk));
     }
     replay.events_mut()[1].represented_in_resume_snapshot = true;
 
@@ -283,14 +262,7 @@ fn resume_event_routing_preserves_exec_begin_before_output_delta() {
             interaction_input: None,
         }),
     };
-    let delta = Event {
-        id: "turn-with-command".to_string(),
-        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-            call_id: "ordered-command".to_string(),
-            stream: ExecOutputStream::Stdout,
-            chunk: b"output".to_vec(),
-        }),
-    };
+    let delta = exec_delta_event("turn-with-command", "ordered-command", b"output".to_vec());
     let mut buffered = Vec::new();
     match route_resume_in_flight_event(begin, /*has_buffered_prefix*/ false) {
         ResumeInFlightEvent::Buffer(event) => buffered.push(event),

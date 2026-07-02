@@ -39,6 +39,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
@@ -90,6 +91,7 @@ use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::fs::FileTimes;
 use std::io::Write;
@@ -163,6 +165,63 @@ async fn read_next_response(mcp: &mut TestAppServer) -> Result<JSONRPCResponse> 
             _ => {}
         }
     }
+}
+
+async fn initialized_app_server(codex_home: &Path) -> Result<TestAppServer> {
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    Ok(mcp)
+}
+
+async fn read_response<T: DeserializeOwned>(mcp: &mut TestAppServer, request_id: i64) -> Result<T> {
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn start_test_thread(mcp: &mut TestAppServer) -> Result<ThreadStartResponse> {
+    let request_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    read_response(mcp, request_id).await
+}
+
+async fn complete_text_turn(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    text: &str,
+) -> Result<TurnStartResponse> {
+    let request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let response = read_response(mcp, request_id).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(response)
+}
+
+async fn resume_test_thread(
+    mcp: &mut TestAppServer,
+    params: ThreadResumeParams,
+) -> Result<ThreadResumeResponse> {
+    let request_id = mcp.send_thread_resume_request(params).await?;
+    read_response(mcp, request_id).await
 }
 
 #[tokio::test]
@@ -3781,78 +3840,20 @@ async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Re
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
-    let start_id = primary
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let mut primary = initialized_app_server(codex_home.path()).await?;
+    let ThreadStartResponse { thread, .. } = start_test_thread(&mut primary).await?;
+    complete_text_turn(&mut primary, &thread.id, "primary seed").await?;
 
-    let seed_turn_id = primary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "primary seed".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
-    let secondary_resume_id = secondary
-        .send_thread_resume_request(ThreadResumeParams {
+    let mut secondary = initialized_app_server(codex_home.path()).await?;
+    resume_test_thread(
+        &mut secondary,
+        ThreadResumeParams {
             thread_id: thread.id.clone(),
             ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(secondary_resume_id)),
+        },
     )
-    .await??;
-
-    let secondary_turn_id = secondary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "secondary external turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(secondary_turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    .await?;
+    complete_text_turn(&mut secondary, &thread.id, "secondary external turn").await?;
     let metadata_update_id = secondary
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread.id.clone(),
@@ -3863,27 +3864,23 @@ async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Re
             }),
         })
         .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(metadata_update_id)),
-    )
-    .await??;
+    let _: ThreadMetadataUpdateResponse = read_response(&mut secondary, metadata_update_id).await?;
     let secondary_read_id = secondary
         .send_thread_read_request(ThreadReadParams {
             thread_id: thread.id.clone(),
             include_turns: false,
         })
         .await?;
-    let secondary_read_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(secondary_read_id)),
-    )
-    .await??;
     let ThreadReadResponse {
         thread: authoritative_thread,
-    } = to_response::<ThreadReadResponse>(secondary_read_resp)?;
-    let primary_resume_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
+    } = read_response(&mut secondary, secondary_read_id).await?;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        initial_turns_page,
+        ..
+    } = resume_test_thread(
+        &mut primary,
+        ThreadResumeParams {
             thread_id: thread.id.clone(),
             exclude_turns: true,
             initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
@@ -3892,18 +3889,9 @@ async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Re
                 items_view: Some(TurnItemsView::Full),
             }),
             ..Default::default()
-        })
-        .await?;
-    let primary_resume_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(primary_resume_id)),
+        },
     )
-    .await??;
-    let ThreadResumeResponse {
-        thread: resumed_thread,
-        initial_turns_page,
-        ..
-    } = to_response::<ThreadResumeResponse>(primary_resume_resp)?;
+    .await?;
     assert!(resumed_thread.turns.is_empty());
     assert_eq!(resumed_thread.git_info, authoritative_thread.git_info);
     assert_eq!(resumed_thread.updated_at, authoritative_thread.updated_at);
@@ -3926,27 +3914,7 @@ async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Re
         "primary resume response should include the externally appended turn"
     );
 
-    let final_turn_id = primary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            client_user_message_id: None,
-            input: vec![UserInput::Text {
-                text: "primary final turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(final_turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    complete_text_turn(&mut primary, &thread.id, "primary final turn").await?;
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3, "expected one model call per turn");
@@ -3989,20 +3957,8 @@ async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Res
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut primary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
-    let start_id = primary
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+    let mut primary = initialized_app_server(codex_home.path()).await?;
+    let ThreadStartResponse { thread, .. } = start_test_thread(&mut primary).await?;
 
     let interrupted_request_id = primary
         .send_turn_start_request(TurnStartParams {
@@ -4014,14 +3970,9 @@ async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Res
             ..Default::default()
         })
         .await?;
-    let interrupted_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupted_request_id)),
-    )
-    .await??;
     let TurnStartResponse {
         turn: interrupted_turn,
-    } = to_response(interrupted_response)?;
+    } = read_response(&mut primary, interrupted_request_id).await?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -4048,58 +3999,30 @@ async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Res
         )
         .await?;
 
-    let mut secondary = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, secondary.initialize()).await??;
-    let secondary_resume_id = secondary
-        .send_thread_resume_request(ThreadResumeParams {
+    let mut secondary = initialized_app_server(codex_home.path()).await?;
+    resume_test_thread(
+        &mut secondary,
+        ThreadResumeParams {
             thread_id: thread.id.clone(),
             ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(secondary_resume_id)),
+        },
     )
-    .await??;
-    let external_turn_request_id = secondary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "secondary external turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let external_turn_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_response_message(RequestId::Integer(external_turn_request_id)),
-    )
-    .await??;
+    .await?;
     let TurnStartResponse {
         turn: external_turn,
-    } = to_response(external_turn_response)?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        secondary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    } = complete_text_turn(&mut secondary, &thread.id, "secondary external turn").await?;
 
-    let primary_resume_id = primary
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
-            ..Default::default()
-        })
-        .await?;
-    let primary_resume_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(primary_resume_id)),
-    )
-    .await??;
     let ThreadResumeResponse {
         thread: resumed_thread,
         ..
-    } = to_response(primary_resume_response)?;
+    } = resume_test_thread(
+        &mut primary,
+        ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        },
+    )
+    .await?;
 
     assert_eq!(resumed_thread.turns.len(), 2);
     assert_eq!(resumed_thread.turns[0].id, interrupted_turn.id);
@@ -4131,41 +4054,9 @@ async fn running_thread_resume_serializes_with_following_history_injection() -> 
     .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
-    let seed_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "seed turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(seed_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let mut mcp = initialized_app_server(codex_home.path()).await?;
+    let ThreadStartResponse { thread, .. } = start_test_thread(&mut mcp).await?;
+    complete_text_turn(&mut mcp, &thread.id, "seed turn").await?;
     mcp.clear_message_buffer();
 
     let resume_id = mcp
@@ -4197,26 +4088,7 @@ async fn running_thread_resume_serializes_with_following_history_injection() -> 
     let second_response = timeout(DEFAULT_READ_TIMEOUT, read_next_response(&mut mcp)).await??;
     assert_eq!(second_response.id, RequestId::Integer(inject_id));
 
-    let final_id = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
-            input: vec![UserInput::Text {
-                text: "final turn".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(final_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    complete_text_turn(&mut mcp, &thread.id, "final turn").await?;
 
     let requests = response_mock.requests();
     let final_input =
@@ -4234,42 +4106,10 @@ async fn running_thread_resume_waits_for_preceding_rollback() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
-    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let start_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams {
-            model: Some("gpt-5.4".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_response = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+    let mut mcp = initialized_app_server(codex_home.path()).await?;
+    let ThreadStartResponse { thread, .. } = start_test_thread(&mut mcp).await?;
     for prompt in ["first turn", "second turn"] {
-        let turn_id = mcp
-            .send_turn_start_request(TurnStartParams {
-                thread_id: thread.id.clone(),
-                input: vec![UserInput::Text {
-                    text: prompt.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                ..Default::default()
-            })
-            .await?;
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
-        )
-        .await??;
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
-        )
-        .await??;
+        complete_text_turn(&mut mcp, &thread.id, prompt).await?;
     }
     mcp.clear_message_buffer();
 

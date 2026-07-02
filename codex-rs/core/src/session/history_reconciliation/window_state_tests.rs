@@ -13,43 +13,25 @@ async fn reconcile_persisted_history_installs_compaction_checkpoint() {
         assert!(state.claim_token_budget_reminder());
         assert!(!state.claim_token_budget_reminder());
     }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
     let compacted_history = model_history_for_turn("summary", "after summary");
-    let first_window_id = Uuid::now_v7();
-    let previous_window_id = Uuid::now_v7();
-    let window_id = Uuid::now_v7();
+    let window_ids = new_compaction_window_ids();
     let rollout = vec![
         turn_started("compact-turn"),
-        RolloutItem::Compacted(CompactedItem {
-            message: "summary".to_string(),
-            replacement_history: Some(compacted_history.clone()),
-            window_number: Some(7),
-            first_window_id: Some(first_window_id.to_string()),
-            previous_window_id: Some(previous_window_id.to_string()),
-            window_id: Some(window_id.to_string()),
-        }),
+        compacted_item(
+            compacted_history.clone(),
+            /*window_number*/ 7,
+            window_ids,
+        ),
         turn_complete("compact-turn"),
     ];
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     let mut state = session.state.lock().await;
     assert_eq!(state.history.raw_items(), compacted_history);
     assert_eq!(state.auto_compact_window_number(), 7);
-    assert_eq!(
-        state.auto_compact_window_ids(),
-        AutoCompactWindowIds {
-            first_window_id,
-            previous_window_id: Some(previous_window_id),
-            window_id,
-        }
-    );
+    assert_eq!(state.auto_compact_window_ids(), window_ids);
     assert!(!state.take_new_context_window_request());
     assert!(state.claim_token_budget_reminder());
 }
@@ -69,29 +51,14 @@ async fn reconcile_persisted_history_resets_runtime_state_for_new_compaction_win
         state.request_new_context_window();
         assert!(state.claim_token_budget_reminder());
     }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    let first_window_id = Uuid::now_v7();
-    let previous_window_id = Uuid::now_v7();
-    let window_id = Uuid::now_v7();
+    let window_ids = new_compaction_window_ids();
     let rollout = vec![
         turn_started("compact-turn"),
-        RolloutItem::Compacted(CompactedItem {
-            message: "summary".to_string(),
-            replacement_history: Some(history.clone()),
-            window_number: Some(7),
-            first_window_id: Some(first_window_id.to_string()),
-            previous_window_id: Some(previous_window_id.to_string()),
-            window_id: Some(window_id.to_string()),
-        }),
+        compacted_item(history.clone(), /*window_number*/ 7, window_ids),
         turn_complete("compact-turn"),
     ];
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     let mut state = session.state.lock().await;
@@ -110,28 +77,19 @@ async fn reconcile_persisted_history_queues_only_unconsumed_imported_compaction_
         let first_history = model_history_for_turn("first user", "first assistant");
         session.replace_history(first_history, None).await;
         let mut rollout = completed_turn("turn-1", "first user", "first assistant");
+        set_known_persisted_history(&session, &rollout).await;
         {
             let mut state = session.state.lock().await;
-            state.set_known_persisted_history_cursor(persisted_history_cursor(&rollout));
             while state.take_pending_session_start_source().is_some() {}
         }
-        let snapshot = session
-            .history_reconciliation_snapshot()
-            .await
-            .expect("idle history snapshot");
-        let first_window_id = Uuid::now_v7();
-        let previous_window_id = Uuid::now_v7();
-        let window_id = Uuid::now_v7();
+        let window_ids = new_compaction_window_ids();
         rollout.extend([
             turn_started("compact-turn"),
-            RolloutItem::Compacted(CompactedItem {
-                message: "summary".to_string(),
-                replacement_history: Some(model_history_for_turn("summary", "after summary")),
-                window_number: Some(7),
-                first_window_id: Some(first_window_id.to_string()),
-                previous_window_id: Some(previous_window_id.to_string()),
-                window_id: Some(window_id.to_string()),
-            }),
+            compacted_item(
+                model_history_for_turn("summary", "after summary"),
+                /*window_number*/ 7,
+                window_ids,
+            ),
             turn_complete("compact-turn"),
         ]);
         if followed_by_turn {
@@ -142,9 +100,7 @@ async fn reconcile_persisted_history_queues_only_unconsumed_imported_compaction_
             ));
         }
 
-        let outcome = session
-            .reconcile_persisted_history(snapshot, &rollout)
-            .await;
+        let outcome = reconcile_idle(&session, &rollout).await;
 
         assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
         let pending_source = session
@@ -181,36 +137,21 @@ async fn cursor_mismatch_queues_imported_compaction_hook_exactly_once() {
     let first_turn = completed_turn("turn-1", "first user", "first assistant");
     let mut locally_known_rollout = first_turn.clone();
     locally_known_rollout.push(RolloutItem::ResponseItem(local_item));
+    set_known_persisted_history(&session, &locally_known_rollout).await;
     {
         let mut state = session.state.lock().await;
-        state.set_known_persisted_history_cursor(persisted_history_cursor(&locally_known_rollout));
         while state.take_pending_session_start_source().is_some() {}
     }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
 
-    let first_window_id = Uuid::now_v7();
-    let previous_window_id = Uuid::now_v7();
-    let window_id = Uuid::now_v7();
+    let window_ids = new_compaction_window_ids();
     let mut actual_rollout = first_turn;
     actual_rollout.extend([
         turn_started("compact-turn"),
-        RolloutItem::Compacted(CompactedItem {
-            message: "summary".to_string(),
-            replacement_history: Some(local_history),
-            window_number: Some(7),
-            first_window_id: Some(first_window_id.to_string()),
-            previous_window_id: Some(previous_window_id.to_string()),
-            window_id: Some(window_id.to_string()),
-        }),
+        compacted_item(local_history, /*window_number*/ 7, window_ids),
         turn_complete("compact-turn"),
     ]);
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &actual_rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &actual_rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     assert!(matches!(
@@ -222,13 +163,7 @@ async fn cursor_mismatch_queues_imported_compaction_hook_exactly_once() {
         Some(codex_hooks::SessionStartSource::Compact)
     ));
 
-    let second_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("second idle history snapshot");
-    let second_outcome = session
-        .reconcile_persisted_history(second_snapshot, &actual_rollout)
-        .await;
+    let second_outcome = reconcile_idle(&session, &actual_rollout).await;
 
     assert_eq!(
         second_outcome,
@@ -286,22 +221,14 @@ async fn reconcile_persisted_history_applies_external_rollback() {
     );
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
     rollout.extend(completed_turn("turn-2", "second user", "second assistant"));
+    set_known_persisted_history(&session, &rollout).await;
     {
         let mut state = session.state.lock().await;
         let _ = state.additional_context.merge(additional_context.clone());
-        state.set_known_persisted_history_cursor(persisted_history_cursor(&rollout));
     }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-        ThreadRolledBackEvent { num_turns: 1 },
-    )));
+    rollout.push(rollback(/*num_turns*/ 1));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(session.clone_history().await.raw_items(), first_history);
@@ -390,17 +317,9 @@ async fn reconcile_persisted_history_rearms_token_budget_reminder_removed_by_rol
                 state.auto_compact_window_ids(),
             )
         };
-        let snapshot = session
-            .history_reconciliation_snapshot()
-            .await
-            .expect("idle history snapshot");
-        rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-            ThreadRolledBackEvent { num_turns: 1 },
-        )));
+        rollout.push(rollback(/*num_turns*/ 1));
 
-        let outcome = session
-            .reconcile_persisted_history(snapshot, &rollout)
-            .await;
+        let outcome = reconcile_idle(&session, &rollout).await;
 
         assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
         assert_eq!(session.clone_history().await.raw_items(), first_history);
@@ -452,28 +371,15 @@ async fn reconcile_persisted_history_preserves_loaded_prefix_truncation() {
         .additional_context
         .merge(additional_context.clone());
     let mut rollout = completed_turn("turn-1", "raw user", "raw assistant");
-    {
-        let mut state = session.state.lock().await;
-        state.set_known_persisted_history_cursor(persisted_history_cursor(&rollout));
-        state.ensure_auto_compact_window_server_prefill_from_usage(&TokenUsage {
-            input_tokens: 777,
-            total_tokens: 777,
-            ..Default::default()
-        });
-    }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    set_known_persisted_history(&session, &rollout).await;
+    set_server_prefill(&session, /*input_tokens*/ 777).await;
     rollout.extend(completed_turn(
         "turn-2",
         "external user",
         "external assistant",
     ));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     let mut expected = preserved_prefix;
@@ -483,12 +389,7 @@ async fn reconcile_persisted_history_preserves_loaded_prefix_truncation() {
     ));
     assert_eq!(session.clone_history().await.raw_items(), expected);
     assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .auto_compact_window_snapshot()
-            .prefill_input_tokens,
+        server_prefill(&session).await,
         Some(777),
         "suffix reconciliation must preserve the prefill after restoring the loaded prefix"
     );
@@ -515,37 +416,19 @@ async fn reconcile_persisted_history_preserves_same_window_prefill_for_append_on
     let local_history = model_history_for_turn("first user", "first assistant");
     session.replace_history(local_history, None).await;
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
-    {
-        let mut state = session.state.lock().await;
-        state.set_known_persisted_history_cursor(persisted_history_cursor(&rollout));
-        state.ensure_auto_compact_window_server_prefill_from_usage(&TokenUsage {
-            input_tokens: 777,
-            total_tokens: 777,
-            ..Default::default()
-        });
-    }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    set_known_persisted_history(&session, &rollout).await;
+    set_server_prefill(&session, /*input_tokens*/ 777).await;
     rollout.extend(completed_turn(
         "turn-2",
         "external user",
         "external assistant",
     ));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .auto_compact_window_snapshot()
-            .prefill_input_tokens,
+        server_prefill(&session).await,
         Some(777),
         "append-only reconciliation in the same compaction window must retain the server baseline"
     );
@@ -564,24 +447,14 @@ async fn reconcile_persisted_history_ignores_interleaved_session_metadata_in_cur
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
     rollout.push(session_meta(session.thread_id()));
     rollout.push(RolloutItem::ResponseItem(local_item));
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&rollout));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    set_known_persisted_history(&session, &rollout).await;
     rollout.extend(completed_turn(
         "turn-2",
         "external user",
         "external assistant",
     ));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     let mut expected = preserved_prefix;
@@ -607,15 +480,7 @@ async fn reconcile_persisted_history_rebuilds_after_external_append_interleaves_
     let first_turn = completed_turn("turn-1", "first user", "first assistant");
     let mut locally_known_rollout = first_turn.clone();
     locally_known_rollout.push(RolloutItem::ResponseItem(local_item.clone()));
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_history_cursor(persisted_history_cursor(&locally_known_rollout));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    set_known_persisted_history(&session, &locally_known_rollout).await;
 
     let mut actual_rollout = first_turn;
     actual_rollout.extend(completed_turn(
@@ -625,9 +490,7 @@ async fn reconcile_persisted_history_rebuilds_after_external_append_interleaves_
     ));
     actual_rollout.push(RolloutItem::ResponseItem(local_item.clone()));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &actual_rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &actual_rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     let mut expected = model_history_for_turn("first user", "first assistant");

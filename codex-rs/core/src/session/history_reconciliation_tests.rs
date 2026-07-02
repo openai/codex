@@ -147,6 +147,82 @@ fn token_usage_info(total_tokens: i64) -> TokenUsageInfo {
     }
 }
 
+async fn reconcile_idle(
+    session: &Session,
+    rollout: &[RolloutItem],
+) -> ThreadHistoryReconciliationOutcome {
+    let snapshot = session
+        .history_reconciliation_snapshot()
+        .await
+        .expect("idle history snapshot");
+    session.reconcile_persisted_history(snapshot, rollout).await
+}
+
+async fn set_known_persisted_history(session: &Session, rollout: &[RolloutItem]) {
+    session
+        .state
+        .lock()
+        .await
+        .set_known_persisted_history_cursor(persisted_history_cursor(rollout));
+}
+
+async fn invalidate_persisted_history_cursor(session: &Session, items: &[RolloutItem]) {
+    let rollout_guard = session.acquire_rollout_persistence_lock().await;
+    session
+        .invalidate_persisted_item_cursor(&rollout_guard, items)
+        .await;
+}
+
+fn rollback(num_turns: u32) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+        num_turns,
+    }))
+}
+
+fn new_compaction_window_ids() -> AutoCompactWindowIds {
+    AutoCompactWindowIds {
+        first_window_id: Uuid::now_v7(),
+        previous_window_id: Some(Uuid::now_v7()),
+        window_id: Uuid::now_v7(),
+    }
+}
+
+fn compacted_item(
+    replacement_history: Vec<ResponseItem>,
+    window_number: u64,
+    window_ids: AutoCompactWindowIds,
+) -> RolloutItem {
+    RolloutItem::Compacted(CompactedItem {
+        message: "summary".to_string(),
+        replacement_history: Some(replacement_history),
+        window_number: Some(window_number),
+        first_window_id: Some(window_ids.first_window_id.to_string()),
+        previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
+        window_id: Some(window_ids.window_id.to_string()),
+    })
+}
+
+async fn set_server_prefill(session: &Session, input_tokens: i64) {
+    session
+        .state
+        .lock()
+        .await
+        .ensure_auto_compact_window_server_prefill_from_usage(&TokenUsage {
+            input_tokens,
+            total_tokens: input_tokens,
+            ..Default::default()
+        });
+}
+
+async fn server_prefill(session: &Session) -> Option<i64> {
+    session
+        .state
+        .lock()
+        .await
+        .auto_compact_window_snapshot()
+        .prefill_input_tokens
+}
+
 #[path = "history_reconciliation/cursor_recovery_tests.rs"]
 mod cursor_recovery_tests;
 #[path = "history_reconciliation/reminder_state_tests.rs"]

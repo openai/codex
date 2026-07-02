@@ -96,6 +96,29 @@ fn event_is_represented(
     )
 }
 
+fn full_turns_cover_event(buffered: &BufferedThreadEvent, turns: &[Turn]) -> bool {
+    event_is_represented(
+        buffered,
+        turns,
+        /*initial_turns_page*/ None,
+        ResumePayloadMode::Full,
+    )
+}
+
+fn consume_full_turn_coverage(
+    buffered: &BufferedThreadEvent,
+    turns: &[Turn],
+    item_coverage: &mut ResumePayloadItemCoverage,
+) -> bool {
+    buffered_event_is_represented_in_resume_payload(
+        buffered,
+        turns,
+        /*initial_turns_page*/ None,
+        item_coverage,
+        ResumePayloadMode::Full,
+    )
+}
+
 fn turn_with_view(id: &str, items_view: TurnItemsView, status: TurnStatus) -> Turn {
     Turn {
         id: id.to_string(),
@@ -106,6 +129,109 @@ fn turn_with_view(id: &str, items_view: TurnItemsView, status: TurnStatus) -> Tu
         started_at: Some(1),
         completed_at: None,
         duration_ms: None,
+    }
+}
+
+fn buffered_event(id: &str, msg: EventMsg) -> BufferedThreadEvent {
+    BufferedThreadEvent {
+        event: Event {
+            id: id.to_string(),
+            msg,
+        },
+        represented_in_resume_snapshot: false,
+        request_live_for_resumed_connection: true,
+    }
+}
+
+fn represented_buffered_event(id: &str, msg: EventMsg) -> BufferedThreadEvent {
+    BufferedThreadEvent {
+        represented_in_resume_snapshot: true,
+        ..buffered_event(id, msg)
+    }
+}
+
+fn buffered_started_item(turn_id: &str, item: TurnItem) -> BufferedThreadEvent {
+    buffered_event(
+        turn_id,
+        EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: turn_id.to_string(),
+            item,
+            started_at_ms: 1_000,
+        }),
+    )
+}
+
+fn buffered_completed_item(turn_id: &str, item: TurnItem) -> BufferedThreadEvent {
+    buffered_event(
+        turn_id,
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: turn_id.to_string(),
+            item,
+            completed_at_ms: 2_000,
+        }),
+    )
+}
+
+fn mcp_tool_item(id: &str, status: codex_protocol::items::McpToolCallStatus) -> TurnItem {
+    TurnItem::McpToolCall(McpToolCallItem {
+        id: id.to_string(),
+        server: "private".to_string(),
+        tool: "lookup".to_string(),
+        arguments: serde_json::json!({"secret": true}),
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        link_id: None,
+        app_name: None,
+        template_id: None,
+        action_name: None,
+        plugin_id: None,
+        status,
+        result: None,
+        error: None,
+        duration: None,
+    })
+}
+
+fn agent_message_item(id: &str, text: &str) -> AgentMessageItem {
+    AgentMessageItem {
+        id: id.to_string(),
+        content: vec![AgentMessageContent::Text {
+            text: text.to_string(),
+        }],
+        phase: None,
+        memory_citation: None,
+    }
+}
+
+fn thread_agent_message(id: &str, text: &str) -> ThreadItem {
+    ThreadItem::AgentMessage {
+        id: id.to_string(),
+        text: text.to_string(),
+        phase: None,
+        memory_citation: None,
+    }
+}
+
+fn turn_complete_event(turn_id: &str) -> EventMsg {
+    EventMsg::TurnComplete(TurnCompleteEvent {
+        turn_id: turn_id.to_string(),
+        last_agent_message: None,
+        completed_at: Some(2),
+        duration_ms: Some(1_000),
+        time_to_first_token_ms: None,
+    })
+}
+
+fn exec_delta_event(turn_id: &str, call_id: &str, chunk: impl Into<Vec<u8>>) -> Event {
+    Event {
+        id: turn_id.to_string(),
+        msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: call_id.to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: chunk.into(),
+        }),
     }
 }
 

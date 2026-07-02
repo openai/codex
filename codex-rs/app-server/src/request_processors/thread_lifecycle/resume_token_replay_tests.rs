@@ -14,30 +14,47 @@ fn token_usage_info(total_tokens: i64) -> TokenUsageInfo {
     }
 }
 
+fn page_with_turn(id: &str, items_view: TurnItemsView) -> TurnsPage {
+    TurnsPage {
+        data: vec![turn_with_view(id, items_view, TurnStatus::Completed)],
+        next_cursor: Some("older-page".to_string()),
+        backwards_cursor: None,
+    }
+}
+
+fn assert_page_coverage(
+    label: &str,
+    buffered: &BufferedThreadEvent,
+    page: &TurnsPage,
+    expected: bool,
+) {
+    assert_eq!(
+        event_is_represented(buffered, &[], Some(page), ResumePayloadMode::Full),
+        expected,
+        "{label}"
+    );
+}
+
 #[test]
 fn buffered_token_usage_dedupes_only_the_reconciled_final_snapshot() {
     let usage_a = token_usage_info(10);
     let usage_b = token_usage_info(20);
-    let mut buffered = vec![BufferedThreadEvent {
-        event: Event {
-            id: "turn-a".to_string(),
-            msg: EventMsg::TokenCount(TokenCountEvent {
-                info: Some(usage_a.clone()),
-                rate_limits: Some(RateLimitSnapshot {
-                    limit_id: Some("codex".to_string()),
-                    limit_name: None,
-                    primary: None,
-                    secondary: None,
-                    credits: None,
-                    individual_limit: None,
-                    plan_type: None,
-                    rate_limit_reached_type: None,
-                }),
+    let mut buffered = vec![represented_buffered_event(
+        "turn-a",
+        EventMsg::TokenCount(TokenCountEvent {
+            info: Some(usage_a.clone()),
+            rate_limits: Some(RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: None,
+                primary: None,
+                secondary: None,
+                credits: None,
+                individual_limit: None,
+                plan_type: None,
+                rate_limit_reached_type: None,
             }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    }];
+        }),
+    )];
 
     assert!(!should_replay_reconciled_token_usage(
         &buffered,
@@ -57,130 +74,86 @@ fn buffered_token_usage_dedupes_only_the_reconciled_final_snapshot() {
         "a captured snapshot with no recoverable owner still uses the sender's fallback"
     );
 
-    buffered.push(BufferedThreadEvent {
-        event: Event {
-            id: "turn-a".to_string(),
-            msg: EventMsg::TokenCount(TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    });
+    buffered.push(represented_buffered_event(
+        "turn-a",
+        EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: None,
+        }),
+    ));
     assert!(
         !should_replay_reconciled_token_usage(&buffered, Some(&usage_a), Some("turn-a")),
         "a later rate-limit-only event must not hide the last buffered usage snapshot"
     );
     assert!(
-        !event_is_represented(&buffered[0], &[], None, ResumePayloadMode::Full,),
+        !full_turns_cover_event(&buffered[0], &[]),
         "the buffered event still delivers its rate-limit side effect exactly once"
     );
 }
 
 #[test]
 fn resume_payload_coverage_replays_events_omitted_by_initial_turns_page() {
-    let buffered_message = BufferedThreadEvent {
-        event: Event {
-            id: "latest-turn".to_string(),
-            msg: EventMsg::AgentMessage(AgentMessageEvent {
-                message: "buffered".to_string(),
-                phase: None,
-                memory_citation: None,
-            }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    };
-    let mut page = TurnsPage {
-        data: vec![turn_with_view(
+    let buffered_message = represented_buffered_event(
+        "latest-turn",
+        EventMsg::AgentMessage(AgentMessageEvent {
+            message: "buffered".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    );
+    for (label, id, view, expected) in [
+        (
+            "omitted turn replays",
             "older-turn",
             TurnItemsView::Full,
-            TurnStatus::Completed,
-        )],
-        next_cursor: Some("older-page".to_string()),
-        backwards_cursor: None,
-    };
-
-    assert!(
-        !event_is_represented(&buffered_message, &[], Some(&page), ResumePayloadMode::Full,),
-        "a paginated response that omits the event's turn must replay it"
-    );
-
-    page.data = vec![turn_with_view(
-        "latest-turn",
-        TurnItemsView::Summary,
-        TurnStatus::Completed,
-    )];
-    assert!(
-        !event_is_represented(&buffered_message, &[], Some(&page), ResumePayloadMode::Full,),
-        "a summary page does not prove an arbitrary buffered item is present"
-    );
-
-    page.data[0].items_view = TurnItemsView::Full;
-    assert!(event_is_represented(
-        &buffered_message,
-        &[],
-        Some(&page),
-        ResumePayloadMode::Full,
-    ));
-
-    let buffered_completion = BufferedThreadEvent {
-        event: Event {
-            id: "latest-turn".to_string(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: "latest-turn".to_string(),
-                last_agent_message: None,
-                completed_at: Some(2),
-                duration_ms: Some(1_000),
-                time_to_first_token_ms: None,
-            }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    };
-    page.data = vec![turn_with_view(
-        "older-turn",
-        TurnItemsView::NotLoaded,
-        TurnStatus::Completed,
-    )];
-    assert!(
-        !event_is_represented(
-            &buffered_completion,
-            &[],
-            Some(&page),
-            ResumePayloadMode::Full,
+            false,
         ),
-        "turn metadata from an omitted page must still be replayed"
-    );
-    page.data = vec![turn_with_view(
-        "latest-turn",
-        TurnItemsView::NotLoaded,
-        TurnStatus::Completed,
-    )];
-    assert!(
-        event_is_represented(
-            &buffered_completion,
-            &[],
-            Some(&page),
-            ResumePayloadMode::Full,
+        (
+            "summary does not cover arbitrary item",
+            "latest-turn",
+            TurnItemsView::Summary,
+            false,
         ),
-        "terminal turn metadata is represented even when items are not loaded"
-    );
+        (
+            "full item view covers item",
+            "latest-turn",
+            TurnItemsView::Full,
+            true,
+        ),
+    ] {
+        assert_page_coverage(
+            label,
+            &buffered_message,
+            &page_with_turn(id, view),
+            expected,
+        );
+    }
 
-    let buffered_usage = BufferedThreadEvent {
-        event: Event {
-            id: "latest-turn".to_string(),
-            msg: EventMsg::TokenCount(TokenCountEvent {
-                info: None,
-                rate_limits: None,
-            }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    };
-    assert!(
-        !event_is_represented(&buffered_usage, &[], Some(&page), ResumePayloadMode::Full,),
-        "token usage is not represented by a turn page"
+    let buffered_completion =
+        represented_buffered_event("latest-turn", turn_complete_event("latest-turn"));
+    for (label, id, expected) in [
+        ("omitted turn metadata replays", "older-turn", false),
+        ("terminal metadata needs no items", "latest-turn", true),
+    ] {
+        assert_page_coverage(
+            label,
+            &buffered_completion,
+            &page_with_turn(id, TurnItemsView::NotLoaded),
+            expected,
+        );
+    }
+
+    let buffered_usage = represented_buffered_event(
+        "latest-turn",
+        EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: None,
+        }),
+    );
+    assert_page_coverage(
+        "turn page never covers token usage",
+        &buffered_usage,
+        &page_with_turn("latest-turn", TurnItemsView::NotLoaded),
+        /*expected*/ false,
     );
 }

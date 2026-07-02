@@ -5,87 +5,65 @@ fn resume_cut_routes_snapshot_and_stream_events_without_duplicates_or_loss() {
     let existing = ConnectionId(1);
     let joining = ConnectionId(2);
 
-    assert_eq!(
-        buffered_event_recipients(
-            &[existing],
+    for (label, subscribers, resumed, represented, expected) in [
+        (
+            "persisted event stays in snapshot",
+            vec![existing],
             Some(joining),
-            ResumeEventCoverage {
-                represented_in_resume_snapshot: true,
-                request_live_for_resumed_connection: true,
-            },
+            true,
+            vec![existing],
         ),
-        vec![existing],
-        "a pre-cut persisted event belongs in the snapshot, not a joiner notification"
-    );
-    assert_eq!(
-        buffered_event_recipients(
-            &[existing],
+        (
+            "stream-only event replays to joiner",
+            vec![existing],
             Some(joining),
-            ResumeEventCoverage {
-                represented_in_resume_snapshot: false,
-                request_live_for_resumed_connection: true,
-            },
+            false,
+            vec![existing, joining],
         ),
-        vec![existing, joining],
-        "a pre-cut stream-only event must be replayed to the joiner after the response"
-    );
-    assert_eq!(
-        buffered_event_recipients(
-            &[existing, joining],
+        (
+            "re-resume does not duplicate snapshot event",
+            vec![existing, joining],
             Some(joining),
-            ResumeEventCoverage {
-                represented_in_resume_snapshot: true,
-                request_live_for_resumed_connection: true,
-            },
+            true,
+            vec![existing],
         ),
-        vec![existing],
-        "re-resume must not duplicate a snapshot event on an existing connection"
-    );
-    assert_eq!(
-        buffered_event_recipients(
-            &[existing, joining],
+        (
+            "failed resume preserves original stream",
+            vec![existing, joining],
             None,
-            ResumeEventCoverage {
-                represented_in_resume_snapshot: true,
-                request_live_for_resumed_connection: true,
-            },
+            true,
+            vec![existing, joining],
         ),
-        vec![existing, joining],
-        "a failed resume must leave the original event stream untouched"
-    );
+    ] {
+        assert_eq!(
+            buffered_event_recipients(
+                &subscribers,
+                resumed,
+                ResumeEventCoverage {
+                    represented_in_resume_snapshot: represented,
+                    request_live_for_resumed_connection: true,
+                },
+            ),
+            expected,
+            "{label}"
+        );
+    }
 }
 
 fn buffered_user_input_request(turn_id: &str) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::RequestUserInput(RequestUserInputEvent {
-                call_id: format!("request-{turn_id}"),
-                turn_id: turn_id.to_string(),
-                questions: Vec::new(),
-                auto_resolution_ms: None,
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    }
+    buffered_event(
+        turn_id,
+        EventMsg::RequestUserInput(RequestUserInputEvent {
+            call_id: format!("request-{turn_id}"),
+            turn_id: turn_id.to_string(),
+            questions: Vec::new(),
+            auto_resolution_ms: None,
+        }),
+    )
 }
 
 fn buffered_turn_completion(turn_id: &str) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn_id.to_string(),
-                last_agent_message: None,
-                completed_at: Some(2),
-                duration_ms: Some(1_000),
-                time_to_first_token_ms: None,
-            }),
-        },
-        represented_in_resume_snapshot: true,
-        request_live_for_resumed_connection: true,
-    }
+    represented_buffered_event(turn_id, turn_complete_event(turn_id))
 }
 
 #[test]
@@ -150,38 +128,6 @@ fn resume_cut_projects_request_liveness_before_joiner_delivery() {
     );
 }
 
-fn buffered_completed_item(turn_id: &str, item: TurnItem) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: ThreadId::new(),
-                turn_id: turn_id.to_string(),
-                item,
-                completed_at_ms: 2_000,
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    }
-}
-
-fn buffered_started_item(turn_id: &str, item: TurnItem) -> BufferedThreadEvent {
-    BufferedThreadEvent {
-        event: Event {
-            id: turn_id.to_string(),
-            msg: EventMsg::ItemStarted(ItemStartedEvent {
-                thread_id: ThreadId::new(),
-                turn_id: turn_id.to_string(),
-                item,
-                started_at_ms: 1_000,
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    }
-}
-
 fn buffered_exec_lifecycle(turn_id: &str) -> (BufferedThreadEvent, BufferedThreadEvent) {
     let command = vec!["printf".to_string(), "done".to_string()];
     let begin = ExecCommandBeginEvent {
@@ -214,109 +160,50 @@ fn buffered_exec_lifecycle(turn_id: &str) -> (BufferedThreadEvent, BufferedThrea
         status: ExecCommandStatus::Completed,
     };
     (
-        BufferedThreadEvent {
-            event: Event {
-                id: turn_id.to_string(),
-                msg: EventMsg::ExecCommandBegin(begin),
-            },
-            represented_in_resume_snapshot: false,
-            request_live_for_resumed_connection: true,
-        },
-        BufferedThreadEvent {
-            event: Event {
-                id: turn_id.to_string(),
-                msg: EventMsg::ExecCommandEnd(end),
-            },
-            represented_in_resume_snapshot: false,
-            request_live_for_resumed_connection: true,
-        },
+        buffered_event(turn_id, EventMsg::ExecCommandBegin(begin)),
+        buffered_event(turn_id, EventMsg::ExecCommandEnd(end)),
     )
-}
-
-fn mcp_tool_item(id: &str, status: codex_protocol::items::McpToolCallStatus) -> TurnItem {
-    TurnItem::McpToolCall(McpToolCallItem {
-        id: id.to_string(),
-        server: "private".to_string(),
-        tool: "lookup".to_string(),
-        arguments: serde_json::json!({"secret": true}),
-        connector_id: None,
-        mcp_app_resource_uri: None,
-        link_id: None,
-        app_name: None,
-        template_id: None,
-        action_name: None,
-        plugin_id: None,
-        status,
-        result: None,
-        error: None,
-        duration: None,
-    })
 }
 
 #[test]
 fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction() {
     let buffered_agent = buffered_completed_item(
         "latest-turn",
-        TurnItem::AgentMessage(AgentMessageItem {
-            id: "canonical-agent-id".to_string(),
-            content: vec![AgentMessageContent::Text {
-                text: "durable answer".to_string(),
-            }],
-            phase: None,
-            memory_citation: None,
-        }),
+        TurnItem::AgentMessage(agent_message_item("canonical-agent-id", "durable answer")),
     );
     let mut full_turn = turn_with_view("latest-turn", TurnItemsView::Full, TurnStatus::Completed);
-    full_turn.items.push(ThreadItem::AgentMessage {
-        id: "item-2".to_string(),
-        text: "durable answer".to_string(),
-        phase: None,
-        memory_citation: None,
-    });
+    full_turn
+        .items
+        .push(thread_agent_message("item-2", "durable answer"));
     let full_turns = vec![full_turn];
     assert!(
-        event_is_represented(&buffered_agent, &full_turns, None, ResumePayloadMode::Full,),
+        full_turns_cover_event(&buffered_agent, &full_turns),
         "canonical and rebuilt agent items with different ids must not be delivered twice"
     );
 
     let second_identical_agent = buffered_completed_item(
         "latest-turn",
-        TurnItem::AgentMessage(AgentMessageItem {
-            id: "second-canonical-agent-id".to_string(),
-            content: vec![AgentMessageContent::Text {
-                text: "durable answer".to_string(),
-            }],
-            phase: None,
-            memory_citation: None,
-        }),
+        TurnItem::AgentMessage(agent_message_item(
+            "second-canonical-agent-id",
+            "durable answer",
+        )),
     );
     let mut occurrence_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
-    assert!(buffered_event_is_represented_in_resume_payload(
+    assert!(consume_full_turn_coverage(
         &buffered_agent,
         &full_turns,
-        None,
         &mut occurrence_coverage,
-        ResumePayloadMode::Full,
     ));
     assert!(
-        !buffered_event_is_represented_in_resume_payload(
+        !consume_full_turn_coverage(
             &second_identical_agent,
             &full_turns,
-            None,
             &mut occurrence_coverage,
-            ResumePayloadMode::Full,
         ),
         "one durable item cannot cover two identical canonical occurrences"
     );
 
-    let same_canonical_id_item = AgentMessageItem {
-        id: "shared-canonical-agent-id".to_string(),
-        content: vec![AgentMessageContent::Text {
-            text: "durable answer".to_string(),
-        }],
-        phase: None,
-        memory_citation: None,
-    };
+    let same_canonical_id_item = agent_message_item("shared-canonical-agent-id", "durable answer");
     let mut lifecycle_pair = [
         buffered_started_item(
             "latest-turn",
@@ -329,13 +216,8 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
     ];
     let mut lifecycle_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
     for buffered in lifecycle_pair.iter_mut().rev() {
-        buffered.represented_in_resume_snapshot = buffered_event_is_represented_in_resume_payload(
-            buffered,
-            &full_turns,
-            None,
-            &mut lifecycle_coverage,
-            ResumePayloadMode::Full,
-        );
+        buffered.represented_in_resume_snapshot =
+            consume_full_turn_coverage(buffered, &full_turns, &mut lifecycle_coverage);
     }
     assert!(
         lifecycle_pair
@@ -345,73 +227,52 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
     );
 
     let redacted_items = [
-        TurnItem::ImageGeneration(ImageGenerationItem {
-            id: "image-1".to_string(),
-            status: "completed".to_string(),
-            revised_prompt: Some("secret prompt".to_string()),
-            result: "secret image payload".to_string(),
-            saved_path: None,
-        }),
-        TurnItem::McpToolCall(McpToolCallItem {
-            id: "mcp-1".to_string(),
-            server: "private".to_string(),
-            tool: "lookup".to_string(),
-            arguments: serde_json::json!({"secret": true}),
-            connector_id: None,
-            mcp_app_resource_uri: None,
-            link_id: None,
-            app_name: None,
-            template_id: None,
-            action_name: None,
-            plugin_id: None,
-            status: codex_protocol::items::McpToolCallStatus::Completed,
-            result: None,
-            error: None,
-            duration: None,
-        }),
+        (
+            "image generation",
+            TurnItem::ImageGeneration(ImageGenerationItem {
+                id: "image-1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("secret prompt".to_string()),
+                result: "secret image payload".to_string(),
+                saved_path: None,
+            }),
+        ),
+        (
+            "MCP tool call",
+            mcp_tool_item("mcp-1", codex_protocol::items::McpToolCallStatus::Completed),
+        ),
     ];
-    for item in redacted_items {
+    for (label, item) in redacted_items {
         let buffered = buffered_completed_item("omitted-turn", item);
-        assert!(event_is_represented(
-            &buffered,
-            &[],
-            None,
-            ResumePayloadMode::Redacted,
-        ));
         assert!(
-            !event_is_represented(&buffered, &[], None, ResumePayloadMode::Full,),
-            "an omitted item remains replayable for an unredacted client"
+            event_is_represented(&buffered, &[], None, ResumePayloadMode::Redacted,),
+            "redacted {label} must be covered"
+        );
+        assert!(
+            !full_turns_cover_event(&buffered, &[]),
+            "omitted {label} remains replayable for an unredacted client"
         );
     }
 
-    let buffered_raw_image = BufferedThreadEvent {
-        event: Event {
-            id: "omitted-turn".to_string(),
-            msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-                item: ResponseItem::ImageGenerationCall {
-                    id: Some("raw-image".to_string()),
-                    status: "completed".to_string(),
-                    revised_prompt: Some("secret prompt".to_string()),
-                    result: "secret base64".to_string(),
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    };
+    let buffered_raw_image = buffered_event(
+        "omitted-turn",
+        EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: ResponseItem::ImageGenerationCall {
+                id: Some("raw-image".to_string()),
+                status: "completed".to_string(),
+                revised_prompt: Some("secret prompt".to_string()),
+                result: "secret base64".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        }),
+    );
     assert!(event_is_represented(
         &buffered_raw_image,
         &[],
         None,
         ResumePayloadMode::Redacted,
     ));
-    assert!(event_is_represented(
-        &buffered_raw_image,
-        &[],
-        None,
-        ResumePayloadMode::Full,
-    ));
+    assert!(full_turns_cover_event(&buffered_raw_image, &[]));
 }
 
 #[test]
@@ -428,13 +289,8 @@ fn full_busy_snapshot_covers_projected_exec_lifecycle_but_omitted_items_do_not()
     let mut buffered = [begin, end];
     let mut coverage = ResumePayloadItemCoverage::new(&full_turns, None);
     for event in buffered.iter_mut().rev() {
-        event.represented_in_resume_snapshot = buffered_event_is_represented_in_resume_payload(
-            event,
-            &full_turns,
-            None,
-            &mut coverage,
-            ResumePayloadMode::Full,
-        );
+        event.represented_in_resume_snapshot =
+            consume_full_turn_coverage(event, &full_turns, &mut coverage);
     }
     assert!(
         buffered
@@ -449,12 +305,9 @@ fn full_busy_snapshot_covers_projected_exec_lifecycle_but_omitted_items_do_not()
         TurnStatus::InProgress,
     )];
     assert!(
-        buffered.iter().all(|event| !event_is_represented(
-            event,
-            &omitted_turns,
-            None,
-            ResumePayloadMode::Full,
-        )),
+        buffered
+            .iter()
+            .all(|event| !full_turns_cover_event(event, &omitted_turns)),
         "omitted lifecycle items must still be replayed after resume"
     );
 }
@@ -470,16 +323,12 @@ fn raw_hook_prompt_routes_typed_and_raw_channels_independently() {
         unreachable!();
     };
     *id = None;
-    let buffered = BufferedThreadEvent {
-        event: Event {
-            id: "busy-turn".to_string(),
-            msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-                item: raw_item.clone(),
-            }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    };
+    let buffered = buffered_event(
+        "busy-turn",
+        EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: raw_item.clone(),
+        }),
+    );
     let mut full_turn = turn_with_view("busy-turn", TurnItemsView::Full, TurnStatus::InProgress);
     full_turn.items.push(ThreadItem::HookPrompt {
         id: "history-generated-id".to_string(),
@@ -492,38 +341,21 @@ fn raw_hook_prompt_routes_typed_and_raw_channels_independently() {
     let full_turns = vec![full_turn];
 
     let mut typed_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
-    assert!(buffered_event_is_represented_in_resume_payload(
+    assert!(consume_full_turn_coverage(
         &buffered,
         &full_turns,
-        None,
         &mut typed_coverage,
-        ResumePayloadMode::Full,
     ));
-    let second_identical = BufferedThreadEvent {
-        event: Event {
-            id: "busy-turn".to_string(),
-            msg: EventMsg::RawResponseItem(RawResponseItemEvent { item: raw_item }),
-        },
-        represented_in_resume_snapshot: false,
-        request_live_for_resumed_connection: true,
-    };
+    let second_identical = buffered_event(
+        "busy-turn",
+        EventMsg::RawResponseItem(RawResponseItemEvent { item: raw_item }),
+    );
     assert!(
-        !buffered_event_is_represented_in_resume_payload(
-            &second_identical,
-            &full_turns,
-            None,
-            &mut typed_coverage,
-            ResumePayloadMode::Full,
-        ),
+        !consume_full_turn_coverage(&second_identical, &full_turns, &mut typed_coverage,),
         "one durable hook occurrence cannot cover two buffered hook prompts"
     );
 
-    assert!(!event_is_represented(
-        &buffered,
-        &[],
-        None,
-        ResumePayloadMode::Full,
-    ));
+    assert!(!full_turns_cover_event(&buffered, &[]));
     assert!(
         !event_is_represented(&buffered, &[], None, ResumePayloadMode::Redacted),
         "an omitted hook remains safe to replay as a typed item on redacted resume"
@@ -576,12 +408,7 @@ fn canonical_completion_requires_final_state_and_stable_call_ids_never_normalize
         mcp_tool_item("mcp-a", McpToolCallStatus::Completed),
     );
     assert!(
-        !event_is_represented(
-            &completed_a,
-            &[in_progress_turn],
-            None,
-            ResumePayloadMode::Full,
-        ),
+        !full_turns_cover_event(&completed_a, &[in_progress_turn]),
         "same-id in-progress state cannot cover a buffered completion"
     );
 
@@ -590,11 +417,9 @@ fn canonical_completion_requires_final_state_and_stable_call_ids_never_normalize
     let completed_api_item: ThreadItem =
         mcp_tool_item("mcp-a", McpToolCallStatus::Completed).into();
     completed_turn.items.push(completed_api_item);
-    assert!(event_is_represented(
+    assert!(full_turns_cover_event(
         &completed_a,
-        &[completed_turn.clone()],
-        None,
-        ResumePayloadMode::Full,
+        &[completed_turn.clone()]
     ));
 
     let completed_b = buffered_completed_item(
@@ -602,60 +427,36 @@ fn canonical_completion_requires_final_state_and_stable_call_ids_never_normalize
         mcp_tool_item("mcp-b", McpToolCallStatus::Completed),
     );
     assert!(
-        !event_is_represented(
-            &completed_b,
-            &[completed_turn],
-            None,
-            ResumePayloadMode::Full,
-        ),
+        !full_turns_cover_event(&completed_b, &[completed_turn]),
         "a different stable call id must not match by normalized payload"
     );
 }
 
 #[test]
 fn final_item_coverage_suppresses_folded_deltas_but_omitted_items_replay_them() {
-    let item = AgentMessageItem {
-        id: "canonical-agent-id".to_string(),
-        content: vec![AgentMessageContent::Text {
-            text: "final answer".to_string(),
-        }],
-        phase: None,
-        memory_citation: None,
-    };
+    let item = agent_message_item("canonical-agent-id", "final answer");
     let mut buffered = [
         buffered_started_item("busy-turn", TurnItem::AgentMessage(item.clone())),
-        BufferedThreadEvent {
-            event: Event {
-                id: "busy-turn".to_string(),
-                msg: EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
-                    thread_id: ThreadId::new().to_string(),
-                    turn_id: "busy-turn".to_string(),
-                    item_id: "canonical-agent-id".to_string(),
-                    delta: "final answer".to_string(),
-                }),
-            },
-            represented_in_resume_snapshot: false,
-            request_live_for_resumed_connection: true,
-        },
+        buffered_event(
+            "busy-turn",
+            EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                thread_id: ThreadId::new().to_string(),
+                turn_id: "busy-turn".to_string(),
+                item_id: "canonical-agent-id".to_string(),
+                delta: "final answer".to_string(),
+            }),
+        ),
         buffered_completed_item("busy-turn", TurnItem::AgentMessage(item)),
     ];
     let mut full_turn = turn_with_view("busy-turn", TurnItemsView::Full, TurnStatus::InProgress);
-    full_turn.items.push(ThreadItem::AgentMessage {
-        id: "history-generated-id".to_string(),
-        text: "final answer".to_string(),
-        phase: None,
-        memory_citation: None,
-    });
+    full_turn
+        .items
+        .push(thread_agent_message("history-generated-id", "final answer"));
     let full_turns = vec![full_turn];
     let mut coverage = ResumePayloadItemCoverage::new(&full_turns, None);
     for event in buffered.iter_mut().rev() {
-        event.represented_in_resume_snapshot = buffered_event_is_represented_in_resume_payload(
-            event,
-            &full_turns,
-            None,
-            &mut coverage,
-            ResumePayloadMode::Full,
-        );
+        event.represented_in_resume_snapshot =
+            consume_full_turn_coverage(event, &full_turns, &mut coverage);
     }
     assert!(
         buffered
@@ -664,10 +465,9 @@ fn final_item_coverage_suppresses_folded_deltas_but_omitted_items_replay_them() 
         "a full final item must own its start, folded delta, and completion"
     );
 
-    assert!(buffered.iter().all(|event| !event_is_represented(
-        event,
-        &[],
-        None,
-        ResumePayloadMode::Full,
-    )));
+    assert!(
+        buffered
+            .iter()
+            .all(|event| !full_turns_cover_event(event, &[]))
+    );
 }

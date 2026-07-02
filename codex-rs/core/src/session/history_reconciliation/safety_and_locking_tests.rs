@@ -3,6 +3,93 @@ use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
 use pretty_assertions::assert_eq;
 
+async fn known_crash_tail() -> (Session, Vec<ResponseItem>, Vec<RolloutItem>) {
+    let (session, _turn_context) = make_session_and_context().await;
+    let history = model_history_for_turn("crash user", "partial assistant");
+    let rollout = vec![
+        turn_started("crash-turn"),
+        RolloutItem::ResponseItem(user_message("crash user")),
+        RolloutItem::ResponseItem(assistant_message("partial assistant")),
+    ];
+    session
+        .replace_history(history.clone(), /*reference_context_item*/ None)
+        .await;
+    session
+        .state
+        .lock()
+        .await
+        .set_known_persisted_incomplete_tail(Some("crash-turn".to_string()));
+    (session, history, rollout)
+}
+
+async fn events_committed_before_reconciliation_cut<F, Fut>(
+    case: &'static str,
+    session: Arc<Session>,
+    rx_event: &async_channel::Receiver<Event>,
+    record: F,
+) -> Vec<EventMsg>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let rollout_guard = session.acquire_rollout_persistence_lock().await;
+    let mut record_task = tokio::spawn(record());
+    timeout(Duration::from_secs(1), async {
+        while session.clone_history().await.raw_items().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("{case}: item should reach in-memory history before persistence unblocks")
+    });
+
+    let session_for_cut = Arc::clone(&session);
+    let (cut_queued_tx, cut_queued_rx) = tokio::sync::oneshot::channel();
+    let (cut_acquired_tx, mut cut_acquired_rx) = tokio::sync::oneshot::channel();
+    let (release_cut_tx, release_cut_rx) = tokio::sync::oneshot::channel();
+    let cut_task = tokio::spawn(async move {
+        let history_guard = session_for_cut.acquire_history_persistence_lock().await;
+        let _ = cut_queued_tx.send(());
+        let event_guard = session_for_cut.acquire_event_delivery_lock().await;
+        let rollout_guard = session_for_cut.acquire_rollout_persistence_lock().await;
+        let _ = cut_acquired_tx.send(());
+        let _ = release_cut_rx.await;
+        drop((history_guard, event_guard, rollout_guard));
+    });
+    timeout(Duration::from_secs(1), cut_queued_rx)
+        .await
+        .unwrap_or_else(|_| panic!("{case}: the cut should queue behind the event transaction"))
+        .unwrap_or_else(|_| {
+            panic!("{case}: cut task should report that its history guard is held")
+        });
+    assert!(
+        timeout(Duration::from_millis(25), &mut cut_acquired_rx)
+            .await
+            .is_err(),
+        "{case}: the cut must wait while the event batch is blocked on persistence"
+    );
+
+    drop(rollout_guard);
+    timeout(Duration::from_secs(1), &mut cut_acquired_rx)
+        .await
+        .unwrap_or_else(|_| panic!("{case}: the cut should acquire after the event batch"))
+        .unwrap_or_else(|_| panic!("{case}: cut task should report acquisition"));
+    let events = std::iter::from_fn(|| rx_event.try_recv().ok())
+        .map(|event| event.msg)
+        .collect();
+    let _ = release_cut_tx.send(());
+    timeout(Duration::from_secs(1), cut_task)
+        .await
+        .unwrap_or_else(|_| panic!("{case}: cut task should finish"))
+        .unwrap_or_else(|error| panic!("{case}: cut task should not panic: {error}"));
+    timeout(Duration::from_secs(1), &mut record_task)
+        .await
+        .unwrap_or_else(|_| panic!("{case}: record task should finish"))
+        .unwrap_or_else(|error| panic!("{case}: record task should not panic: {error}"));
+    events
+}
+
 #[tokio::test]
 async fn reconcile_persisted_history_hydrates_tokens_without_rewriting_equal_history() {
     let (session, turn_context) = make_session_and_context().await;
@@ -14,10 +101,6 @@ async fn reconcile_persisted_history_hydrates_tokens_without_rewriting_equal_his
         let mut state = session.state.lock().await;
         state.set_token_info(Some(old_info));
     }
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
     let before_version = session.state.lock().await.history.history_version();
     let mut rollout = completed_turn("turn-1", "user", "assistant");
     let mut persisted_turn_context = turn_context.to_turn_context_item();
@@ -30,9 +113,7 @@ async fn reconcile_persisted_history_hydrates_tokens_without_rewriting_equal_his
         },
     )));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     let state = session.state.lock().await;
@@ -101,13 +182,7 @@ async fn reconcile_persisted_history_rejects_incomplete_idle_tail_without_mutati
             duration_ms: None,
         },
     )));
-    let retry_snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle retry snapshot");
-    let retry_outcome = session
-        .reconcile_persisted_history(retry_snapshot, &rollout)
-        .await;
+    let retry_outcome = reconcile_idle(&session, &rollout).await;
     assert_eq!(retry_outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -120,10 +195,6 @@ async fn reconcile_persisted_history_requires_terminal_event_after_turn_error() 
     let (session, _turn_context) = make_session_and_context().await;
     let local_history = model_history_for_turn("local user", "local assistant");
     session.replace_history(local_history.clone(), None).await;
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
     let rollout = vec![
         turn_started("failed-turn"),
         RolloutItem::ResponseItem(user_message("external user")),
@@ -133,9 +204,7 @@ async fn reconcile_persisted_history_requires_terminal_event_after_turn_error() 
         })),
     ];
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Incomplete);
     assert_eq!(session.clone_history().await.raw_items(), local_history);
@@ -143,27 +212,9 @@ async fn reconcile_persisted_history_requires_terminal_event_after_turn_error() 
 
 #[tokio::test]
 async fn reconcile_persisted_history_allows_unchanged_known_crash_tail() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let history = model_history_for_turn("crash user", "partial assistant");
-    let rollout = vec![
-        turn_started("crash-turn"),
-        RolloutItem::ResponseItem(user_message("crash user")),
-        RolloutItem::ResponseItem(assistant_message("partial assistant")),
-    ];
-    session.replace_history(history.clone(), None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_incomplete_tail(Some("crash-turn".to_string()));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    let (session, history, rollout) = known_crash_tail().await;
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     assert_eq!(session.clone_history().await.raw_items(), history);
@@ -171,23 +222,7 @@ async fn reconcile_persisted_history_allows_unchanged_known_crash_tail() {
 
 #[tokio::test]
 async fn reconcile_persisted_history_allows_metadata_after_known_crash_tail() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let history = model_history_for_turn("crash user", "partial assistant");
-    let mut rollout = vec![
-        turn_started("crash-turn"),
-        RolloutItem::ResponseItem(user_message("crash user")),
-        RolloutItem::ResponseItem(assistant_message("partial assistant")),
-    ];
-    session.replace_history(history.clone(), None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_incomplete_tail(Some("crash-turn".to_string()));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
+    let (session, history, mut rollout) = known_crash_tail().await;
     let thread_id = session.thread_id();
     rollout.push(RolloutItem::EventMsg(EventMsg::ThreadGoalUpdated(
         ThreadGoalUpdatedEvent {
@@ -206,9 +241,7 @@ async fn reconcile_persisted_history_allows_metadata_after_known_crash_tail() {
         },
     )));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     assert_eq!(session.clone_history().await.raw_items(), history);
@@ -216,30 +249,10 @@ async fn reconcile_persisted_history_allows_metadata_after_known_crash_tail() {
 
 #[tokio::test]
 async fn reconcile_persisted_history_allows_rollback_after_known_crash_tail() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let history = model_history_for_turn("crash user", "partial assistant");
-    let mut rollout = vec![
-        turn_started("crash-turn"),
-        RolloutItem::ResponseItem(user_message("crash user")),
-        RolloutItem::ResponseItem(assistant_message("partial assistant")),
-    ];
-    session.replace_history(history, None).await;
-    session
-        .state
-        .lock()
-        .await
-        .set_known_persisted_incomplete_tail(Some("crash-turn".to_string()));
-    let snapshot = session
-        .history_reconciliation_snapshot()
-        .await
-        .expect("idle history snapshot");
-    rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-        ThreadRolledBackEvent { num_turns: 1 },
-    )));
+    let (session, _history, mut rollout) = known_crash_tail().await;
+    rollout.push(rollback(/*num_turns*/ 1));
 
-    let outcome = session
-        .reconcile_persisted_history(snapshot, &rollout)
-        .await;
+    let outcome = reconcile_idle(&session, &rollout).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(session.clone_history().await.raw_items(), Vec::new());
@@ -415,72 +428,27 @@ async fn history_reconciliation_event_cut_keeps_hook_prompt_persistence_with_raw
         "hook-run-1",
     )])
     .expect("hook prompt message");
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
     let session_for_record = Arc::clone(&session);
     let turn_context_for_record = Arc::clone(&turn_context);
-    let mut record_task = tokio::spawn(async move {
-        session_for_record
-            .record_conversation_items(
-                turn_context_for_record.as_ref(),
-                std::slice::from_ref(&hook_prompt),
-            )
-            .await;
-    });
-
-    timeout(Duration::from_secs(1), async {
-        loop {
-            if !session.clone_history().await.raw_items().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("hook prompt should reach in-memory history before persistence unblocks");
-
-    let session_for_cut = Arc::clone(&session);
-    let (cut_queued_tx, cut_queued_rx) = tokio::sync::oneshot::channel();
-    let (cut_acquired_tx, mut cut_acquired_rx) = tokio::sync::oneshot::channel();
-    let (release_cut_tx, release_cut_rx) = tokio::sync::oneshot::channel();
-    let cut_task = tokio::spawn(async move {
-        let history_guard = session_for_cut.acquire_history_persistence_lock().await;
-        let _ = cut_queued_tx.send(());
-        let event_guard = session_for_cut.acquire_event_delivery_lock().await;
-        let rollout_guard = session_for_cut.acquire_rollout_persistence_lock().await;
-        let _ = cut_acquired_tx.send(());
-        let _ = release_cut_rx.await;
-        drop((history_guard, event_guard, rollout_guard));
-    });
-    timeout(Duration::from_secs(1), cut_queued_rx)
-        .await
-        .expect("the cut should queue behind the event transaction")
-        .expect("cut task should report that its history guard is held");
-    assert!(
-        timeout(Duration::from_millis(25), &mut cut_acquired_rx)
-            .await
-            .is_err(),
-        "the cut must wait while the hook prompt batch is blocked on persistence"
-    );
-
-    drop(rollout_guard);
-    timeout(Duration::from_secs(1), &mut cut_acquired_rx)
-        .await
-        .expect("the cut should acquire after the hook prompt batch")
-        .expect("cut task should report acquisition");
-    let raw_event_precedes_cut = std::iter::from_fn(|| rx_event.try_recv().ok())
-        .any(|event| matches!(event.msg, EventMsg::RawResponseItem(_)));
-    let _ = release_cut_tx.send(());
-    timeout(Duration::from_secs(1), cut_task)
-        .await
-        .expect("cut task should finish")
-        .expect("cut task should not panic");
-    timeout(Duration::from_secs(1), &mut record_task)
-        .await
-        .expect("hook prompt record should finish")
-        .expect("hook prompt record task should not panic");
+    let events = events_committed_before_reconciliation_cut(
+        "hook prompt persistence",
+        Arc::clone(&session),
+        &rx_event,
+        move || async move {
+            session_for_record
+                .record_conversation_items(
+                    turn_context_for_record.as_ref(),
+                    std::slice::from_ref(&hook_prompt),
+                )
+                .await;
+        },
+    )
+    .await;
 
     assert!(
-        raw_event_precedes_cut,
+        events
+            .iter()
+            .any(|event| matches!(event, EventMsg::RawResponseItem(_))),
         "the raw hook-prompt event must be delivered before a resume snapshot can include its persisted response item"
     );
 }
@@ -489,61 +457,22 @@ async fn history_reconciliation_event_cut_keeps_hook_prompt_persistence_with_raw
 async fn history_reconciliation_event_cut_keeps_record_and_item_lifecycle_in_one_batch() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
     let response_item = assistant_message("batched assistant item");
-    let rollout_guard = session.acquire_rollout_persistence_lock().await;
     let session_for_record = Arc::clone(&session);
     let turn_context_for_record = Arc::clone(&turn_context);
-    let mut record_task = tokio::spawn(async move {
-        session_for_record
-            .record_response_item_and_emit_turn_item(
-                turn_context_for_record.as_ref(),
-                response_item,
-            )
-            .await;
-    });
-
-    timeout(Duration::from_secs(1), async {
-        loop {
-            if !session.clone_history().await.raw_items().is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("assistant item should reach in-memory history before persistence unblocks");
-
-    let session_for_cut = Arc::clone(&session);
-    let (cut_queued_tx, cut_queued_rx) = tokio::sync::oneshot::channel();
-    let (cut_acquired_tx, mut cut_acquired_rx) = tokio::sync::oneshot::channel();
-    let (release_cut_tx, release_cut_rx) = tokio::sync::oneshot::channel();
-    let cut_task = tokio::spawn(async move {
-        let history_guard = session_for_cut.acquire_history_persistence_lock().await;
-        let _ = cut_queued_tx.send(());
-        let event_guard = session_for_cut.acquire_event_delivery_lock().await;
-        let rollout_guard = session_for_cut.acquire_rollout_persistence_lock().await;
-        let _ = cut_acquired_tx.send(());
-        let _ = release_cut_rx.await;
-        drop((history_guard, event_guard, rollout_guard));
-    });
-    timeout(Duration::from_secs(1), cut_queued_rx)
-        .await
-        .expect("the cut should queue behind the event transaction")
-        .expect("cut task should report that its history guard is held");
-    assert!(
-        timeout(Duration::from_millis(25), &mut cut_acquired_rx)
-            .await
-            .is_err(),
-        "the cut must wait while the item batch is blocked on persistence"
-    );
-
-    drop(rollout_guard);
-    timeout(Duration::from_secs(1), &mut cut_acquired_rx)
-        .await
-        .expect("the cut should acquire after the item batch")
-        .expect("cut task should report acquisition");
-    let events: Vec<EventMsg> = std::iter::from_fn(|| rx_event.try_recv().ok())
-        .map(|event| event.msg)
-        .collect();
+    let events = events_committed_before_reconciliation_cut(
+        "response item lifecycle",
+        Arc::clone(&session),
+        &rx_event,
+        move || async move {
+            session_for_record
+                .record_response_item_and_emit_turn_item(
+                    turn_context_for_record.as_ref(),
+                    response_item,
+                )
+                .await;
+        },
+    )
+    .await;
     let raw_event_precedes_cut = events
         .iter()
         .any(|event| matches!(event, EventMsg::RawResponseItem(_)));
@@ -553,16 +482,6 @@ async fn history_reconciliation_event_cut_keeps_record_and_item_lifecycle_in_one
     let item_completed_precedes_cut = events
         .iter()
         .any(|event| matches!(event, EventMsg::ItemCompleted(_)));
-    let _ = release_cut_tx.send(());
-    timeout(Duration::from_secs(1), cut_task)
-        .await
-        .expect("cut task should finish")
-        .expect("cut task should not panic");
-    timeout(Duration::from_secs(1), &mut record_task)
-        .await
-        .expect("assistant item record should finish")
-        .expect("assistant item record task should not panic");
-
     assert!(raw_event_precedes_cut, "raw response item must precede cut");
     assert!(item_started_precedes_cut, "item/started must precede cut");
     assert!(
