@@ -72,7 +72,41 @@ fn commit_all(cwd: &Path, message: &str) {
 fn write_git_candidate(directory: &Path) {
     std::fs::create_dir_all(directory).expect("create candidate directory");
     let candidate = directory.join(git_executable_name());
+    #[cfg(windows)]
+    {
+        let mut pe = [0_u8; 68];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[60..64].copy_from_slice(&64_u32.to_le_bytes());
+        pe[64..].copy_from_slice(b"PE\0\0");
+        std::fs::write(candidate, pe).expect("write native PE fixture");
+    }
+    #[cfg(not(windows))]
     std::fs::copy(native_git_fixture(), candidate).expect("copy native Git fixture");
+}
+
+fn write_runnable_git_candidate(directory: &Path) {
+    #[cfg(windows)]
+    {
+        std::fs::create_dir_all(directory.parent().expect("candidate parent"))
+            .expect("create candidate parent");
+        create_junction(directory, &native_git_search_directory());
+    }
+    #[cfg(not(windows))]
+    write_git_candidate(directory);
+}
+
+#[cfg(windows)]
+fn native_git_search_directory() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH");
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(git_executable_name());
+        if let Ok(candidate) = std::fs::canonicalize(candidate)
+            && crate::git_executable::is_native_executable_file(&candidate)
+        {
+            return directory;
+        }
+    }
+    panic!("no native Git directory in PATH")
 }
 
 fn native_git_fixture() -> PathBuf {
@@ -1424,7 +1458,7 @@ fn linked_worktree_rejects_git_from_main_and_linked_worktrees() {
     run_git(&main, &["init", "-q"]);
     run_git(&main, &["worktree", "add", "--orphan", path_text(&linked)]);
     write_git_candidate(&main_bin);
-    write_git_candidate(&trusted_bin);
+    write_runnable_git_candidate(&trusted_bin);
 
     let locations = repository_authority_for_cwd(&linked).expect("untrusted locations");
     assert!(path_is_untrusted(
@@ -1477,8 +1511,8 @@ fn registered_sibling_remains_untrusted_without_its_worktree_marker_or_root() {
         }
         let locations = repository_authority_for_cwd(&main).expect("untrusted locations");
         assert!(
-            locations.contains_root(&sibling),
-            "registered sibling root missing in state {state}"
+            path_is_untrusted(&sibling_bin.join(git_executable_name()), &locations),
+            "registered sibling Git became trusted in state {state}"
         );
         assert_eq!(
             selected_git(&locations, &[&sibling_bin, &trusted_bin]),
@@ -1618,13 +1652,19 @@ fn metadata_alias_registered_route_is_rejected_before_and_after_symlink_retarget
 
 #[cfg(windows)]
 #[test]
-fn metadata_alias_registered_route_rejects_unicode_case_junction_retarget() {
+fn registered_route_rejects_unicode_case_junction_retarget() {
     let fixture = tempfile::tempdir().expect("fixture");
     let route = metadata_alias_registered_route(fixture.path(), "Répo", "RÉPO");
-    create_junction(&route.pivot, &route.main.join(".git"));
+    let raw_marker = fixture.path().join("RÉPO").join("pivot").join(".git");
+    std::fs::write(
+        &route.registry_marker,
+        format!("{}\n", raw_marker.display()),
+    )
+    .expect("write direct junction registry route");
+    create_junction(&route.pivot, &route.linked);
 
     assert_eq!(
-        std::fs::canonicalize(&route.raw_marker).expect("canonical metadata-alias route"),
+        std::fs::canonicalize(&raw_marker).expect("canonical Unicode junction route"),
         std::fs::canonicalize(route.linked.join(".git")).expect("canonical linked marker")
     );
     assert_unsafe_registry_route(
@@ -1633,19 +1673,17 @@ fn metadata_alias_registered_route_rejects_unicode_case_junction_retarget() {
     );
 
     std::fs::remove_dir(&route.pivot).expect("remove metadata junction");
-    let attacker_target = fixture.path().join("attacker/deep");
     let attacker_linked = fixture.path().join("attacker/linked");
-    std::fs::create_dir_all(&attacker_target).expect("create attacker pivot target");
     std::fs::create_dir_all(&attacker_linked).expect("create attacker linked root");
     std::fs::write(
         attacker_linked.join(".git"),
         format!("gitdir: {}\n", route.linked_admin.display()),
     )
     .expect("write attacker backlink");
-    create_junction(&route.pivot, &attacker_target);
+    create_junction(&route.pivot, &attacker_linked);
 
     assert_eq!(
-        std::fs::canonicalize(&route.raw_marker).expect("canonical retargeted route"),
+        std::fs::canonicalize(&raw_marker).expect("canonical retargeted route"),
         std::fs::canonicalize(attacker_linked.join(".git")).expect("canonical attacker marker")
     );
     assert_unsafe_registry_route(
@@ -1700,37 +1738,42 @@ fn overlapping_registered_route_remains_rejected_after_symlink_retarget() {
 fn overlapping_registered_route_remains_rejected_after_junction_retarget() {
     let fixture = tempfile::tempdir().expect("fixture");
     let route = overlapping_registered_route(fixture.path());
+    let pivot = route.nested.join("pivot");
+    let raw_marker = pivot.join("linked/.git");
+    std::fs::write(
+        &route.registry_marker,
+        format!("{}\n", raw_marker.display()),
+    )
+    .expect("write direct overlapping registry route");
+    create_junction(&pivot, &route.main);
+
+    assert_eq!(
+        std::fs::canonicalize(&raw_marker).expect("canonical overlapping junction route"),
+        std::fs::canonicalize(route.linked.join(".git")).expect("canonical linked marker")
+    );
     assert_unsafe_registry_route(
         repository_authority_for_cwd(&route.main),
         &route.registry_marker,
     );
 
-    std::fs::remove_dir_all(&route.nested).expect("remove nested worktree");
+    std::fs::remove_dir(&pivot).expect("remove overlapping junction");
     let attacker_parent = fixture.path().join("attacker/deep");
-    let attacker_nested = attacker_parent.join("nested");
     let attacker_linked = attacker_parent.join("linked");
-    std::fs::create_dir_all(&attacker_nested).expect("create attacker nested root");
     std::fs::create_dir_all(&attacker_linked).expect("create attacker linked root");
-    std::fs::write(
-        attacker_nested.join(".git"),
-        format!("gitdir: {}\n", route.nested_admin.display()),
-    )
-    .expect("write attacker nested backlink");
     std::fs::write(
         attacker_linked.join(".git"),
         format!("gitdir: {}\n", route.linked_admin.display()),
     )
     .expect("write attacker linked backlink");
-    create_junction(&route.nested, &attacker_nested);
+    create_junction(&pivot, &attacker_parent);
 
     assert_eq!(
-        std::fs::canonicalize(&route.raw_marker).expect("canonical retargeted marker"),
+        std::fs::canonicalize(&raw_marker).expect("canonical retargeted marker"),
         std::fs::canonicalize(attacker_linked.join(".git")).expect("canonical attacker marker")
     );
-    let nested_registry_marker = route.nested_admin.join("gitdir");
-    assert_unsafe_registry_route_at_one_of(
+    assert_unsafe_registry_route(
         repository_authority_for_cwd(&route.main),
-        &[&route.registry_marker, &nested_registry_marker],
+        &route.registry_marker,
     );
 }
 
@@ -1976,7 +2019,7 @@ fn submodule_rejects_git_from_enclosing_superproject() {
         ],
     );
     write_git_candidate(&outer_bin);
-    write_git_candidate(&trusted_bin);
+    write_runnable_git_candidate(&trusted_bin);
 
     let locations = repository_authority_for_cwd(&submodule).expect("untrusted locations");
     assert!(
@@ -2029,7 +2072,7 @@ fn bare_backed_linked_worktree_allows_external_git_in_sibling_directory() {
             path_text(&linked),
         ],
     );
-    write_git_candidate(&trusted_bin);
+    write_runnable_git_candidate(&trusted_bin);
 
     let locations = repository_authority_for_cwd(&linked).expect("untrusted locations");
     assert_eq!(
