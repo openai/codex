@@ -417,7 +417,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     }
 }
 
-/// Converts a config-summary value into printable single-line terminal text.
 fn sanitize_config_summary_value(value: &str) -> String {
     let mut sanitized = String::new();
     let mut pending_space = false;
@@ -443,7 +442,6 @@ fn sanitize_config_summary_value(value: &str) -> String {
     sanitized
 }
 
-/// Returns whether `ch` should be dropped from config-summary output.
 fn is_disallowed_config_summary_char(ch: char) -> bool {
     if ch.is_control() {
         return true;
