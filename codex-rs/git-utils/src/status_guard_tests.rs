@@ -70,6 +70,36 @@ fn write_wrapper(path: &Path, body: &str) {
     std::fs::set_permissions(path, permissions).expect("mark wrapper executable");
 }
 
+fn run_isolated_config_test(test_name: &str) {
+    let environment = tempfile::tempdir().expect("isolated Git environment");
+    let global_config = environment.path().join("global.gitconfig");
+    let system_config = environment.path().join("system.gitconfig");
+    std::fs::write(&global_config, "").expect("empty global config");
+    std::fs::write(&system_config, "").expect("empty system config");
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    crate::safe_git::isolate_git_command_environment(&mut command);
+    let output = command
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("CODEX_GIT_UTILS_STATUS_GUARD_ENV_CHILD", "1")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_SYSTEM", &system_config)
+        .env("GIT_CONFIG_NOSYSTEM", "0")
+        .env("GIT_CONFIG_COUNT", "0")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env("RUST_TEST_THREADS", "1")
+        .output()
+        .expect("run isolated test process");
+    assert!(
+        output.status.success(),
+        "isolated test {test_name} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn io_error_mapping_preserves_authority_provenance() {
     for error in [
@@ -504,6 +534,12 @@ async fn fsmonitor_probe_is_base_only_and_the_sealed_decision_controls_final_ord
 
 #[tokio::test]
 async fn zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes() {
+    if std::env::var_os("CODEX_GIT_UTILS_STATUS_GUARD_ENV_CHILD").is_none() {
+        run_isolated_config_test(
+            "status_guard::tests::zero_driver_status_skips_tracked_paths_attributes_and_overlay_writes",
+        );
+        return;
+    }
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let repo = init_repo(&temp_dir, /*file_count*/ 0).await;
     let wrapper = temp_dir.path().join("git-wrapper");
