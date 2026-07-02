@@ -14,7 +14,6 @@ use crate::sandbox_tags::permission_profile_policy_tag;
 use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -445,8 +444,6 @@ impl ToolRegistry {
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 let log_payload = invocation.payload.log_payload();
-                let extra_trace_fields =
-                    tool_result_trace_fields(&invocation.turn.sub_id, &invocation.source, "", "");
                 otel.tool_result_with_tags(
                     tool_name_flat.as_ref(),
                     &call_id_owned,
@@ -455,7 +452,7 @@ impl ToolRegistry {
                     /*success*/ false,
                     &message,
                     &base_tool_result_tags,
-                    &extra_trace_fields,
+                    /*extra_trace_fields*/ &[],
                 );
                 let err = FunctionCallError::RespondToModel(message);
                 dispatch_trace.record_failed(&err);
@@ -466,25 +463,18 @@ impl ToolRegistry {
         let telemetry_tags = tool.telemetry_tags(&invocation).await;
         let mut tool_result_tags =
             Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len());
-        let mut mcp_server = "";
-        let mut mcp_server_origin = "";
+        let mut extra_trace_fields = Vec::new();
         tool_result_tags.extend_from_slice(&base_tool_result_tags);
         for (key, value) in &telemetry_tags {
-            match *key {
-                "mcp_server" => mcp_server = value.as_str(),
-                "mcp_server_origin" => mcp_server_origin = value.as_str(),
-                _ => tool_result_tags.push((*key, value.as_str())),
+            if matches!(*key, "mcp_server" | "mcp_server_origin") {
+                extra_trace_fields.push((*key, value.as_str()));
+            } else {
+                tool_result_tags.push((*key, value.as_str()));
             }
         }
         if !tool.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
             let log_payload = invocation.payload.log_payload();
-            let extra_trace_fields = tool_result_trace_fields(
-                &invocation.turn.sub_id,
-                &invocation.source,
-                mcp_server,
-                mcp_server_origin,
-            );
             otel.tool_result_with_tags(
                 tool_name_flat.as_ref(),
                 &call_id_owned,
@@ -551,12 +541,6 @@ impl ToolRegistry {
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
         let log_payload = invocation.payload.log_payload();
-        let extra_trace_fields = tool_result_trace_fields(
-            &invocation.turn.sub_id,
-            &invocation.source,
-            mcp_server,
-            mcp_server_origin,
-        );
 
         let result = otel
             .log_tool_result_with_tags(
@@ -684,32 +668,6 @@ impl ToolRegistry {
             }
         }
     }
-}
-
-fn tool_result_trace_fields<'a>(
-    turn_id: &'a str,
-    source: &'a ToolCallSource,
-    mcp_server: &'a str,
-    mcp_server_origin: &'a str,
-) -> [(&'static str, &'a str); 6] {
-    let (tool_source, code_mode_cell_id, code_mode_runtime_tool_call_id) = match source {
-        ToolCallSource::Direct => ("direct", "", ""),
-        ToolCallSource::CodeMode {
-            cell_id,
-            runtime_tool_call_id,
-        } => ("code_mode", cell_id.as_str(), runtime_tool_call_id.as_str()),
-    };
-    [
-        ("turn_id", turn_id),
-        ("tool_source", tool_source),
-        ("code_mode_cell_id", code_mode_cell_id),
-        (
-            "code_mode_runtime_tool_call_id",
-            code_mode_runtime_tool_call_id,
-        ),
-        ("mcp_server", mcp_server),
-        ("mcp_server_origin", mcp_server_origin),
-    ]
 }
 
 async fn notify_tool_finish_if_unclaimed(

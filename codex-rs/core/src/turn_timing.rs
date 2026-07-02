@@ -10,7 +10,6 @@ use codex_otel::TURN_TTFM_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
-use tracing::info;
 
 use crate::ResponseEvent;
 use crate::session::turn_context::TurnContext;
@@ -81,25 +80,6 @@ pub(crate) struct TurnProfileTimingGuard {
     timing: Arc<TurnTimingState>,
     phase: TurnProfilePhase,
     active: bool,
-    inference_log_context: Option<InferenceLogContext>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum InferenceTimingResult {
-    Success,
-    Cancelled,
-    Error,
-}
-
-struct InferenceLogContext {
-    started_at: Instant,
-    conversation_id: String,
-    turn_id: String,
-    model: String,
-    provider_name: String,
-    trace_id: String,
-    inference_index: u32,
-    result: InferenceTimingResult,
 }
 
 impl TurnTimingState {
@@ -138,35 +118,12 @@ impl TurnTimingState {
         self.profile_state().complete(Instant::now())
     }
 
-    pub(crate) fn begin_sampling(
-        self: &Arc<Self>,
-        conversation_id: &impl std::fmt::Display,
-        turn_id: &str,
-        model: &str,
-        provider_name: &str,
-    ) -> TurnProfileTimingGuard {
-        let started_at = Instant::now();
-        let inference_index = self.profile_state().begin_sampling(started_at);
-        let active = inference_index.is_some();
-        let inference_log_context = if tracing::enabled!(tracing::Level::INFO) {
-            inference_index.map(|inference_index| InferenceLogContext {
-                started_at,
-                conversation_id: conversation_id.to_string(),
-                turn_id: turn_id.to_string(),
-                model: model.to_string(),
-                provider_name: provider_name.to_string(),
-                trace_id: codex_otel::current_span_trace_id().unwrap_or_default(),
-                inference_index,
-                result: InferenceTimingResult::Error,
-            })
-        } else {
-            None
-        };
+    pub(crate) fn begin_sampling(self: &Arc<Self>) -> TurnProfileTimingGuard {
+        let active = self.profile_state().begin_sampling(Instant::now());
         TurnProfileTimingGuard {
             timing: Arc::clone(self),
             phase: TurnProfilePhase::Sampling,
             active,
-            inference_log_context,
         }
     }
 
@@ -180,7 +137,6 @@ impl TurnTimingState {
             timing: Arc::clone(self),
             phase: TurnProfilePhase::ToolBlocking,
             active,
-            inference_log_context: None,
         }
     }
 
@@ -210,39 +166,12 @@ impl TurnTimingState {
     }
 }
 
-impl TurnProfileTimingGuard {
-    pub(crate) fn finish_inference(mut self, result: InferenceTimingResult) {
-        if let Some(log_context) = &mut self.inference_log_context {
-            log_context.result = result;
-        }
-    }
-}
-
 impl Drop for TurnProfileTimingGuard {
     fn drop(&mut self) {
         if self.active {
             self.timing
                 .profile_state()
                 .end_phase(Instant::now(), self.phase);
-        }
-        if let Some(log_context) = &self.inference_log_context {
-            info!(
-                event.name = "codex.inference",
-                trace_id = %log_context.trace_id,
-                conversation.id = %log_context.conversation_id,
-                turn_id = %log_context.turn_id,
-                model = %log_context.model,
-                provider_name = %log_context.provider_name,
-                inference_index = log_context.inference_index,
-                result = match log_context.result {
-                    InferenceTimingResult::Success => "success",
-                    InferenceTimingResult::Cancelled => "cancelled",
-                    InferenceTimingResult::Error => "error",
-                },
-                duration_ms = u64::try_from(log_context.started_at.elapsed().as_millis())
-                    .unwrap_or(u64::MAX),
-                "inference completed"
-            );
         }
     }
 }
@@ -271,12 +200,12 @@ impl TurnProfileState {
         };
     }
 
-    fn begin_sampling(&mut self, now: Instant) -> Option<u32> {
+    fn begin_sampling(&mut self, now: Instant) -> bool {
         if self.completed_profile.is_some()
             || self.started_at.is_none()
             || self.active_phase.is_some()
         {
-            return None;
+            return false;
         }
         self.advance(now);
         if self.seen_sampling {
@@ -285,7 +214,7 @@ impl TurnProfileState {
         self.seen_sampling = true;
         self.active_phase = Some(TurnProfilePhase::Sampling);
         self.sampling_request_count = self.sampling_request_count.saturating_add(1);
-        Some(self.sampling_request_count)
+        true
     }
 
     fn record_sampling_retry(&mut self) {

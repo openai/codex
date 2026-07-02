@@ -36,7 +36,6 @@ struct ToolCallTimingGuard {
     turn_id: String,
     call_id: String,
     tool_name: codex_tools::ToolName,
-    source: ToolCallSource,
 }
 
 #[derive(Clone)]
@@ -266,7 +265,7 @@ impl ToolCallTimingGuard {
         call: &ToolCall,
         source: &ToolCallSource,
     ) -> Option<Self> {
-        if !tracing::enabled!(tracing::Level::INFO) {
+        if !matches!(source, ToolCallSource::Direct) || !tracing::enabled!(tracing::Level::INFO) {
             return None;
         }
 
@@ -277,7 +276,6 @@ impl ToolCallTimingGuard {
             turn_id: turn_id.to_string(),
             call_id: call.call_id.clone(),
             tool_name: call.tool_name.clone(),
-            source: source.clone(),
         })
     }
 }
@@ -285,6 +283,13 @@ impl ToolCallTimingGuard {
 impl Drop for ToolCallTimingGuard {
     fn drop(&mut self) {
         let completed_at = Instant::now();
+        // Snapshot once so a concurrently-starting dispatch cannot make one
+        // event internally inconsistent.
+        let execution_started_at = self
+            .execution_started_at
+            .get()
+            .copied()
+            .filter(|execution_started_at| *execution_started_at <= completed_at);
         info!(
             event.name = "codex.tool_call",
             trace_id = %codex_otel::current_span_trace_id().unwrap_or_default(),
@@ -292,30 +297,21 @@ impl Drop for ToolCallTimingGuard {
             turn_id = %self.turn_id,
             tool_name = %self.tool_name,
             call_id = %self.call_id,
-            tool_source = match &self.source {
-                ToolCallSource::Direct => "direct",
-                ToolCallSource::CodeMode { .. } => "code_mode",
-            },
-            code_mode_cell_id = match &self.source {
-                ToolCallSource::Direct => "",
-                ToolCallSource::CodeMode { cell_id, .. } => cell_id.as_str(),
-            },
-            code_mode_runtime_tool_call_id = match &self.source {
-                ToolCallSource::Direct => "",
-                ToolCallSource::CodeMode { runtime_tool_call_id, .. } => runtime_tool_call_id.as_str(),
-            },
-            execution_started = self.execution_started_at.get().is_some(),
-            dispatch_duration_ms = self.execution_started_at.get().map_or_else(
+            tool_source = "direct",
+            code_mode_cell_id = "",
+            code_mode_runtime_tool_call_id = "",
+            execution_started = execution_started_at.is_some(),
+            dispatch_duration_ms = execution_started_at.map_or_else(
                 || u64::try_from(completed_at.duration_since(self.started_at).as_millis()).unwrap_or(u64::MAX),
                 |execution_started_at| {
                     u64::try_from(execution_started_at.duration_since(self.started_at).as_millis())
                         .unwrap_or(u64::MAX)
                 },
             ),
-            handler_duration_ms = self.execution_started_at.get().map_or(
+            handler_duration_ms = execution_started_at.map_or(
                 0,
                 |execution_started_at| {
-                    u64::try_from(completed_at.duration_since(*execution_started_at).as_millis())
+                    u64::try_from(completed_at.duration_since(execution_started_at).as_millis())
                         .unwrap_or(u64::MAX)
                 },
             ),
@@ -344,6 +340,43 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn tool_call_timing_guard_ignores_code_mode_source() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let call = ToolCall {
+                tool_name: codex_tools::ToolName::plain("test_tool"),
+                call_id: "call-1".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            };
+            let direct_guard = ToolCallTimingGuard::capture(
+                Instant::now(),
+                &"conversation-id",
+                "turn-id",
+                &call,
+                &ToolCallSource::Direct,
+            );
+            assert!(direct_guard.is_some());
+            drop(direct_guard);
+
+            let code_mode_guard = ToolCallTimingGuard::capture(
+                Instant::now(),
+                &"conversation-id",
+                "turn-id",
+                &call,
+                &ToolCallSource::CodeMode {
+                    cell_id: "cell-1".to_string(),
+                    runtime_tool_call_id: "runtime-call-1".to_string(),
+                },
+            );
+            assert!(code_mode_guard.is_none());
+        });
+    }
 
     struct ImmediateHandler {
         tool_name: codex_tools::ToolName,

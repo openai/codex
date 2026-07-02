@@ -1062,14 +1062,7 @@ impl SessionTelemetry {
         log_event!(
             self,
             event.name = "codex.tool_result",
-            trace_id = %crate::current_span_trace_id().unwrap_or_default(),
-            turn_id = "",
             tool_name = %tool_name,
-            call_id = "",
-            tool_source = "",
-            code_mode_cell_id = "",
-            code_mode_runtime_tool_call_id = "",
-            arguments = "",
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
             output = %error,
@@ -1079,13 +1072,7 @@ impl SessionTelemetry {
         trace_event!(
             self,
             event.name = "codex.tool_result",
-            trace_id = %crate::current_span_trace_id().unwrap_or_default(),
-            turn_id = "",
             tool_name = %tool_name,
-            call_id = "",
-            tool_source = "",
-            code_mode_cell_id = "",
-            code_mode_runtime_tool_call_id = "",
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
             output_length = error.len() as i64,
@@ -1114,40 +1101,33 @@ impl SessionTelemetry {
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
+        let mcp_server = trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("");
+        let mcp_server_origin =
+            trace_field_value(extra_trace_fields, "mcp_server_origin").unwrap_or("");
         log_event!(
             self,
             event.name = "codex.tool_result",
-            trace_id = %crate::current_span_trace_id().unwrap_or_default(),
-            turn_id = %trace_field_value(extra_trace_fields, "turn_id").unwrap_or(""),
             tool_name = %tool_name,
             call_id = %call_id,
-            tool_source = %trace_field_value(extra_trace_fields, "tool_source").unwrap_or(""),
-            code_mode_cell_id = %trace_field_value(extra_trace_fields, "code_mode_cell_id").unwrap_or(""),
-            code_mode_runtime_tool_call_id = %trace_field_value(extra_trace_fields, "code_mode_runtime_tool_call_id").unwrap_or(""),
             arguments = %arguments,
             duration_ms = %duration.as_millis(),
             success = %success_str,
             output = %output,
-            mcp_server = %trace_field_value(extra_trace_fields, "mcp_server").unwrap_or(""),
-            mcp_server_origin = %trace_field_value(extra_trace_fields, "mcp_server_origin").unwrap_or(""),
+            mcp_server = %mcp_server,
+            mcp_server_origin = %mcp_server_origin,
         );
         trace_event!(
             self,
             event.name = "codex.tool_result",
-            trace_id = %crate::current_span_trace_id().unwrap_or_default(),
-            turn_id = %trace_field_value(extra_trace_fields, "turn_id").unwrap_or(""),
             tool_name = %tool_name,
             call_id = %call_id,
-            tool_source = %trace_field_value(extra_trace_fields, "tool_source").unwrap_or(""),
-            code_mode_cell_id = %trace_field_value(extra_trace_fields, "code_mode_cell_id").unwrap_or(""),
-            code_mode_runtime_tool_call_id = %trace_field_value(extra_trace_fields, "code_mode_runtime_tool_call_id").unwrap_or(""),
             duration_ms = %duration.as_millis(),
             success = %success_str,
             arguments_length = arguments.len() as i64,
             output_length = output.len() as i64,
             output_line_count = output.lines().count() as i64,
-            tool_origin = if trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("").is_empty() { "builtin" } else { "mcp" },
-            mcp_tool = !trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("").is_empty(),
+            tool_origin = if mcp_server.is_empty() { "builtin" } else { "mcp" },
+            mcp_tool = !mcp_server.is_empty(),
         );
     }
 
