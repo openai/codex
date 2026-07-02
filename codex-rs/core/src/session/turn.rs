@@ -2003,34 +2003,24 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, event).await;
                 }
                 let completed_item_id = item.id().map(str::to_owned);
+                let is_tool_call = matches!(
+                    &item,
+                    ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::FunctionCall { .. }
+                        | ResponseItem::ToolSearchCall { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                );
+                if completed_item_id.is_none() && !is_tool_call {
+                    warn!("dropping non-tool output_item.done event without item ID");
+                    continue;
+                }
                 let completes_active_item = match (&completed_item_id, active_item.as_ref()) {
                     (Some(completed_item_id), Some(active)) => completed_item_id == &active.id(),
-                    (None, Some(active)) => {
-                        // Some providers omit IDs on completion events. Only fall back to the
-                        // active item when its variant matches; tool completions can interleave
-                        // with a streamed non-tool item and must not close it.
-                        match (&item, active) {
-                            (ResponseItem::Message { role, .. }, TurnItem::AgentMessage(_)) => {
-                                role == "assistant"
-                            }
-                            (ResponseItem::Reasoning { .. }, TurnItem::Reasoning(_))
-                            | (ResponseItem::WebSearchCall { .. }, TurnItem::WebSearch(_))
-                            | (
-                                ResponseItem::ImageGenerationCall { .. },
-                                TurnItem::ImageGeneration(_),
-                            ) => true,
-                            _ => false,
-                        }
-                    }
                     _ => false,
                 };
-                let previously_streamed_item = match completed_item_id.as_deref() {
-                    Some(item_id) => streamed_items.remove(item_id),
-                    None if completes_active_item => active_item
-                        .as_ref()
-                        .and_then(|active| streamed_items.remove(&active.id())),
-                    None => None,
-                };
+                let previously_streamed_item = completed_item_id
+                    .as_deref()
+                    .and_then(|item_id| streamed_items.remove(item_id));
                 if completes_active_item {
                     active_item = None;
                     active_item_is_streaming_to_client = false;

@@ -1107,6 +1107,7 @@ async fn interleaved_reasoning_summary_events_keep_reasoning_item_metadata() -> 
                     /*summary_index*/ 0,
                     "step one",
                 ),
+                ev_reasoning_item("", &["ignored"], &[]),
                 ev_function_call("call-1", "unknown_tool", "{}"),
                 ev_reasoning_summary_part_added("reasoning-1", /*summary_index*/ 1),
                 ev_reasoning_summary_text_delta(
