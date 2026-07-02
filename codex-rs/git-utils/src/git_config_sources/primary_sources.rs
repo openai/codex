@@ -253,9 +253,14 @@ fn git_env_bool(name: &str) -> io::Result<bool> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "" | "0" | "false" | "no" | "off" => Ok(false),
         value => value
-            .parse::<i32>()
+            .parse::<i64>()
+            .ok()
+            // Supported Git releases disagree on whether INT_MIN is a valid
+            // numeric boolean. Accept only their shared symmetric range so a
+            // value approved here cannot make the selected Git fail later.
+            .filter(|value| (-i64::from(i32::MAX)..=i64::from(i32::MAX)).contains(value))
             .map(|value| value != 0)
-            .map_err(|_| invalid_config_source("invalid Git boolean environment value")),
+            .ok_or_else(|| invalid_config_source("invalid Git boolean environment value")),
     }
 }
 
