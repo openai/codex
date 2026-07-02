@@ -7,8 +7,9 @@ use crate::GitToolingError;
 use crate::git_command::GitRunner;
 use crate::safe_git::DISABLED_HOOKS_PATH;
 
-pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
-    match run_git_for_stdout(
+pub(crate) fn ensure_git_repository(git: &GitRunner, path: &Path) -> Result<(), GitToolingError> {
+    match run_git_for_stdout_with_runner(
+        git,
         path,
         vec![
             OsString::from("rev-parse"),
@@ -29,8 +30,12 @@ pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> 
     }
 }
 
-pub(crate) fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingError> {
-    match run_git_for_stdout(
+pub(crate) fn resolve_head(
+    git: &GitRunner,
+    path: &Path,
+) -> Result<Option<String>, GitToolingError> {
+    match run_git_for_stdout_with_runner(
+        git,
         path,
         vec![
             OsString::from("rev-parse"),
@@ -45,8 +50,12 @@ pub(crate) fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingErro
     }
 }
 
-pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitToolingError> {
-    let root = run_git_for_stdout(
+pub(crate) fn resolve_repository_root(
+    git: &GitRunner,
+    path: &Path,
+) -> Result<PathBuf, GitToolingError> {
+    let root = run_git_for_stdout_with_runner(
+        git,
         path,
         vec![
             OsString::from("rev-parse"),
@@ -70,6 +79,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn run_git_for_stdout<I, S>(
     dir: &Path,
     args: I,
@@ -79,7 +89,21 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let run = run_git(dir, args, env)?;
+    let git = GitRunner::for_cwd_io(dir)?;
+    run_git_for_stdout_with_runner(&git, dir, args, env)
+}
+
+pub(crate) fn run_git_for_stdout_with_runner<I, S>(
+    git: &GitRunner,
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<String, GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let run = run_git_with_runner(git, dir, args, env)?;
     String::from_utf8(run.output.stdout)
         .map(|value| value.trim().to_string())
         .map_err(|source| GitToolingError::GitOutputUtf8 {
@@ -89,6 +113,20 @@ where
 }
 
 fn run_git<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<GitRun, GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let git = GitRunner::for_cwd_io(dir)?;
+    run_git_with_runner(&git, dir, args, env)
+}
+
+fn run_git_with_runner<I, S>(
+    git: &GitRunner,
     dir: &Path,
     args: I,
     env: Option<&[(OsString, OsString)]>,
@@ -109,7 +147,6 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
-    let git = GitRunner::for_cwd_io(dir)?;
     let mut command = git.command_for_cwd(dir)?;
     if let Some(envs) = env {
         for (key, value) in envs {
