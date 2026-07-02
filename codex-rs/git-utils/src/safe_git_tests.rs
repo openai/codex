@@ -343,6 +343,54 @@ async fn get_has_changes_rejects_configured_clean_filter_without_running_it() {
 }
 
 #[tokio::test]
+async fn get_has_changes_distinguishes_filter_sentinels_from_literal_driver_names() {
+    for (driver, sentinel_attribute) in
+        [("set", "filter"), ("unset", "-filter"), ("unspecified", "")]
+    {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        let clean_key = format!("filter.{driver}.clean");
+        run_git(
+            &repo_path,
+            &[
+                "config",
+                &clean_key,
+                "git config codex.filterran true && git hash-object --stdin",
+            ],
+        )
+        .await;
+
+        let sentinel = if sentinel_attribute.is_empty() {
+            String::new()
+        } else {
+            format!("test.txt {sentinel_attribute}\n")
+        };
+        std::fs::write(repo_path.join(".gitattributes"), sentinel)
+            .expect("write sentinel attribute");
+        run_git(&repo_path, &["add", ".gitattributes"]).await;
+        run_git(&repo_path, &["commit", "-m", "sentinel attribute"]).await;
+
+        assert_eq!(try_get_has_changes(&repo_path).await, Ok(false), "{driver}");
+        assert!(!configured_filter_ran(&repo_path).await, "{driver}");
+
+        std::fs::write(
+            repo_path.join(".gitattributes"),
+            format!("test.txt filter={driver}\n"),
+        )
+        .expect("write literal sentinel-named driver");
+        assert_eq!(
+            try_get_has_changes(&repo_path).await,
+            Err(GitReadError::SelectedExecutableFilter {
+                driver: driver.to_string(),
+                path: "test.txt".to_string(),
+            }),
+            "{driver}"
+        );
+        assert!(!configured_filter_ran(&repo_path).await, "{driver}");
+    }
+}
+
+#[tokio::test]
 async fn checked_has_changes_distinguishes_non_repository() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     assert_eq!(

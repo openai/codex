@@ -137,12 +137,17 @@ pub(crate) async fn selected_executable_filter_from(
 ) -> Result<Option<(String, Vec<u8>)>, GitReadError> {
     let git_root = resolve_git_root_async(git, cwd).await?;
     let entries = read_filter_config_async(git, &git_root).await?;
-    if !entries.values().any(|entry| !entry.value.is_empty()) {
+    let executable_drivers =
+        executable_filter_drivers(&entries).map_err(|_| invalid_output("filterConfig"))?;
+    if executable_drivers.is_empty() {
         return Ok(None);
     }
     let paths = read_paths_async(git, &git_root, PathSelection::Tracked).await?;
     let attributes = read_filter_attributes_async(git, &git_root, &paths).await?;
-    selected_executable_filter(&entries, &attributes).map_err(|_| invalid_output("filterSelection"))
+    let attributes =
+        resolve_filter_attribute_sentinels_async(git, &git_root, attributes, &executable_drivers)
+            .await?;
+    Ok(selected_filter(&executable_drivers, &attributes))
 }
 
 async fn resolve_git_root_async(git: &GitRunner, cwd: &Path) -> Result<PathBuf, GitReadError> {
@@ -492,7 +497,7 @@ async fn read_filter_attributes_async(
     git: &GitRunner,
     cwd: &Path,
     paths: &[Vec<u8>],
-) -> Result<BTreeMap<Vec<u8>, String>, GitReadError> {
+) -> Result<BTreeMap<Vec<u8>, FilterAttributeValue>, GitReadError> {
     if paths.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -524,6 +529,88 @@ async fn read_filter_attributes_async(
         return Err(command_failed("filterAttributes", output.status.code()));
     }
     parse_filter_attributes(&output.stdout, paths).map_err(|_| invalid_output("filterAttributes"))
+}
+
+async fn resolve_filter_attribute_sentinels_async(
+    git: &GitRunner,
+    cwd: &Path,
+    attributes: BTreeMap<Vec<u8>, FilterAttributeValue>,
+    executable_drivers: &BTreeSet<String>,
+) -> Result<BTreeMap<Vec<u8>, String>, GitReadError> {
+    let mut resolved = BTreeMap::new();
+    for (path, attribute) in attributes {
+        match attribute {
+            FilterAttributeValue::Driver(driver) => {
+                resolved.insert(path, driver);
+            }
+            FilterAttributeValue::AmbiguousSentinel(driver) => {
+                if executable_drivers.contains(&driver)
+                    && sentinel_spelling_selects_filter_driver_async(git, cwd, &path, &driver)
+                        .await?
+                {
+                    resolved.insert(path, driver);
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+async fn sentinel_spelling_selects_filter_driver_async(
+    git: &GitRunner,
+    cwd: &Path,
+    path: &[u8],
+    driver: &str,
+) -> Result<bool, GitReadError> {
+    let required =
+        run_sentinel_selection_probe_async(git, cwd, path, driver, /*required*/ true).await?;
+    if required.status.success() {
+        return Ok(false);
+    }
+    let optional =
+        run_sentinel_selection_probe_async(git, cwd, path, driver, /*required*/ false).await?;
+    if optional.status.success() {
+        return Ok(true);
+    }
+    Err(command_failed(
+        "filterAttributeSelection",
+        optional.status.code(),
+    ))
+}
+
+async fn run_sentinel_selection_probe_async(
+    git: &GitRunner,
+    cwd: &Path,
+    path: &[u8],
+    driver: &str,
+    required: bool,
+) -> Result<std::process::Output, GitReadError> {
+    let path = git_path_argument(path).map_err(|_| invalid_output("filterAttributeSelection"))?;
+    let mut command = git.tokio_command();
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args([
+            "-c",
+            &format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            &format!("filter.{driver}.required={required}"),
+            "-c",
+            &format!("filter.{driver}.clean="),
+            "-c",
+            &format!("filter.{driver}.smudge="),
+            "-c",
+            &format!("filter.{driver}.process="),
+            "hash-object",
+            "--stdin",
+        ])
+        .arg("--path")
+        .arg(path)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    command_output(git, command, "filterAttributeSelection").await
 }
 
 async fn command_output(
@@ -731,7 +818,6 @@ fn selected_executable_filter_for(
     Ok(selected_filter(&executable_drivers, attributes))
 }
 
-#[cfg(test)]
 fn selected_filter(
     drivers: &BTreeSet<String>,
     attributes: &BTreeMap<Vec<u8>, String>,
