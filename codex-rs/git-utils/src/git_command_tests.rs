@@ -2356,10 +2356,10 @@ fn resolver_fails_closed_for_unsupported_windows_device_namespaces() {
 #[cfg(windows)]
 #[test]
 fn resolver_selects_native_git_exe_only() {
-    assert!(paths_equal(
-        Path::new(r"C:\Repo\.git"),
-        Path::new(r"c:\repo\.GIT")
-    ));
+    let mixed_case = Path::new(r"C:\Repo\.git");
+    let lower_case = Path::new(r"c:\repo\.GIT");
+    assert!(crate::git_config::path_is_within(mixed_case, lower_case));
+    assert!(crate::git_config::path_is_within(lower_case, mixed_case));
     let fixture = tempfile::tempdir().expect("fixture");
     let repo = fixture.path().join("repo");
     let scripts = fixture.path().join("scripts");

@@ -13,6 +13,8 @@ mod windows_path;
 
 use route_walker::RawRouteObservation;
 use route_walker::RouteObservationSnapshot;
+#[cfg(windows)]
+use route_walker::invalid_data;
 use route_walker::observe_route;
 #[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_authority_path_is_ambiguous;
