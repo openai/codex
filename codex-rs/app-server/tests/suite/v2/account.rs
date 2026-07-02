@@ -52,6 +52,7 @@ use url::Url;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -405,6 +406,185 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
         "external mode should not emit account/chatgptAuthTokens/refresh for refreshToken=true"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn personal_access_token_rejects_external_auth_injection_and_does_not_refresh() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            base_url: Some(format!("{}/v1", mock_server.uri())),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path())?;
+
+    let personal_access_token = "at-service-account";
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header(
+            "Authorization",
+            format!("Bearer {personal_access_token}"),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "service-account@example.com",
+            "chatgpt_user_id": "service-account-user",
+            "chatgpt_account_id": "service-account-workspace",
+            "chatgpt_plan_type": "team",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .expect(1..)
+        .mount(&mock_server)
+        .await;
+    let unauthorized = ResponseTemplate::new(401).set_body_json(json!({
+        "error": { "message": "unauthorized" }
+    }));
+    let responses_mock = responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
+
+    let authapi_base_url = mock_server.uri();
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            ("CODEX_ACCESS_TOKEN", Some(personal_access_token)),
+            ("CODEX_AUTHAPI_BASE_URL", Some(authapi_base_url.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let expected_status = GetAuthStatusResponse {
+        auth_method: Some(AuthMode::PersonalAccessToken),
+        auth_token: None,
+        requires_openai_auth: Some(true),
+    };
+    let status_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let status_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<GetAuthStatusResponse>(status_response)?,
+        expected_status
+    );
+
+    let host_access_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("host-user@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
+    )?;
+    let login_id = mcp
+        .send_chatgpt_auth_tokens_login_request(
+            host_access_token,
+            WORKSPACE_ID_EMBEDDED.to_string(),
+            Some("pro".to_string()),
+        )
+        .await?;
+    let login_error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(login_id)),
+    )
+    .await??;
+    assert_eq!(
+        login_error,
+        JSONRPCError {
+            id: RequestId::Integer(login_id),
+            error: JSONRPCErrorError {
+                code: -32600,
+                message: "External ChatGPT auth cannot replace an active personal access token. Remove the personal access token before using chatgptAuthTokens."
+                    .to_string(),
+                data: None,
+            },
+        }
+    );
+
+    let status_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let status_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<GetAuthStatusResponse>(status_response)?,
+        expected_status
+    );
+
+    let thread_id = mcp
+        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_id)),
+    )
+    .await??;
+    let thread =
+        to_response::<codex_app_server_protocol::ThreadStartResponse>(thread_response)?.thread;
+
+    let turn_id = mcp
+        .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
+            thread_id: thread.id,
+            client_user_message_id: None,
+            input: vec![codex_app_server_protocol::UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let completed_notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notification
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some(format!("Bearer {personal_access_token}"))
+    );
+    let refresh_request = timeout(
+        Duration::from_millis(250),
+        mcp.read_stream_until_request_message(),
+    )
+    .await;
+    assert!(
+        refresh_request.is_err(),
+        "personal access token auth should not emit account/chatgptAuthTokens/refresh"
+    );
+
+    mock_server.verify().await;
     Ok(())
 }
 
