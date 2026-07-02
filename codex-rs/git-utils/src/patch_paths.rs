@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use crate::apply::run_git;
 use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
+use crate::exact_staging::update_index_exact_paths;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
-use crate::safe_git::ensure_no_selected_git_add_filters;
 
 pub(crate) fn extract_effective_paths_from_patch(
     git: &GitRunner,
@@ -157,7 +157,7 @@ fn insert_numstat_path(paths: &mut Vec<String>, path: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_patch_path(path: String) -> io::Result<String> {
+pub(crate) fn validate_patch_path(path: String) -> io::Result<String> {
     if path.starts_with('/')
         || path.ends_with('/')
         || invalid_platform_patch_path(&path)
@@ -240,88 +240,36 @@ pub(crate) fn stage_effective_paths(
     paths: &[String],
     git_config_args: &[String],
 ) -> io::Result<()> {
-    stage_effective_paths_with_missing(
-        git,
-        git_root,
-        paths,
-        git_config_args,
-        MissingPathPolicy::Ignore,
-    )
-}
-
-pub(crate) fn stage_effective_paths_for_reverse(
-    git: &GitRunner,
-    git_root: &Path,
-    paths: &[String],
-    git_config_args: &[String],
-) -> io::Result<()> {
-    stage_effective_paths_with_missing(
-        git,
-        git_root,
-        paths,
-        git_config_args,
-        MissingPathPolicy::StageTrackedDeletion,
-    )
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum MissingPathPolicy {
-    Ignore,
-    StageTrackedDeletion,
-}
-
-fn stage_effective_paths_with_missing(
-    git: &GitRunner,
-    git_root: &Path,
-    paths: &[String],
-    git_config_args: &[String],
-    missing_path_policy: MissingPathPolicy,
-) -> io::Result<()> {
     let confined = confine_patch_paths(git, git_root, paths)?;
-    let mut staged_paths = Vec::new();
+    let mut existing = Vec::new();
     let mut content_filter_paths = Vec::new();
     for path in confined.into_exact_leaves()? {
         let joined = git_root.join(&path);
-        match std::fs::symlink_metadata(&joined) {
-            Ok(metadata) => {
-                let file_type = metadata.file_type();
-                if leaf_is_traversable_directory(file_type) {
-                    return Err(containment_error(
-                        "refusing to recursively stage a directory patch path",
-                    ));
-                }
-                if leaf_may_run_git_content_filter(file_type) {
-                    content_filter_paths.push(path.clone());
-                }
-                staged_paths.push(path);
+        if let Ok(metadata) = std::fs::symlink_metadata(&joined) {
+            let file_type = metadata.file_type();
+            if leaf_is_traversable_directory(file_type) {
+                return Err(containment_error(
+                    "refusing to recursively stage a directory patch path",
+                ));
             }
-            Err(error)
-                if error.kind() == io::ErrorKind::NotFound
-                    && missing_path_policy == MissingPathPolicy::StageTrackedDeletion =>
-            {
-                // A clean reverse of a deletion or rename needs the missing
-                // old endpoint staged as a deletion before direct `git apply
-                // --index -R`. Missing leaves cannot run a content filter.
-                staged_paths.push(path);
+            if leaf_may_run_git_content_filter(file_type) {
+                content_filter_paths.push(path.clone());
             }
-            Err(_) => {}
+            existing.push(path);
         }
     }
-    if staged_paths.is_empty() {
+    if existing.is_empty() {
         return Ok(());
     }
-    let filter_guard =
-        ensure_no_selected_git_add_filters(git, git_root, &content_filter_paths, git_config_args)?;
-    let mut args = vec![
-        "--literal-pathspecs".to_string(),
-        "add".to_string(),
-        "--".to_string(),
-    ];
-    args.extend(staged_paths);
-    let mut guarded_config = git_config_args.to_vec();
-    guarded_config.extend_from_slice(filter_guard.git_config_args());
-    let (_code, _, _) = run_git(git, git_root, &guarded_config, &args)?;
-    // We do not hard fail staging; best-effort is OK. Return Ok even on non-zero.
+    let _result = update_index_exact_paths(
+        git,
+        git_root,
+        &existing,
+        &content_filter_paths,
+        git_config_args,
+    )?;
+    // Preserve the public helper's historical best-effort treatment of a
+    // non-zero staging command. Security and probe failures still propagate.
     Ok(())
 }
 
