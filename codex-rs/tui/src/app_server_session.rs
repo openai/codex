@@ -936,14 +936,20 @@ impl AppServerSession {
             .wrap_err("thread/goal/get failed in TUI")
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn thread_goal_set(
         &mut self,
         thread_id: ThreadId,
         objective: Option<String>,
         status: Option<ThreadGoalStatus>,
+        approval_policy: AskForApproval,
+        approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+        permissions_override: TurnPermissionsOverride,
+        cwd: &std::path::Path,
         token_budget: Option<Option<i64>>,
     ) -> Result<ThreadGoalSetResponse> {
         let request_id = self.next_request_id();
+        let (sandbox_policy, permissions) = turn_permissions_overrides(permissions_override, cwd);
         self.client
             .request_typed(ClientRequest::ThreadGoalSet {
                 request_id,
@@ -951,6 +957,10 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     objective,
                     status,
+                    approval_policy: Some(approval_policy),
+                    approvals_reviewer: Some(approvals_reviewer.into()),
+                    sandbox_policy,
+                    permissions,
                     token_budget,
                 },
             })

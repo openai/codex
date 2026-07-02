@@ -775,7 +775,9 @@ impl From<codex_protocol::protocol::ThreadGoal> for ThreadGoal {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalSetParams {
@@ -784,6 +786,21 @@ pub struct ThreadGoalSetParams {
     pub objective: Option<String>,
     #[ts(optional = nullable)]
     pub status: Option<ThreadGoalStatus>,
+    /// Override the approval policy before a goal continuation can start.
+    #[experimental(nested)]
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed before a goal continuation can start.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Override the sandbox policy before a goal continuation can start.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Select a named permissions profile id before a goal continuation can
+    /// start. Cannot be combined with `sandboxPolicy`.
+    #[experimental("thread/goal/set.permissions")]
+    #[ts(optional = nullable)]
+    pub permissions: Option<String>,
     #[serde(
         default,
         deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option",

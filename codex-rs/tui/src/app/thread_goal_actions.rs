@@ -2,6 +2,7 @@ use super::App;
 use crate::app_event::AppEvent;
 use crate::app_event::ThreadGoalSetMode;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::TurnPermissionsOverride;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -14,6 +15,14 @@ use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
+
+struct GoalPermissionContext {
+    approval_policy: codex_app_server_protocol::AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    permissions_override: TurnPermissionsOverride,
+    cwd: codex_utils_absolute_path::AbsolutePathBuf,
+}
 
 const EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE: &str = concat!(
     "Goals need a saved session. This session is temporary.\n",
@@ -132,6 +141,10 @@ impl App {
         draft: goal_files::GoalDraft,
         mode: ThreadGoalSetMode,
     ) {
+        let Some(permission_context) = self.goal_permission_context(thread_id) else {
+            tracing::debug!(%thread_id, "skipping stale goal update for non-visible thread");
+            return;
+        };
         let codex_home = app_server.codex_home_path(&self.config.codex_home);
         let mode = if matches!(mode, ThreadGoalSetMode::ConfirmIfExists) {
             let result = app_server.thread_goal_get(thread_id).await;
@@ -199,8 +212,27 @@ impl App {
             } => (status, Some(token_budget)),
         };
 
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            cleanup_materialized_goal_files(app_server, output_dir).await;
+            return;
+        }
+        let GoalPermissionContext {
+            approval_policy,
+            approvals_reviewer,
+            permissions_override,
+            cwd,
+        } = permission_context;
         let result = app_server
-            .thread_goal_set(thread_id, Some(objective), Some(status), token_budget)
+            .thread_goal_set(
+                thread_id,
+                Some(objective),
+                Some(status),
+                approval_policy,
+                approvals_reviewer,
+                permissions_override,
+                cwd.as_path(),
+                token_budget,
+            )
             .await;
 
         match result {
@@ -232,11 +264,25 @@ impl App {
         thread_id: ThreadId,
         status: ThreadGoalStatus,
     ) {
+        let Some(GoalPermissionContext {
+            approval_policy,
+            approvals_reviewer,
+            permissions_override,
+            cwd,
+        }) = self.goal_permission_context(thread_id)
+        else {
+            tracing::debug!(%thread_id, "skipping stale goal status update for non-visible thread");
+            return;
+        };
         let result = app_server
             .thread_goal_set(
                 thread_id,
                 /*objective*/ None,
                 Some(status),
+                approval_policy,
+                approvals_reviewer,
+                permissions_override,
+                cwd.as_path(),
                 /*token_budget*/ None,
             )
             .await;
@@ -253,6 +299,28 @@ impl App {
                 .chat_widget
                 .add_error_message(thread_goal_error_message("update", &err)),
         }
+    }
+
+    fn goal_permission_context(&self, thread_id: ThreadId) -> Option<GoalPermissionContext> {
+        if self.current_displayed_thread_id() != Some(thread_id) {
+            return None;
+        }
+
+        let config = self.chat_widget.config_ref();
+        let permissions = &config.permissions;
+        let permissions_override =
+            if let Some(active_permission_profile) = permissions.active_permission_profile() {
+                TurnPermissionsOverride::ActiveProfile(active_permission_profile)
+            } else {
+                TurnPermissionsOverride::LegacySandbox(permissions.effective_permission_profile())
+            };
+
+        Some(GoalPermissionContext {
+            approval_policy: permissions.approval_policy.value().into(),
+            approvals_reviewer: config.approvals_reviewer,
+            permissions_override,
+            cwd: config.cwd.clone(),
+        })
     }
 
     pub(super) async fn clear_thread_goal(
