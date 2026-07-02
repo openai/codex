@@ -123,6 +123,8 @@ use core_test_support::test_codex::TestEnv;
 use core_test_support::test_codex::test_env;
 use tokio::process::Command;
 
+use crate::json_logging::JsonLogCapture;
+
 pub struct TestAppServer {
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
@@ -134,6 +136,7 @@ pub struct TestAppServer {
     stdout: BufReader<ChildStdout>,
     pending_messages: VecDeque<JSONRPCMessage>,
     auto_env: Option<TestEnv>,
+    json_logs: JsonLogCapture,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
@@ -160,6 +163,31 @@ impl TestAppServer {
     /// URL-based configuration, this helper rejects a `codex_home` containing
     /// that file.
     pub async fn new_with_auto_env(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_auto_env_and_env(codex_home, &[]).await
+    }
+
+    /// Starts an auto-environment app server that emits JSON logs.
+    ///
+    /// `rust_log` is the value to use for the `RUST_LOG` environment variable.
+    pub async fn new_with_auto_env_and_json_logging(
+        codex_home: &Path,
+        rust_log: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let rust_log = rust_log.into();
+        Self::new_with_auto_env_and_env(
+            codex_home,
+            &[
+                ("LOG_FORMAT", Some("json")),
+                ("RUST_LOG", Some(rust_log.as_str())),
+            ],
+        )
+        .await
+    }
+
+    async fn new_with_auto_env_and_env(
+        codex_home: &Path,
+        extra_env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
         let environments_toml = codex_home.join("environments.toml");
         ensure!(
             !environments_toml
@@ -172,7 +200,7 @@ impl TestAppServer {
         let auto_env = test_env().await?;
         // Noise registry configuration takes precedence over the URL-based
         // provider, so clear inherited values to keep the selection hermetic.
-        let env_overrides = [
+        let mut env_overrides = vec![
             (
                 CODEX_EXEC_SERVER_URL_ENV_VAR,
                 auto_env.environment().exec_server_url(),
@@ -182,6 +210,7 @@ impl TestAppServer {
             (CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR, None),
             (CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR, None),
         ];
+        env_overrides.extend_from_slice(extra_env_overrides);
         let mut app_server = Self::new_with_env(codex_home, &env_overrides).await?;
         app_server.auto_env = Some(auto_env);
         Ok(app_server)
@@ -200,6 +229,28 @@ impl TestAppServer {
             environment_id: selection.environment_id.clone(),
             cwd: selection.cwd.clone().into(),
         })
+    }
+
+    /// Waits for a JSON stderr event whose structured `event.name` field matches.
+    pub async fn wait_for_json_log_event(
+        &self,
+        event_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.json_logs.wait_for_event(event_name).await
+    }
+
+    /// Waits for the requested number of JSON stderr events with the same `event.name` field.
+    pub async fn wait_for_json_log_events(
+        &self,
+        event_name: &str,
+        count: usize,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        self.json_logs.wait_for_events(event_name, count).await
+    }
+
+    /// Returns every stderr line parsed and validated as a JSON log event.
+    pub fn json_log_events(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        self.json_logs.events()
     }
 
     pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
@@ -322,10 +373,13 @@ impl TestAppServer {
 
         // Forward child's stderr to our stderr so failures are visible even
         // when stdout/stderr are captured by the test harness.
+        let json_logs = JsonLogCapture::default();
         if let Some(stderr) = process.stderr.take() {
+            let json_logs = json_logs.clone();
             let mut stderr_reader = BufReader::new(stderr).lines();
             tokio::spawn(async move {
                 while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    json_logs.record(line.clone());
                     eprintln!("[mcp stderr] {line}");
                 }
             });
@@ -337,6 +391,7 @@ impl TestAppServer {
             stdout,
             pending_messages: VecDeque::new(),
             auto_env: None,
+            json_logs,
         })
     }
 
