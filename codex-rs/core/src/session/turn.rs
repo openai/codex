@@ -65,7 +65,6 @@ use crate::tools::router::extension_tool_executors;
 use crate::tools::spec_plan::search_tool_enabled;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use crate::turn_timing::InferenceTimingResult;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -1904,19 +1903,13 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
-    let provider_info = turn_context.provider.info();
     let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
         turn_context.sub_id.as_str(),
         turn_context.model_info.slug.as_str(),
-        provider_info.name.as_str(),
+        turn_context.provider.info().name.as_str(),
     );
-    let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling(
-        &sess.thread_id,
-        &turn_context.sub_id,
-        &turn_context.model_info.slug,
-        &provider_info.name,
-    );
-    let stream_result = client_session
+    let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
+    let mut stream = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -1929,18 +1922,7 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await;
-    let mut stream = match stream_result {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(err)) => {
-            sampling_timing_guard.finish_inference(InferenceTimingResult::Error);
-            return Err(err);
-        }
-        Err(codex_async_utils::CancelErr::Cancelled) => {
-            sampling_timing_guard.finish_inference(InferenceTimingResult::Cancelled);
-            return Err(CodexErr::TurnAborted);
-        }
-    };
+        .await??;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -2364,11 +2346,7 @@ async fn try_run_sampling_request(
             }
         }
     };
-    sampling_timing_guard.finish_inference(match &outcome {
-        Ok(_) => InferenceTimingResult::Success,
-        Err(CodexErr::TurnAborted) => InferenceTimingResult::Cancelled,
-        Err(_) => InferenceTimingResult::Error,
-    });
+    drop(sampling_timing_guard);
 
     flush_assistant_text_segments_all(
         &sess,

@@ -255,10 +255,6 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
             &[
                 ("mcp_server", "internal-mcp"),
                 ("mcp_server_origin", "stdio"),
-                ("turn_id", "turn-1"),
-                ("tool_source", "code_mode"),
-                ("code_mode_cell_id", "cell-1"),
-                ("code_mode_runtime_tool_call_id", "runtime-call-1"),
             ],
         );
     });
@@ -290,29 +286,6 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
         tool_log_attrs.get("mcp_server_origin").map(String::as_str),
         Some("stdio")
     );
-    assert_eq!(
-        tool_log_attrs.get("turn_id").map(String::as_str),
-        Some("turn-1")
-    );
-    assert_eq!(
-        tool_log_attrs.get("tool_source").map(String::as_str),
-        Some("code_mode")
-    );
-    assert_eq!(
-        tool_log_attrs.get("code_mode_cell_id").map(String::as_str),
-        Some("cell-1")
-    );
-    assert_eq!(
-        tool_log_attrs
-            .get("code_mode_runtime_tool_call_id")
-            .map(String::as_str),
-        Some("runtime-call-1")
-    );
-    assert_eq!(
-        tool_log_attrs.get("duration_ms").map(String::as_str),
-        Some("42")
-    );
-    assert!(tool_log_attrs.contains_key("trace_id"));
 
     let spans = span_exporter.get_finished_spans().expect("span export");
     assert_eq!(spans.len(), 1);

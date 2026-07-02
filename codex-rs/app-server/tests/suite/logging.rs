@@ -47,7 +47,7 @@ fn standalone_app_server_emits_json_info_events() -> Result<()> {
 }
 
 #[tokio::test]
-async fn app_server_emits_structured_tool_timing_events() -> Result<()> {
+async fn app_server_emits_structured_tool_call_timing_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = create_mock_responses_server_sequence(vec![
@@ -70,12 +70,7 @@ async fn app_server_emits_structured_tool_timing_events() -> Result<()> {
         codex_home.path(),
         &[
             ("LOG_FORMAT", Some("json")),
-            (
-                "RUST_LOG",
-                Some(
-                    "warn,codex_core::tools::parallel=info,codex_core::turn_timing=info,codex_otel.log_only=info",
-                ),
-            ),
+            ("RUST_LOG", Some("warn,codex_core::tools::parallel=info")),
         ],
     )
     .await?;
@@ -149,57 +144,6 @@ async fn app_server_emits_structured_tool_timing_events() -> Result<()> {
         (0.0..=1.0).contains(&truncation_delta),
         "dispatch and handler durations must account for total duration within integer truncation: {tool_call}"
     );
-
-    let tool_result = app_server
-        .wait_for_json_log_event("codex.tool_result")
-        .await?;
-    assert_eq!(tool_result["level"], "INFO");
-    assert_eq!(tool_result["target"], "codex_otel.log_only");
-    assert!(tool_result["fields"]["trace_id"].is_string());
-    assert_eq!(tool_result["fields"]["conversation.id"], thread.id);
-    assert_eq!(tool_result["fields"]["turn_id"], turn.id);
-    assert_eq!(tool_result["fields"]["tool_name"], "exec_command");
-    assert_eq!(tool_result["fields"]["call_id"], "exec-call-1");
-    assert_eq!(tool_result["fields"]["tool_source"], "direct");
-    assert!(
-        matches!(
-            tool_result["fields"]["success"].as_str(),
-            Some("true" | "false")
-        ),
-        "success must be a boolean string: {tool_result}"
-    );
-    assert!(
-        tool_result["fields"]["duration_ms"]
-            .as_str()
-            .is_some_and(|duration_ms| duration_ms.parse::<u128>().is_ok()),
-        "duration_ms must retain its pre-existing integer-string schema: {tool_result}"
-    );
-
-    let inferences = app_server
-        .wait_for_json_log_events("codex.inference", /*count*/ 2)
-        .await?;
-    assert_eq!(
-        inferences
-            .iter()
-            .map(|event| event["fields"]["inference_index"].as_u64())
-            .collect::<Vec<_>>(),
-        vec![Some(1), Some(2)]
-    );
-    for inference in inferences {
-        assert_eq!(inference["level"], "INFO");
-        assert_eq!(inference["target"], "codex_core::turn_timing");
-        assert_eq!(inference["fields"]["message"], "inference completed");
-        assert!(inference["fields"]["trace_id"].is_string());
-        assert_eq!(inference["fields"]["conversation.id"], thread.id);
-        assert_eq!(inference["fields"]["turn_id"], turn.id);
-        assert_eq!(inference["fields"]["model"], "mock-model");
-        assert_eq!(
-            inference["fields"]["provider_name"],
-            "Mock provider for test"
-        );
-        assert_eq!(inference["fields"]["result"], "success");
-        assert_nonnegative_duration_fields(&inference, &["duration_ms"]);
-    }
 
     Ok(())
 }
