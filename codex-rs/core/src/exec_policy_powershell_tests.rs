@@ -83,7 +83,7 @@ async fn rejects_every_noninspectable_or_untrusted_powershell_state() {
                     })
                     .await;
 
-                assert_eq!(
+                pretty_assertions::assert_eq!(
                     requirement,
                     ExecApprovalRequirement::Forbidden {
                         reason: format!("`{rendered}` rejected: {reason}"),
