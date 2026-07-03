@@ -380,6 +380,103 @@ async fn outer_authority_tracks_permission_deltas_and_missing_managed_sandbox() 
     }
 }
 
+#[tokio::test]
+async fn namespace_literal_alias_with_equivalent_host_mapping_requires_approval() {
+    let requirement = exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
+        policy_src: Some(
+            r#"
+prefix_rule(pattern = ["git.exe."], decision = "allow")
+host_executable(name = "git", paths = ["C:\\trusted\\git.exe"])
+"#
+            .to_string(),
+        ),
+        command: vec![
+            r"\\?\C:\attacker\git.exe.".to_string(),
+            "status".to_string(),
+        ],
+        approval_policy: AskForApproval::UnlessTrusted,
+        permission_profile: PermissionProfile::Disabled,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        prefix_rule: None,
+    })
+    .await;
+
+    assert!(
+        matches!(&requirement, ExecApprovalRequirement::NeedsApproval { .. }),
+        "namespace executable outside the mapped paths must require approval: {requirement:?}"
+    );
+}
+
+#[tokio::test]
+async fn mapped_namespace_literal_restrictions_apply_to_direct_and_inner_commands() {
+    for (kind, command) in [
+        (
+            "direct",
+            vec![
+                r"\\?\C:\attacker\git.exe.".to_string(),
+                "status".to_string(),
+            ],
+        ),
+        (
+            "PowerShell inner",
+            powershell_command(r"\\?\C:\attacker\git.exe. status"),
+        ),
+    ] {
+        let rendered = render_shlex_command(&command);
+
+        assert_eq!(
+            windows_requirement(
+                String::new(),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::Disabled,
+                WindowsSandboxLevel::Disabled,
+                SandboxPermissions::UseDefault,
+            )
+            .await,
+            skip_outer(&command, false),
+            "unmatched {kind} command must take the allow fallback",
+        );
+
+        for (wire_decision, expected) in [
+            (
+                "prompt",
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!("`{rendered}` requires approval by policy")),
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            (
+                "forbidden",
+                ExecApprovalRequirement::Forbidden {
+                    reason: format!(
+                        "`{rendered}` rejected: policy forbids commands starting with `git.exe.`"
+                    ),
+                },
+            ),
+        ] {
+            assert_eq!(
+                windows_requirement(
+                    format!(
+                        r#"
+prefix_rule(pattern = ["git.exe."], decision = "{wire_decision}")
+host_executable(name = "git", paths = ["C:\\trusted\\git.exe"])
+"#
+                    ),
+                    &command,
+                    AskForApproval::OnRequest,
+                    PermissionProfile::Disabled,
+                    WindowsSandboxLevel::Disabled,
+                    SandboxPermissions::UseDefault,
+                )
+                .await,
+                expected,
+                "{kind}/{wire_decision}",
+            );
+        }
+    }
+}
+
 #[test]
 fn commands_for_exec_policy_keeps_bare_powershell_alias_opaque() {
     let command = vec![
