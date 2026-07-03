@@ -252,6 +252,8 @@ mod tests {
     #[cfg(windows)]
     use super::PowerShellExecPolicyParse;
     #[cfg(windows)]
+    use super::PowerShellExecPolicyParseOutcome;
+    #[cfg(windows)]
     use super::PowerShellFlavor;
     use super::UTF8_OUTPUT_PREFIX;
     use super::extract_powershell_command;

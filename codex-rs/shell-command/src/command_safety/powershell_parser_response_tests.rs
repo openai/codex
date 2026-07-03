@@ -82,11 +82,13 @@ fn framed_protocol_rejects_malformed_command_payloads() {
 fn framed_protocol_bounds_lines_and_distinguishes_outcomes() {
     let mut complete = std::io::Cursor::new(b"1\tunsupported\t\n".as_slice());
     assert_eq!(
-        read_bounded_response_line(&mut complete, 32).unwrap(),
+        read_bounded_response_line(&mut complete, /*max_bytes*/ 32).unwrap(),
         "1\tunsupported\t\n"
     );
     for bytes in [b"123456789\n".as_slice(), b"unterminated".as_slice()] {
-        assert!(read_bounded_response_line(&mut std::io::Cursor::new(bytes), 8).is_err());
+        assert!(
+            read_bounded_response_line(&mut std::io::Cursor::new(bytes), /*max_bytes*/ 8,).is_err()
+        );
     }
 
     for (status, commands, expected) in [
