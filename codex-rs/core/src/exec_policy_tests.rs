@@ -39,6 +39,10 @@ use toml::Value as TomlValue;
 #[path = "exec_policy_windows_tests.rs"]
 mod windows_tests;
 
+#[cfg(windows)]
+#[path = "exec_policy_powershell_tests.rs"]
+mod powershell_tests;
+
 fn config_stack_for_dot_codex_folder(dot_codex_folder: &Path) -> ConfigLayerStack {
     let dot_codex_folder =
         AbsolutePathBuf::from_absolute_path(dot_codex_folder).expect("absolute dot_codex_folder");
@@ -2007,12 +2011,13 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
     ])));
     let (pwsh_approval_reason, expected_req) = if cfg!(windows) {
         (
-            r#"On Windows, SandboxPolicy::ReadOnly should be assumed to mean
-                that no sandbox is present, so anything that is not "provably
-                safe" should require approval."#,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: expected_amendment.clone(),
+            "On Windows, an untrusted PowerShell wrapper that cannot be inspected is rejected.",
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{}` rejected: an untrusted PowerShell wrapper could not be inspected with \
+                     the protected system parser",
+                    render_shlex_command(&sneaky_command)
+                ),
             },
         )
     } else {

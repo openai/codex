@@ -9,8 +9,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-#[cfg(windows)]
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -109,7 +107,7 @@ fn enable_unified_exec(config: &mut codex_core::config::Config) {
 
 #[cfg(windows)]
 #[tokio::test]
-async fn unified_exec_workspace_powershell_path_requires_approval_before_execution() -> Result<()> {
+async fn unified_exec_workspace_powershell_path_is_rejected_before_execution() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(enable_unified_exec);
     let test = builder.build(&server).await?;
@@ -122,7 +120,7 @@ async fn unified_exec_workspace_powershell_path_requires_approval_before_executi
         .expect("the test workspace path must be valid UTF-8")
         .to_string();
 
-    let call_id = "unified-exec-workspace-powershell-requires-approval";
+    let call_id = "unified-exec-workspace-powershell-rejected";
     let args = json!({
         "shell": fake_powershell.clone(),
         "cmd": "Get-Location",
@@ -137,7 +135,7 @@ async fn unified_exec_workspace_powershell_path_requires_approval_before_executi
         ]),
     )
     .await;
-    mount_sse_once(
+    let results_mock = mount_sse_once(
         &server,
         sse(vec![
             ev_assistant_message("msg-workspace-powershell-1", "done"),
@@ -164,22 +162,20 @@ async fn unified_exec_workspace_powershell_path_requires_approval_before_executi
         )
     })
     .await;
-    let EventMsg::ExecApprovalRequest(approval) = event else {
-        panic!("workspace PowerShell must request approval before execution, got {event:?}");
-    };
-    assert_eq!(approval.command.first(), Some(&fake_powershell));
+    assert!(
+        matches!(event, EventMsg::TurnComplete(_)),
+        "workspace PowerShell must be rejected before approval or execution, got {event:?}"
+    );
 
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::Denied,
-        })
-        .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("the PowerShell runtime is not a protected system executable"),
+        "unexpected output: {output}"
+    );
 
     Ok(())
 }
