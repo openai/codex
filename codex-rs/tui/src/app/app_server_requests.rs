@@ -852,7 +852,12 @@ mod tests {
     #[test]
     fn resolves_exec_approval_through_app_server_request_id() {
         let mut pending = PendingAppServerRequests::default();
-        let request = exec_request(THREAD_1, 41, "call-1", Some("approval-1"));
+        let request = exec_request(
+            THREAD_1,
+            /*request_id*/ 41,
+            "call-1",
+            Some("approval-1"),
+        );
 
         assert_eq!(pending.note_server_request(&request), None);
 
@@ -878,12 +883,22 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
 
         assert_eq!(
-            pending.note_server_request(&exec_request(THREAD_1, 41, "call-1", Some("approval-1"),)),
+            pending.note_server_request(&exec_request(
+                THREAD_1,
+                /*request_id*/ 41,
+                "call-1",
+                Some("approval-1"),
+            )),
             None
         );
         assert!(
             pending
-                .note_server_request(&exec_request(THREAD_1, 42, "call-2", Some("approval-1"),))
+                .note_server_request(&exec_request(
+                    THREAD_1,
+                    /*request_id*/ 42,
+                    "call-2",
+                    Some("approval-1"),
+                ))
                 .is_some()
         );
 
@@ -1097,7 +1112,7 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
 
         assert_eq!(
-            pending.note_server_request(&mcp_request(THREAD_1, 12)),
+            pending.note_server_request(&mcp_request(THREAD_1, /*request_id*/ 12)),
             None
         );
 
@@ -1171,7 +1186,9 @@ mod tests {
     fn resolves_patch_approval_through_app_server_request_id() {
         let mut pending = PendingAppServerRequests::default();
         assert_eq!(
-            pending.note_server_request(&file_change_request(THREAD_1, 13, "patch-1")),
+            pending.note_server_request(&file_change_request(
+                THREAD_1, /*request_id*/ 13, "patch-1",
+            )),
             None
         );
 
@@ -1195,7 +1212,12 @@ mod tests {
     fn resolve_notification_returns_resolved_exec_request() {
         let mut pending = PendingAppServerRequests::default();
         assert_eq!(
-            pending.note_server_request(&exec_request(THREAD_1, 41, "call-1", Some("approval-1"),)),
+            pending.note_server_request(&exec_request(
+                THREAD_1,
+                /*request_id*/ 41,
+                "call-1",
+                Some("approval-1"),
+            )),
             None
         );
 
@@ -1217,7 +1239,7 @@ mod tests {
     fn resolve_notification_returns_resolved_mcp_request() {
         let mut pending = PendingAppServerRequests::default();
         assert_eq!(
-            pending.note_server_request(&mcp_request(THREAD_1, 12)),
+            pending.note_server_request(&mcp_request(THREAD_1, /*request_id*/ 12)),
             None
         );
 
@@ -1234,7 +1256,9 @@ mod tests {
     #[test]
     fn resolve_notification_returns_resolved_user_input_item_id() {
         let mut pending = PendingAppServerRequests::default();
-        pending.note_server_request(&user_input_request(THREAD_1, 8, "turn-1", "tool-1"));
+        pending.note_server_request(&user_input_request(
+            THREAD_1, /*request_id*/ 8, "turn-1", "tool-1",
+        ));
 
         assert_eq!(
             pending.resolve_notification(thread_id(THREAD_1), &AppServerRequestId::Integer(8)),
@@ -1290,16 +1314,36 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
 
         for request in [
-            exec_request(THREAD_1, 1, "implicit-exec", /*approval_id*/ None),
-            exec_request(THREAD_2, 2, "implicit-exec", /*approval_id*/ None),
-            exec_request(THREAD_1, 3, "exec-1", Some("explicit-exec")),
-            exec_request(THREAD_2, 4, "exec-2", Some("explicit-exec")),
-            file_change_request(THREAD_1, 5, "patch"),
-            file_change_request(THREAD_2, 6, "patch"),
-            permissions_request(THREAD_1, 7, "permissions"),
-            permissions_request(THREAD_2, 8, "permissions"),
-            user_input_request(THREAD_1, 9, "turn", "input"),
-            user_input_request(THREAD_2, 10, "turn", "input"),
+            exec_request(
+                THREAD_1,
+                /*request_id*/ 1,
+                "implicit-exec",
+                /*approval_id*/ None,
+            ),
+            exec_request(
+                THREAD_2,
+                /*request_id*/ 2,
+                "implicit-exec",
+                /*approval_id*/ None,
+            ),
+            exec_request(
+                THREAD_1,
+                /*request_id*/ 3,
+                "exec-1",
+                Some("explicit-exec"),
+            ),
+            exec_request(
+                THREAD_2,
+                /*request_id*/ 4,
+                "exec-2",
+                Some("explicit-exec"),
+            ),
+            file_change_request(THREAD_1, /*request_id*/ 5, "patch"),
+            file_change_request(THREAD_2, /*request_id*/ 6, "patch"),
+            permissions_request(THREAD_1, /*request_id*/ 7, "permissions"),
+            permissions_request(THREAD_2, /*request_id*/ 8, "permissions"),
+            user_input_request(THREAD_1, /*request_id*/ 9, "turn", "input"),
+            user_input_request(THREAD_2, /*request_id*/ 10, "turn", "input"),
         ] {
             assert_eq!(pending.note_server_request(&request), None);
         }
@@ -1349,11 +1393,21 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
         let request_id = AppServerRequestId::Integer(41);
         assert_eq!(
-            pending.note_server_request(&exec_request(THREAD_1, 41, "call", Some("approval"),)),
+            pending.note_server_request(&exec_request(
+                THREAD_1,
+                /*request_id*/ 41,
+                "call",
+                Some("approval"),
+            )),
             None
         );
         assert_eq!(
-            pending.note_server_request(&exec_request(THREAD_2, 41, "call", Some("approval"),)),
+            pending.note_server_request(&exec_request(
+                THREAD_2,
+                /*request_id*/ 41,
+                "call",
+                Some("approval"),
+            )),
             None
         );
 
@@ -1376,12 +1430,12 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
         let cases = [
             (
-                file_change_request(THREAD_1, 1, "patch"),
-                file_change_request(THREAD_1, 2, "patch"),
+                file_change_request(THREAD_1, /*request_id*/ 1, "patch"),
+                file_change_request(THREAD_1, /*request_id*/ 2, "patch"),
             ),
             (
-                permissions_request(THREAD_1, 3, "permissions"),
-                permissions_request(THREAD_1, 4, "permissions"),
+                permissions_request(THREAD_1, /*request_id*/ 3, "permissions"),
+                permissions_request(THREAD_1, /*request_id*/ 4, "permissions"),
             ),
         ];
         for (original, duplicate) in cases {
@@ -1395,10 +1449,10 @@ mod tests {
     #[test]
     fn duplicate_user_input_item_is_rejected_within_thread_and_turn_only() {
         let mut pending = PendingAppServerRequests::default();
-        let original = user_input_request(THREAD_1, 1, "turn-1", "input");
-        let duplicate = user_input_request(THREAD_1, 2, "turn-1", "input");
-        let other_turn = user_input_request(THREAD_1, 3, "turn-2", "input");
-        let other_thread = user_input_request(THREAD_2, 4, "turn-1", "input");
+        let original = user_input_request(THREAD_1, /*request_id*/ 1, "turn-1", "input");
+        let duplicate = user_input_request(THREAD_1, /*request_id*/ 2, "turn-1", "input");
+        let other_turn = user_input_request(THREAD_1, /*request_id*/ 3, "turn-2", "input");
+        let other_thread = user_input_request(THREAD_2, /*request_id*/ 4, "turn-1", "input");
 
         assert_eq!(pending.note_server_request(&original), None);
         assert!(pending.note_server_request(&duplicate).is_some());
@@ -1426,8 +1480,18 @@ mod tests {
         let cases = [
             (
                 "implicit exec approval",
-                exec_request(THREAD_1, 1, "implicit-exec", /* approval_id */ None),
-                exec_request(THREAD_1, 2, "implicit-exec", /* approval_id */ None),
+                exec_request(
+                    THREAD_1,
+                    /*request_id*/ 1,
+                    "implicit-exec",
+                    /*approval_id*/ None,
+                ),
+                exec_request(
+                    THREAD_1,
+                    /*request_id*/ 2,
+                    "implicit-exec",
+                    /*approval_id*/ None,
+                ),
                 Op::ExecApproval {
                     id: "implicit-exec".to_string(),
                     turn_id: None,
@@ -1436,8 +1500,18 @@ mod tests {
             ),
             (
                 "explicit exec approval",
-                exec_request(THREAD_1, 1, "exec-a", Some("explicit-exec")),
-                exec_request(THREAD_1, 2, "exec-b", Some("explicit-exec")),
+                exec_request(
+                    THREAD_1,
+                    /*request_id*/ 1,
+                    "exec-a",
+                    Some("explicit-exec"),
+                ),
+                exec_request(
+                    THREAD_1,
+                    /*request_id*/ 2,
+                    "exec-b",
+                    Some("explicit-exec"),
+                ),
                 Op::ExecApproval {
                     id: "explicit-exec".to_string(),
                     turn_id: None,
@@ -1446,8 +1520,8 @@ mod tests {
             ),
             (
                 "file change approval",
-                file_change_request(THREAD_1, 1, "patch"),
-                file_change_request(THREAD_1, 2, "patch"),
+                file_change_request(THREAD_1, /*request_id*/ 1, "patch"),
+                file_change_request(THREAD_1, /*request_id*/ 2, "patch"),
                 Op::PatchApproval {
                     id: "patch".to_string(),
                     decision: FileChangeApprovalDecision::Accept,
@@ -1455,8 +1529,8 @@ mod tests {
             ),
             (
                 "permissions approval",
-                permissions_request(THREAD_1, 1, "permissions"),
-                permissions_request(THREAD_1, 2, "permissions"),
+                permissions_request(THREAD_1, /*request_id*/ 1, "permissions"),
+                permissions_request(THREAD_1, /*request_id*/ 2, "permissions"),
                 Op::RequestPermissionsResponse {
                     id: "permissions".to_string(),
                     response: permissions_response(),
@@ -1464,8 +1538,8 @@ mod tests {
             ),
             (
                 "user input",
-                user_input_request(THREAD_1, 1, "turn", "input"),
-                user_input_request(THREAD_1, 2, "turn", "input"),
+                user_input_request(THREAD_1, /*request_id*/ 1, "turn", "input"),
+                user_input_request(THREAD_1, /*request_id*/ 2, "turn", "input"),
                 Op::UserInputAnswer {
                     id: "turn".to_string(),
                     response: empty_user_input_response(),
@@ -1591,8 +1665,8 @@ mod tests {
     #[test]
     fn equal_user_input_item_ids_across_turns_resolve_independently() {
         let mut pending = PendingAppServerRequests::default();
-        let first = user_input_request(THREAD_1, 8, "turn-1", "input");
-        let second = user_input_request(THREAD_1, 9, "turn-2", "input");
+        let first = user_input_request(THREAD_1, /*request_id*/ 8, "turn-1", "input");
+        let second = user_input_request(THREAD_1, /*request_id*/ 9, "turn-2", "input");
 
         assert_eq!(pending.note_server_request(&first), None);
         assert_eq!(pending.note_server_request(&second), None);
@@ -1618,8 +1692,13 @@ mod tests {
     #[test]
     fn invalid_thread_id_is_rejected_before_pending_state_changes() {
         let mut pending = PendingAppServerRequests::default();
-        let invalid = exec_request("not-a-thread-id", 1, "call", Some("approval"));
-        let valid = exec_request(THREAD_1, 2, "call", Some("approval"));
+        let invalid = exec_request(
+            "not-a-thread-id",
+            /*request_id*/ 1,
+            "call",
+            Some("approval"),
+        );
+        let valid = exec_request(THREAD_1, /*request_id*/ 2, "call", Some("approval"));
 
         let unsupported = pending
             .note_server_request(&invalid)
