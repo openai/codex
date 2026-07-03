@@ -967,7 +967,7 @@ impl ExecPolicyManager {
                         matched_prefix,
                         decision: Decision::Allow,
                         ..
-                    } if matched_prefix.len() == outer.len()
+                    } if matched_prefix.as_slice() == outer
                 )
             })
         });
@@ -1263,7 +1263,7 @@ fn create_untrusted_wrapper_approval_requirement(
                             matched_prefix,
                             decision: Decision::Allow,
                             ..
-                        } if matched_prefix.len() == candidate.argv.len()
+                        } if matched_prefix.as_slice() == candidate.argv
                     )
                 });
         every_candidate_explicit_allow &= raw_full_outer_allow;
@@ -1281,7 +1281,6 @@ fn create_untrusted_wrapper_approval_requirement(
             .unwrap_or(Decision::Forbidden),
         matched_rules,
     };
-
     // Preserve configured-shell compatibility for a directly authored exact
     // allow of an opaque nested shell argv (for example, `/bin/sh script`).
     // This exception is unavailable to a locally model-resolved outer runtime,
@@ -1328,15 +1327,13 @@ fn create_untrusted_wrapper_approval_requirement(
         evaluation.decision = Decision::Prompt;
     }
 
-    let permission_or_backend_gate = permission_delta_requires_outer_authority(
+    let requires_composed_authority = untrusted_composition_requires_full_authority(
         context.permission_profile,
         context.sandbox_permissions,
-    ) || missing_managed_windows_sandbox_backend(
-        context.permission_profile,
         context.windows_sandbox_level,
     );
     if evaluation.decision != Decision::Forbidden
-        && permission_or_backend_gate
+        && requires_composed_authority
         && !composed_full_authority
     {
         evaluation
@@ -1742,6 +1739,24 @@ fn permission_delta_requires_outer_authority(
         }
         (_, SandboxPermissions::UseDefault) => false,
     }
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn untrusted_composition_requires_full_authority(
+    permission_profile: &PermissionProfile,
+    sandbox_permissions: SandboxPermissions,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> bool {
+    let lacks_filesystem_containment = match permission_profile {
+        PermissionProfile::Disabled => true,
+        PermissionProfile::Managed { .. } => {
+            !profile_has_managed_filesystem_restrictions(permission_profile)
+        }
+        PermissionProfile::External { .. } => false,
+    };
+    lacks_filesystem_containment
+        || permission_delta_requires_outer_authority(permission_profile, sandbox_permissions)
+        || missing_managed_windows_sandbox_backend(permission_profile, windows_sandbox_level)
 }
 
 fn missing_managed_windows_sandbox_backend(

@@ -361,7 +361,7 @@ impl Policy {
                     .host_executables_by_name
                     .contains_key(&normalized_basename)
             {
-                return Vec::new();
+                return self.match_restrictive_basename_rules(cmd);
             }
         }
         let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {

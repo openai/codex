@@ -20,6 +20,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::GranularApprovalConfig;
@@ -36,6 +37,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -2162,6 +2164,117 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         scenario.name, result.exit_code, result.stdout
     );
     scenario.expectation.verify(&test, &result)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn sandbox_retry_uses_fresh_callback_identity_and_one_shot_decisions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("enable unified exec");
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+        })
+        .build(&server)
+        .await?;
+
+    let call_id = "sandbox-retry-callback-identity";
+    let target = test.cwd.path().join("sandbox-retry-callback-identity.txt");
+    let _ = fs::remove_file(&target);
+    let command = format!("touch {target:?}");
+    let event = exec_command_event(
+        call_id,
+        &command,
+        /*yield_time_ms*/ Some(30_000),
+        SandboxPermissions::UseDefault,
+        /*justification*/ None,
+    )?;
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-sandbox-retry-1"),
+                event,
+                ev_completed("resp-sandbox-retry-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-sandbox-retry-1", "done"),
+                ev_completed("resp-sandbox-retry-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "retry the sandbox-denied write",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    let approval_id = approval
+        .approval_id
+        .clone()
+        .unwrap_or_else(|| panic!("sandbox retry must carry a callback ID: {approval:?}"));
+    assert_eq!(approval.call_id, call_id);
+    assert_ne!(approval_id, call_id);
+    assert_eq!(
+        approval.approval_purpose,
+        Some(ExecApprovalPurpose::SandboxRetry)
+    );
+    assert_eq!(
+        approval.effective_available_decisions(),
+        vec![ReviewDecision::Approved, ReviewDecision::Abort]
+    );
+    assert_eq!(
+        approval.reason.as_deref(),
+        Some("command failed; retry without sandbox?")
+    );
+    assert!(
+        !target.exists(),
+        "sandbox-denied write must not complete before retry approval"
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval_id,
+            turn_id: Some(approval.turn_id),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let output_item = responses.requests()[1].function_call_output(call_id);
+    let result = parse_result(&output_item);
+    assert_eq!(result.exit_code, Some(0), "approved retry must succeed");
+    assert!(
+        target.exists(),
+        "approved retry must create the target file"
+    );
+    fs::remove_file(target)?;
 
     Ok(())
 }

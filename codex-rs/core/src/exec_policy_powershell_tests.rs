@@ -553,7 +553,7 @@ fn untrusted_permission_and_windows_backend_gates_require_composed_authority() {
             PermissionProfile::Disabled,
             WSL::Disabled,
             SP::RequireEscalated,
-            false,
+            true,
         ),
         (
             "external default",
@@ -608,6 +608,158 @@ fn untrusted_permission_and_windows_backend_gates_require_composed_authority() {
             "composed authority should cover {level:?} and {permissions:?}",
         );
     }
+}
+
+#[test]
+fn untrusted_without_filesystem_containment_requires_complete_composed_authority() {
+    let outer = untrusted_powershell_command("Get-Location");
+    let inner = vec_str(&["Get-Location"]);
+    let partial_policy = format!(
+        "{}\n{}",
+        prefix_rule_for(&outer[..1], "allow"),
+        prefix_rule_for(&inner, "allow")
+    );
+    let full_policy = format!(
+        "{}\n{}",
+        prefix_rule_for(&outer, "allow"),
+        prefix_rule_for(&inner, "allow")
+    );
+    let disabled = PermissionProfile::Disabled;
+
+    for (name, approval_policy, expected) in [
+        (
+            "on request",
+            AskForApproval::OnRequest,
+            one_shot(/*reason*/ None),
+        ),
+        (
+            "unless trusted",
+            AskForApproval::UnlessTrusted,
+            one_shot(/*reason*/ None),
+        ),
+        (
+            "never",
+            AskForApproval::Never,
+            ExecApprovalRequirement::Forbidden {
+                reason: PROMPT_CONFLICT_REASON.to_string(),
+            },
+        ),
+        (
+            "granular sandbox approval disabled",
+            granular(/*rules*/ false, /*sandbox_approval*/ false),
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            "granular sandbox approval enabled",
+            granular(/*rules*/ false, /*sandbox_approval*/ true),
+            one_shot(/*reason*/ None),
+        ),
+    ] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&partial_policy),
+                &outer,
+                std::slice::from_ref(&inner),
+                approval_policy,
+                &disabled,
+                WindowsSandboxLevel::Disabled,
+                SandboxPermissions::UseDefault,
+            ),
+            expected,
+            "{name}",
+        );
+    }
+
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&prefix_rule_for(&outer, "allow")),
+            &outer,
+            std::slice::from_ref(&inner),
+            AskForApproval::OnRequest,
+            &disabled,
+            WindowsSandboxLevel::Disabled,
+            SandboxPermissions::UseDefault,
+        ),
+        one_shot(/*reason*/ None),
+        "a heuristic-safe inner command is not explicit authority without a sandbox",
+    );
+
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&full_policy),
+            &outer,
+            std::slice::from_ref(&inner),
+            AskForApproval::OnRequest,
+            &disabled,
+            WindowsSandboxLevel::Disabled,
+            SandboxPermissions::UseDefault,
+        ),
+        untrusted_skip(/*bypass_sandbox*/ true),
+        "complete composed authority remains sufficient without a sandbox",
+    );
+
+    let managed_unrestricted = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::unrestricted(),
+        NetworkSandboxPolicy::Enabled,
+    );
+    let managed_full_disk_write = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]),
+        NetworkSandboxPolicy::Enabled,
+    );
+    for (name, profile) in [
+        ("managed unrestricted", managed_unrestricted),
+        ("managed full-disk write", managed_full_disk_write),
+    ] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&partial_policy),
+                &outer,
+                std::slice::from_ref(&inner),
+                AskForApproval::OnRequest,
+                &profile,
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            ),
+            one_shot(/*reason*/ None),
+            "partial authority must prompt for {name}",
+        );
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&full_policy),
+                &outer,
+                std::slice::from_ref(&inner),
+                AskForApproval::OnRequest,
+                &profile,
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            ),
+            untrusted_skip(/*bypass_sandbox*/ true),
+            "complete authority remains sufficient for {name}",
+        );
+    }
+
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&partial_policy),
+            &outer,
+            std::slice::from_ref(&inner),
+            AskForApproval::OnRequest,
+            &PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            },
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::UseDefault,
+        ),
+        untrusted_skip(/*bypass_sandbox*/ false),
+        "an externally enforced sandbox keeps existing partial-authority behavior",
+    );
 }
 
 #[test]

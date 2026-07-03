@@ -1715,6 +1715,76 @@ async fn configured_delegators_without_rules_preserve_legacy_sandboxed_behavior(
 }
 
 #[tokio::test]
+async fn posix_wrappers_require_complete_authority_without_filesystem_containment() {
+    let inner = vec_str(&["echo", "hello"]);
+    let model_command = vec![
+        host_program_path("zsh"),
+        "-lc".to_string(),
+        shlex_try_join(inner.iter().map(String::as_str)).expect("quote inner command"),
+    ];
+    let full_inner_allow = prefix_rule_for(&inner, "allow");
+    let full_model_outer_allow = prefix_rule_for(&model_command, "allow");
+    let nested_wrapper = vec![
+        posix_script_program_path("sh"),
+        "-c".to_string(),
+        shlex_try_join(inner.iter().map(String::as_str)).expect("quote nested body"),
+    ];
+    let configured_command = vec![
+        host_program_path("zsh"),
+        "-lc".to_string(),
+        shlex_try_join(nested_wrapper.iter().map(String::as_str)).expect("quote nested wrapper"),
+    ];
+    let full_nested_wrapper_allow = prefix_rule_for(&nested_wrapper, "allow");
+
+    for (name, provenance, command, partial_policy, full_policy) in [
+        (
+            "local model-resolved wrapper",
+            ShellApprovalProvenance::local_model_resolved(),
+            model_command,
+            full_model_outer_allow.clone(),
+            format!("{full_model_outer_allow}\n{full_inner_allow}"),
+        ),
+        (
+            "configured nested wrapper",
+            ShellApprovalProvenance::configured(),
+            configured_command,
+            full_nested_wrapper_allow.clone(),
+            format!("{full_nested_wrapper_allow}\n{full_inner_allow}"),
+        ),
+    ] {
+        assert_eq!(
+            requirement_with_provenance(
+                Some(&partial_policy),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::Disabled,
+                SandboxPermissions::UseDefault,
+                provenance,
+            )
+            .await,
+            ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+            "partial authority must prompt for {name}",
+        );
+        assert_eq!(
+            requirement_with_provenance(
+                Some(&full_policy),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::Disabled,
+                SandboxPermissions::UseDefault,
+                provenance,
+            )
+            .await,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+            "complete authority remains sufficient for {name}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn configured_exact_allow_can_authorize_an_opaque_nested_shell_only() {
     let inner = vec![
         posix_script_program_path("sh"),

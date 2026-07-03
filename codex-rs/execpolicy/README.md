@@ -43,7 +43,7 @@ host_executable(
   - With host-executable resolution enabled, if no exact rule matches, execpolicy may fall back from `/usr/bin/git` to basename rules for `git`.
   - If `host_executable(name="git", ...)` exists, basename fallback is only allowed for listed absolute paths.
   - If no `host_executable()` entry exists for a basename, basename fallback is allowed.
-  - Windows verbatim/device namespace paths cannot be listed by `host_executable`; use an ordinary absolute spelling or an exact prefix rule. If either a namespace command's literal basename or its ordinary normalized alias has host-executable metadata, the namespace spelling does not inherit basename rules. With no corresponding metadata, its literal basename rule may still match. Exact full-path rules always retain their authored decision.
+  - Windows verbatim/device namespace paths cannot be listed by `host_executable`; use an ordinary absolute spelling or an exact prefix rule. If either a namespace command's literal basename or its ordinary normalized alias has host-executable metadata, basename `allow` is filtered while basename `prompt` and `forbidden` remain in force without a `resolvedProgram`. With no corresponding metadata, its literal basename rule may still match with its authored decision. Exact full-path rules always retain their authored decision.
   - The library's restrictive basename overlay is separate from ordinary fallback: it ignores host-executable path lists for `prompt` and `forbidden`, but always discards basename `allow`.
 
 ## CLI
