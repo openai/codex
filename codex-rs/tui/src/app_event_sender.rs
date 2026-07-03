@@ -221,7 +221,7 @@ mod tests {
 
         sender.exec_approval(
             thread_id(),
-            None,
+            /*request_id*/ None,
             "approval".to_string(),
             CommandExecutionApprovalDecision::Accept,
         );

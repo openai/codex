@@ -1813,11 +1813,11 @@ mod tests {
         );
         overlay.try_consume_user_input_request(
             request_event("turn-2", vec![question_with_options("q2", "Second")]),
-            None,
+            /*identity*/ None,
         );
         overlay.try_consume_user_input_request(
             request_event("turn-3", vec![question_with_options("q3", "Third")]),
-            None,
+            /*identity*/ None,
         );
 
         overlay.submit_answers();
@@ -1908,7 +1908,7 @@ mod tests {
                 questions: vec![question_with_options("q2", "Second")],
                 auto_resolution_ms: None,
             },
-            None,
+            /*identity*/ None,
         );
         overlay.try_consume_user_input_request(
             ToolRequestUserInputParams {
@@ -1918,7 +1918,7 @@ mod tests {
                 questions: vec![question_with_options("q3", "Third")],
                 auto_resolution_ms: None,
             },
-            None,
+            /*identity*/ None,
         );
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -2150,7 +2150,7 @@ mod tests {
                 "turn-2",
                 vec![question_with_options("q2", "Second")],
             ),
-            None,
+            /*identity*/ None,
         );
         let now = Instant::now();
         let total_timeout = AUTO_RESOLUTION_HIDDEN_GRACE + AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
