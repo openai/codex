@@ -1,9 +1,10 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::command_safety::PowershellParseOutcome;
 use crate::command_safety::TrustedPowerShellFlavor;
 use crate::command_safety::is_trusted_powershell_parser_executable;
+use crate::command_safety::parse_powershell_ast_commands_with_trusted_flavor;
 use crate::command_safety::try_parse_powershell_ast_commands;
-use crate::command_safety::try_parse_powershell_ast_commands_with_trusted_flavor;
 
 const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
 
@@ -90,9 +91,23 @@ pub enum PowerShellFlavor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PowerShellExecPolicyParse {
     /// The runtime wrapper is the same protected executable used for parsing.
-    TrustedRuntime { commands: Option<Vec<Vec<String>>> },
+    TrustedRuntime {
+        outcome: PowerShellExecPolicyParseOutcome,
+    },
     /// A protected parser inspected the body, but the runtime wrapper remains untrusted.
-    UntrustedRuntime { commands: Option<Vec<Vec<String>>> },
+    UntrustedRuntime {
+        outcome: PowerShellExecPolicyParseOutcome,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PowerShellExecPolicyParseOutcome {
+    /// The protected parser safely lowered the script into argv-like commands.
+    Commands(Vec<Vec<String>>),
+    /// The script or wrapper is valid but outside the safe lowering subset.
+    Unsupported,
+    /// The protected parser could not return an authoritative result.
+    Failed,
 }
 
 /// Inspects a PowerShell wrapper without spawning its model-selected runtime.
@@ -101,12 +116,13 @@ pub fn parse_powershell_command_for_exec_policy(
 ) -> Option<PowerShellExecPolicyParse> {
     let executable = command.first()?;
     let flavor = powershell_flavor_for_executable(executable)?;
-    let commands = extract_powershell_command(command)
-        .and_then(|(_, script)| parse_powershell_script_with_trusted_parser(flavor, script));
+    let outcome = extract_powershell_command(command)
+        .map(|(_, script)| parse_powershell_script_with_trusted_parser_outcome(flavor, script))
+        .unwrap_or(PowerShellExecPolicyParseOutcome::Unsupported);
     if is_trusted_powershell_parser_executable(executable) {
-        Some(PowerShellExecPolicyParse::TrustedRuntime { commands })
+        Some(PowerShellExecPolicyParse::TrustedRuntime { outcome })
     } else {
-        Some(PowerShellExecPolicyParse::UntrustedRuntime { commands })
+        Some(PowerShellExecPolicyParse::UntrustedRuntime { outcome })
     }
 }
 
@@ -139,11 +155,28 @@ pub fn parse_powershell_script_with_trusted_parser(
     flavor: PowerShellFlavor,
     script: &str,
 ) -> Option<Vec<Vec<String>>> {
+    match parse_powershell_script_with_trusted_parser_outcome(flavor, script) {
+        PowerShellExecPolicyParseOutcome::Commands(commands) => Some(commands),
+        PowerShellExecPolicyParseOutcome::Unsupported
+        | PowerShellExecPolicyParseOutcome::Failed => None,
+    }
+}
+
+fn parse_powershell_script_with_trusted_parser_outcome(
+    flavor: PowerShellFlavor,
+    script: &str,
+) -> PowerShellExecPolicyParseOutcome {
     let trusted_flavor = match flavor {
         PowerShellFlavor::WindowsPowerShell => TrustedPowerShellFlavor::WindowsPowerShell,
         PowerShellFlavor::PowerShell7 => TrustedPowerShellFlavor::PowerShell7,
     };
-    try_parse_powershell_ast_commands_with_trusted_flavor(trusted_flavor, script)
+    match parse_powershell_ast_commands_with_trusted_flavor(trusted_flavor, script) {
+        PowershellParseOutcome::Commands(commands) => {
+            PowerShellExecPolicyParseOutcome::Commands(commands)
+        }
+        PowershellParseOutcome::Unsupported => PowerShellExecPolicyParseOutcome::Unsupported,
+        PowershellParseOutcome::Failed => PowerShellExecPolicyParseOutcome::Failed,
+    }
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
@@ -397,7 +430,10 @@ mod tests {
             Some(PowerShellFlavor::PowerShell7)
         );
         let trusted = trusted_windows_powershell_executable();
-        let parsed = Some(vec![vec!["echo".to_string(), "classified".to_string()]]);
+        let parsed = PowerShellExecPolicyParseOutcome::Commands(vec![vec![
+            "echo".to_string(),
+            "classified".to_string(),
+        ]]);
         let cases = [
             (trusted, true),
             ("powershell.exe".to_string(), false),
@@ -420,11 +456,11 @@ mod tests {
             ]);
             let expected = if trusted {
                 PowerShellExecPolicyParse::TrustedRuntime {
-                    commands: parsed.clone(),
+                    outcome: parsed.clone(),
                 }
             } else {
                 PowerShellExecPolicyParse::UntrustedRuntime {
-                    commands: parsed.clone(),
+                    outcome: parsed.clone(),
                 }
             };
             assert_eq!(result, Some(expected), "runtime {executable:?}");
@@ -445,7 +481,9 @@ mod tests {
                     "-Command".to_string(),
                     "echo launchable".to_string(),
                 ]),
-                Some(PowerShellExecPolicyParse::UntrustedRuntime { commands: Some(_) })
+                Some(PowerShellExecPolicyParse::UntrustedRuntime {
+                    outcome: PowerShellExecPolicyParseOutcome::Commands(_)
+                })
             ));
         }
     }
@@ -464,18 +502,24 @@ mod tests {
                     &trusted_windows_powershell_executable(),
                     &["-Command", "param([string]$path) echo blocked"],
                 ),
-                PowerShellExecPolicyParse::TrustedRuntime { commands: None },
+                PowerShellExecPolicyParse::TrustedRuntime {
+                    outcome: PowerShellExecPolicyParseOutcome::Unsupported,
+                },
             ),
             (
                 command(
                     "powershell.exe",
                     &["-NonInteractive", "-Command", "echo blocked"],
                 ),
-                PowerShellExecPolicyParse::UntrustedRuntime { commands: None },
+                PowerShellExecPolicyParse::UntrustedRuntime {
+                    outcome: PowerShellExecPolicyParseOutcome::Unsupported,
+                },
             ),
             (
                 command("powershell.exe", &["-Command", "echo blocked", "trailing"]),
-                PowerShellExecPolicyParse::UntrustedRuntime { commands: None },
+                PowerShellExecPolicyParse::UntrustedRuntime {
+                    outcome: PowerShellExecPolicyParseOutcome::Unsupported,
+                },
             ),
         ];
 

