@@ -111,7 +111,9 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
-    /// Lists persisted items within a stored thread, optionally filtered to a turn.
+    /// Lists persisted items within a stored thread, optionally filtered to a turn or update
+    /// interval. Implementations must return [`ThreadStoreError::Unsupported`] rather than ignore
+    /// timestamp bounds they cannot apply.
     fn list_items(&self, _params: ListItemsParams) -> ThreadStoreFuture<'_, ItemPage> {
         Box::pin(async {
             Err(ThreadStoreError::Unsupported {
