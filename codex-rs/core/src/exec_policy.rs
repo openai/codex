@@ -403,7 +403,7 @@ impl ExecPolicyManager {
                         matched_prefix,
                         decision: Decision::Allow,
                         ..
-                    } if matched_prefix.len() == outer.len()
+                    } if matched_prefix.as_slice() == outer
                 )
             })
         });

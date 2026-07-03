@@ -1126,13 +1126,13 @@ host_executable(name = "git", paths = ["{}"])
 
 #[cfg(windows)]
 #[test]
-fn namespace_literal_aliases_do_not_bypass_equivalent_host_mapping() -> Result<()> {
+fn mapped_namespace_literal_aliases_filter_allow_and_preserve_restrictions() -> Result<()> {
     let options = MatchOptions {
         resolve_host_executables: true,
     };
 
     for executable_suffix in [".exe", ".cmd", ".bat", ".com"] {
-        for literal_tail in [".", " ", "...", "   ", ". . ", "..  . "] {
+        for literal_tail in ["", ".", " ", "...", "   ", ". . ", "..  . "] {
             let mixed_case = executable_suffix == ".com" && literal_tail == "..  . ";
             let raw_stem = if mixed_case { "GiT" } else { "git" };
             let raw_suffix = if mixed_case {
@@ -1144,7 +1144,7 @@ fn namespace_literal_aliases_do_not_bypass_equivalent_host_mapping() -> Result<(
             let literal_rule_key = raw_literal_name.to_ascii_lowercase();
             let ordinary_name = format!("git{executable_suffix}");
             let trusted_path = format!(r"C:\trusted\{ordinary_name}");
-            let mapping_sources = [
+            let mut mapping_sources = vec![
                 format!(
                     r#"host_executable(name = "git", paths = ["{}"] )"#,
                     starlark_string(&trusted_path)
@@ -1156,6 +1156,8 @@ fn namespace_literal_aliases_do_not_bypass_equivalent_host_mapping() -> Result<(
                 format!(r#"host_executable(name = "{literal_rule_key}", paths = [])"#),
                 format!(r#"host_executable(name = "{raw_literal_name}", paths = [])"#),
             ];
+            mapping_sources.sort();
+            mapping_sources.dedup();
             let namespace_paths = [
                 format!(r"\\?\C:\attacker\{raw_literal_name}"),
                 format!(r"\\?\UNC\server\share\{raw_literal_name}"),
@@ -1164,23 +1166,38 @@ fn namespace_literal_aliases_do_not_bypass_equivalent_host_mapping() -> Result<(
             ];
 
             for mapping_source in mapping_sources {
-                let policy = parse_policy(&format!(
-                    r#"
-prefix_rule(pattern = ["{literal_rule_key}"], decision = "allow")
+                for (wire_decision, decision) in [
+                    ("allow", Decision::Allow),
+                    ("prompt", Decision::Prompt),
+                    ("forbidden", Decision::Forbidden),
+                ] {
+                    let policy = parse_policy(&format!(
+                        r#"
+prefix_rule(pattern = ["{literal_rule_key}"], decision = "{wire_decision}")
 {mapping_source}
 "#
-                ))?;
-                for executable in &namespace_paths {
-                    assert!(
-                        policy
-                            .matches_for_command_with_options(
+                    ))?;
+                    for executable in &namespace_paths {
+                        let expected = if decision == Decision::Allow {
+                            Vec::new()
+                        } else {
+                            vec![RuleMatch::PrefixRuleMatch {
+                                matched_prefix: vec![literal_rule_key.clone()],
+                                decision,
+                                resolved_program: None,
+                                justification: None,
+                            }]
+                        };
+                        assert_eq!(
+                            policy.matches_for_command_with_options(
                                 &[executable.clone(), "status".to_string()],
                                 None,
                                 &options,
-                            )
-                            .is_empty(),
-                        "suffix={executable_suffix:?} tail={literal_tail:?} mapping={mapping_source:?} executable={executable:?}"
-                    );
+                            ),
+                            expected,
+                            "suffix={executable_suffix:?} tail={literal_tail:?} decision={wire_decision:?} mapping={mapping_source:?} executable={executable:?}"
+                        );
+                    }
                 }
             }
         }
