@@ -43,6 +43,7 @@ fn configure_multi_agent_v2(config: &mut Config) {
         .expect("test config should allow feature update");
 }
 
+// Configuring a custom mode hint also enables multi-agent V2 for the test.
 fn configure_custom_mode_hint(config: &mut Config) {
     configure_multi_agent_v2(config);
     config.multi_agent_v2.multi_agent_mode_hint_text = Some(CUSTOM_MODE_HINT_TEXT.to_string());
