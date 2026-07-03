@@ -695,6 +695,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
                 decision: Decision::Forbidden,
                 resolved_program: None,
                 justification: None,
+                reviewer: None,
             }],
         }
     );

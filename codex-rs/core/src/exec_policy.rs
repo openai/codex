@@ -17,9 +17,11 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
+use codex_execpolicy::RuleReviewer;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
@@ -331,12 +333,17 @@ impl ExecPolicyManager {
                 let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
                     is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt
                 });
+                let reviewer = evaluation.prompt_reviewer().map(|reviewer| match reviewer {
+                    RuleReviewer::User => ApprovalsReviewer::User,
+                    RuleReviewer::AutoReview => ApprovalsReviewer::AutoReview,
+                });
                 match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
                     Some(reason) => ExecApprovalRequirement::Forbidden {
                         reason: reason.to_string(),
                     },
                     None => ExecApprovalRequirement::NeedsApproval {
-                        reason: derive_prompt_reason(command, &evaluation),
+                        reason: derive_prompt_reason(command, &evaluation, reviewer),
+                        reviewer,
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
                             if auto_amendment_allowed {
                                 try_derive_execpolicy_amendment_for_prompt_rules(
@@ -913,8 +920,17 @@ fn prefix_rule_would_approve_all_commands(
 }
 
 /// Only return a reason when a policy rule drove the prompt decision.
-fn derive_prompt_reason(command_args: &[String], evaluation: &Evaluation) -> Option<String> {
+fn derive_prompt_reason(
+    command_args: &[String],
+    evaluation: &Evaluation,
+    reviewer: Option<ApprovalsReviewer>,
+) -> Option<String> {
     let command = render_shlex_command(command_args);
+    let approval_description = match reviewer {
+        Some(ApprovalsReviewer::User) => "requires human approval",
+        Some(ApprovalsReviewer::AutoReview) => "requires automatic approval review",
+        None => "requires approval",
+    };
 
     let most_specific_prompt = evaluation
         .matched_rules
@@ -931,11 +947,11 @@ fn derive_prompt_reason(command_args: &[String], evaluation: &Evaluation) -> Opt
         .max_by_key(|(matched_prefix_len, _)| *matched_prefix_len);
 
     match most_specific_prompt {
-        Some((_matched_prefix_len, Some(justification))) => {
-            Some(format!("`{command}` requires approval: {justification}"))
-        }
+        Some((_matched_prefix_len, Some(justification))) => Some(format!(
+            "`{command}` {approval_description}: {justification}"
+        )),
         Some((_matched_prefix_len, None)) => {
-            Some(format!("`{command}` requires approval by policy"))
+            Some(format!("`{command}` {approval_description} by policy"))
         }
         None => None,
     }

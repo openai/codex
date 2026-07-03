@@ -195,6 +195,7 @@ async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
+            reviewer: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(inner_command)),
         },
     )

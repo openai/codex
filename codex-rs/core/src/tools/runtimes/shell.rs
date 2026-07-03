@@ -180,6 +180,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         command,
                         cwd,
                         reason,
+                        ctx.approvals_reviewer,
                         ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()

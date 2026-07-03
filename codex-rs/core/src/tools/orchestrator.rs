@@ -6,10 +6,13 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::guardian::allowed_approval_reviewer_override;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
+use crate::guardian::reason_for_allowed_approval_reviewer_override;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::flat_tool_name;
@@ -31,6 +34,7 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::unsandboxed_execution_allowed;
 use codex_hooks::PermissionRequestDecision;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -146,7 +150,6 @@ impl ToolOrchestrator {
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
         let strict_auto_review = tool_ctx.session.strict_auto_review_enabled_for_turn().await;
-        let use_guardian = routes_approval_to_guardian(turn_ctx) || strict_auto_review;
 
         // 1) Approval
         let mut already_approved = false;
@@ -156,9 +159,17 @@ impl ToolOrchestrator {
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
+        let requested_reviewer = requirement.reviewer();
+        let reviewer = allowed_approval_reviewer_override(turn_ctx, requested_reviewer);
+        let strict_auto_review_for_request =
+            strict_auto_review && reviewer != Some(ApprovalsReviewer::User);
+        let use_guardian = reviewer.map_or_else(
+            || routes_approval_to_guardian(turn_ctx) || strict_auto_review_for_request,
+            |reviewer| routes_approval_to_guardian_with_reviewer(turn_ctx, reviewer),
+        );
         match &requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                if strict_auto_review {
+                if strict_auto_review_for_request {
                     let guardian_review_id = Some(new_guardian_review_id());
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
@@ -166,6 +177,7 @@ impl ToolOrchestrator {
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: None,
+                        approvals_reviewer: reviewer,
                         network_approval_context: None,
                     };
                     let decision = Self::request_approval(
@@ -194,13 +206,19 @@ impl ToolOrchestrator {
                 return Err(ToolError::Rejected(reason.clone()));
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+                let reason = reason_for_allowed_approval_reviewer_override(
+                    reason.clone(),
+                    requested_reviewer,
+                    reviewer,
+                );
                 let guardian_review_id = use_guardian.then(new_guardian_review_id);
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
                     guardian_review_id: guardian_review_id.clone(),
-                    retry_reason: reason.clone(),
+                    retry_reason: reason,
+                    approvals_reviewer: reviewer,
                     network_approval_context: None,
                 };
                 let decision = Self::request_approval(
@@ -209,7 +227,7 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                    /*evaluate_permission_request_hooks*/ !strict_auto_review_for_request,
                     &otel,
                 )
                 .await?;
@@ -386,7 +404,7 @@ impl ToolOrchestrator {
 
                 // Strict auto-review approval covers the sandboxed attempt only;
                 // retrying without the sandbox requires a fresh guardian review.
-                let bypass_retry_approval = !strict_auto_review
+                let bypass_retry_approval = !strict_auto_review_for_request
                     && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
@@ -397,6 +415,7 @@ impl ToolOrchestrator {
                         call_id: &tool_ctx.call_id,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
+                        approvals_reviewer: reviewer,
                         network_approval_context: network_approval_context.clone(),
                     };
 
@@ -407,7 +426,8 @@ impl ToolOrchestrator {
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                        /*evaluate_permission_request_hooks*/
+                        !strict_auto_review_for_request,
                         &otel,
                     )
                     .await?;

@@ -11,6 +11,16 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+/// Selects who should review an approval request produced by a prompt rule.
+///
+/// Rules without an explicit reviewer inherit the caller's configured reviewer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleReviewer {
+    User,
+    AutoReview,
+}
+
 /// Matches a single command token, either a fixed string or one of several allowed alternatives.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PatternToken {
@@ -74,6 +84,9 @@ pub enum RuleMatch {
         /// (e.g., prompt reasons or rejection messages).
         #[serde(skip_serializing_if = "Option::is_none")]
         justification: Option<String>,
+        /// Optional reviewer override for prompt rules.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reviewer: Option<RuleReviewer>,
     },
     HeuristicsRuleMatch {
         command: Vec<String>,
@@ -95,12 +108,14 @@ impl RuleMatch {
                 matched_prefix,
                 decision,
                 justification,
+                reviewer,
                 ..
             } => Self::PrefixRuleMatch {
                 matched_prefix,
                 decision,
                 resolved_program: Some(resolved_program.clone()),
                 justification,
+                reviewer,
             },
             other => other,
         }
@@ -112,6 +127,7 @@ pub struct PrefixRule {
     pub pattern: PrefixPattern,
     pub decision: Decision,
     pub justification: Option<String>,
+    pub reviewer: Option<RuleReviewer>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,6 +250,7 @@ impl Rule for PrefixRule {
                 decision: self.decision,
                 resolved_program: None,
                 justification: self.justification.clone(),
+                reviewer: self.reviewer,
             })
     }
 

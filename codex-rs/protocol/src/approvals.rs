@@ -1,3 +1,4 @@
+use crate::config_types::ApprovalsReviewer;
 use crate::mcp::RequestId;
 use crate::models::AdditionalPermissionProfile;
 use crate::models::PermissionProfile;
@@ -248,6 +249,12 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional reviewer selected by the matched exec-policy rule.
+    ///
+    /// When absent, clients should use the active turn-level reviewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     /// Optional network context for a blocked request that can be approved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

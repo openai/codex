@@ -1225,6 +1225,39 @@ async fn routes_approval_to_guardian_can_use_app_reviewer_override() {
 }
 
 #[tokio::test]
+async fn exec_policy_reviewer_override_respects_managed_reviewer_requirements() {
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    let requirements = codex_config::ConfigRequirements {
+        approvals_reviewer: codex_config::ConstrainedWithSource::new(
+            Constrained::allow_only(ApprovalsReviewer::User),
+            /*source*/ None,
+        ),
+        ..Default::default()
+    };
+    config.config_layer_stack = ConfigLayerStack::new(Vec::new(), requirements, Default::default())
+        .expect("config layer stack");
+    turn.config = Arc::new(config);
+
+    assert_eq!(
+        allowed_approval_reviewer_override(&turn, Some(ApprovalsReviewer::AutoReview)),
+        None
+    );
+    assert_eq!(
+        allowed_approval_reviewer_override(&turn, Some(ApprovalsReviewer::User)),
+        Some(ApprovalsReviewer::User)
+    );
+    assert_eq!(
+        reason_for_allowed_approval_reviewer_override(
+            Some("`rm` requires human approval by policy".to_string()),
+            Some(ApprovalsReviewer::User),
+            None,
+        ),
+        Some("`rm` requires approval by policy".to_string())
+    );
+}
+
+#[tokio::test]
 async fn routes_approval_to_guardian_allows_granular_review_policy() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();

@@ -283,12 +283,12 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
 }
 
 #[tokio::test]
-async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_for_reply() {
+async fn handle_exec_approval_routes_explicit_auto_review_to_guardian() {
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.approvals_reviewer = ApprovalsReviewer::User;
     parent_ctx.config = Arc::new(config);
     parent_ctx
         .approval_policy
@@ -328,6 +328,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                     command: vec!["rm".to_string(), "-rf".to_string(), "tmp".to_string()],
                     cwd: test_path_buf("/tmp").abs(),
                     reason: Some("unsafe subcommand".to_string()),
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                     network_approval_context: None,
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
@@ -392,6 +393,111 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             id: "callback-approval-1".to_string(),
             turn_id: Some("child-turn-1".to_string()),
             decision: ReviewDecision::Abort,
+        }
+    );
+}
+
+#[tokio::test]
+async fn handle_exec_approval_routes_explicit_user_reviewer_to_parent_prompt() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    parent_ctx.config = Arc::new(config);
+    parent_ctx
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        async move {
+            handle_exec_approval(
+                codex.as_ref(),
+                "child-turn-user".to_string(),
+                &parent_session,
+                &parent_ctx,
+                ExecApprovalRequestEvent {
+                    call_id: "command-item-user".to_string(),
+                    approval_id: Some("callback-approval-user".to_string()),
+                    turn_id: "child-turn-user".to_string(),
+                    environment_id: Some("remote".to_string()),
+                    started_at_ms: 0,
+                    command: vec!["git".to_string(), "push".to_string()],
+                    cwd: test_path_buf("/tmp").abs(),
+                    reason: Some("requires human approval by policy".to_string()),
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    additional_permissions: None,
+                    available_decisions: Some(vec![
+                        ReviewDecision::Approved,
+                        ReviewDecision::Abort,
+                    ]),
+                    parsed_cmd: Vec::new(),
+                },
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = rx_events.recv().await.expect("approval request event");
+            match event.msg {
+                EventMsg::ExecApprovalRequest(request) => return request,
+                EventMsg::GuardianAssessment(_) => {
+                    panic!("user reviewer override should not route to guardian")
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for parent approval prompt");
+    assert_eq!(request.approvals_reviewer, Some(ApprovalsReviewer::User));
+    assert_eq!(
+        request.reason.as_deref(),
+        Some("requires human approval by policy")
+    );
+
+    parent_session
+        .notify_approval("callback-approval-user", ReviewDecision::Approved)
+        .await;
+    timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("handle_exec_approval hung")
+        .expect("handle_exec_approval join error");
+
+    let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        .await
+        .expect("exec approval response timed out")
+        .expect("exec approval response missing");
+    assert_eq!(
+        submission.op,
+        Op::ExecApproval {
+            id: "callback-approval-user".to_string(),
+            turn_id: Some("child-turn-user".to_string()),
+            decision: ReviewDecision::Approved,
         }
     );
 }

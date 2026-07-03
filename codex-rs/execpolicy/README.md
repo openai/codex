@@ -2,9 +2,11 @@
 
 ## Overview
 
-- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, justification?, match?, not_match?)` plus `host_executable(name=..., paths=[...])`.
+- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, reviewer?, justification?, match?, not_match?)` plus `host_executable(name=..., paths=[...])`.
 - This release covers the prefix-rule subset of the execpolicy language plus host executable metadata; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
+- `reviewer` is an optional reviewer override for `decision = "prompt"` rules. Valid values are `user` and `auto_review`; rules without it inherit the caller's configured reviewer. It is rejected for `allow` and `forbidden` rules.
+- Managed `allowed_approvals_reviewers` constraints still apply; a disallowed rule override is ignored and the configured reviewer is inherited.
 - `justification` is an optional human-readable rationale for why a rule exists. It can be provided for any `decision` and may be surfaced in different contexts (for example, in approval prompts or rejection messages). When `decision = "forbidden"` is used, include a recommended alternative in the `justification`, when appropriate (e.g., ``"Use `jj` instead of `git`."``).
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
 - The CLI always prints the JSON serialization of the evaluation result.
@@ -18,6 +20,7 @@
 prefix_rule(
     pattern = ["cmd", ["alt1", "alt2"]], # ordered tokens; list entries denote alternatives
     decision = "prompt",                 # allow | prompt | forbidden; defaults to allow
+    reviewer = "user",                   # user | auto_review; prompt rules only
     justification = "explain why this rule exists",
     match = [["cmd", "alt1"], "cmd alt2"],           # examples that must match this rule
     not_match = [["cmd", "oops"], "cmd alt3"],       # examples that must not match this rule
@@ -82,7 +85,8 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
         "matchedPrefix": ["<token>", "..."],
         "decision": "allow|prompt|forbidden",
         "resolvedProgram": "/absolute/path/to/program",
-        "justification": "..."
+        "justification": "...",
+        "reviewer": "user|auto_review"
       }
     }
   ],
@@ -93,6 +97,8 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
 - When no rules match, `matchedRules` is an empty array and `decision` is omitted.
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
 - `resolvedProgram` is omitted unless an absolute executable path matched via basename fallback.
+- `reviewer` is omitted unless a matching prompt rule explicitly overrides the caller's configured reviewer.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
+- For matching prompt rules that specify different reviewers, `user` takes precedence over `auto_review`.
 
 Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.

@@ -3571,6 +3571,7 @@ prefix_rules = [
                         any_of: None,
                     }],
                     decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                    reviewer: None,
                     justification: None,
                 }],
             }
@@ -3600,6 +3601,7 @@ prefix_rules = [
                             any_of: None,
                         }],
                         decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                        reviewer: None,
                         justification: None,
                     },
                     RequirementsExecPolicyPrefixRuleToml {
@@ -3614,6 +3616,7 @@ prefix_rules = [
                             },
                         ],
                         decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
+                        reviewer: None,
                         justification: Some("review changes before push or commit".to_string()),
                     },
                 ],
@@ -3643,6 +3646,7 @@ prefix_rules = [
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
@@ -3669,6 +3673,7 @@ prefix_rules = [
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
@@ -3681,6 +3686,7 @@ prefix_rules = [
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
@@ -3765,6 +3771,7 @@ prefix_rules = []
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
@@ -3804,6 +3811,7 @@ prefix_rules = []
                     decision: Decision::Forbidden,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
@@ -3819,6 +3827,7 @@ prefix_rules = []
                     decision: Decision::Prompt,
                     resolved_program: None,
                     justification: None,
+                    reviewer: None,
                 }],
             }
         );
