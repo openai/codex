@@ -1,4 +1,4 @@
-name: Copybara Internal To Public Check
+name: Verify internal PR does not break public CI
 
 on:
   pull_request: {}
@@ -7,13 +7,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: public-projection-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-test:
-    name: Internal to public projection build-test
+  prepare_projection:
+    name: Prepare public projection
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,6 +28,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
       - name: Install Copybara
         id: copybara
@@ -42,38 +47,139 @@ jobs:
             --force-author="github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
             --force-message="Validate public projection"
 
-      - name: Verify codex-rs Cargo manifests inherit workspace settings
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: python3 .github/scripts/verify_cargo_workspace_manifests.py
-
-      - name: Verify codex-tui does not import codex-core directly
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: python3 .github/scripts/verify_tui_core_boundary.py
-
-      - name: Verify Bazel clippy flags match Cargo workspace lints
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: python3 .github/scripts/verify_bazel_clippy_lints.py
-
-      - name: Install just
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+      - name: Checkout sanitized public lockfiles
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          tool: just@1.51.0
+          ref: copybara-no-internal-references
+          persist-credentials: false
+          path: public-lockfile-baseline
+          sparse-checkout: |
+            codex-rs/Cargo.lock
+            MODULE.bazel.lock
+          sparse-checkout-cone-mode: false
 
-      - name: Check rusty_v8 MODULE.bazel checksums
+      - name: Restore public lockfiles and reconcile Cargo
         working-directory: ${{ runner.temp }}/codex-public-projection
+        env:
+          PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-projection
         run: |
-          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
-          just test-github-scripts
+          set -euo pipefail
+
+          cp \
+            "${GITHUB_WORKSPACE}/public-lockfile-baseline/codex-rs/Cargo.lock" \
+            "${PUBLIC_PROJECTION}/codex-rs/Cargo.lock"
+          cp \
+            "${GITHUB_WORKSPACE}/public-lockfile-baseline/MODULE.bazel.lock" \
+            "${PUBLIC_PROJECTION}/MODULE.bazel.lock"
+
+          reject_internal_dependency_references() {
+            if rg --line-number --ignore-case \
+              --glob Cargo.lock \
+              --glob Cargo.toml \
+              --glob MODULE.bazel.lock \
+              'codex[-_]internal|github\.com/openai/codex-internal' \
+              "${PUBLIC_PROJECTION}"; then
+              echo "Public dependency metadata contains an internal reference." >&2
+              exit 1
+            fi
+          }
+
+          cargo_metadata=(
+            cargo metadata
+            --format-version 1
+            --manifest-path "${PUBLIC_PROJECTION}/codex-rs/Cargo.toml"
+          )
+
+          reject_internal_dependency_references
+          "${cargo_metadata[@]}" >/dev/null
+          "${cargo_metadata[@]}" --locked >/dev/null
+          reject_internal_dependency_references
 
       - name: Prepare Bazel CI
         id: prepare_bazel
         uses: ./.github/actions/prepare-bazel-ci
         with:
           target: x86_64-unknown-linux-gnu
-          cache-scope: public-projection-bazel-${{ github.job }}
+          cache-scope: public-projection-bazel-lock
+
+      - name: Reconcile and verify MODULE.bazel.lock
+        working-directory: ${{ runner.temp }}/codex-public-projection
+        run: |
+          bazel mod deps --lockfile_mode=update
+          ./scripts/check-module-bazel-lock.sh
+          if rg --line-number --ignore-case \
+            'codex[-_]internal|github\.com/openai/codex-internal' \
+            MODULE.bazel.lock; then
+            echo "Public dependency metadata contains an internal reference." >&2
+            exit 1
+          fi
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
+      - name: Archive public projection
+        env:
+          PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-projection
+        run: tar -czf "${RUNNER_TEMP}/public-projection.tgz" -C "${PUBLIC_PROJECTION}" .
+
+      - name: Upload public projection
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: public-projection
+          path: ${{ runner.temp }}/public-projection.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  bazel:
+    name: Public projection Bazel tests
+    needs: prepare_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: bazel
+      deployment: false
+    steps:
+      # Keep the internal checkout solely for the local Bazel setup action and
+      # its cache key. Every command under test runs in the downloaded public
+      # projection.
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Download public projection
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: public-projection
+          path: ${{ runner.temp }}/public-projection-artifact
+
+      - name: Extract public projection
+        run: |
+          mkdir -p "${RUNNER_TEMP}/codex-public-projection"
+          tar -xzf "${RUNNER_TEMP}/public-projection-artifact/public-projection.tgz" \
+            -C "${RUNNER_TEMP}/codex-public-projection"
+
+      - name: Set up Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          cache-scope: public-projection-bazel-build-test
           install-test-prereqs: "true"
 
-      - name: Check MODULE.bazel.lock is up to date
+      - name: Verify MODULE.bazel.lock
         working-directory: ${{ runner.temp }}/codex-public-projection
         run: ./scripts/check-module-bazel-lock.sh
 
@@ -129,9 +235,87 @@ jobs:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
 
+  repo_checks:
+    name: Public projection repository checks
+    needs: prepare_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download public projection
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: public-projection
+          path: ${{ runner.temp }}/public-projection-artifact
+
+      - name: Extract public projection
+        run: tar -xzf "${RUNNER_TEMP}/public-projection-artifact/public-projection.tgz" -C "${GITHUB_WORKSPACE}"
+
+      # format.py enumerates the repository through git ls-files. Recreate only
+      # the index it needs; the projection artifact deliberately has no source
+      # or internal Git history.
+      - name: Initialize projected Git index
+        run: |
+          git init --initial-branch=main
+          git add --all --force
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Install just
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Verify codex-rs Cargo manifests inherit workspace settings
+        run: python3 .github/scripts/verify_cargo_workspace_manifests.py
+
+      - name: Verify codex-tui does not import codex-core directly
+        run: python3 .github/scripts/verify_tui_core_boundary.py
+
+      - name: Verify Bazel clippy flags match Cargo workspace lints
+        run: python3 .github/scripts/verify_bazel_clippy_lints.py
+
+      - name: Check rusty_v8 MODULE.bazel checksums
+        run: |
+          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
+          just test-github-scripts
+
       - name: Test Codex package builder
-        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
+
+      - name: Ensure root README.md contains only ASCII and certain Unicode code points
+        run: ./scripts/asciicheck.py README.md
+
+      - name: Check root README ToC
+        run: python3 scripts/readme_toc.py README.md
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
+
+      - name: Check formatting (run `just fmt` to fix)
+        run: just fmt-check
+
+  node_checks:
+    name: Public projection Node and package checks
+    needs: prepare_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Download public projection
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: public-projection
+          path: ${{ runner.temp }}/public-projection-artifact
+
+      - name: Extract public projection
+        run: tar -xzf "${RUNNER_TEMP}/public-projection-artifact/public-projection.tgz" -C "${GITHUB_WORKSPACE}"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
@@ -144,11 +328,9 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        working-directory: ${{ runner.temp }}/codex-public-projection
         run: pnpm install --frozen-lockfile
 
       - name: Stage npm package
-        working-directory: ${{ runner.temp }}/codex-public-projection
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -162,23 +344,30 @@ jobs:
             --package codex \
             --output-dir "$OUTPUT_DIR"
 
-      - name: Ensure root README.md contains only ASCII and certain Unicode code points
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: ./scripts/asciicheck.py README.md
-
-      - name: Check root README ToC
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: python3 scripts/readme_toc.py README.md
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.3"
-
-      - name: Check formatting (run `just fmt` to fix)
-        working-directory: ${{ runner.temp }}/codex-public-projection
-        run: just fmt-check
-
       - name: Prettier (run `pnpm run format:fix` to fix)
-        working-directory: ${{ runner.temp }}/codex-public-projection
         run: pnpm run format
+
+  build-test:
+    name: Internal to public projection build-test
+    needs:
+      - bazel
+      - repo_checks
+      - node_checks
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every public projection check to pass
+        env:
+          BAZEL_RESULT: ${{ needs.bazel.result }}
+          REPO_CHECKS_RESULT: ${{ needs.repo_checks.result }}
+          NODE_CHECKS_RESULT: ${{ needs.node_checks.result }}
+        run: |
+          if [[ "${BAZEL_RESULT}" != success || \
+                "${REPO_CHECKS_RESULT}" != success || \
+                "${NODE_CHECKS_RESULT}" != success ]]; then
+            echo "Bazel: ${BAZEL_RESULT}" >&2
+            echo "Repository checks: ${REPO_CHECKS_RESULT}" >&2
+            echo "Node checks: ${NODE_CHECKS_RESULT}" >&2
+            exit 1
+          fi

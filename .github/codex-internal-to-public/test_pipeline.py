@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import call
+from unittest.mock import patch
 
 import pipeline
 
@@ -59,6 +61,10 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertEqual(
                 git_output(fixture.repo, "show", f"{ready}:codex-rs/Cargo.lock"),
                 cargo_lockfile().strip(),
+            )
+            self.assertEqual(
+                git_output(fixture.repo, "show", f"{ready}:MODULE.bazel.lock"),
+                bazel_lockfile().strip(),
             )
             self.assertFalse(git_path_exists(fixture.repo, ready, pipeline.GITHUB_DIR))
             self.assertEqual(
@@ -377,6 +383,30 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertIn("a Slack URL", result.stderr)
 
 
+class PipelineLockfileTest(unittest.TestCase):
+    def test_reconcile_bazel_lockfile_updates_then_verifies(self) -> None:
+        candidate_tree = Path("/candidate")
+
+        with patch.object(pipeline, "run") as run:
+            pipeline.reconcile_bazel_lockfile(candidate_tree)
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    ["bazel", "mod", "deps", "--lockfile_mode=update"],
+                    cwd=candidate_tree,
+                    capture=True,
+                ),
+                call(
+                    ["bazel", "mod", "deps", "--lockfile_mode=error"],
+                    cwd=candidate_tree,
+                    capture=True,
+                ),
+            ],
+        )
+
+
 def create_repository_fixture(
     root: Path,
     *,
@@ -401,6 +431,9 @@ def create_repository_fixture(
     workflow.write_text("name: Internal staging\n", encoding="utf-8")
     public_github_file = repo / ".github/workflows/public-ci.yml"
     public_github_file.write_text("name: Public CI\n", encoding="utf-8")
+    (repo / pipeline.BAZEL_LOCKFILE).write_text(
+        "internal candidate lockfile\n", encoding="utf-8"
+    )
     (repo / "public.txt").write_text(candidate_content, encoding="utf-8")
     for relative_path, content in (additional_candidate_files or {}).items():
         path = repo / relative_path
@@ -475,6 +508,7 @@ def create_base_repository(root: Path) -> tuple[Path, str]:
     source.parent.mkdir()
     source.write_text("pub fn fixture() {}\n", encoding="utf-8")
     (repo / pipeline.CARGO_LOCKFILE).write_text(cargo_lockfile(), encoding="utf-8")
+    (repo / pipeline.BAZEL_LOCKFILE).write_text(bazel_lockfile(), encoding="utf-8")
     (repo / "public.txt").write_text("baseline\n", encoding="utf-8")
     return repo, commit_all(repo, "Public baseline")
 
@@ -490,6 +524,10 @@ def cargo_lockfile() -> str:
     )
 
 
+def bazel_lockfile() -> str:
+    return '{"lockFileVersion": 21}\n'
+
+
 def run_pipeline(
     repo: Path,
     runner_temp: Path,
@@ -498,11 +536,17 @@ def run_pipeline(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    fake_bin = runner_temp / "fake-bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_bazel = fake_bin / "bazel"
+    fake_bazel.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_bazel.chmod(0o755)
     return subprocess.run(
         [sys.executable, PIPELINE_SCRIPT.as_posix(), command],
         cwd=repo,
         env={
             **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "RUNNER_TEMP": runner_temp.as_posix(),
             **(env or {}),
         },

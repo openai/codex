@@ -1,3 +1,5 @@
+# Keep the internal-to-public filtering below synchronized with Copyberry's
+# codex-internal-no-internal-code/push/copy.bara.sky configuration.
 INTERNAL_ONLY_FILES = [
     ".copybara/**",
     ".github/internal/**",
@@ -5,9 +7,16 @@ INTERNAL_ONLY_FILES = [
     "codex-rs/internal-*/**",
 ]
 
+# The internal workspace lockfile contains internal package names. Preserve a
+# sanitized destination lockfile and reconcile it after creating the public
+# projection.
+PRESERVED_DESTINATION_FILES = [
+    "codex-rs/Cargo.lock",
+]
+
 PUBLIC_FILES = glob(
     ["**"],
-    exclude = INTERNAL_ONLY_FILES,
+    exclude = INTERNAL_ONLY_FILES + PRESERVED_DESTINATION_FILES,
 )
 
 INTERNAL_ONLY_MARKER_FILES = glob(
@@ -121,7 +130,10 @@ core.workflow(
     origin = folder.origin(),
     destination = folder.destination(),
     origin_files = PUBLIC_FILES,
-    destination_files = glob(["**"]),
+    destination_files = glob(
+        ["**"],
+        exclude = PRESERVED_DESTINATION_FILES,
+    ),
     authoring = authoring.pass_thru(SYNC_AUTHOR),
     mode = "SQUASH",
     transformations = [PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC],

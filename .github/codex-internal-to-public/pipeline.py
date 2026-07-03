@@ -7,11 +7,11 @@ branch contains the projected public tree plus an internal state file recording 
 candidate; the final export excludes that marker.
 
 ``prepare`` selects the oldest unprocessed first-parent candidate, removes internal staging files,
-reconciles the public Cargo lockfile, and archives the projected tree. For message generation it
-also creates a public-only Git bundle with two synthetic commits: the exact previous public tree and
-the exact candidate tree with a placeholder message. A separate workflow imports that disconnected
-branch into a full ``openai/codex`` clone, so Codex can inspect the target and real public history
-without receiving internal Git objects or the original commit message.
+reconciles the public Cargo and Bazel lockfiles, and archives the projected tree. For message
+generation it also creates a public-only Git bundle with two synthetic commits: the exact previous
+public tree and the exact candidate tree with a placeholder message. A separate workflow imports
+that disconnected branch into a full ``openai/codex`` clone, so Codex can inspect the target and
+real public history without receiving internal Git objects or the original commit message.
 
 ``validate-message`` enforces the public message policy on either the file produced by Codex or a
 reviewed manual override. ``publish`` rechecks branch state, applies the projected tree and
@@ -47,6 +47,8 @@ GITHUB_DIR = Path(".github")
 STATE_FILE = Path(".codex-internal-to-public-state")
 CARGO_MANIFEST = Path("codex-rs/Cargo.toml")
 CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
+BAZEL_LOCKFILE = Path("MODULE.bazel.lock")
+GENERATED_LOCKFILES = (CARGO_LOCKFILE, BAZEL_LOCKFILE)
 BOT_NAME = "OpenAI Codex Sync"
 BOT_EMAIL = "codex-sync@openai.com"
 MESSAGE_WORKSPACE_BRANCH = "public-message-workspace"
@@ -168,10 +170,11 @@ def prepare(
             remove_github_files(candidate_tree)
             (candidate_tree / STATE_FILE).unlink(missing_ok=True)
             reject_internal_paths(candidate_tree)
-            restore_previous_lockfile(ready_parent, candidate_tree)
-            reject_internal_cargo_references(candidate_tree)
+            restore_previous_lockfiles(ready_parent, candidate_tree)
+            reject_internal_dependency_references(candidate_tree)
             reconcile_cargo_lockfile(candidate_tree)
-            reject_internal_cargo_references(candidate_tree)
+            reconcile_bazel_lockfile(candidate_tree)
+            reject_internal_dependency_references(candidate_tree)
             write_projection_archive(candidate_tree, projection_archive)
             if message_override is None:
                 write_message_inputs(
@@ -301,9 +304,14 @@ def read_public_message_override() -> PublicMessageOverride | None:
     )
 
 
-def restore_previous_lockfile(ready_revision: str, candidate_tree: Path) -> None:
-    lockfile = output(["git", "show", f"{ready_revision}:{CARGO_LOCKFILE.as_posix()}"])
-    (candidate_tree / CARGO_LOCKFILE).write_text(f"{lockfile}\n", encoding="utf-8")
+def restore_previous_lockfiles(ready_revision: str, candidate_tree: Path) -> None:
+    for lockfile_path in GENERATED_LOCKFILES:
+        lockfile = output(
+            ["git", "show", f"{ready_revision}:{lockfile_path.as_posix()}"]
+        )
+        (candidate_tree / lockfile_path).write_text(
+            f"{lockfile}\n", encoding="utf-8"
+        )
 
 
 def reconcile_cargo_lockfile(candidate_tree: Path) -> None:
@@ -320,8 +328,14 @@ def reconcile_cargo_lockfile(candidate_tree: Path) -> None:
     run([*args, "--locked"], cwd=candidate_tree, capture=True)
 
 
-def reject_internal_cargo_references(candidate_tree: Path) -> None:
-    paths = [candidate_tree / CARGO_LOCKFILE]
+def reconcile_bazel_lockfile(candidate_tree: Path) -> None:
+    args = ["bazel", "mod", "deps"]
+    run([*args, "--lockfile_mode=update"], cwd=candidate_tree, capture=True)
+    run([*args, "--lockfile_mode=error"], cwd=candidate_tree, capture=True)
+
+
+def reject_internal_dependency_references(candidate_tree: Path) -> None:
+    paths = [candidate_tree / lockfile for lockfile in GENERATED_LOCKFILES]
     paths.extend((candidate_tree / "codex-rs").rglob("Cargo.toml"))
     forbidden = re.compile(
         r"codex[-_]internal|github\.com/openai/codex-internal", re.IGNORECASE
@@ -330,7 +344,7 @@ def reject_internal_cargo_references(candidate_tree: Path) -> None:
         match = forbidden.search(path.read_text(encoding="utf-8"))
         if match:
             raise RuntimeError(
-                f"Public Cargo metadata in {path.relative_to(candidate_tree)} contains "
+                f"Public dependency metadata in {path.relative_to(candidate_tree)} contains "
                 f"an internal reference: {match.group(0)}"
             )
 
@@ -363,7 +377,7 @@ def write_message_inputs(
             remove_github_files(ready_tree)
             (ready_tree / STATE_FILE).unlink(missing_ok=True)
             reject_internal_paths(ready_tree)
-            reject_internal_cargo_references(ready_tree)
+            reject_internal_dependency_references(ready_tree)
             write_projection_archive(ready_tree, baseline_archive)
 
         baseline = temp_root / "baseline"

@@ -2,7 +2,7 @@
 
 This directory implements the middle phase of the Codex export pipeline. It turns one commit from
 `copybara-no-internal-code` into one commit on `copybara-no-internal-references`, regenerating the
-public lockfile and replacing the source message with a public-safe message written by Codex.
+public lockfiles and replacing the source message with a public-safe message written by Codex.
 
 This directory is a self-contained internal staging bundle: it includes the Python pipeline, Codex
 prompt, tests, and this documentation. The first Copyberry hop copies the entire bundle and the
@@ -21,7 +21,7 @@ flowchart LR
     public["codex<br/><code>main</code>"]
 
     internal -->|"Copyberry<br/>remove internal code"| candidate
-    candidate -->|"this workflow<br/>message + Cargo.lock"| ready
+    candidate -->|"this workflow<br/>message + lockfiles"| ready
     ready -->|"Copyberry<br/>PR + force merge"| public
 ```
 
@@ -31,8 +31,8 @@ The two Copyberry jobs and this workflow have distinct responsibilities:
    public file filter and marker transforms, and writes non-empty public projections to
    `copybara-no-internal-code`.
 2. `.github/workflows/codex-internal-to-public-staging.yml` consumes exactly one candidate commit,
-   reconciles `codex-rs/Cargo.lock`, writes a public-safe message, and appends exactly one commit to
-   `copybara-no-internal-references`.
+   reconciles `codex-rs/Cargo.lock` and `MODULE.bazel.lock`, writes a public-safe message, and
+   appends exactly one commit to `copybara-no-internal-references`.
 3. `codex-internal-to-codex-oss` consumes the ready branch in iterative mode. Copyberry creates and
    force-merges one public PR for each ready commit.
 
@@ -74,8 +74,8 @@ For each run, `pipeline.py prepare`:
 2. verifies that the recorded SHA is still an ancestor of the candidate tip;
 3. selects the oldest unprocessed first-parent candidate commit;
 4. creates a public-only tree for only that commit;
-5. starts with the previous ready branch's `Cargo.lock`, then runs `cargo metadata` once to reconcile
-   it and again with `--locked` to verify it; and
+5. starts with the previous ready branch's `Cargo.lock` and `MODULE.bazel.lock`, minimally
+   reconciles each one, and verifies both in locked/error mode; and
 6. emits separate artifacts for model input, publication metadata, and the projected tree.
 
 The publish job verifies that neither branch moved unexpectedly, preserves the candidate commit's
@@ -164,7 +164,7 @@ Always use full references such as `https://github.com/openai/codex/pull/12345` 
 message. Do not relax this to `openai/codex#12345`: GitHub-flavored Markdown does not hyperlink that
 form consistently outside the repository.
 
-## Cargo.lock policy
+## Generated lockfile policy
 
 Do not run `cargo generate-lockfile` in this pipeline. Resolving from scratch needlessly updates
 unrelated third-party dependencies and makes the exported commit larger and harder to review.
@@ -174,26 +174,33 @@ Cargo minimally reconcile it with the candidate manifests. Before and after reco
 script rejects known internal crate and repository identifiers. `cargo metadata --locked` is the
 final consistency check.
 
+`MODULE.bazel.lock` records facts derived from `codex-rs/Cargo.lock`, so the two generated files must
+move together. Each run also carries forward the ready branch's Bazel lockfile, runs `bazel mod deps
+--lockfile_mode=update` after Cargo reconciliation, and verifies it again with
+`--lockfile_mode=error`.
+
 The two Copyberry hops intentionally need different lockfile rules:
 
 - `codex-internal-no-internal-code` should preserve the existing sanitized `Cargo.lock` on the
-  candidate branch because the lockfile on internal `main` contains internal packages.
-- This workflow updates that preserved lockfile and commits the result to
+  candidate branch because the lockfile on internal `main` contains internal packages. This
+  workflow replaces the candidate's `MODULE.bazel.lock` with the matching ready-branch baseline.
+- This workflow updates both generated lockfiles and commits the result to
   `copybara-no-internal-references`.
-- `codex-internal-to-codex-oss` must copy the updated lockfile from the ready branch to
+- `codex-internal-to-codex-oss` must copy both updated lockfiles from the ready branch to
   `openai/codex`.
 
 The final-hop config must not use the first hop's destination-lockfile preservation rule. Its
-`PUBLIC_FILES` and `destination_files` include `codex-rs/Cargo.lock`, while both scopes exclude
-`.github/**` and its source scope excludes `.codex-internal-to-public-state`.
+`PUBLIC_FILES` and `destination_files` include `codex-rs/Cargo.lock` and `MODULE.bazel.lock`, while
+both scopes exclude `.github/**` and its source scope excludes
+`.codex-internal-to-public-state`.
 
 ## Bootstrap
 
 The workflow intentionally refuses to guess a baseline. Before its first run, seed
 `copybara-no-internal-references` with:
 
-1. the public tree and sanitized `Cargo.lock` that correspond to a known commit on
-   `copybara-no-internal-code`, with the complete `.github` directory omitted; and
+1. the public tree and matching sanitized `Cargo.lock` and `MODULE.bazel.lock` that correspond to a
+   known commit on `copybara-no-internal-code`, with the complete `.github` directory omitted; and
 2. a state file containing that candidate commit's full SHA.
 
 Commit those together and push the result as the initial ready branch tip. The recorded candidate
