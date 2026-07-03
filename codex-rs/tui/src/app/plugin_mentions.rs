@@ -165,6 +165,7 @@ mod tests {
         PluginSummary {
             id: format!("{name}@server-marketplace"),
             remote_plugin_id: Some(format!("plugins~{name}")),
+            version: None,
             local_version: None,
             name: name.to_string(),
             share_context: None,

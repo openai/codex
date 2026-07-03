@@ -618,6 +618,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 summary: RemotePluginSummary {
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: "plugins_123".to_string(),
+                    version: Some("0.1.0".to_string()),
                     local_version: None,
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
@@ -658,6 +659,7 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
                 summary: RemotePluginSummary {
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: "plugins_456".to_string(),
+                    version: Some("0.1.0".to_string()),
                     local_version: Some("0.1.0".to_string()),
                     name: "demo-plugin".to_string(),
                     share_context: Some(RemotePluginShareContext {
