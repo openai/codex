@@ -14,6 +14,11 @@ PRESERVED_DESTINATION_FILES = [
     "codex-rs/Cargo.lock",
 ]
 
+PUBLIC_TO_INTERNAL_FILES = glob(
+    ["**"],
+    exclude = INTERNAL_ONLY_FILES,
+)
+
 PUBLIC_FILES = glob(
     ["**"],
     exclude = INTERNAL_ONLY_FILES + PRESERVED_DESTINATION_FILES,
@@ -96,7 +101,9 @@ core.workflow(
         push = "copybara/public-to-internal",
     ),
     origin_files = glob(["**"]),
-    destination_files = PUBLIC_FILES,
+    # Stage the public Cargo.lock so the Actions wrapper can either retain it
+    # or restore the internal lockfile before reconciling the workspace.
+    destination_files = PUBLIC_TO_INTERNAL_FILES,
     authoring = authoring.pass_thru(SYNC_AUTHOR),
     mode = "SQUASH",
     custom_rev_id = "Codex-Public-RevId",
