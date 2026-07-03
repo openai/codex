@@ -12,6 +12,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
         approval_id: None,
+        approval_purpose: None,
         turn_id: "turn-short".into(),
         environment_id: Some("remote".to_string()),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -58,6 +59,7 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: None,
@@ -100,6 +102,7 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
@@ -160,6 +163,7 @@ async fn network_exec_approval_history_describes_session_host_allowance() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
@@ -202,6 +206,7 @@ async fn network_exec_approval_history_describes_one_time_host_allowance() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
@@ -244,6 +249,7 @@ async fn network_exec_approval_history_describes_canceled_host_request() {
             item_id: "item-1".to_string(),
             started_at_ms: 0,
             approval_id: Some("approval-1".to_string()),
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
@@ -335,6 +341,7 @@ async fn exec_approval_uses_approval_id_when_present() {
         ExecApprovalRequestEvent {
             call_id: "call-parent".into(),
             approval_id: Some("approval-subcommand".into()),
+            approval_purpose: None,
             turn_id: "turn-short".into(),
             environment_id: None,
             command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -378,6 +385,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
         approval_id: None,
+        approval_purpose: None,
         turn_id: "turn-multi".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -430,6 +438,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
         approval_id: None,
+        approval_purpose: None,
         turn_id: "turn-long".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), long],

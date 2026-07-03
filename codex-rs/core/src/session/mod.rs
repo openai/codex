@@ -354,6 +354,7 @@ use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -2131,9 +2132,9 @@ impl Session {
     /// cleared before a response arrives, treat it as an abort so interrupted
     /// turns do not continue on a synthetic denial.
     ///
-    /// If `available_decisions` is `None`, callback-scoped requests with an
-    /// `approval_id` offer only approve or abort. Other requests derive their
-    /// decisions via [ExecApprovalRequestEvent::default_available_decisions].
+    /// If `available_decisions` is `None`, callback-scoped requests use the
+    /// one-shot approve/abort set; other requests derive their decisions via
+    /// [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
     #[expect(
         clippy::await_holding_invalid_type,
@@ -2144,6 +2145,7 @@ impl Session {
         turn_context: &TurnContext,
         call_id: String,
         approval_id: Option<String>,
+        approval_purpose: Option<ExecApprovalPurpose>,
         environment_id: Option<String>,
         command: Vec<String>,
         cwd: AbsolutePathBuf,
@@ -2153,8 +2155,8 @@ impl Session {
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
-        //  command-level approvals use `call_id`.
-        // `approval_id` is only present for subcommand callbacks (execve intercept)
+        // Command-level approvals use `call_id`; callback-scoped approvals can
+        // supply a distinct ID for matching the response.
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
@@ -2169,7 +2171,10 @@ impl Session {
             ]
         });
         let available_decisions = available_decisions.unwrap_or_else(|| {
-            if approval_id.is_some() {
+            if ExecApprovalRequestEvent::is_callback_scoped(
+                approval_id.as_deref(),
+                approval_purpose,
+            ) {
                 vec![ReviewDecision::Approved, ReviewDecision::Abort]
             } else {
                 ExecApprovalRequestEvent::default_available_decisions(
@@ -2211,6 +2216,7 @@ impl Session {
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             approval_id,
+            approval_purpose,
             turn_id: turn_context.sub_id.clone(),
             environment_id,
             started_at_ms: now_unix_timestamp_ms(),

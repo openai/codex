@@ -98,6 +98,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
@@ -561,6 +562,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .into_iter()
                 .map(CommandExecutionApprovalDecision::from)
                 .collect::<Vec<_>>();
+            let effective_approval_purpose = ev.effective_approval_purpose();
+            let approval_purpose = ev.approval_purpose.map(Into::into);
             let ExecApprovalRequestEvent {
                 call_id,
                 approval_id,
@@ -635,17 +638,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             let additional_permissions =
                 additional_permissions.map(V2AdditionalPermissionProfile::from);
-            // Today execve callbacks omit `reason`, while sandbox retries carry
-            // one. If execve starts carrying a reason, replace this narrow
-            // compatibility discriminator with an explicit callback purpose.
-            let is_sandbox_retry = approval_id.is_some() && reason.is_some();
-
             let params = CommandExecutionRequestApprovalParams {
                 thread_id: conversation_id.to_string(),
                 turn_id: turn_id.clone(),
                 item_id: call_id.clone(),
                 started_at_ms,
                 approval_id: approval_id.clone(),
+                approval_purpose,
                 environment_id,
                 reason,
                 network_approval_context,
@@ -670,7 +669,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     call_id,
                     completion_item,
                     started_now,
-                    is_sandbox_retry,
+                    effective_approval_purpose,
                     pending_request_id,
                     rx,
                     conversation,
@@ -2088,7 +2087,7 @@ async fn on_command_execution_request_approval_response(
     item_id: String,
     completion_item: Option<CommandExecutionCompletionItem>,
     started_now: bool,
-    is_sandbox_retry: bool,
+    approval_purpose: ExecApprovalPurpose,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2172,18 +2171,14 @@ async fn on_command_execution_request_approval_response(
         }
     };
 
-    // A non-null approval_id can identify either an execve callback for a
-    // command item that is still active (for example, zsh-exec-bridge) or an
-    // unsandboxed retry. Suppress duplicate completion only for a non-canceling
-    // callback of the former kind. A declined retry must complete the item even
-    // when its initial approval already started it and no begin/end event ran
-    // before the sandbox denial; cancel must also close the item before aborting.
-    let suppress_repeated_prompt_completion_item = suppress_repeated_prompt_completion_item(
-        approval_id.as_deref(),
-        started_now,
-        is_sandbox_retry,
-        cancel_requested,
-    );
+    // An execve callback can target a command item that is still active (for
+    // example, zsh-exec-bridge), while a sandbox retry represents a new attempt.
+    // Suppress duplicate completion only for a non-canceling callback of the
+    // former kind. A declined retry must complete the item even when its initial
+    // approval already started it and no begin/end event ran before the sandbox
+    // denial; cancel must also close the item before aborting.
+    let suppress_repeated_prompt_completion_item =
+        suppress_repeated_prompt_completion_item(started_now, approval_purpose, cancel_requested);
 
     if let Some(status) = completion_status
         && !suppress_repeated_prompt_completion_item
@@ -2215,12 +2210,11 @@ async fn on_command_execution_request_approval_response(
 }
 
 fn suppress_repeated_prompt_completion_item(
-    approval_id: Option<&str>,
     started_now: bool,
-    is_sandbox_retry: bool,
+    approval_purpose: ExecApprovalPurpose,
     cancel_requested: bool,
 ) -> bool {
-    approval_id.is_some() && !started_now && !is_sandbox_retry && !cancel_requested
+    !started_now && approval_purpose == ExecApprovalPurpose::Execve && !cancel_requested
 }
 
 fn now_unix_timestamp_ms() -> i64 {
@@ -2728,20 +2722,16 @@ mod tests {
     #[test]
     fn repeated_approval_response_lifecycle_truth_table() {
         let cases = [
-            (None, false, false, false, false),
-            (Some("callback"), false, false, false, true),
-            (Some("callback"), false, false, true, false),
-            (Some("callback"), false, true, false, false),
-            (Some("callback"), true, false, false, false),
+            (ExecApprovalPurpose::Initial, false, false, false),
+            (ExecApprovalPurpose::Initial, false, true, false),
+            (ExecApprovalPurpose::SandboxRetry, false, false, false),
+            (ExecApprovalPurpose::Execve, false, false, true),
+            (ExecApprovalPurpose::Execve, false, true, false),
+            (ExecApprovalPurpose::Execve, true, false, false),
         ];
-        for (approval_id, started_now, is_sandbox_retry, cancel_requested, expected) in cases {
+        for (purpose, started_now, cancel, expected) in cases {
             assert_eq!(
-                suppress_repeated_prompt_completion_item(
-                    approval_id,
-                    started_now,
-                    is_sandbox_retry,
-                    cancel_requested,
-                ),
+                suppress_repeated_prompt_completion_item(started_now, purpose, cancel),
                 expected
             );
         }

@@ -3693,6 +3693,7 @@ mod tests {
             item_id: "call_123".to_string(),
             started_at_ms: 0,
             approval_id: None,
+            approval_purpose: None,
             environment_id: None,
             reason: None,
             network_approval_context: None,

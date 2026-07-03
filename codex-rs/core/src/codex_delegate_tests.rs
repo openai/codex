@@ -9,6 +9,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -322,6 +323,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                 ExecApprovalRequestEvent {
                     call_id: "command-item-1".to_string(),
                     approval_id: Some("callback-approval-1".to_string()),
+                    approval_purpose: Some(ExecApprovalPurpose::SandboxRetry),
                     turn_id: "child-turn-1".to_string(),
                     environment_id: Some("remote".to_string()),
                     started_at_ms: 0,
@@ -397,7 +399,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 }
 
 #[tokio::test]
-async fn cancelling_delegated_exec_removes_retry_waiter_and_late_response_is_inert() {
+async fn delegated_exec_preserves_raw_purpose_and_cancel_cleans_retry_waiter() {
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
@@ -417,6 +419,55 @@ async fn cancelling_delegated_exec_removes_retry_waiter_and_late_response_is_ine
         session: Arc::clone(&parent_session),
         session_loop_termination: completed_session_loop_termination(),
     });
+
+    let legacy_handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        async move {
+            let mut event = delegated_retry_exec_approval_event();
+            event.call_id = "legacy-command-item".to_string();
+            event.approval_id = None;
+            event.approval_purpose = None;
+            handle_exec_approval(
+                codex.as_ref(),
+                "legacy-child-turn".to_string(),
+                &parent_session,
+                &parent_ctx,
+                event,
+                &CancellationToken::new(),
+            )
+            .await;
+        }
+    });
+    let legacy_request = timeout(Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("legacy exec approval event timed out")
+        .expect("legacy exec approval event missing");
+    let EventMsg::ExecApprovalRequest(legacy_request) = legacy_request.msg else {
+        panic!("expected legacy ExecApprovalRequest event");
+    };
+    assert_eq!(legacy_request.call_id, "legacy-command-item");
+    assert_eq!(legacy_request.approval_purpose, None);
+    parent_session
+        .notify_exec_approval("legacy-command-item", ReviewDecision::Approved)
+        .await;
+    timeout(Duration::from_secs(1), legacy_handle)
+        .await
+        .expect("legacy handle_exec_approval hung")
+        .expect("legacy handle_exec_approval join error");
+    let legacy_submission = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("legacy exec approval response timed out")
+        .expect("legacy exec approval response missing");
+    assert_eq!(
+        legacy_submission.op,
+        Op::ExecApproval {
+            id: "legacy-command-item".to_string(),
+            turn_id: Some("legacy-child-turn".to_string()),
+            decision: ReviewDecision::Approved,
+        }
+    );
 
     let cancel_token = CancellationToken::new();
     let handle = tokio::spawn({
@@ -446,6 +497,10 @@ async fn cancelling_delegated_exec_removes_retry_waiter_and_late_response_is_ine
     };
     assert_eq!(request.call_id, "command-item-1");
     assert_eq!(request.approval_id.as_deref(), Some("retry-id"));
+    assert_eq!(
+        request.approval_purpose,
+        Some(ExecApprovalPurpose::SandboxRetry)
+    );
 
     cancel_token.cancel();
     timeout(Duration::from_secs(1), handle)
@@ -493,6 +548,7 @@ fn delegated_retry_exec_approval_event() -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: "command-item-1".to_string(),
         approval_id: Some("retry-id".to_string()),
+        approval_purpose: Some(ExecApprovalPurpose::SandboxRetry),
         turn_id: "child-turn-1".to_string(),
         environment_id: Some("remote".to_string()),
         started_at_ms: 0,

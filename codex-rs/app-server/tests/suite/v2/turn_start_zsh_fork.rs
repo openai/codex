@@ -15,6 +15,7 @@ use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionApprovalPurpose;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -595,6 +596,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             (has_first_file != has_second_file) && (has_rm_action || mentions_rm_binary);
 
         if is_target_subcommand {
+            assert_eq!(
+                params.approval_purpose,
+                Some(CommandExecutionApprovalPurpose::Execve)
+            );
             approved_subcommand_ids.push(
                 params
                     .approval_id

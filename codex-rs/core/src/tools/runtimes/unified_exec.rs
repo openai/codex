@@ -217,6 +217,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         turn,
                         call_id,
                         /*approval_id*/ None,
+                        /*approval_purpose*/ None,
                         environment_id,
                         command,
                         native_cwd,
