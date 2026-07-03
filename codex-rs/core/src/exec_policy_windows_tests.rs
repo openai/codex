@@ -11,6 +11,80 @@ static TRUSTED_WINDOWS_POWERSHELL_EXE: LazyLock<String> = LazyLock::new(|| {
         .to_string()
 });
 
+fn powershell_command(script: &str) -> Vec<String> {
+    vec![
+        TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        script.to_string(),
+    ]
+}
+
+fn prefix_rule_for(command: &[String], decision: &str) -> String {
+    let pattern = command
+        .iter()
+        .map(|word| format!(r#""{}""#, starlark_string(word)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"prefix_rule(pattern=[{pattern}], decision="{decision}")"#)
+}
+
+fn skip_outer(command: &[String], bypass_sandbox: bool) -> ExecApprovalRequirement {
+    ExecApprovalRequirement::Skip {
+        bypass_sandbox,
+        proposed_execpolicy_amendment: (!bypass_sandbox)
+            .then(|| ExecPolicyAmendment::new(command.to_vec())),
+    }
+}
+
+fn prompt_outer(command: &[String]) -> ExecApprovalRequirement {
+    ExecApprovalRequirement::NeedsApproval {
+        reason: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command.to_vec())),
+    }
+}
+
+async fn windows_requirement(
+    policy_src: String,
+    command: &[String],
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+    windows_sandbox_level: WindowsSandboxLevel,
+    sandbox_permissions: SandboxPermissions,
+) -> ExecApprovalRequirement {
+    ExecPolicyManager::new(policy_from_src(Some(&policy_src)))
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command,
+            approval_policy,
+            permission_profile,
+            windows_sandbox_level,
+            sandbox_permissions,
+            prefix_rule: None,
+        })
+        .await
+}
+
+async fn default_windows_requirement(
+    policy_src: String,
+    command: &[String],
+) -> ExecApprovalRequirement {
+    windows_requirement(
+        policy_src,
+        command,
+        AskForApproval::UnlessTrusted,
+        PermissionProfile::read_only(),
+        WindowsSandboxLevel::RestrictedToken,
+        SandboxPermissions::UseDefault,
+    )
+    .await
+}
+
+fn external_profile() -> PermissionProfile {
+    PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
+    }
+}
+
 #[tokio::test]
 async fn evaluates_powershell_inner_commands_against_prompt_rules() {
     assert_exec_approval_requirement_for_command(
@@ -35,27 +109,271 @@ async fn evaluates_powershell_inner_commands_against_prompt_rules() {
 }
 
 #[tokio::test]
-async fn evaluates_powershell_inner_commands_against_allow_rules() {
-    assert_exec_approval_requirement_for_command(
-        ExecApprovalRequirementScenario {
-            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
-            command: vec![
-                TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "echo blocked".to_string(),
-            ],
-            approval_policy: AskForApproval::UnlessTrusted,
-            permission_profile: PermissionProfile::read_only(),
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            prefix_rule: None,
-        },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: true,
-            proposed_execpolicy_amendment: None,
-        },
-    )
-    .await;
+async fn inner_allows_for_runtime_resolved_names_remain_sandboxed() {
+    for (script, inner) in [
+        ("echo blocked", "echo"),
+        ("Get-Content Cargo.toml", "Get-Content"),
+        ("Invoke-ProfileHook test", "Invoke-ProfileHook"),
+        ("codex-path-helper --version", "codex-path-helper"),
+    ] {
+        let command = powershell_command(script);
+        assert_eq!(
+            default_windows_requirement(
+                format!(r#"prefix_rule(pattern=["{inner}"], decision="allow")"#),
+                &command,
+            )
+            .await,
+            skip_outer(&command, false),
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_exact_outer_rules_can_bypass_runtime_resolution() {
+    let command = powershell_command("Remove-Item target -Force");
+    let executable = starlark_string(&command[0]);
+    let rest = command[1..]
+        .iter()
+        .map(|word| format!(r#""{}""#, starlark_string(word)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mismatched = powershell_command("Remove-Item other -Force");
+    let cases = [
+        (prefix_rule_for(&command[..1], "allow"), Some(false)),
+        (prefix_rule_for(&command, "allow"), Some(true)),
+        (
+            format!(
+                "host_executable(name = \"powershell\", paths = [\"{executable}\"])\n\
+             prefix_rule(pattern=[\"powershell\", {rest}], decision=\"allow\")"
+            ),
+            Some(true),
+        ),
+        (
+            format!(
+                "prefix_rule(pattern=[[\"{executable}\", \"C:\\\\other\\\\powershell.exe\"], \
+             [\"-NoProfile\", \"-noprofile\"], \"-Command\", \
+             \"Remove-Item target -Force\"], decision=\"allow\")"
+            ),
+            Some(true),
+        ),
+        (prefix_rule_for(&mismatched, "allow"), None),
+    ];
+
+    for (policy_src, bypass_sandbox) in cases {
+        assert_eq!(
+            default_windows_requirement(policy_src, &command).await,
+            bypass_sandbox.map_or_else(
+                || prompt_outer(&command),
+                |bypass| skip_outer(&command, bypass)
+            ),
+        );
+    }
+}
+
+#[tokio::test]
+async fn full_outer_allow_does_not_bypass_extended_unsupported_wrapper() {
+    use SandboxPermissions::*;
+    use WindowsSandboxLevel::*;
+
+    let command = powershell_command("Get-Content Cargo.toml");
+    let policy_src = prefix_rule_for(&command, "allow");
+    let mut extended = command.clone();
+    extended.push("trailing-runtime-argument".to_string());
+
+    for (profile, level, permissions, prompts) in [
+        (
+            PermissionProfile::read_only(),
+            RestrictedToken,
+            UseDefault,
+            false,
+        ),
+        (
+            PermissionProfile::read_only(),
+            RestrictedToken,
+            RequireEscalated,
+            true,
+        ),
+        (
+            PermissionProfile::read_only(),
+            RestrictedToken,
+            WithAdditionalPermissions,
+            true,
+        ),
+        (PermissionProfile::read_only(), Disabled, UseDefault, true),
+        (
+            PermissionProfile::Disabled,
+            RestrictedToken,
+            UseDefault,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            windows_requirement(
+                policy_src.clone(),
+                &extended,
+                AskForApproval::UnlessTrusted,
+                profile,
+                level,
+                permissions,
+            )
+            .await,
+            if prompts {
+                prompt_outer(&extended)
+            } else {
+                skip_outer(&extended, false)
+            },
+        );
+    }
+}
+
+#[tokio::test]
+async fn explicit_inner_and_outer_restrictions_remain_strictest() {
+    let command = powershell_command("Get-Content Cargo.toml");
+    let outer_allow = prefix_rule_for(&command, "allow");
+    let inner_allow = r#"prefix_rule(pattern=["Get-Content"], decision="allow")"#;
+    let rendered = render_shlex_command(&command);
+
+    for (inner, decision) in [
+        (true, "prompt"),
+        (true, "forbidden"),
+        (false, "prompt"),
+        (false, "forbidden"),
+    ] {
+        let (policy_src, forbidden_prefix) = if inner {
+            (
+                format!(
+                    "{outer_allow}\nprefix_rule(pattern=[\"Get-Content\"], decision=\"{decision}\")"
+                ),
+                "Get-Content".to_string(),
+            )
+        } else {
+            (
+                format!("{inner_allow}\n{}", prefix_rule_for(&command, decision)),
+                rendered.clone(),
+            )
+        };
+        let expected = if decision == "prompt" {
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some(format!("`{rendered}` requires approval by policy")),
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{rendered}` rejected: policy forbids commands starting with `{forbidden_prefix}`"
+                ),
+            }
+        };
+        assert_eq!(
+            windows_requirement(
+                policy_src,
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::read_only(),
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            )
+            .await,
+            expected,
+        );
+    }
+}
+
+#[tokio::test]
+async fn outer_authority_tracks_permission_deltas_and_missing_managed_sandbox() {
+    use SandboxPermissions::*;
+    use WindowsSandboxLevel::*;
+
+    let command = powershell_command("Get-Content Cargo.toml");
+    let inner_allow = r#"prefix_rule(pattern=["Get-Content"], decision="allow")"#.to_string();
+    let denied_read_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    for (profile, level, permissions, prompts) in [
+        (
+            PermissionProfile::read_only(),
+            RestrictedToken,
+            RequireEscalated,
+            true,
+        ),
+        (PermissionProfile::read_only(), Disabled, UseDefault, true),
+        (
+            denied_read_profile,
+            RestrictedToken,
+            RequireEscalated,
+            false,
+        ),
+        (
+            PermissionProfile::read_only(),
+            RestrictedToken,
+            WithAdditionalPermissions,
+            true,
+        ),
+        (
+            PermissionProfile::Disabled,
+            RestrictedToken,
+            RequireEscalated,
+            false,
+        ),
+        (
+            PermissionProfile::Disabled,
+            RestrictedToken,
+            WithAdditionalPermissions,
+            false,
+        ),
+        (external_profile(), RestrictedToken, UseDefault, false),
+        (external_profile(), RestrictedToken, RequireEscalated, true),
+        (
+            external_profile(),
+            RestrictedToken,
+            WithAdditionalPermissions,
+            true,
+        ),
+    ] {
+        assert_eq!(
+            windows_requirement(
+                inner_allow.clone(),
+                &command,
+                AskForApproval::OnRequest,
+                profile,
+                level,
+                permissions,
+            )
+            .await,
+            if prompts {
+                prompt_outer(&command)
+            } else {
+                skip_outer(&command, false)
+            },
+        );
+    }
+
+    let exact_allow = format!("{inner_allow}\n{}", prefix_rule_for(&command, "allow"));
+    for (level, permissions) in [
+        (RestrictedToken, RequireEscalated),
+        (RestrictedToken, WithAdditionalPermissions),
+        (Disabled, UseDefault),
+    ] {
+        assert_eq!(
+            windows_requirement(
+                exact_allow.clone(),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::read_only(),
+                level,
+                permissions,
+            )
+            .await,
+            skip_outer(&command, true),
+        );
+    }
 }
 
 #[tokio::test]
@@ -210,21 +528,12 @@ fn writable_windows_policy_without_sandbox_backend_still_requires_approval() {
 
 #[tokio::test]
 async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
-    let inner_command = vec![
-        "Remove-Item".to_string(),
-        "test".to_string(),
-        "-Force".to_string(),
-    ];
+    let command = powershell_command("Remove-Item test -Force");
 
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
             policy_src: None,
-            command: vec![
-                TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "Remove-Item test -Force".to_string(),
-            ],
+            command: command.clone(),
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -232,7 +541,28 @@ async fn unmatched_dangerous_powershell_inner_commands_require_approval() {
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(inner_command)),
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn mixed_powershell_inner_commands_use_the_strictest_decision() {
+    let command = powershell_command("echo safe; Remove-Item target -Force");
+
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
+            command: command.clone(),
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::Disabled,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         },
     )
     .await;

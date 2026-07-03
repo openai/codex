@@ -235,8 +235,9 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
         .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
     while let Ok(app_event) = app_event_rx.try_recv() {
-        if let AppEvent::SubmitThreadOp {
+        if let AppEvent::ResolveAppServerRequest {
             thread_id: op_thread_id,
+            request_id: AppServerRequestId::Integer(1),
             ..
         } = app_event
         {
@@ -245,7 +246,7 @@ async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach()
         }
     }
 
-    panic!("expected approval action to submit a thread-scoped op");
+    panic!("expected approval action to resolve the exact app-server request");
 }
 
 #[tokio::test]
@@ -272,7 +273,7 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
 
     let resolved = app
         .pending_app_server_requests
-        .resolve_notification(&AppServerRequestId::Integer(1))
+        .resolve_notification(thread_id, &AppServerRequestId::Integer(1))
         .expect("matching app-server request should resolve");
     app.chat_widget.dismiss_app_server_request(&resolved);
     while app_event_rx.try_recv().is_ok() {}
@@ -300,11 +301,48 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
 
     while let Ok(app_event) = app_event_rx.try_recv() {
         assert!(
-            !matches!(app_event, AppEvent::SubmitThreadOp { .. }),
+            !matches!(
+                app_event,
+                AppEvent::SubmitThreadOp { .. } | AppEvent::ResolveAppServerRequest { .. }
+            ),
             "resolved buffered approval should not become actionable"
         );
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_submit_thread_op_cannot_consume_pending_app_server_request() -> Result<()> {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let approval_request = exec_approval_request(thread_id, "turn-1", "call-1", Some("approval-1"));
+    assert_eq!(
+        app.pending_app_server_requests
+            .note_server_request(&approval_request),
+        None
+    );
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await?;
+
+    app.submit_thread_op(
+        &mut app_server,
+        thread_id,
+        Op::ExecApproval {
+            id: "approval-1".to_string(),
+            turn_id: None,
+            decision: codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+        },
+    )
+    .await?;
+
+    assert!(
+        app.pending_app_server_requests
+            .contains_server_request(&approval_request),
+        "an untagged ordinary op must not consume app-server request state"
+    );
     Ok(())
 }
 
@@ -2819,8 +2857,9 @@ async fn inactive_thread_invalid_url_elicitation_is_declined() {
     );
     assert_matches!(
         app_event_rx.try_recv(),
-        Ok(AppEvent::SubmitThreadOp {
+        Ok(AppEvent::ResolveAppServerRequest {
             thread_id: op_thread_id,
+            request_id: AppServerRequestId::Integer(10),
             op: Op::ResolveElicitation {
                 server_name,
                 request_id: AppServerRequestId::Integer(10),

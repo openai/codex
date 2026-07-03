@@ -15,7 +15,6 @@ libc = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 shlex = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
@@ -32,6 +31,7 @@ windows-sys = { version = "0.52", features = [
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 
 [lib]
 doctest = false

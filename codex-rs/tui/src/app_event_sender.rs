@@ -77,40 +77,60 @@ impl AppEventSender {
         )));
     }
 
+    pub(crate) fn app_server_user_input_answer(
+        &self,
+        thread_id: ThreadId,
+        request_id: AppServerRequestId,
+        id: String,
+        response: ToolRequestUserInputResponse,
+    ) {
+        self.send_app_server_response(
+            thread_id,
+            request_id,
+            AppCommand::user_input_answer(id, response),
+        );
+    }
+
     pub(crate) fn exec_approval(
         &self,
         thread_id: ThreadId,
+        request_id: Option<AppServerRequestId>,
         id: String,
         decision: CommandExecutionApprovalDecision,
     ) {
-        self.send(AppEvent::SubmitThreadOp {
+        self.send_prompt_response(
             thread_id,
-            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision),
-        });
+            request_id,
+            AppCommand::exec_approval(id, /*turn_id*/ None, decision),
+        );
     }
 
     pub(crate) fn request_permissions_response(
         &self,
         thread_id: ThreadId,
+        request_id: Option<AppServerRequestId>,
         id: String,
         response: RequestPermissionsResponse,
     ) {
-        self.send(AppEvent::SubmitThreadOp {
+        self.send_prompt_response(
             thread_id,
-            op: AppCommand::request_permissions_response(id, response),
-        });
+            request_id,
+            AppCommand::request_permissions_response(id, response),
+        );
     }
 
     pub(crate) fn patch_approval(
         &self,
         thread_id: ThreadId,
+        request_id: Option<AppServerRequestId>,
         id: String,
         decision: FileChangeApprovalDecision,
     ) {
-        self.send(AppEvent::SubmitThreadOp {
+        self.send_prompt_response(
             thread_id,
-            op: AppCommand::patch_approval(id, decision),
-        });
+            request_id,
+            AppCommand::patch_approval(id, decision),
+        );
     }
 
     pub(crate) fn resolve_elicitation(
@@ -122,9 +142,98 @@ impl AppEventSender {
         content: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) {
-        self.send(AppEvent::SubmitThreadOp {
+        self.send_app_server_response(
             thread_id,
-            op: AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta),
+            request_id.clone(),
+            AppCommand::resolve_elicitation(server_name, request_id, decision, content, meta),
+        );
+    }
+
+    fn send_prompt_response(
+        &self,
+        thread_id: ThreadId,
+        request_id: Option<AppServerRequestId>,
+        op: AppCommand,
+    ) {
+        match request_id {
+            Some(request_id) => self.send_app_server_response(thread_id, request_id, op),
+            None => self.send(AppEvent::SubmitThreadOp { thread_id, op }),
+        }
+    }
+
+    fn send_app_server_response(
+        &self,
+        thread_id: ThreadId,
+        request_id: AppServerRequestId,
+        op: AppCommand,
+    ) {
+        self.send(AppEvent::ResolveAppServerRequest {
+            thread_id,
+            request_id,
+            op,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn thread_id() -> ThreadId {
+        ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread id")
+    }
+
+    #[test]
+    fn typed_app_server_request_ids_select_exact_resolution_route() {
+        let (tx, mut rx) = unbounded_channel();
+        let sender = AppEventSender::new(tx);
+
+        for request_id in [
+            AppServerRequestId::Integer(1),
+            AppServerRequestId::String("1".to_string()),
+        ] {
+            sender.exec_approval(
+                thread_id(),
+                Some(request_id.clone()),
+                "approval".to_string(),
+                CommandExecutionApprovalDecision::Accept,
+            );
+
+            let AppEvent::ResolveAppServerRequest {
+                thread_id: event_thread_id,
+                request_id: event_request_id,
+                op: AppCommand::ExecApproval { id, .. },
+            } = rx.try_recv().expect("expected exact app-server response")
+            else {
+                panic!("expected ResolveAppServerRequest");
+            };
+            assert_eq!(event_thread_id, thread_id());
+            assert_eq!(event_request_id, request_id);
+            assert_eq!(id, "approval");
+        }
+    }
+
+    #[test]
+    fn untagged_approval_uses_ordinary_thread_op_route() {
+        let (tx, mut rx) = unbounded_channel();
+        let sender = AppEventSender::new(tx);
+
+        sender.exec_approval(
+            thread_id(),
+            /*request_id*/ None,
+            "approval".to_string(),
+            CommandExecutionApprovalDecision::Accept,
+        );
+
+        let AppEvent::SubmitThreadOp {
+            thread_id: event_thread_id,
+            op: AppCommand::ExecApproval { id, .. },
+        } = rx.try_recv().expect("expected ordinary thread op")
+        else {
+            panic!("untagged approval must not use app-server resolution route");
+        };
+        assert_eq!(event_thread_id, thread_id());
+        assert_eq!(id, "approval");
     }
 }

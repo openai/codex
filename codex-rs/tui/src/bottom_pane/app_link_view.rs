@@ -757,6 +757,7 @@ impl BottomPaneView for AppLinkView {
 
     fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
         let ResolvedAppServerRequest::McpElicitation {
+            thread_id,
             server_name,
             request_id,
         } = request
@@ -766,7 +767,10 @@ impl BottomPaneView for AppLinkView {
         let Some(target) = self.elicitation_target.as_ref() else {
             return false;
         };
-        if target.server_name != *server_name || target.request_id != *request_id {
+        if target.thread_id != *thread_id
+            || target.server_name != *server_name
+            || target.request_id != *request_id
+        {
             return false;
         }
 
@@ -1229,8 +1233,13 @@ mod tests {
 
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match rx.try_recv() {
-            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+            Ok(AppEvent::ResolveAppServerRequest {
+                thread_id,
+                request_id,
+                op,
+            }) => {
                 assert_eq!(thread_id, target.thread_id);
+                assert_eq!(request_id, target.request_id);
                 assert_eq!(
                     op,
                     Op::ResolveElicitation {
@@ -1385,8 +1394,13 @@ mod tests {
             Err(err) => panic!("missing app event: {err}"),
         }
         match rx.try_recv() {
-            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+            Ok(AppEvent::ResolveAppServerRequest {
+                thread_id,
+                request_id,
+                op,
+            }) => {
                 assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(request_id, suggestion_target().request_id);
                 assert_eq!(
                     op,
                     Op::ResolveElicitation {
@@ -1427,8 +1441,13 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
 
         match rx.try_recv() {
-            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+            Ok(AppEvent::ResolveAppServerRequest {
+                thread_id,
+                request_id,
+                op,
+            }) => {
                 assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(request_id, suggestion_target().request_id);
                 assert_eq!(
                     op,
                     Op::ResolveElicitation {
@@ -1477,8 +1496,13 @@ mod tests {
             Err(err) => panic!("missing app event: {err}"),
         }
         match rx.try_recv() {
-            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+            Ok(AppEvent::ResolveAppServerRequest {
+                thread_id,
+                request_id,
+                op,
+            }) => {
                 assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(request_id, suggestion_target().request_id);
                 assert_eq!(
                     op,
                     Op::ResolveElicitation {
@@ -1517,7 +1541,16 @@ mod tests {
         );
 
         assert!(
+            !view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id: generic_url_target().thread_id,
+                server_name: "codex_apps".to_string(),
+                request_id: AppServerRequestId::String("request-1".to_string()),
+            })
+        );
+        assert!(!view.is_complete());
+        assert!(
             view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id: suggestion_target().thread_id,
                 server_name: "codex_apps".to_string(),
                 request_id: AppServerRequestId::String("request-1".to_string()),
             })
@@ -1547,6 +1580,7 @@ mod tests {
 
         assert!(
             !view.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id: suggestion_target().thread_id,
                 server_name: "other_server".to_string(),
                 request_id: AppServerRequestId::String("request-1".to_string()),
             })
