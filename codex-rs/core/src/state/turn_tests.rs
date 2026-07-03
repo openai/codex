@@ -57,17 +57,25 @@ fn pending_approvals_with_the_same_id_are_isolated_by_request_kind() {
     let (tx_patch, _rx_patch) = oneshot::channel();
     let (tx_exec, _rx_exec) = oneshot::channel();
     let mut turn_state = TurnState::default();
-    turn_state.insert_pending_approval(
-        "approval".to_string(),
-        tx_patch,
-        PendingApprovalKind::Patch,
-        vec![ReviewDecision::Approved],
+    assert!(
+        turn_state
+            .insert_pending_approval(
+                "approval".to_string(),
+                tx_patch,
+                PendingApprovalKind::Patch,
+                vec![ReviewDecision::Approved],
+            )
+            .is_ok()
     );
-    turn_state.insert_pending_approval(
-        "approval".to_string(),
-        tx_exec,
-        PendingApprovalKind::Exec,
-        vec![ReviewDecision::Approved],
+    assert!(
+        turn_state
+            .insert_pending_approval(
+                "approval".to_string(),
+                tx_exec,
+                PendingApprovalKind::Exec,
+                vec![ReviewDecision::Approved],
+            )
+            .is_ok()
     );
 
     assert!(
@@ -83,7 +91,43 @@ fn pending_approvals_with_the_same_id_are_isolated_by_request_kind() {
 }
 
 #[tokio::test]
-async fn consumed_approval_id_cannot_resolve_a_later_generation() {
+async fn duplicate_same_kind_pending_approval_keeps_the_original_waiter() {
+    for kind in [PendingApprovalKind::Exec, PendingApprovalKind::Patch] {
+        let mut turn_state = TurnState::default();
+        let (initial_tx, initial_rx) = oneshot::channel();
+        assert!(
+            turn_state
+                .insert_pending_approval(
+                    "call-id".to_string(),
+                    initial_tx,
+                    kind,
+                    vec![ReviewDecision::Approved],
+                )
+                .is_ok()
+        );
+
+        let (duplicate_tx, duplicate_rx) = oneshot::channel();
+        let Err(duplicate) = turn_state.insert_pending_approval(
+            "call-id".to_string(),
+            duplicate_tx,
+            kind,
+            vec![ReviewDecision::Approved],
+        ) else {
+            panic!("duplicate {kind:?} approval id should be rejected");
+        };
+        duplicate.send(ReviewDecision::Abort);
+        assert_eq!(duplicate_rx.await, Ok(ReviewDecision::Abort));
+
+        turn_state
+            .remove_pending_approval("call-id", kind)
+            .expect("original waiter must remain pending")
+            .send(ReviewDecision::Approved);
+        assert_eq!(initial_rx.await, Ok(ReviewDecision::Approved));
+    }
+}
+
+#[tokio::test]
+async fn consumed_approval_id_cannot_resolve_a_distinct_id_waiter() {
     for stale_decision in [
         ReviewDecision::Approved,
         ReviewDecision::Abort,
@@ -91,11 +135,15 @@ async fn consumed_approval_id_cannot_resolve_a_later_generation() {
     ] {
         let mut turn_state = TurnState::default();
         let (initial_tx, initial_rx) = oneshot::channel();
-        turn_state.insert_pending_approval(
-            "call-id".to_string(),
-            initial_tx,
-            PendingApprovalKind::Exec,
-            vec![ReviewDecision::Approved],
+        assert!(
+            turn_state
+                .insert_pending_approval(
+                    "call-id".to_string(),
+                    initial_tx,
+                    PendingApprovalKind::Exec,
+                    vec![ReviewDecision::Approved],
+                )
+                .is_ok()
         );
         turn_state
             .remove_pending_approval("call-id", PendingApprovalKind::Exec)
@@ -104,11 +152,15 @@ async fn consumed_approval_id_cannot_resolve_a_later_generation() {
         assert_eq!(initial_rx.await, Ok(ReviewDecision::Approved));
 
         let (retry_tx, retry_rx) = oneshot::channel();
-        turn_state.insert_pending_approval(
-            "retry-id".to_string(),
-            retry_tx,
-            PendingApprovalKind::Exec,
-            vec![ReviewDecision::Approved],
+        assert!(
+            turn_state
+                .insert_pending_approval(
+                    "retry-id".to_string(),
+                    retry_tx,
+                    PendingApprovalKind::Exec,
+                    vec![ReviewDecision::Approved],
+                )
+                .is_ok()
         );
 
         assert!(
