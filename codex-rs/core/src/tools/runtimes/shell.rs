@@ -176,6 +176,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         turn,
                         call_id,
                         /*approval_id*/ None,
+                        /*approval_purpose*/ None,
                         environment_id,
                         command,
                         cwd,

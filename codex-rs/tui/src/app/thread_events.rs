@@ -494,6 +494,7 @@ mod tests {
                 item_id: item_id.to_string(),
                 started_at_ms: 0,
                 approval_id: approval_id.map(str::to_string),
+                approval_purpose: None,
                 environment_id: None,
                 reason: Some("needs approval".to_string()),
                 network_approval_context: None,

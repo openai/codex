@@ -1013,6 +1013,7 @@ mod tests {
                 item_id: "item-1".to_string(),
                 started_at_ms: 0,
                 approval_id: None,
+                approval_purpose: None,
                 environment_id: None,
                 reason: None,
                 network_approval_context: None,

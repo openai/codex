@@ -226,6 +226,7 @@ async fn run_codex_tool_session_inner(
                             cwd,
                             call_id,
                             approval_id: _,
+                            approval_purpose: _,
                             reason: _,
                             proposed_execpolicy_amendment: _,
                             proposed_network_policy_amendments: _,

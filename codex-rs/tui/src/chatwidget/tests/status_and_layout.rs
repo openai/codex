@@ -2048,6 +2048,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
         approval_id: None,
+        approval_purpose: None,
         turn_id: "turn-approve-exec".into(),
         environment_id: None,
         command: vec!["echo".into(), "hello world".into()],

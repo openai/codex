@@ -214,6 +214,14 @@ pub struct GuardianAssessmentEvent {
     pub action: GuardianAssessmentAction,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecApprovalPurpose {
+    Initial,
+    Execve,
+    SandboxRetry,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated command execution item.
@@ -225,6 +233,13 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub approval_id: Option<String>,
+    /// Semantic purpose of this approval request.
+    ///
+    /// Compatibility senders may omit this field; consumers should then use
+    /// [`Self::effective_approval_purpose`] for compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_purpose: Option<ExecApprovalPurpose>,
     /// Turn ID that this command belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -286,7 +301,11 @@ impl ExecApprovalRequestEvent {
         // senders, so we fall back to the legacy logic if it's not present.
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
-            None if self.approval_id.is_some() => {
+            None if Self::is_callback_scoped(
+                self.approval_id.as_deref(),
+                self.approval_purpose,
+            ) =>
+            {
                 vec![ReviewDecision::Approved, ReviewDecision::Abort]
             }
             None => Self::default_available_decisions(
@@ -296,6 +315,29 @@ impl ExecApprovalRequestEvent {
                 self.additional_permissions.as_ref(),
             ),
         }
+    }
+
+    pub fn is_callback_scoped(
+        approval_id: Option<&str>,
+        approval_purpose: Option<ExecApprovalPurpose>,
+    ) -> bool {
+        approval_id.is_some()
+            || matches!(
+                approval_purpose,
+                Some(ExecApprovalPurpose::Execve | ExecApprovalPurpose::SandboxRetry)
+            )
+    }
+
+    pub fn effective_approval_purpose(&self) -> ExecApprovalPurpose {
+        self.approval_purpose.unwrap_or_else(|| {
+            if self.approval_id.is_none() {
+                ExecApprovalPurpose::Initial
+            } else if self.reason.is_some() {
+                ExecApprovalPurpose::SandboxRetry
+            } else {
+                ExecApprovalPurpose::Execve
+            }
+        })
     }
 
     pub fn default_available_decisions(
@@ -476,29 +518,71 @@ mod tests {
     }
 
     #[test]
-    fn callback_without_explicit_decisions_is_one_shot() {
-        let value = serde_json::json!({
+    fn exec_approval_purpose_is_optional_and_overrides_legacy_inference() {
+        let mut value = serde_json::json!({
             "call_id": "command-item",
             "approval_id": "callback",
             "turn_id": "turn",
             "started_at_ms": 0,
             "command": ["echo", "hi"],
             "cwd": test_path_buf("/tmp"),
-            "reason": null,
+            "reason": "display text",
             "parsed_cmd": [],
         });
-        let mut event: ExecApprovalRequestEvent =
-            serde_json::from_value(value).expect("callback event");
+        let legacy: ExecApprovalRequestEvent =
+            serde_json::from_value(value.clone()).expect("legacy event");
         assert_eq!(
-            event.effective_available_decisions(),
-            vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            (
+                legacy.effective_approval_purpose(),
+                legacy.effective_available_decisions(),
+            ),
+            (
+                ExecApprovalPurpose::SandboxRetry,
+                vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            )
         );
 
-        event.available_decisions = Some(vec![ReviewDecision::ApprovedForSession]);
-        assert_eq!(
-            event.effective_available_decisions(),
-            vec![ReviewDecision::ApprovedForSession]
-        );
+        for (wire, expected) in [
+            ("initial", ExecApprovalPurpose::Initial),
+            ("execve", ExecApprovalPurpose::Execve),
+            ("sandbox_retry", ExecApprovalPurpose::SandboxRetry),
+        ] {
+            value["approval_purpose"] = serde_json::Value::String(wire.to_string());
+            let event: ExecApprovalRequestEvent =
+                serde_json::from_value(value.clone()).expect("event with explicit purpose");
+            assert_eq!(event.effective_approval_purpose(), expected);
+        }
+
+        for (approval_id, purpose, callback_scoped) in [
+            (None, Some("initial"), false),
+            (Some("callback"), Some("initial"), true),
+            (None, Some("execve"), true),
+            (None, Some("sandbox_retry"), true),
+        ] {
+            value["approval_id"] = approval_id
+                .map(|id| serde_json::Value::String(id.to_string()))
+                .unwrap_or(serde_json::Value::Null);
+            value["approval_purpose"] = purpose
+                .map(|purpose| serde_json::Value::String(purpose.to_string()))
+                .unwrap_or(serde_json::Value::Null);
+            let mut event: ExecApprovalRequestEvent =
+                serde_json::from_value(value.clone()).expect("callback scope event");
+            let expected = if callback_scoped {
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            } else {
+                vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedForSession,
+                    ReviewDecision::Abort,
+                ]
+            };
+            assert_eq!(event.effective_available_decisions(), expected);
+            event.available_decisions = Some(vec![ReviewDecision::ApprovedForSession]);
+            assert_eq!(
+                event.effective_available_decisions(),
+                vec![ReviewDecision::ApprovedForSession]
+            );
+        }
     }
 
     #[test]

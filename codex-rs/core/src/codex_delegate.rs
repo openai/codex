@@ -497,6 +497,7 @@ async fn handle_exec_approval(
     cancel_token: &CancellationToken,
 ) {
     let approval_id_for_op = event.effective_approval_id();
+    let approval_purpose = event.approval_purpose;
     let ExecApprovalRequestEvent {
         call_id,
         approval_id,
@@ -547,6 +548,7 @@ async fn handle_exec_approval(
                 parent_ctx,
                 call_id,
                 approval_id,
+                approval_purpose,
                 environment_id,
                 command,
                 cwd,

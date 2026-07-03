@@ -41,6 +41,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
@@ -519,6 +520,7 @@ impl CoreShellActionProvider {
                         &turn,
                         call_id,
                         approval_id,
+                        Some(ExecApprovalPurpose::Execve),
                         environment_id,
                         command,
                         workdir.clone(),
