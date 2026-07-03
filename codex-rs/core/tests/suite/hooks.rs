@@ -22,6 +22,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::TestTargetOs;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
@@ -43,6 +44,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -4017,10 +4019,16 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     let server = start_mock_server().await;
     let start_call_id = "posttooluse-exec-session-start";
     let poll_call_id = "posttooluse-exec-session-poll";
-    let command = "sleep 1; printf session-post-hook-output".to_string();
+    let command = match test_target_os() {
+        TestTargetOs::Linux | TestTargetOs::MacOs => {
+            "sleep 1; printf session-post-hook-output".to_string()
+        }
+        TestTargetOs::Windows => {
+            "Start-Sleep -Seconds 1; [Console]::Write('session-post-hook-output')".to_string()
+        }
+    };
     let start_args = serde_json::json!({
         "cmd": command,
-        "shell": "/bin/sh",
         "login": false,
         "tty": false,
         "yield_time_ms": 250,

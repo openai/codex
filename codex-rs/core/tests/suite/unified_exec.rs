@@ -408,7 +408,6 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     let call_id = "uexec-begin-event";
     let args = json!({
-        "shell": "bash".to_string(),
         "cmd": "/bin/echo hello unified exec".to_string(),
         "yield_time_ms": 250,
     });
@@ -1298,7 +1297,6 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     let open_call_id = "uexec-open-session";
     let open_args = json!({
-        "shell": "bash".to_string(),
         "cmd": "sleep 0.1".to_string(),
         "yield_time_ms": 10,
     });
@@ -2038,7 +2036,7 @@ async fn model_shell_resolution_failure_precedes_process_allocation_and_events()
             .enable(Feature::UnifiedExec)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = builder.build(&server).await?;
 
     let invalid_call_id = "uexec-missing-model-shell";
     let invalid_args = serde_json::json!({

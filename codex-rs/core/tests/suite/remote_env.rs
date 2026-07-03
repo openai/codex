@@ -253,15 +253,19 @@ async fn compatible_remote_path_hint_uses_environment_shell_in_remote_cwd() -> R
 
     skip_if_no_remote_env!(Ok(()));
 
-    let (shell, expected_cwd_prefix) = match test_target_os() {
-        TestTargetOs::Linux => ("/attacker/bash", "/tmp/codex-core-test-cwd-"),
-        TestTargetOs::Windows => (r"C:\attacker\PowerShell.ExE", r"C:\codex-core-test-cwd-"),
+    let (shell, command, expected_cwd_prefix) = match test_target_os() {
+        TestTargetOs::Linux => ("/attacker/bash", "pwd", "/tmp/codex-core-test-cwd-"),
+        TestTargetOs::Windows => (
+            r"C:\attacker\PowerShell.ExE",
+            "Write-Output (Get-Location).Path",
+            r"C:\codex-core-test-cwd-",
+        ),
         TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
     };
 
     let server = start_mock_server().await;
     let arguments = serde_json::to_string(&json!({
-        "cmd": "pwd",
+        "cmd": command,
         "shell": shell,
         "login": false,
         "yield_time_ms": 10_000,

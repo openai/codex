@@ -117,10 +117,10 @@ pub fn detect_shell_type(shell_path: impl AsRef<std::path::Path>) -> Option<Shel
     let shell_path = shell_path.as_ref();
     #[cfg(windows)]
     {
-        return shell_path
+        shell_path
             .as_os_str()
             .to_str()
-            .and_then(detect_shell_type_from_hint);
+            .and_then(detect_shell_type_from_hint)
     }
     #[cfg(not(windows))]
     match shell_path.as_os_str().to_str() {
