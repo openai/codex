@@ -158,6 +158,9 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     type ApprovalKey = UnifiedExecApprovalKey;
 
     fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
+        if req.exec_approval_requirement.is_one_shot() {
+            return Vec::new();
+        }
         vec![UnifiedExecApprovalKey {
             environment_id: req.turn_environment.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
@@ -177,11 +180,15 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
+        let approval_id = ctx.approval_id.clone();
+        let approval_purpose = ctx.approval_purpose;
         let command = req.command.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let guardian_review_id = ctx.guardian_review_id.clone();
+        let network_approval_context = ctx.network_approval_context.clone();
+        let one_shot = req.exec_approval_requirement.is_one_shot();
         Box::pin(async move {
             let native_cwd = match req.cwd.to_abs_path() {
                 Ok(c) => c,
@@ -211,18 +218,19 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                 .await;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
+                let available_decisions =
+                    one_shot.then(|| vec![ReviewDecision::Approved, ReviewDecision::Abort]);
                 session
                     .request_command_approval(
                         turn,
                         call_id,
-                        /*approval_id*/ None,
-                        /*approval_purpose*/ None,
+                        approval_id,
+                        Some(approval_purpose),
                         environment_id,
                         command,
                         native_cwd,
                         reason,
-                        ctx.network_approval_context.clone(),
+                        network_approval_context,
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -492,9 +500,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 mod tests {
     use super::*;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+    use crate::state::ActiveTurn;
     use crate::tools::sandboxing::ToolRuntime;
     use codex_exec_server::Environment;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ExecApprovalPurpose;
     use codex_tools::ZshForkConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
@@ -550,6 +561,72 @@ mod tests {
         let other_key = runtime.approval_keys(&request);
 
         assert_ne!(original_key, other_key);
+    }
+
+    #[tokio::test]
+    async fn one_shot_approval_has_no_session_cache_key() {
+        let manager = UnifiedExecProcessManager::default();
+        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::NeedsOneShotApproval {
+                reason: Some("one run only".to_string()),
+            },
+        );
+
+        assert!(runtime.approval_keys(&request).is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_shot_approval_routes_by_callback_id() {
+        let (session, turn, events) =
+            crate::session::tests::make_session_and_context_with_rx().await;
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let manager = UnifiedExecProcessManager::default();
+        let mut runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let request = test_request(
+            SandboxPermissions::UseDefault,
+            ExecApprovalRequirement::NeedsOneShotApproval {
+                reason: Some("one run only".to_string()),
+            },
+        );
+        let call_id = "command-item";
+        let approval_id = "retry-callback";
+        let approval = runtime.start_approval_async(
+            &request,
+            ApprovalCtx {
+                session: &session,
+                turn: &turn,
+                call_id,
+                approval_id: Some(approval_id.to_string()),
+                approval_purpose: ExecApprovalPurpose::SandboxRetry,
+                guardian_review_id: None,
+                retry_reason: Some("sandbox denied".to_string()),
+                network_approval_context: None,
+            },
+        );
+        let respond = async {
+            let event = events.recv().await.expect("approval event");
+            let EventMsg::ExecApprovalRequest(event) = event.msg else {
+                panic!("expected exec approval");
+            };
+            assert_eq!(event.call_id, call_id);
+            assert_eq!(event.approval_id.as_deref(), Some(approval_id));
+            assert_eq!(
+                event.approval_purpose,
+                Some(ExecApprovalPurpose::SandboxRetry)
+            );
+            assert_eq!(
+                event.effective_available_decisions(),
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            );
+            session
+                .notify_exec_approval(approval_id, ReviewDecision::Approved)
+                .await;
+        };
+
+        let (decision, ()) = tokio::join!(approval, respond);
+        assert_eq!(decision, ReviewDecision::Approved);
     }
 
     #[tokio::test]

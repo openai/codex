@@ -2130,10 +2130,13 @@ impl Session {
 
     /// Emit an exec approval request event and await the user's decision.
     ///
-    /// The request is keyed by `call_id` + `approval_id` so matching responses
-    /// are delivered to the correct in-flight turn. If the pending approval is
-    /// cleared before a response arrives, treat it as an abort so interrupted
-    /// turns do not continue on a synthetic denial.
+    /// `call_id` is the stable command-item identity. A callback-specific
+    /// `approval_id`, when present, is the response-routing identity; otherwise
+    /// `call_id` is used for both. Each callback-specific ID must be unique so a
+    /// delayed or replayed response cannot resolve a later prompt for the same
+    /// item. If the pending approval is cleared before a response arrives,
+    /// treat it as an abort so interrupted turns do not continue on a synthetic
+    /// denial.
     ///
     /// If `available_decisions` is `None`, callback-scoped requests use the
     /// one-shot approve/abort set; other requests derive their decisions via
@@ -2158,8 +2161,9 @@ impl Session {
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
-        // Command-level approvals use `call_id`; callback-scoped approvals can
-        // supply a distinct ID for matching the response.
+        // Cacheable single-prompt approvals use `call_id`. Callback-scoped
+        // approvals carry a fresh opaque ID for response routing while
+        // `call_id` remains the stable command-item identity.
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
