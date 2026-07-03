@@ -482,42 +482,53 @@ impl McpConnectionManager {
     /// Returns all tools with model-visible names normalized.
     #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        let mut tools = Vec::new();
-        for (server_name, managed_client) in &self.clients {
-            managed_client.reconnect_failed_startup().await;
-            let has_cached_tools = managed_client.has_cached_tools();
-            let startup_complete = managed_client
-                .startup_complete
-                .load(std::sync::atomic::Ordering::Acquire);
-            trace!(
-                server_name = %server_name,
-                has_cached_tools,
-                startup_complete,
-                "waiting for MCP server tools while building tool list"
-            );
-            let Some(server_tools) = managed_client
-                .listed_tools()
+        let tools: Vec<ToolInfo> =
+            futures::future::join_all(self.clients.iter().map(|(server_name, managed_client)| {
+                let required = self.required_servers.binary_search(server_name).is_ok();
+                async move {
+                    managed_client.reconnect_failed_startup().await;
+                    let has_cached_tools = managed_client.has_cached_tools();
+                    let startup_complete = managed_client.startup_complete.load(Ordering::Acquire);
+                    trace!(
+                        server_name = %server_name,
+                        required,
+                        has_cached_tools,
+                        startup_complete,
+                        "listing MCP server tools while building tool list"
+                    );
+                    if !required && !startup_complete && !has_cached_tools {
+                        trace!(
+                            server_name = %server_name,
+                            "skipping pending optional MCP server without cached tools"
+                        );
+                        return None;
+                    }
+                    if required && !startup_complete && has_cached_tools {
+                        let _ = managed_client.client().await;
+                    }
+                    let server_tools = managed_client.listed_tools().await;
+                    if let Some(server_tools) = &server_tools {
+                        trace!(
+                            server_name = %server_name,
+                            required,
+                            tool_count = server_tools.len(),
+                            "listed MCP server tools while building tool list"
+                        );
+                    }
+                    server_tools
+                }
                 .instrument(trace_span!(
                     "list_tools_for_server",
                     server_name = %server_name,
-                    has_cached_tools,
-                    startup_complete
+                    required
                 ))
-                .await
-            else {
-                continue;
-            };
-            trace!(
-                server_name = %server_name,
-                tool_count = server_tools.len(),
-                "listed MCP server tools while building tool list"
-            );
-            tools.extend(
-                server_tools
-                    .into_iter()
-                    .map(|tool| self.with_server_metadata(tool)),
-            );
-        }
+            }))
+            .await
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|tool| self.with_server_metadata(tool))
+            .collect();
         normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
