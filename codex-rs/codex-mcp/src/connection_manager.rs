@@ -136,6 +136,7 @@ impl McpConnectionManager {
         codex_home: PathBuf,
         codex_apps_tools_cache: CodexAppsToolsCache,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        enable_codex_apps_tools_cache: bool,
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
         supports_openai_form_elicitation: bool,
@@ -192,8 +193,11 @@ impl McpConnectionManager {
                     } => bearer_token_env_var.is_some(),
                     McpServerTransportConfig::Stdio { .. } => false,
                 });
-            let shares_codex_apps_tools_cache =
-                should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
+            let shares_codex_apps_tools_cache = should_share_codex_apps_tools_cache(
+                &server_name,
+                uses_env_bearer_token,
+                enable_codex_apps_tools_cache,
+            );
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
                 codex_apps_tools_cache
                     .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
@@ -913,8 +917,12 @@ fn chatgpt_auth_provider_for_server(
     chatgpt_auth_provider
 }
 
-fn should_share_codex_apps_tools_cache(server_name: &str, uses_env_bearer_token: bool) -> bool {
-    server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token
+fn should_share_codex_apps_tools_cache(
+    server_name: &str,
+    uses_env_bearer_token: bool,
+    cache_enabled: bool,
+) -> bool {
+    server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token && cache_enabled
 }
 
 async fn emit_update(

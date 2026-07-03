@@ -1764,13 +1764,14 @@ impl PluginRequestProcessor {
         }
 
         let environment_manager = self.thread_manager.environment_manager();
+        let mcp_manager = self.thread_manager.mcp_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
             connectors::list_all_connectors_with_options(config, /*force_refetch*/ false, &[]),
             connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
                 config,
                 /*force_refetch*/ true,
                 Arc::clone(&environment_manager),
-                self.thread_manager.mcp_manager(),
+                Arc::clone(&mcp_manager),
             ),
         );
 
@@ -1795,9 +1796,12 @@ impl PluginRequestProcessor {
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
                 (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config)
-                        .await
-                        .unwrap_or_default(),
+                    connectors::list_cached_accessible_connectors_from_mcp_tools(
+                        config,
+                        mcp_manager.as_ref(),
+                    )
+                    .await
+                    .unwrap_or_default(),
                     false,
                 )
             }

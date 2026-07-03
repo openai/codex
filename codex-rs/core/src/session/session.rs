@@ -1207,6 +1207,9 @@ impl Session {
                 config.codex_home.to_path_buf(),
                 sess.services.mcp_manager.codex_apps_tools_cache(),
                 codex_apps_tools_cache_key(auth),
+                /*enable_codex_apps_tools_cache*/ !codex_mcp::extension_managed_codex_apps_enabled(
+                    &mcp_config,
+                ),
                 config.prefix_mcp_tool_names(),
                 mcp_config.client_elicitation_capability.clone(),
                 sess.services

@@ -700,6 +700,7 @@ async fn refresh_codex_apps_after_connector_auth(
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn_context.config,
                 auth.as_ref(),
+                turn_context.extension_managed_apps_enabled,
                 &mcp_tools,
             );
         }
@@ -1489,6 +1490,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
+            sess.services.mcp_manager.as_ref(),
         )
         .await
         {

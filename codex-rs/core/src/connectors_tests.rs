@@ -6,6 +6,7 @@ use codex_config::AppsRequirementsToml;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::McpServerAuth;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_connectors::merge::plugin_connector_to_app_info;
@@ -90,6 +91,41 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = previous;
     result
+}
+
+struct ExtensionManagedCodexApps;
+
+impl codex_extension_api::McpServerContributor<Config> for ExtensionManagedCodexApps {
+    fn id(&self) -> &'static str {
+        "extension_managed_codex_apps"
+    }
+
+    fn contribute<'a>(
+        &'a self,
+        context: codex_extension_api::McpServerContributionContext<'a, Config>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+    {
+        Box::pin(async move {
+            let mut server = codex_mcp::codex_apps_mcp_server_config(
+                &context.config().chatgpt_base_url,
+                /*apps_mcp_product_sku*/ None,
+            );
+            server.auth = McpServerAuth::OAuth;
+            vec![codex_extension_api::McpServerContribution::Set {
+                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                config: Box::new(server),
+            }]
+        })
+    }
+}
+
+fn extension_managed_mcp_manager(config: &Config) -> McpManager {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
+    builder.mcp_server_contributor(Arc::new(ExtensionManagedCodexApps));
+    McpManager::new_with_extensions(
+        Arc::new(PluginsManager::new(config.codex_home.to_path_buf())),
+        Arc::new(builder.build()),
+    )
 }
 
 #[test]
@@ -238,7 +274,9 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
     ];
 
     let cached = with_accessible_connectors_cache_cleared(|| {
-        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
+        refresh_accessible_connectors_cache_from_mcp_tools(
+            &config, /*auth*/ None, /*extension_managed_apps_enabled*/ false, &tools,
+        );
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
     });
 
@@ -280,6 +318,69 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
                 plugin_display_names: Vec::new(),
             }
         ]
+    );
+}
+
+#[tokio::test]
+async fn extension_managed_apps_do_not_write_accessible_connectors_cache() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
+    let tools = vec![codex_app_tool(
+        "calendar_list_events",
+        "calendar",
+        Some("Google Calendar"),
+        &[],
+    )];
+
+    let cached = with_accessible_connectors_cache_cleared(|| {
+        refresh_accessible_connectors_cache_from_mcp_tools(
+            &config, /*auth*/ None, /*extension_managed_apps_enabled*/ true, &tools,
+        );
+        read_cached_accessible_connectors(&cache_key)
+    });
+
+    assert_eq!(cached, None);
+}
+
+#[tokio::test]
+async fn extension_managed_apps_bypass_cached_connector_lookup_without_chatgpt_auth() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let mcp_manager = extension_managed_mcp_manager(&config);
+
+    assert_eq!(
+        list_cached_accessible_connectors_from_mcp_tools(&config, &mcp_manager).await,
+        None,
+    );
+}
+
+#[tokio::test]
+async fn compatibility_apps_remain_hidden_without_chatgpt_auth() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
+        config.codex_home.to_path_buf(),
+    )));
+
+    assert_eq!(
+        list_cached_accessible_connectors_from_mcp_tools(&config, &mcp_manager).await,
+        Some(Vec::new()),
     );
 }
 

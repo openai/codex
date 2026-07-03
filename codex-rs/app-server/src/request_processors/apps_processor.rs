@@ -66,10 +66,9 @@ impl AppsRequestProcessor {
         }
 
         let auth = self.auth_manager.auth().await;
-        if !config
-            .features
-            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
-        {
+        let mcp_manager = self.thread_manager.mcp_manager();
+        let mcp_config = mcp_manager.runtime_config(&config).await;
+        if !codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
             return Ok(Some(AppsListResponse {
                 data: Vec::new(),
                 next_cursor: None,
@@ -89,7 +88,6 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
-        let mcp_manager = self.thread_manager.mcp_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
@@ -192,7 +190,10 @@ impl AppsRequestProcessor {
             );
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
+            connectors::list_cached_accessible_connectors_from_mcp_tools(
+                &config,
+                mcp_manager.as_ref(),
+            ),
             connectors::list_cached_all_connectors(&config, &plugin_apps)
         );
         let cached_all_connectors = all_connectors.clone();

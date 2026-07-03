@@ -40,6 +40,8 @@ use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
+use codex_mcp::extension_managed_codex_apps_enabled;
+use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::tool_plugin_provenance;
 
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -130,15 +132,17 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
+    mcp_manager: &McpManager,
 ) -> Option<Vec<AppInfo>> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
-    if !config
-        .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
-    {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    if !host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
         return Some(Vec::new());
+    }
+    if extension_managed_codex_apps_enabled(&mcp_config) {
+        return None;
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     read_cached_accessible_connectors(&cache_key)
@@ -147,9 +151,10 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
+    extension_managed_apps_enabled: bool,
     mcp_tools: &[ToolInfo],
 ) {
-    if !config.features.enabled(Feature::Apps) {
+    if !config.features.enabled(Feature::Apps) || extension_managed_apps_enabled {
         return;
     }
 
@@ -216,19 +221,19 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
-    if !config
-        .features
-        .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
-    {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    if !host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
         });
     }
-    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let mcp_config = mcp_manager.runtime_config(config).await;
+    let cache_key = (!extension_managed_codex_apps_enabled(&mcp_config))
+        .then(|| accessible_connectors_cache_key(config, auth.as_ref()));
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
-    if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
+    if !force_refetch
+        && let Some(cache_key) = cache_key.as_ref()
+        && let Some(cached_connectors) = read_cached_accessible_connectors(cache_key)
     {
         let cached_connectors = with_app_plugin_sources(cached_connectors, &tool_plugin_provenance);
         return Ok(AccessibleConnectorsStatus {
@@ -277,6 +282,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         config.codex_home.to_path_buf(),
         mcp_manager.codex_apps_tools_cache(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        /*enable_codex_apps_tools_cache*/ !extension_managed_codex_apps_enabled(&mcp_config),
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,
@@ -343,7 +349,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     }
 
     let accessible_connectors = accessible_connectors_for_app_list_from_mcp_tools(&tools);
-    if codex_apps_ready || !accessible_connectors.is_empty() {
+    if (codex_apps_ready || !accessible_connectors.is_empty())
+        && let Some(cache_key) = cache_key
+    {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
     let accessible_connectors =

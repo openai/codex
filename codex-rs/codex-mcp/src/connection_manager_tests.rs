@@ -735,6 +735,25 @@ fn codex_apps_env_bearer_token_bypasses_shared_tools_cache() {
     assert!(!should_share_codex_apps_tools_cache(
         CODEX_APPS_MCP_SERVER_NAME,
         /*uses_env_bearer_token*/ true,
+        /*cache_enabled*/ true,
+    ));
+}
+
+#[test]
+fn extension_managed_codex_apps_bypass_shared_tools_cache() {
+    assert!(!should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ false,
+    ));
+}
+
+#[test]
+fn codex_apps_chatgpt_auth_uses_shared_tools_cache() {
+    assert!(should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ true,
     ));
 }
 
@@ -1533,6 +1552,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             chatgpt_user_id: None,
             is_workspace_account: false,
         },
+        /*enable_codex_apps_tools_cache*/ true,
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
         /*supports_openai_form_elicitation*/ false,
