@@ -3431,14 +3431,7 @@ impl Session {
         }
         if let Some(multi_agent_mode) = multi_agents::effective_multi_agent_mode(turn_context) {
             items.push(ContextualUserFragment::into(
-                MultiAgentModeInstructions::new(
-                    multi_agent_mode,
-                    turn_context
-                        .config
-                        .multi_agent_v2
-                        .multi_agent_mode_hint_text
-                        .clone(),
-                ),
+                MultiAgentModeInstructions::new(multi_agent_mode),
             ));
         }
         if let Some(contextual_user_message) =

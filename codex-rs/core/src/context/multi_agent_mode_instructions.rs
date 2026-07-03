@@ -9,15 +9,11 @@ const PROACTIVE_MULTI_AGENT_MODE_TEXT: &str = "Proactive multi-agent delegation 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultiAgentModeInstructions {
     multi_agent_mode: MultiAgentMode,
-    hint_text: Option<String>,
 }
 
 impl MultiAgentModeInstructions {
-    pub(crate) fn new(multi_agent_mode: MultiAgentMode, hint_text: Option<String>) -> Self {
-        Self {
-            multi_agent_mode,
-            hint_text,
-        }
+    pub(crate) fn new(multi_agent_mode: MultiAgentMode) -> Self {
+        Self { multi_agent_mode }
     }
 }
 
@@ -35,12 +31,8 @@ impl ContextualUserFragment for MultiAgentModeInstructions {
     }
 
     fn body(&self) -> String {
-        if let Some(hint_text) = &self.hint_text {
-            return hint_text.clone();
-        }
-
-        match self.multi_agent_mode {
-            MultiAgentMode::Custom => String::new(),
+        match &self.multi_agent_mode {
+            MultiAgentMode::Custom(hint_text) => hint_text.clone(),
             MultiAgentMode::ExplicitRequestOnly => {
                 EXPLICIT_REQUEST_ONLY_MULTI_AGENT_MODE_TEXT.to_string()
             }

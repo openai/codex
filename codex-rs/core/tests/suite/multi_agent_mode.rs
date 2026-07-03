@@ -20,6 +20,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 
 const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.";
 const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
@@ -178,14 +179,15 @@ async fn configured_mode_hint_uses_custom_mode_across_reasoning_efforts() -> Res
     let recorded_modes = rollout_values
         .iter()
         .filter(|value| value.get("type").and_then(Value::as_str) == Some("turn_context"))
-        .filter_map(|value| {
-            value
-                .pointer("/payload/multi_agent_mode")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+        .filter_map(|value| value.pointer("/payload/multi_agent_mode").cloned())
         .collect::<Vec<_>>();
-    assert_eq!(recorded_modes, ["custom", "custom"]);
+    assert_eq!(
+        recorded_modes,
+        [
+            json!({"custom": CUSTOM_MODE_HINT_TEXT}),
+            json!({"custom": CUSTOM_MODE_HINT_TEXT}),
+        ]
+    );
 
     Ok(())
 }

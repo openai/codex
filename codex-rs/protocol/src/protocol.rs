@@ -2668,7 +2668,7 @@ impl InitialHistory {
                 | RolloutItem::WorldState(_)
                 | RolloutItem::EventMsg(_) => None,
             })
-            .and_then(|turn_context| turn_context.multi_agent_mode)
+            .and_then(|turn_context| turn_context.multi_agent_mode.clone())
     }
 
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
@@ -5737,6 +5737,25 @@ mod tests {
             ])
             .get_latest_effective_multi_agent_mode(),
             None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn latest_effective_multi_agent_mode_maps_legacy_none_to_empty_custom() -> Result<()> {
+        let value = json!({
+            "cwd": test_path_buf("/tmp"),
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "multi_agent_mode": "none",
+            "summary": "auto",
+        });
+        let item = RolloutItem::TurnContext(serde_json::from_value(value)?);
+
+        assert_eq!(
+            InitialHistory::Forked(vec![item]).get_latest_effective_multi_agent_mode(),
+            Some(MultiAgentMode::Custom(String::new()))
         );
         Ok(())
     }

@@ -85,23 +85,10 @@ fn build_multi_agent_mode_update_item(
     }
 
     match effective_multi_agent_mode {
-        Some(multi_agent_mode) => Some(
-            MultiAgentModeInstructions::new(
-                multi_agent_mode,
-                next.config
-                    .multi_agent_v2
-                    .multi_agent_mode_hint_text
-                    .clone(),
-            )
-            .render(),
-        ),
-        None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => Some(
-            MultiAgentModeInstructions::new(
-                MultiAgentMode::ExplicitRequestOnly,
-                /*hint_text*/ None,
-            )
-            .render(),
-        ),
+        Some(multi_agent_mode) => Some(MultiAgentModeInstructions::new(multi_agent_mode).render()),
+        None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
+            Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())
+        }
         None => None,
     }
 }
