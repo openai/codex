@@ -1,7 +1,10 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::executable_name::executable_lookup_key;
 use crate::executable_name::executable_path_lookup_key;
+#[cfg(windows)]
+use crate::executable_name::has_windows_verbatim_or_device_prefix;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
@@ -15,6 +18,7 @@ use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
@@ -294,6 +298,37 @@ impl Policy {
         }
     }
 
+    /// Returns exact matches plus lexical basename `Prompt` and `Forbidden`
+    /// matches. Basename `Allow` matches are always discarded.
+    ///
+    /// Unlike ordinary host-executable resolution, restrictive basename
+    /// matching intentionally ignores `host_executable` path allowlists so an
+    /// unlisted or relative executable cannot escape an authored restriction.
+    /// Exact matches, including exact `Allow` rules, retain their meaning.
+    pub fn matches_for_command_with_restrictive_host_rules(
+        &self,
+        cmd: &[String],
+        heuristics_fallback: HeuristicsFallback<'_>,
+    ) -> Vec<RuleMatch> {
+        let mut matched_rules = self.match_exact_rules(cmd).unwrap_or_default();
+        for rule_match in self.match_restrictive_basename_rules(cmd) {
+            if !matched_rules.contains(&rule_match) {
+                matched_rules.push(rule_match);
+            }
+        }
+
+        if matched_rules.is_empty()
+            && let Some(heuristics_fallback) = heuristics_fallback
+        {
+            vec![RuleMatch::HeuristicsRuleMatch {
+                command: cmd.to_vec(),
+                decision: heuristics_fallback(cmd),
+            }]
+        } else {
+            matched_rules
+        }
+    }
+
     fn match_exact_rules(&self, cmd: &[String]) -> Option<Vec<RuleMatch>> {
         let first = cmd.first()?;
         Some(
@@ -308,10 +343,18 @@ impl Policy {
         let Some(first) = cmd.first() else {
             return Vec::new();
         };
-        let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {
+        let raw_path = Path::new(first);
+        let Some(basename) = executable_path_lookup_key(raw_path) else {
             return Vec::new();
         };
-        let Some(basename) = executable_path_lookup_key(program.as_path()) else {
+        #[cfg(windows)]
+        let namespace_path = has_windows_verbatim_or_device_prefix(raw_path);
+        #[cfg(not(windows))]
+        let namespace_path = false;
+        if namespace_path && self.host_executables_by_name.contains_key(&basename) {
+            return Vec::new();
+        }
+        let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {
             return Vec::new();
         };
         let Some(rules) = self.rules_by_program.get_vec(&basename) else {
@@ -329,7 +372,74 @@ impl Policy {
         rules
             .iter()
             .filter_map(|rule| rule.matches(&basename_command))
-            .map(|rule_match| rule_match.with_resolved_program(&program))
+            .map(|rule_match| {
+                if namespace_path {
+                    rule_match
+                } else {
+                    rule_match.with_resolved_program(&program)
+                }
+            })
+            .collect()
+    }
+
+    fn match_restrictive_basename_rules(&self, cmd: &[String]) -> Vec<RuleMatch> {
+        let Some(first) = cmd.first() else {
+            return Vec::new();
+        };
+        let path = Path::new(first);
+        let Some(path_key) = executable_path_lookup_key(path) else {
+            return Vec::new();
+        };
+        let Some(raw_basename) = path.file_name().and_then(|name| name.to_str()) else {
+            return Vec::new();
+        };
+
+        #[cfg(windows)]
+        let normalized_raw_basename = raw_basename
+            .trim_end_matches([' ', '.'])
+            .to_ascii_lowercase();
+        #[cfg(not(windows))]
+        let normalized_raw_basename = raw_basename.to_string();
+        #[cfg(windows)]
+        let raw_basename = raw_basename.to_ascii_lowercase();
+        #[cfg(not(windows))]
+        let raw_basename = raw_basename.to_string();
+
+        let mut basenames = vec![path_key, executable_lookup_key(&raw_basename)];
+        basenames.dedup();
+        for basename in [normalized_raw_basename, raw_basename] {
+            if !basenames.contains(&basename) {
+                basenames.push(basename);
+            }
+        }
+
+        #[cfg(windows)]
+        let namespace_path = has_windows_verbatim_or_device_prefix(path);
+        #[cfg(not(windows))]
+        let namespace_path = false;
+        let resolved_program = (!namespace_path && path.is_absolute())
+            .then(|| AbsolutePathBuf::try_from(first.clone()).ok())
+            .flatten();
+
+        basenames
+            .into_iter()
+            .flat_map(|basename| {
+                let Some(rules) = self.rules_by_program.get_vec(&basename) else {
+                    return Vec::new();
+                };
+                let basename_command = std::iter::once(basename)
+                    .chain(cmd.iter().skip(1).cloned())
+                    .collect::<Vec<_>>();
+                rules
+                    .iter()
+                    .filter_map(|rule| rule.matches(&basename_command))
+                    .filter(|rule_match| rule_match.decision() != Decision::Allow)
+                    .map(|rule_match| match resolved_program.as_ref() {
+                        Some(program) => rule_match.with_resolved_program(program),
+                        None => rule_match,
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 }
