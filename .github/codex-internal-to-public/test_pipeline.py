@@ -216,6 +216,47 @@ class PipelineIntegrationTest(unittest.TestCase):
                 ),
             )
 
+    def test_validate_message_reads_generated_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "public-history").mkdir()
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+            message_file = runner_temp / "public-commit-message.md"
+            message_file.write_text(
+                "Describe the public change\n\nPublic details.\n\n",
+                encoding="utf-8",
+            )
+
+            run_pipeline(repo, runner_temp, "validate-message")
+
+            self.assertEqual(
+                message_file.read_text(encoding="utf-8"),
+                "Describe the public change\n\nPublic details.\n",
+            )
+
+    def test_validate_message_rejects_missing_generated_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "public-history").mkdir()
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+
+            result = run_pipeline(
+                repo,
+                runner_temp,
+                "validate-message",
+                env={"CODEX_OUTPUT": "Do not accept this fallback"},
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("public-commit-message.md", result.stderr)
+
     def test_manual_message_override_publishes_without_model_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

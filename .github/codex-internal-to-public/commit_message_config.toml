@@ -6,6 +6,9 @@ description = "Inspect a writable public repository and verify public GitHub ref
 
 [permissions.public-commit-message.filesystem]
 ":minimal" = "read"
+"/opt/hostedtoolcache" = "read"
+"~/.cargo/bin" = "read"
+"~/.rustup" = "read"
 
 [permissions.public-commit-message.filesystem.":workspace_roots"]
 "." = "read"

@@ -121,17 +121,19 @@ message artifact as the Codex configuration because the message job deliberately
 the internal repo. A pre-Codex step installs it into a Codex home under `runner.temp`, outside the
 workspace paths that model-invoked commands can read.
 
-The profile gives commands read-only access to minimal runtime paths and the job workspace, with
-write access limited to `message-workspace/` and `message-input/scratch/`. The workflow installs
-Rust and points Cargo's home and target directories at scratch space. This lets Codex inspect and
-edit the public working tree and run Cargo builds, tests, or examples while keeping the synthetic
-target commit unchanged. The configuration enables the managed network proxy so its domain policy
-limits requests to public GitHub, Cargo registry, and Rust distribution hosts. The job receives no
-GitHub token. Its OpenAI API key comes from the protected `public-commit-message` GitHub environment,
-whose deployment branch policy permits only `copybara-no-internal-code`; other jobs cannot access
-that environment secret because they do not reference the environment. The workflow selects the
-profile through `openai/codex-action@v1.10`, removes sudo, and runs Codex as the final step in its
-job so no later step inherits its process environment. See the
+The profile gives commands read-only access to minimal runtime paths, the GitHub-hosted runner's
+`/opt/hostedtoolcache` tree, the installed Cargo binaries and Rust toolchains, and the job workspace.
+Write access remains limited to `message-workspace/` and `message-input/scratch/`. The workflow
+installs Rust and points Cargo's home, target, and temporary directories at scratch space. This lets
+Codex inspect and edit the public working tree and run Cargo builds, tests, or examples while
+keeping the synthetic target commit unchanged. The configuration enables the managed network proxy
+so its domain policy limits requests to public GitHub, Cargo registry, and Rust distribution hosts.
+The job receives no GitHub token. Its OpenAI API key comes from the protected
+`public-commit-message` GitHub environment, whose deployment branch policy permits only
+`copybara-no-internal-code`; other jobs cannot access that environment secret because they do not
+reference the environment. The workflow selects the profile through `openai/codex-action@v1.10`
+and removes sudo. After Codex exits, fixed workflow steps only require and upload the generated
+message file; they do not consume the model's final chat response. See the
 [Codex permissions documentation](https://developers.openai.com/codex/permissions) when changing
 the profile.
 
@@ -145,8 +147,8 @@ references are limited to ten URLs and 2,000 bytes.
 The subject should normally fit within 72 characters, but validation does not enforce that
 guideline. The body is GitHub-Flavored Markdown and may use headings, lists, tables, links, and
 fenced code blocks when they improve the public explanation. The body may contain at most 5,000
-UTF-8 bytes. Validation writes the accepted message to `public-commit-message.md` for the publish
-job.
+UTF-8 bytes. The model job must upload its `public-commit-message.md` file; a missing file fails the
+job. A fresh runner validates that file in place before passing it to the publish job.
 
 The message-input artifact includes the same `message_policy.py` source used by the fresh validation
 job. The prompt directs Codex to read it and run the executable

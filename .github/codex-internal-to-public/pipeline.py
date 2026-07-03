@@ -13,10 +13,10 @@ the exact candidate tree with a placeholder message. A separate workflow imports
 branch into a full ``openai/codex`` clone, so Codex can inspect the target and real public history
 without receiving internal Git objects or the original commit message.
 
-``validate-message`` enforces the public message policy on either Codex output or a reviewed manual
-override. ``publish`` rechecks branch state, applies the projected tree and validated message to the
-ready branch, updates the state marker, and pushes with a lease so concurrent runs cannot silently
-overwrite one another.
+``validate-message`` enforces the public message policy on either the file produced by Codex or a
+reviewed manual override. ``publish`` rechecks branch state, applies the projected tree and
+validated message to the ready branch, updates the state marker, and pushes with a lease so
+concurrent runs cannot silently overwrite one another.
 """
 
 import json
@@ -84,6 +84,7 @@ def main() -> int:
         )
     command = sys.argv[1]
     runner_temp = Path(required_env("RUNNER_TEMP"))
+    public_message_file = runner_temp / "public-commit-message.md"
     github_output_value = os.environ.get("GITHUB_OUTPUT")
     github_output = Path(github_output_value) if github_output_value else None
     if command == "prepare":
@@ -98,7 +99,7 @@ def main() -> int:
     elif command == "validate-message":
         message_override = read_public_message_override()
         if message_override is None:
-            message = required_env("CODEX_OUTPUT")
+            message = public_message_file.read_text(encoding="utf-8")
         else:
             message = message_override.subject
             if message_override.body.strip():
@@ -106,13 +107,13 @@ def main() -> int:
         validate_message(
             message,
             Path("public-history"),
-            runner_temp / "public-commit-message.md",
+            public_message_file,
         )
     elif command == "publish":
         publish(
             runner_temp / "public-projection.tgz",
             runner_temp / "publish-metadata.json",
-            runner_temp / "public-commit-message.md",
+            public_message_file,
             github_output,
         )
     else:

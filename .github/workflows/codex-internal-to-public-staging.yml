@@ -101,8 +101,6 @@ jobs:
     environment: public-commit-message
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
       - name: Checkout public message workspace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -137,10 +135,7 @@ jobs:
             "$RUNNER_TEMP/codex-home/config.toml"
           install -d -m 0700 message-input/scratch/tmp
 
-      # Keep Codex last in this job. A fresh runner validates its output and a
-      # different fresh runner receives the write-capable token.
       - name: Generate public commit message
-        id: codex
         uses: openai/codex-action@6b771854be52d8637d060e4b15120b9d746282ab # v1.10
         env:
           CARGO_HOME: ${{ github.workspace }}/message-input/scratch/cargo-home
@@ -153,6 +148,22 @@ jobs:
           permission-profile: public-commit-message
           safety-strategy: drop-sudo
           prompt-file: message-input/prompt.md
+
+      # The model must create this regular file through its sandboxed tools. Its
+      # final chat response is deliberately ignored, so a tool failure cannot be
+      # mistaken for a commit message. A fresh runner validates the artifact and
+      # a different fresh runner receives the write-capable token.
+      - name: Require generated public message file
+        run: |
+          test -f message-input/scratch/public-commit-message.md
+          test ! -L message-input/scratch/public-commit-message.md
+
+      - name: Upload generated public message
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: generated-public-message
+          path: message-input/scratch/public-commit-message.md
+          if-no-files-found: error
 
   validate-message:
     needs:
@@ -181,9 +192,15 @@ jobs:
           persist-credentials: false
           path: public-history
 
+      - name: Download generated public message
+        if: ${{ needs.prepare.outputs.message_override != 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: generated-public-message
+          path: ${{ runner.temp }}
+
       - name: Validate public message and references
         env:
-          CODEX_OUTPUT: ${{ needs.message.outputs.codex_output }}
           USE_PUBLIC_MESSAGE_OVERRIDE: ${{ inputs.use_public_message_override || false }}
           EXPECTED_CANDIDATE_REVISION: ${{ inputs.expected_candidate_revision || '' }}
           PUBLIC_SUBJECT: ${{ inputs.public_subject || '' }}
