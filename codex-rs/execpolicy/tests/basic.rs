@@ -1126,6 +1126,207 @@ host_executable(name = "git", paths = ["{}"])
 
 #[cfg(windows)]
 #[test]
+fn namespace_literal_aliases_do_not_bypass_equivalent_host_mapping() -> Result<()> {
+    let options = MatchOptions {
+        resolve_host_executables: true,
+    };
+
+    for executable_suffix in [".exe", ".cmd", ".bat", ".com"] {
+        for literal_tail in [".", " ", "...", "   ", ". . ", "..  . "] {
+            let mixed_case = executable_suffix == ".com" && literal_tail == "..  . ";
+            let raw_stem = if mixed_case { "GiT" } else { "git" };
+            let raw_suffix = if mixed_case {
+                ".CoM"
+            } else {
+                executable_suffix
+            };
+            let raw_literal_name = format!("{raw_stem}{raw_suffix}{literal_tail}");
+            let literal_rule_key = raw_literal_name.to_ascii_lowercase();
+            let ordinary_name = format!("git{executable_suffix}");
+            let trusted_path = format!(r"C:\trusted\{ordinary_name}");
+            let mapping_sources = [
+                format!(
+                    r#"host_executable(name = "git", paths = ["{}"] )"#,
+                    starlark_string(&trusted_path)
+                ),
+                format!(
+                    r#"host_executable(name = "{ordinary_name}", paths = ["{}"] )"#,
+                    starlark_string(&trusted_path)
+                ),
+                format!(r#"host_executable(name = "{literal_rule_key}", paths = [])"#),
+                format!(r#"host_executable(name = "{raw_literal_name}", paths = [])"#),
+            ];
+            let namespace_paths = [
+                format!(r"\\?\C:\attacker\{raw_literal_name}"),
+                format!(r"\\?\UNC\server\share\{raw_literal_name}"),
+                format!(r"\\.\C:\attacker\{raw_literal_name}"),
+                format!(r"\\.\UNC\server\share\{raw_literal_name}"),
+            ];
+
+            for mapping_source in mapping_sources {
+                let policy = parse_policy(&format!(
+                    r#"
+prefix_rule(pattern = ["{literal_rule_key}"], decision = "allow")
+{mapping_source}
+"#
+                ))?;
+                for executable in &namespace_paths {
+                    assert!(
+                        policy
+                            .matches_for_command_with_options(
+                                &[executable.clone(), "status".to_string()],
+                                None,
+                                &options,
+                            )
+                            .is_empty(),
+                        "suffix={executable_suffix:?} tail={literal_tail:?} mapping={mapping_source:?} executable={executable:?}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn unmapped_namespace_literal_rules_preserve_authored_decisions() -> Result<()> {
+    let raw_literal_name = "GiT.ExE. . ";
+    let literal_rule_key = raw_literal_name.to_ascii_lowercase();
+    let namespace_paths = [
+        format!(r"\\?\C:\attacker\{raw_literal_name}"),
+        format!(r"\\?\UNC\server\share\{raw_literal_name}"),
+        format!(r"\\.\C:\attacker\{raw_literal_name}"),
+        format!(r"\\.\UNC\server\share\{raw_literal_name}"),
+    ];
+    let unrelated_mapping = format!(
+        r#"host_executable(name = "rg", paths = ["{}"] )"#,
+        starlark_string(r"C:\trusted\rg.exe")
+    );
+    let options = MatchOptions {
+        resolve_host_executables: true,
+    };
+
+    for mapping_source in [String::new(), unrelated_mapping] {
+        for (wire_decision, decision) in [
+            ("allow", Decision::Allow),
+            ("prompt", Decision::Prompt),
+            ("forbidden", Decision::Forbidden),
+        ] {
+            let policy = parse_policy(&format!(
+                r#"
+prefix_rule(pattern = ["{literal_rule_key}"], decision = "{wire_decision}")
+{mapping_source}
+"#
+            ))?;
+            for executable in &namespace_paths {
+                assert_eq!(
+                    policy.matches_for_command_with_options(
+                        &[executable.clone(), "status".to_string()],
+                        None,
+                        &options,
+                    ),
+                    vec![RuleMatch::PrefixRuleMatch {
+                        matched_prefix: vec![literal_rule_key.clone()],
+                        decision,
+                        resolved_program: None,
+                        justification: None,
+                    }],
+                    "{mapping_source:?}/{wire_decision}: {executable:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn exact_namespace_rules_precede_equivalent_host_mapping() -> Result<()> {
+    let namespace_path = r"\\?\C:\attacker\git.exe.";
+    let trusted_path = starlark_string(r"C:\trusted\git.exe");
+    let options = MatchOptions {
+        resolve_host_executables: true,
+    };
+
+    for (wire_decision, decision) in [
+        ("allow", Decision::Allow),
+        ("prompt", Decision::Prompt),
+        ("forbidden", Decision::Forbidden),
+    ] {
+        let policy = parse_policy(&format!(
+            r#"
+prefix_rule(pattern = ["{}"], decision = "{wire_decision}")
+prefix_rule(pattern = ["git.exe."], decision = "forbidden")
+host_executable(name = "git", paths = ["{trusted_path}"])
+"#,
+            starlark_string(namespace_path)
+        ))?;
+
+        assert_eq!(
+            policy.matches_for_command_with_options(
+                &[namespace_path.to_string(), "status".to_string()],
+                None,
+                &options,
+            ),
+            vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec![namespace_path.to_string()],
+                decision,
+                resolved_program: None,
+                justification: None,
+            }],
+            "{wire_decision}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn mapped_namespace_literal_restrictions_stay_in_restrictive_overlay() -> Result<()> {
+    let namespace_path = r"\\?\C:\attacker\git.exe.";
+    let trusted_path = starlark_string(r"C:\trusted\git.exe");
+
+    for (wire_decision, decision) in [
+        ("allow", Decision::Allow),
+        ("prompt", Decision::Prompt),
+        ("forbidden", Decision::Forbidden),
+    ] {
+        let policy = parse_policy(&format!(
+            r#"
+prefix_rule(pattern = ["git.exe."], decision = "{wire_decision}")
+host_executable(name = "git", paths = ["{trusted_path}"])
+"#
+        ))?;
+        let command = vec![namespace_path.to_string(), "status".to_string()];
+        let expected = if decision == Decision::Allow {
+            RuleMatch::HeuristicsRuleMatch {
+                command,
+                decision: Decision::Prompt,
+            }
+        } else {
+            RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git.exe."]),
+                decision,
+                resolved_program: None,
+                justification: None,
+            }
+        };
+
+        assert_eq!(
+            policy.matches_for_command_with_restrictive_host_rules(
+                &[namespace_path.to_string(), "status".to_string()],
+                Some(&prompt_all),
+            ),
+            vec![expected],
+            "{wire_decision}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_namespace_host_resolution_matrix() -> Result<()> {
     let ordinary_paths = [
         r"C:\workspace\git.exe.",

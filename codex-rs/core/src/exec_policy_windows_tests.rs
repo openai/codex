@@ -58,6 +58,33 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
     .await;
 }
 
+#[tokio::test]
+async fn namespace_literal_alias_with_equivalent_host_mapping_requires_approval() {
+    let requirement = exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
+        policy_src: Some(
+            r#"
+prefix_rule(pattern = ["git.exe."], decision = "allow")
+host_executable(name = "git", paths = ["C:\\trusted\\git.exe"])
+"#
+            .to_string(),
+        ),
+        command: vec![
+            r"\\?\C:\attacker\git.exe.".to_string(),
+            "status".to_string(),
+        ],
+        approval_policy: AskForApproval::UnlessTrusted,
+        permission_profile: PermissionProfile::Disabled,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        prefix_rule: None,
+    })
+    .await;
+
+    assert!(
+        matches!(&requirement, ExecApprovalRequirement::NeedsApproval { .. }),
+        "namespace executable outside the mapped paths must require approval: {requirement:?}"
+    );
+}
+
 #[test]
 fn commands_for_exec_policy_keeps_bare_powershell_alias_opaque() {
     let command = vec![

@@ -351,8 +351,18 @@ impl Policy {
         let namespace_path = has_windows_verbatim_or_device_prefix(raw_path);
         #[cfg(not(windows))]
         let namespace_path = false;
-        if namespace_path && self.host_executables_by_name.contains_key(&basename) {
-            return Vec::new();
+        if namespace_path {
+            let Some(raw_basename) = raw_path.file_name().and_then(|name| name.to_str()) else {
+                return Vec::new();
+            };
+            let normalized_basename = executable_lookup_key(raw_basename);
+            if self.host_executables_by_name.contains_key(&basename)
+                || self
+                    .host_executables_by_name
+                    .contains_key(&normalized_basename)
+            {
+                return Vec::new();
+            }
         }
         let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {
             return Vec::new();
