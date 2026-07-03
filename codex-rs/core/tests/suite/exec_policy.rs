@@ -135,7 +135,6 @@ async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_befor
         format!("Set-Content -LiteralPath '{sentinel_arg}' started; Write-Output '{marker}'");
     let expected_command = vec![
         fake_powershell.clone(),
-        "-NoProfile".to_string(),
         "-Command".to_string(),
         script.clone(),
     ];
