@@ -15,6 +15,7 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
@@ -617,7 +618,12 @@ async fn assert_remote_manual_compact_request_parity(
     snapshot_name: &str,
     scenario: &str,
 ) -> Result<()> {
-    let mut builder = test_codex().with_auth(auth);
+    let mut builder = test_codex().with_auth(auth).with_config(|config| {
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::Disabled)
+            .expect("set permission profile");
+    });
     if let Some(service_tier) = configured_service_tier {
         builder = builder.with_config(move |config| {
             config.service_tier = Some(service_tier.request_value().to_string());
@@ -1317,7 +1323,14 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("set permission profile");
+            }),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -4208,6 +4221,10 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 config.model_auto_compact_token_limit = Some(200);
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::Disabled)
+                    .expect("set permission profile");
             }),
     )
     .await?;
