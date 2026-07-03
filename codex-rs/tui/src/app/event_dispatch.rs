@@ -439,6 +439,15 @@ impl App {
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_thread_op(app_server, thread_id, op).await?;
             }
+            AppEvent::ResolveAppServerRequest {
+                thread_id,
+                request_id,
+                op,
+            } => {
+                crate::session_log::log_outbound_op(&op);
+                self.resolve_app_server_request(app_server, thread_id, request_id, &op)
+                    .await?;
+            }
             AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
                 self.enqueue_thread_history_entry_response(thread_id, event)
                     .await?;

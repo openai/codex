@@ -1571,13 +1571,16 @@ async fn request_user_input_interrupt_pauses_active_goal_turn() {
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         let thread_id = start_active_goal_turn(&mut chat);
-        chat.handle_request_user_input_now(ToolRequestUserInputParams {
-            thread_id: thread_id.to_string(),
-            item_id: "call-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            questions: Vec::new(),
-            auto_resolution_ms: None,
-        });
+        chat.handle_request_user_input_now(
+            /*app_server_request_id*/ None,
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: Vec::new(),
+                auto_resolution_ms: None,
+            },
+        );
 
         chat.handle_key_event(key_event);
 

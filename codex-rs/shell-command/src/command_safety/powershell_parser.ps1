@@ -1,20 +1,22 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$PSModuleAutoLoadingPreference = 'None'
 
 # Long-lived PowerShell AST parser used by the Rust command-safety layer on Windows.
 # The caller starts one child process per PowerShell executable variant and then sends
-# newline-delimited JSON requests over stdin:
-#   { "id": <u64>, "payload": "<base64-encoded UTF-16LE script>" }
-# We answer with one compact JSON line per request:
-#   { "id": <same>, "status": "ok", "commands": [["Get-Content", "foo.txt"]] }
-# or:
-#   { "id": <same>, "status": "parse_failed" | "parse_errors" | "unsupported" }
+# tab-delimited requests over stdin:
+#   <id>\t<base64-encoded UTF-16LE script>
+# We answer with one tab-delimited line per request:
+#   <id>\t<status>\t<base64-encoded length-prefixed UTF-8 command words>
+# The payload is empty for parse_failed, parse_errors, and unsupported responses.
+# This protocol intentionally uses only .NET methods. In particular, it must not invoke JSON
+# cmdlets because PowerShell can resolve those through a user-controlled module search path.
 #
 # "unsupported" is intentional: it means the script parsed successfully, but the AST
 # included constructs that we conservatively refuse to lower into argv-like command words.
-# The Rust side treats that the same way as an unsafe command.
+# The Rust side does not accept that response as lowered commands.
 
-# Use BOM-free UTF-8 on the protocol stream so Rust sees clean JSON lines with no
+# Use BOM-free UTF-8 on the protocol stream so Rust sees clean framed lines with no
 # leading BOM bytes on the first response.
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $stdin = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8, $false)
@@ -43,9 +45,10 @@ function Invoke-ParseRequest {
     }
 
     # Top-level AST regions and collections outside the end-block statement list
-    # can execute code that the command lowering below does not inspect.
+    # can affect execution in ways that the command lowering below does not represent.
     $cleanBlock = $ast.PSObject.Properties['CleanBlock']
     if (
+        $ast.ScriptRequirements -ne $null -or
         $ast.ParamBlock -ne $null -or
         $ast.DynamicParamBlock -ne $null -or
         $ast.BeginBlock -ne $null -or
@@ -106,10 +109,47 @@ function Invoke-ParseRequest {
     return @{ id = $RequestId; status = 'ok'; commands = $commands }
 }
 
+function Convert-CommandsToPayload {
+    param($Commands)
+
+    $memory = [System.IO.MemoryStream]::new()
+    $writer = [System.IO.BinaryWriter]::new(
+        $memory,
+        [System.Text.UTF8Encoding]::new($false),
+        $true
+    )
+    try {
+        $writer.Write([uint32]$Commands.Count)
+        foreach ($command in $Commands) {
+            $writer.Write([uint32]$command.Count)
+            foreach ($word in $command) {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$word)
+                $writer.Write([uint32]$bytes.Length)
+                $writer.Write($bytes)
+            }
+        }
+        $writer.Flush()
+        return [System.Convert]::ToBase64String($memory.ToArray())
+    } finally {
+        $writer.Dispose()
+        $memory.Dispose()
+    }
+}
+
 function Write-Response {
     param($Response)
 
-    $stdout.WriteLine(($Response | ConvertTo-Json -Compress -Depth 3))
+    $requestId = [uint64]$Response.id
+    $status = [string]$Response.status
+    $payload = ''
+    if ($status -eq 'ok') {
+        try {
+            $payload = Convert-CommandsToPayload $Response.commands
+        } catch {
+            $status = 'parse_failed'
+        }
+    }
+    $stdout.WriteLine(([string]$requestId + "`t" + $status + "`t" + $payload))
 }
 
 function Convert-CommandElement {
@@ -248,25 +288,21 @@ function Add-CommandsFromPipelineBase {
 }
 
 # This script stays alive so the Rust caller can amortize PowerShell startup across
-# many parse requests. Each request and response is one compact JSON line.
+# many parse requests. Each request and response is one framed line.
 while (($requestLine = $stdin.ReadLine()) -ne $null) {
-    $request = $null
-    try {
-        $request = $requestLine | ConvertFrom-Json
-    } catch {
-        Write-Response @{ id = $null; status = 'parse_failed' }
+    $requestParts = $requestLine.Split([char]9)
+    $requestId = [uint64]0
+    if (
+        $requestParts.Count -ne 2 -or
+        -not [uint64]::TryParse($requestParts[0], [ref]$requestId)
+    ) {
+        Write-Response @{ id = 0; status = 'parse_failed' }
         continue
     }
 
     # We process requests serially, but still echo the id back so the Rust side can
     # detect protocol desyncs instead of silently trusting mixed stdout.
-    $requestId = $request.id
-    $payload = $request.payload
-    if ([string]::IsNullOrEmpty($payload)) {
-        Write-Response @{ id = $requestId; status = 'parse_failed' }
-        continue
-    }
-
+    $payload = $requestParts[1]
     try {
         $source =
             [System.Text.Encoding]::Unicode.GetString(
