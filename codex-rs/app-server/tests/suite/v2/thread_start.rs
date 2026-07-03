@@ -40,6 +40,7 @@ use serde_json::json;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -1044,6 +1045,45 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
 }
 
 #[tokio::test]
+async fn thread_start_does_not_wait_for_optional_http_mcp_auth_discovery() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mcp_addr = listener.local_addr()?;
+    let blackhole_server = tokio::spawn(async move {
+        let mut connections = Vec::new();
+        while let Ok((connection, _)) = listener.accept().await {
+            connections.push(connection);
+        }
+    });
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_optional_http_mcp(
+        codex_home.path(),
+        &server.uri(),
+        &format!("http://{mcp_addr}/mcp"),
+    )?;
+
+    let mut mcp = TestAppServer::new_with_auto_env(codex_home.path()).await?;
+    timeout(std::time::Duration::from_secs(30), mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        std::time::Duration::from_secs(3),
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await
+    .context("thread/start waited for optional HTTP MCP auth discovery")??;
+    let response: ThreadStartResponse = to_response(response)?;
+
+    assert!(!response.thread.id.is_empty());
+    blackhole_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -1509,6 +1549,37 @@ stream_max_retries = 0
 {optional_broken_transport}
 "#,
             optional_broken_transport = broken_mcp_transport_toml()
+        ),
+    )
+}
+
+fn create_config_toml_with_optional_http_mcp(
+    codex_home: &Path,
+    server_uri: &str,
+    mcp_uri: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[mcp_servers.optional_http]
+url = "{mcp_uri}"
+startup_timeout_sec = 60
+"#
         ),
     )
 }

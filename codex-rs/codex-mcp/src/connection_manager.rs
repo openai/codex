@@ -22,6 +22,7 @@ use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::mcp::compute_auth_status_entry;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -164,6 +165,7 @@ impl McpConnectionManager {
         let chatgpt_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
+        let auth = auth.cloned();
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()
@@ -206,6 +208,7 @@ impl McpConnectionManager {
                 } else {
                     chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone())
                 };
+            let server_for_auth_status = server.clone();
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 startup_submit_id.clone(),
@@ -226,11 +229,37 @@ impl McpConnectionManager {
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
+            let auth = auth.clone();
+            let auth_runtime_context = runtime_context.clone();
             join_set.spawn(async move {
                 let mut outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
                     outcome = Err(StartupOutcomeError::Cancelled);
                 }
+                // OAuth discovery may make several network requests. Resolve a missing status only
+                // after an authentication failure so optional servers cannot delay session startup.
+                let auth_entry = match (&outcome, auth_entry) {
+                    (Err(error @ StartupOutcomeError::Failed { .. }), None)
+                        if error.is_authentication_required() =>
+                    {
+                        Some(
+                            compute_auth_status_entry(
+                                &server_name,
+                                &server_for_auth_status,
+                                store_mode,
+                                keyring_backend_kind,
+                                auth.as_ref(),
+                                &auth_runtime_context,
+                            )
+                            .await,
+                        )
+                    }
+                    (Err(StartupOutcomeError::Failed { .. }), None) => Some(McpAuthStatusEntry {
+                        config: server_for_auth_status.configured_config().cloned(),
+                        auth_state: McpAuthState::Unsupported,
+                    }),
+                    (_, auth_entry) => auth_entry,
+                };
                 let status = match &outcome {
                     Ok(_) => McpStartupStatus::Ready,
                     Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,

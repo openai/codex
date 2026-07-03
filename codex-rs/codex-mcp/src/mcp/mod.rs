@@ -3,6 +3,7 @@ pub use auth::McpOAuthLoginConfig;
 pub use auth::McpOAuthLoginSupport;
 pub use auth::McpOAuthScopesSource;
 pub use auth::ResolvedMcpOAuthScopes;
+pub(crate) use auth::compute_auth_status_entry;
 pub use auth::compute_auth_statuses;
 pub use auth::discover_supported_scopes;
 pub use auth::discover_supported_scopes_with_http_client;
