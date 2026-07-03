@@ -23,6 +23,20 @@ fn rejects_every_possible_parse_time_construct_before_semantic_parsing() {
         r"Write-Output 'using module Foo'",
         r#"Write-Output "configuration CodexProbe {}""#,
         r"Get-Content C:\configuration\using\file.txt",
+        "[Codex.DoesNotExist, /tmp/Codex.AttackerAssembly]",
+        "[Codex.DoesNotExist, //tmp/Codex.AttackerAssembly]",
+        r"[Codex.DoesNotExist, C:\workspace\Codex.AttackerAssembly]",
+        r"[Codex.DoesNotExist, \\attacker\share\Evil]",
+        "[Codex.DoesNotExist, C:/workspace/Codex.AttackerAssembly]",
+        "[Codex.DoesNotExist, //attacker/share/Evil]",
+        "[Codex.DoesNotExist <# ] #>, /tmp/Codex.AttackerAssembly]",
+        "[Codex.DoesNotExist\n,\n/tmp/Codex.AttackerAssembly]",
+        "[System.Collections.Generic.Dictionary[string, Codex.DoesNotExist]]",
+        "[System.Collections.Generic.List[[Codex.DoesNotExist, /tmp/Codex.AttackerAssembly]]]",
+        "[Codex.DoesNotExistAttribute, Codex.AttackerAssembly()] class C {}",
+        "[Codex.DoesNotExistAttribute <# ] #>, /tmp/Codex.AttackerAssembly()] class C {}",
+        "Write-Output '[not a type]'; Write-Output a,b",
+        "# [ inert\nWrite-Output a,b",
     ] {
         assert!(requires_preparse_rejection(source), "accepted {source:?}");
     }
@@ -36,6 +50,12 @@ fn allows_sources_without_raw_semantic_keywords() {
         r#"confi"guration" CodexProbe {}"#,
         "u'sing' module Foo",
         "#Requires -Modules C:\\workspace\\CodexProbe.psm1\nGet-Content Cargo.toml",
+        "[System.String]::Empty",
+        "$items[0]",
+        "Write-Output 1,2; [System.String]::Empty",
+        "Write-Output '[not a type]'",
+        "[Codex.DoesNotExist， /tmp/Codex.AttackerAssembly]",
+        "[Codex.DoesNotExist، /tmp/Codex.AttackerAssembly]",
     ] {
         assert!(!requires_preparse_rejection(source), "rejected {source:?}");
     }
