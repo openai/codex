@@ -693,6 +693,63 @@ fn untrusted_wrapper_identity_uses_exact_outer_and_restrictive_basename_rules() 
 }
 
 #[tokio::test]
+async fn local_model_resolved_trusted_powershell_composes_exact_outer_and_inner() {
+    let outer = powershell_command("Get-Location");
+    let inner = vec_str(&["Get-Location"]);
+    let full_outer_allow = prefix_rule_for(&outer, "allow");
+    let short_outer_allow = prefix_rule_for(&outer[..1], "allow");
+    let inner_allow = prefix_rule_for(&inner, "allow");
+
+    pretty_assertions::assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{inner_allow}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        untrusted_skip(/*bypass_sandbox*/ true),
+        "exact outer and explicit inner authority should authorize the parsed composition",
+    );
+
+    pretty_assertions::assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{short_outer_allow}\n{inner_allow}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        untrusted_skip(/*bypass_sandbox*/ false),
+        "partial outer authority may proceed only inside the managed sandbox",
+    );
+
+    let inner_forbidden = prefix_rule_for(&inner, "forbidden");
+    pretty_assertions::assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{inner_forbidden}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: format!(
+                "`{}` rejected: policy forbids commands starting with `Get-Location`",
+                render_shlex_command(&outer)
+            ),
+        },
+        "an inner forbidden rule must dominate exact outer authority",
+    );
+}
+
+#[tokio::test]
 async fn untrusted_parsed_results_ignore_requested_amendments() {
     let command = absolute_untrusted_powershell_command("echo allowed");
     let inner_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");

@@ -824,7 +824,10 @@ impl ExecPolicyManager {
                     return requirement;
                 }
                 Some(powershell_policy::PreparedPowerShell::Parsed(parsed)) => {
-                    if let Some(outer_argv) = parsed.untrusted_outer_argv() {
+                    let composed_outer_argv = parsed
+                        .untrusted_outer_argv()
+                        .or_else(|| provenance.requires_outer_policy().then_some(command));
+                    if let Some(outer_argv) = composed_outer_argv {
                         return create_untrusted_powershell_approval_requirement(
                             exec_policy.as_ref(),
                             outer_argv,

@@ -42,6 +42,7 @@ pub enum ModelShellResolveError {
     UnsupportedWindowsLaunch(PathBuf),
     UnsupportedWindowsPathNamespace(PathBuf),
     UnresolvedWindowsRelativePath(PathBuf),
+    ParentDirectoryComponent(PathBuf),
     NonUtf8ResolvedPath(PathBuf),
     RelativeWorkingDirectory(PathBuf),
 }
@@ -89,6 +90,11 @@ impl std::fmt::Display for ModelShellResolveError {
             Self::UnresolvedWindowsRelativePath(path) => write!(
                 formatter,
                 "model-provided Windows shell path `{}` is drive-relative and cannot be resolved against the selected working directory",
+                path.display()
+            ),
+            Self::ParentDirectoryComponent(path) => write!(
+                formatter,
+                "model-provided shell resolution refuses parent-directory component in `{}`",
                 path.display()
             ),
             Self::NonUtf8ResolvedPath(path) => write!(
@@ -410,12 +416,18 @@ pub fn resolve_model_provided_shell_in(
     let resolved_path = {
         let _ = path_ext;
         if is_bare_name {
-            std::env::split_paths(search_path)
-                .map(|directory| resolve_relative_path(&directory, cwd).join(shell_path))
-                .find(|candidate| validate_model_shell_path(candidate).is_ok())
+            let mut resolved = None;
+            for directory in std::env::split_paths(search_path) {
+                let candidate = resolve_relative_path(&directory, cwd)?.join(shell_path);
+                if validate_model_shell_path(&candidate).is_ok() {
+                    resolved = Some(candidate);
+                    break;
+                }
+            }
+            resolved
                 .ok_or_else(|| ModelShellResolveError::MissingBareName(shell_path.to_path_buf()))?
         } else {
-            resolve_relative_path(shell_path, cwd)
+            resolve_relative_path(shell_path, cwd)?
         }
     };
 
@@ -429,16 +441,22 @@ pub fn resolve_model_provided_shell_in(
     })
 }
 
-fn resolve_relative_path(path: &Path, cwd: &Path) -> PathBuf {
+fn resolve_relative_path(path: &Path, cwd: &Path) -> Result<PathBuf, ModelShellResolveError> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         cwd.join(path)
     };
-    absolute
+    if absolute
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ModelShellResolveError::ParentDirectoryComponent(absolute));
+    }
+    Ok(absolute
         .components()
         .filter(|component| !matches!(component, std::path::Component::CurDir))
-        .collect()
+        .collect())
 }
 
 #[cfg(any(windows, test))]
@@ -467,10 +485,8 @@ fn resolve_model_shell_path_windows(
             ));
         }
         let mut first_specific_error = None;
-        for candidate in candidate_names
-            .into_iter()
-            .map(|candidate| resolve_relative_path(&candidate, cwd))
-        {
+        for candidate in candidate_names {
+            let candidate = resolve_relative_path(&candidate, cwd)?;
             match validate_model_shell_path(&candidate) {
                 Ok(()) => return Ok(candidate),
                 Err(ModelShellResolveError::MissingPath(_)) => {}
@@ -550,7 +566,7 @@ fn resolve_windows_path_against_cwd(
         validate_windows_local_path_namespace(cwd)?;
     }
 
-    Ok(resolve_relative_path(path, cwd))
+    resolve_relative_path(path, cwd)
 }
 
 #[cfg(any(windows, test))]
@@ -792,6 +808,93 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_shell_resolver_rejects_parent_components_in_shell_and_cwd() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let cwd = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        let tools = cwd.join("tools");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        std::fs::create_dir_all(&tools).expect("create tools");
+        write_executable(&outside.join("bash"));
+        write_executable(&tools.join("bash"));
+
+        for (requested, selected_cwd, rejected) in [
+            (
+                PathBuf::from("../outside/bash"),
+                cwd.clone(),
+                cwd.join("../outside/bash"),
+            ),
+            (
+                cwd.join("../outside/bash"),
+                cwd.clone(),
+                cwd.join("../outside/bash"),
+            ),
+            (
+                PathBuf::from("tools/bash"),
+                cwd.join("../workspace"),
+                cwd.join("../workspace/tools/bash"),
+            ),
+        ] {
+            assert_eq!(
+                resolve_model_provided_shell_in(
+                    &requested,
+                    OsStr::new(""),
+                    /*path_ext*/ None,
+                    &selected_cwd,
+                ),
+                Err(ModelShellResolveError::ParentDirectoryComponent(rejected)),
+                "parent components must be rejected for {requested:?} against {selected_cwd:?}",
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_shell_resolver_rejects_parent_path_entries_in_lookup_order() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let cwd = temp_dir.path().join("workspace");
+        let valid_bin = temp_dir.path().join("valid-bin");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir(&cwd).expect("create cwd");
+        std::fs::create_dir(&valid_bin).expect("create valid bin");
+        std::fs::create_dir(&outside).expect("create outside");
+        let valid_shell = valid_bin.join("bash");
+        write_executable(&valid_shell);
+        write_executable(&outside.join("bash"));
+
+        let parent_first = std::env::join_paths([Path::new("../outside"), valid_bin.as_path()])
+            .expect("join PATH");
+        assert_eq!(
+            resolve_model_provided_shell_in(
+                Path::new("bash"),
+                &parent_first,
+                /*path_ext*/ None,
+                &cwd,
+            ),
+            Err(ModelShellResolveError::ParentDirectoryComponent(
+                cwd.join("../outside")
+            )),
+        );
+
+        let valid_first = std::env::join_paths([valid_bin.as_path(), Path::new("../outside")])
+            .expect("join PATH");
+        assert_eq!(
+            resolve_model_provided_shell_in(
+                Path::new("bash"),
+                &valid_first,
+                /*path_ext*/ None,
+                &cwd,
+            ),
+            Ok(DetectedShell {
+                shell_type: ShellType::Bash,
+                shell_path: valid_shell,
+            }),
+            "an earlier valid PATH candidate wins before an unused parent-containing entry",
+        );
     }
 
     #[cfg(unix)]
@@ -1067,6 +1170,62 @@ mod tests {
                 shell_path: shell,
             }),
             "a valid earlier PATH candidate must return before an unused unsafe entry"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_model_shell_resolver_rejects_parent_components_in_lookup_order() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let bin = temp_dir.path().join("bin");
+        let tools = temp_dir.path().join("tools");
+        std::fs::create_dir(&bin).expect("create bin");
+        std::fs::create_dir(&tools).expect("create tools");
+        let shell = bin.join("powershell.EXE");
+        std::fs::write(&shell, "fixture").expect("write fake executable");
+
+        let requested = PathBuf::from(r"tools\..\bin\powershell.exe");
+        assert_eq!(
+            resolve_model_provided_shell_in(
+                &requested,
+                OsStr::new(""),
+                Some(OsStr::new(".EXE")),
+                temp_dir.path(),
+            ),
+            Err(ModelShellResolveError::ParentDirectoryComponent(
+                temp_dir.path().join(&requested)
+            )),
+        );
+
+        let parent_entry = PathBuf::from(r"tools\..");
+        let parent_first =
+            std::env::join_paths([parent_entry.as_path(), bin.as_path()]).expect("join PATH");
+        assert_eq!(
+            resolve_model_provided_shell_in(
+                Path::new("powershell"),
+                &parent_first,
+                Some(OsStr::new(".EXE")),
+                temp_dir.path(),
+            ),
+            Err(ModelShellResolveError::ParentDirectoryComponent(
+                temp_dir.path().join(&parent_entry)
+            )),
+        );
+
+        let valid_first =
+            std::env::join_paths([bin.as_path(), parent_entry.as_path()]).expect("join PATH");
+        assert_eq!(
+            resolve_model_provided_shell_in(
+                Path::new("powershell"),
+                &valid_first,
+                Some(OsStr::new(".EXE")),
+                temp_dir.path(),
+            ),
+            Ok(DetectedShell {
+                shell_type: ShellType::PowerShell,
+                shell_path: shell,
+            }),
+            "an earlier valid PATH candidate wins before an unused parent-containing entry",
         );
     }
 
