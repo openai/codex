@@ -1,5 +1,6 @@
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,7 +29,11 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
+    pub(crate) async fn load_fresh(
+        &self,
+        expected_version: &str,
+        expected_cache_key: &ModelsCacheKey,
+    ) -> Option<ModelsCache> {
         info!(
                 cache_path = %self.cache_path.display(),
                 expected_version,
@@ -47,6 +52,13 @@ impl ModelsCacheManager {
             fetched_at = %cache.fetched_at,
             "models cache: loaded cache file"
         );
+        if cache.cache_key.as_ref() != Some(expected_cache_key) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                "models cache: cache key mismatch"
+            );
+            return None;
+        }
         if cache.client_version.as_deref() != Some(expected_version) {
             info!(
                 cache_path = %self.cache_path.display(),
@@ -79,11 +91,13 @@ impl ModelsCacheManager {
         models: &[ModelInfo],
         etag: Option<String>,
         client_version: String,
+        cache_key: ModelsCacheKey,
     ) {
         let cache = ModelsCache {
             fetched_at: Utc::now(),
             etag,
             client_version: Some(client_version),
+            cache_key: Some(cache_key),
             models: models.to_vec(),
         };
         if let Err(err) = self.save_internal(&cache).await {
@@ -92,11 +106,20 @@ impl ModelsCacheManager {
     }
 
     /// Renew the cache TTL by updating the fetched_at timestamp to now.
-    pub(crate) async fn renew_cache_ttl(&self) -> io::Result<()> {
+    pub(crate) async fn renew_cache_ttl(
+        &self,
+        expected_cache_key: &ModelsCacheKey,
+    ) -> io::Result<()> {
         let mut cache = match self.load().await? {
             Some(cache) => cache,
             None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
         };
+        if cache.cache_key.as_ref() != Some(expected_cache_key) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "models cache key mismatch",
+            ));
+        }
         cache.fetched_at = Utc::now();
         self.save_internal(&cache).await
     }
@@ -157,6 +180,30 @@ impl ModelsCacheManager {
     }
 }
 
+/// Identity of the provider and account that produced a model catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ModelsCacheKey {
+    provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_mode: Option<AuthMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
+}
+
+impl ModelsCacheKey {
+    pub(crate) fn new(
+        provider_id: String,
+        auth_mode: Option<AuthMode>,
+        account_id: Option<String>,
+    ) -> Self {
+        Self {
+            provider_id,
+            auth_mode,
+            account_id,
+        }
+    }
+}
+
 /// Serialized snapshot of models and metadata cached on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ModelsCache {
@@ -165,6 +212,8 @@ pub(crate) struct ModelsCache {
     pub(crate) etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_key: Option<ModelsCacheKey>,
     pub(crate) models: Vec<ModelInfo>,
 }
 

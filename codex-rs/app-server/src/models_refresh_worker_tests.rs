@@ -76,6 +76,7 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
     let endpoint = TestModelsEndpoint::new();
     let models_manager: SharedModelsManager = Arc::new(OpenAiModelsManager::new(
         codex_home.path().to_path_buf(),
+        "test-provider".to_string(),
         endpoint.clone(),
         /*auth_manager*/ None,
     ));

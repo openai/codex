@@ -147,8 +147,13 @@ pub fn models_manager_with_provider(
     auth_manager: Arc<AuthManager>,
     provider: ModelProviderInfo,
 ) -> SharedModelsManager {
+    let model_provider_id = provider.name.clone();
     let provider = create_model_provider(provider, Some(auth_manager));
-    provider.models_manager(codex_home, /*config_model_catalog*/ None)
+    provider.models_manager(
+        codex_home,
+        model_provider_id,
+        /*config_model_catalog*/ None,
+    )
 }
 
 pub fn get_model_offline(model: Option<&str>) -> String {

@@ -1,3 +1,4 @@
+use super::cache::ModelsCacheKey;
 use super::cache::ModelsCacheManager;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
@@ -199,6 +200,7 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 /// OpenAI-compatible model manager backed by bundled models, cache, and `/models`.
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
+    model_provider_id: String,
     remote_models: RwLock<Vec<ModelInfo>>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -217,6 +219,7 @@ impl OpenAiModelsManager {
     /// Construct an OpenAI-compatible remote model manager.
     pub fn new(
         codex_home: PathBuf,
+        model_provider_id: String,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
@@ -224,12 +227,26 @@ impl OpenAiModelsManager {
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let remote_models = load_remote_models_from_file().unwrap_or_default();
         Self {
+            model_provider_id,
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
             cache_manager,
             endpoint_client,
             auth_manager,
         }
+    }
+
+    fn cache_key(&self) -> ModelsCacheKey {
+        let auth_mode = self
+            .auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_mode());
+        let account_id = auth_mode
+            .filter(|auth_mode| auth_mode.uses_codex_backend())
+            .and(self.auth_manager.as_ref())
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .and_then(|auth| auth.get_account_id());
+        ModelsCacheKey::new(self.model_provider_id.clone(), auth_mode, account_id)
     }
 }
 
@@ -288,10 +305,10 @@ impl OpenAiModelsManager {
     async fn refresh_if_new_etag(&self, etag: String) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
-            if let Err(err) = self.cache_manager.renew_cache_ttl().await {
-                error!("failed to renew cache TTL: {err}");
+            match self.cache_manager.renew_cache_ttl(&self.cache_key()).await {
+                Ok(()) => return,
+                Err(err) => error!("failed to renew cache TTL: {err}"),
             }
-            return;
         }
         if let Err(err) = self.refresh_available_models(RefreshStrategy::Online).await {
             error!("failed to refresh available models: {err}");
@@ -334,11 +351,12 @@ impl OpenAiModelsManager {
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
+        let cache_key = self.cache_key();
         let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
-            .persist_cache(&models, etag, client_version)
+            .persist_cache(&models, etag, client_version, cache_key)
             .await;
         Ok(())
     }
@@ -383,15 +401,19 @@ impl OpenAiModelsManager {
         *self.remote_models.write().await = existing_models;
     }
 
-    /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
+    /// Attempt to satisfy the refresh from the cache when it matches the provider, account, and
+    /// TTL.
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
         info!(client_version, "models cache: evaluating cache eligibility");
-        // TODO(celia-oai): Include provider identity in cache eligibility so switching
-        // providers does not reuse a fresh models_cache.json entry from another provider.
-        let cache = match self.cache_manager.load_fresh(&client_version).await {
+        let cache_key = self.cache_key();
+        let cache = match self
+            .cache_manager
+            .load_fresh(&client_version, &cache_key)
+            .await
+        {
             Some(cache) => cache,
             None => {
                 info!("models cache: no usable cache entry");
