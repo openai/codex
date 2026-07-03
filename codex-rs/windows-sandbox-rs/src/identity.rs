@@ -268,6 +268,12 @@ fn desired_offline_proxy_settings(
         {
             marker.offline_proxy_settings()
         }
+        (None, crate::WindowsSandboxProxySettingsMode::Preserve) => {
+            crate::setup::OfflineProxySettings {
+                proxy_ports: Vec::new(),
+                allow_local_binding: false,
+            }
+        }
         _ => offline_proxy_settings_from_env(env_map, network_identity),
     }
 }
@@ -369,6 +375,33 @@ mod tests {
             )
             .proxy_ports,
             vec![8080]
+        );
+    }
+
+    #[test]
+    fn preserving_proxy_settings_without_a_marker_does_not_capture_env_proxy_ports() {
+        let env_map = HashMap::from([
+            (
+                "HTTP_PROXY".to_string(),
+                "http://127.0.0.1:8080".to_string(),
+            ),
+            (
+                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "1".to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            desired_offline_proxy_settings(
+                None,
+                WindowsSandboxProxySettingsMode::Preserve,
+                &env_map,
+                SandboxNetworkIdentity::Offline,
+            ),
+            crate::setup::OfflineProxySettings {
+                proxy_ports: vec![],
+                allow_local_binding: false,
+            }
         );
     }
 }
