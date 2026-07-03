@@ -1244,7 +1244,8 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (multiline prefix)");
     let contents = terminal.backend().vt100().screen().contents();
-    assert!(!contents.contains("don't ask again"));
+    assert!(contents.contains("don't ask again for this command in this session"));
+    assert!(!contents.contains("don't ask again for commands that start with"));
     assert_chatwidget_snapshot!(
         "approval_modal_exec_multiline_prefix_no_execpolicy",
         contents

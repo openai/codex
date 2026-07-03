@@ -521,7 +521,7 @@
   },
   "properties": {
     "approvalId": {
-      "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
+      "description": "Unique identifier for this specific approval callback.\n\nFor a command item with only one approval callback, this is absent.\n\nWhen multiple callbacks can belong to one parent `itemId` (for example, a zsh-exec-bridge subcommand or an unsandboxed retry), `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
       "type": [
         "string",
         "null"

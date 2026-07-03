@@ -1446,11 +1446,11 @@ pub struct CommandExecutionRequestApprovalParams {
     pub started_at_ms: i64,
     /// Unique identifier for this specific approval callback.
     ///
-    /// For regular shell/unified_exec approvals, this is null.
+    /// For a command item with only one approval callback, this is absent.
     ///
-    /// For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to
-    /// one parent `itemId`, so `approvalId` is a distinct opaque callback id
-    /// (a UUID) used to disambiguate routing.
+    /// When multiple callbacks can belong to one parent `itemId` (for example,
+    /// a zsh-exec-bridge subcommand or an unsandboxed retry), `approvalId` is a
+    /// distinct opaque callback id (a UUID) used to disambiguate routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub approval_id: Option<String>,

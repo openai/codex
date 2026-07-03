@@ -95,7 +95,10 @@ impl ExecApprovalRequestEvent {
             ];
         }
 
-        let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+        let mut decisions = vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::AcceptForSession,
+        ];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(
                 CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {

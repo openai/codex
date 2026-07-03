@@ -340,7 +340,10 @@ fn default_exec_approval_decisions(
         ];
     }
 
-    let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+    let mut decisions = vec![
+        CommandExecutionApprovalDecision::Accept,
+        CommandExecutionApprovalDecision::AcceptForSession,
+    ];
     if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
         decisions.push(
             CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {

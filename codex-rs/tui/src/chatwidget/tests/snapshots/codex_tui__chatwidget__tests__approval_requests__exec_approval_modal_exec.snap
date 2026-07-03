@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/approval_requests.rs
+assertion_line: 39
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 80, height: 15 },
+    area: Rect { x: 0, y: 0, width: 80, height: 16 },
     content: [
         "                                                                                ",
         "                                                                                ",
@@ -17,7 +18,8 @@ Buffer {
         "  $ echo hello world                                                            ",
         "                                                                                ",
         "› 1. Yes, proceed (y)                                                           ",
-        "  2. No, and tell Codex what to do differently (esc)                            ",
+        "  2. Yes, and don't ask again for this command in this session (a)              ",
+        "  3. No, and tell Codex what to do differently (esc)                            ",
         "                                                                                ",
         "  Press enter to confirm or esc to cancel                                       ",
     ],
@@ -36,8 +38,10 @@ Buffer {
         x: 20, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 11, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
         x: 21, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 48, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 51, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 64, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 65, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 48, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 51, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 15, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
     ]
 }
