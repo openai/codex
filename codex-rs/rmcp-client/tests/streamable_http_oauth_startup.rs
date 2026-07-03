@@ -325,6 +325,7 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*allow_stored_oauth*/ true,
         Environment::default_for_tests().get_http_client(),
         /*auth_provider*/ None,
     )
@@ -365,6 +366,7 @@ async fn expired_unrefreshable_startup_child() -> anyhow::Result<()> {
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*allow_stored_oauth*/ true,
         Environment::default_for_tests().get_http_client(),
         /*auth_provider*/ None,
     )

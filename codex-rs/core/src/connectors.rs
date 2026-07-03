@@ -33,14 +33,15 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_mcp::McpConfig;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
+use codex_mcp::codex_apps_tools_cache_enabled;
 use codex_mcp::codex_apps_tools_cache_key;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers;
-use codex_mcp::extension_managed_codex_apps_enabled;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::tool_plugin_provenance;
 
@@ -134,14 +135,21 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
     mcp_manager: &McpManager,
 ) -> Option<Vec<AppInfo>> {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    list_cached_accessible_connectors_from_mcp_tools_with_mcp_config(config, &mcp_config).await
+}
+
+pub async fn list_cached_accessible_connectors_from_mcp_tools_with_mcp_config(
+    config: &Config,
+    mcp_config: &McpConfig,
+) -> Option<Vec<AppInfo>> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
-    let mcp_config = mcp_manager.runtime_config(config).await;
-    if !host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
+    if !host_owned_codex_apps_enabled(mcp_config, auth.as_ref()) {
         return Some(Vec::new());
     }
-    if extension_managed_codex_apps_enabled(&mcp_config) {
+    if !codex_apps_tools_cache_enabled(mcp_config, auth.as_ref()) {
         return None;
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
@@ -151,10 +159,10 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
-    extension_managed_apps_enabled: bool,
+    uses_shared_codex_apps_tools_cache: bool,
     mcp_tools: &[ToolInfo],
 ) {
-    if !config.features.enabled(Feature::Apps) || extension_managed_apps_enabled {
+    if !config.features.enabled(Feature::Apps) || !uses_shared_codex_apps_tools_cache {
         return;
     }
 
@@ -218,18 +226,35 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
     environment_manager: Arc<EnvironmentManager>,
     mcp_manager: Arc<McpManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    let mcp_config = mcp_manager.runtime_config(config).await;
+    list_accessible_connectors_from_mcp_tools_with_mcp_config(
+        config,
+        force_refetch,
+        environment_manager,
+        mcp_manager,
+        mcp_config,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_config(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+    mcp_manager: Arc<McpManager>,
+    mcp_config: McpConfig,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
     let auth = auth_manager.auth().await;
-    let mcp_config = mcp_manager.runtime_config(config).await;
     if !host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
             codex_apps_ready: true,
         });
     }
-    let cache_key = (!extension_managed_codex_apps_enabled(&mcp_config))
-        .then(|| accessible_connectors_cache_key(config, auth.as_ref()));
+    let can_share_cache = codex_apps_tools_cache_enabled(&mcp_config, auth.as_ref());
+    let cache_key = can_share_cache.then(|| accessible_connectors_cache_key(config, auth.as_ref()));
     let tool_plugin_provenance = tool_plugin_provenance(&mcp_config);
     if !force_refetch
         && let Some(cache_key) = cache_key.as_ref()
@@ -282,7 +307,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         config.codex_home.to_path_buf(),
         mcp_manager.codex_apps_tools_cache(),
         codex_apps_tools_cache_key(auth.as_ref()),
-        /*enable_codex_apps_tools_cache*/ !extension_managed_codex_apps_enabled(&mcp_config),
+        /*enable_codex_apps_tools_cache*/ can_share_cache,
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         /*supports_openai_form_elicitation*/ false,

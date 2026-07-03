@@ -468,7 +468,7 @@ async fn refresh_missing_requested_connectors(
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn.config,
                 auth,
-                turn.extension_managed_apps_enabled,
+                manager.uses_shared_codex_apps_tools_cache_for(auth),
                 &mcp_tools,
             );
             Some(accessible_connectors)

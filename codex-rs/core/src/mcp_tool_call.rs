@@ -700,7 +700,7 @@ async fn refresh_codex_apps_after_connector_auth(
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn_context.config,
                 auth.as_ref(),
-                turn_context.extension_managed_apps_enabled,
+                manager.uses_shared_codex_apps_tools_cache_for(auth.as_ref()),
                 &mcp_tools,
             );
         }

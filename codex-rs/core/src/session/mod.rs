@@ -3239,7 +3239,8 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        if turn_context.config.include_apps_instructions && turn_context.apps_enabled(mcp.config())
+        {
             let accessible_and_enabled_connectors =
                 connectors::list_accessible_and_enabled_connectors_from_manager(
                     mcp.manager(),

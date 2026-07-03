@@ -1185,7 +1185,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
 }
 
 #[tokio::test]
-async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Result<()> {
+async fn list_apps_force_refetch_does_not_reuse_extension_accessible_snapshot() -> Result<()> {
     let initial_connectors = vec![
         AppInfo {
             id: "alpha".to_string(),
@@ -1245,6 +1245,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
+    // App server installs the hosted Apps MCP extension, whose catalog must not reuse the
+    // compatibility server's shared accessible-app snapshot.
     let warm_request = mcp
         .send_apps_list_request(AppsListParams {
             limit: None,
@@ -1356,57 +1358,6 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         })
         .await?;
 
-    let first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(
-        first_update.data,
-        vec![
-            AppInfo {
-                id: "beta".to_string(),
-                name: "Beta App".to_string(),
-                description: Some("Beta v1".to_string()),
-                logo_url: None,
-                logo_url_dark: None,
-                icon_assets: None,
-                icon_dark_assets: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
-                is_accessible: true,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            },
-            AppInfo {
-                id: "alpha".to_string(),
-                name: "Alpha".to_string(),
-                description: Some("Alpha v1".to_string()),
-                logo_url: None,
-                logo_url_dark: None,
-                icon_assets: None,
-                icon_dark_assets: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                is_accessible: false,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            },
-        ]
-    );
-
-    let maybe_second_update = timeout(
-        Duration::from_millis(150),
-        read_app_list_updated_notification(&mut mcp),
-    )
-    .await;
-    assert!(
-        maybe_second_update.is_err(),
-        "unexpected inaccessible-only app/list update during force refetch"
-    );
-
     let expected_final = vec![AppInfo {
         id: "alpha".to_string(),
         name: "Alpha".to_string(),
@@ -1424,8 +1375,8 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-    let second_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(second_update.data, expected_final);
+    let update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(update.data, expected_final);
 
     let refetch_response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,

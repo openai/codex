@@ -40,6 +40,21 @@ pub struct CodexAppsToolsCacheKey {
     pub(crate) is_workspace_account: bool,
 }
 
+impl CodexAppsToolsCacheKey {
+    /// Returns whether this key can safely partition process-shared Apps caches.
+    pub(crate) fn can_partition_shared_cache(&self) -> bool {
+        let has_account_id = self
+            .account_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty());
+        let has_chatgpt_user_id = self
+            .chatgpt_user_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty());
+        has_account_id && (!self.is_workspace_account || has_chatgpt_user_id)
+    }
+}
+
 /// Builds the CodexAuth-backed Codex Apps cache key.
 pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCacheKey {
     CodexAppsToolsCacheKey {
@@ -68,6 +83,10 @@ pub(crate) struct CodexAppsToolsCacheContext {
 }
 
 impl CodexAppsToolsCacheContext {
+    pub(crate) fn is_for_auth_key(&self, auth_key: &CodexAppsToolsCacheKey) -> bool {
+        self.entry.identity.auth_key == *auth_key
+    }
+
     pub(crate) fn tools_cache_path(&self) -> PathBuf {
         self.entry
             .identity

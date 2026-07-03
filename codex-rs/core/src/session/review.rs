@@ -111,7 +111,6 @@ pub(super) async fn spawn_review_thread(
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
-        extension_managed_apps_enabled: parent_turn_context.extension_managed_apps_enabled,
         model_info: model_info.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,

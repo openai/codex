@@ -22,6 +22,7 @@ use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
 use crate::codex_apps::normalize_codex_apps_tool_title;
 use crate::codex_apps_cache::CodexAppsToolsCacheContext;
+use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
 use crate::codex_apps_cache::load_startup_cached_codex_apps_server_info;
 use crate::elicitation::ElicitationRequestManager;
@@ -498,6 +499,15 @@ impl AsyncManagedClient {
             .is_some_and(CodexAppsToolsCacheContext::has_current_tools)
     }
 
+    pub(crate) fn uses_codex_apps_tools_cache_for(
+        &self,
+        auth_key: &CodexAppsToolsCacheKey,
+    ) -> bool {
+        self.codex_apps_tools_cache_context
+            .as_ref()
+            .is_some_and(|context| context.is_for_auth_key(auth_key))
+    }
+
     fn cached_tools(&self) -> Option<Vec<ToolInfo>> {
         self.codex_apps_tools_cache_context
             .as_ref()
@@ -925,6 +935,7 @@ async fn make_rmcp_client(
     runtime_context: McpRuntimeContext,
     runtime_auth_provider: Option<SharedAuthProvider>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
+    let allow_stored_oauth = server.allows_stored_oauth();
     let config = match server.launch() {
         McpServerLaunch::Configured(config) => config.as_ref().clone(),
     };
@@ -995,6 +1006,7 @@ async fn make_rmcp_client(
                 env_http_headers,
                 store_mode,
                 keyring_backend_kind,
+                allow_stored_oauth,
                 http_client,
                 runtime_auth_provider,
             )

@@ -95,6 +95,7 @@ pub(crate) async fn create_client_with_http_client(
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*allow_stored_oauth*/ true,
         http_client,
         /*auth_provider*/ None,
     )
@@ -139,6 +140,7 @@ pub(crate) async fn create_remote_client(
         /*env_http_headers*/ None,
         OAuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
+        /*allow_stored_oauth*/ true,
         Arc::new(http_client),
         /*auth_provider*/ None,
     )

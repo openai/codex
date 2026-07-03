@@ -59,7 +59,7 @@ impl AppsRequestProcessor {
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
 
-        if let Some(thread) = thread {
+        if let Some(thread) = thread.as_ref() {
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
@@ -67,7 +67,10 @@ impl AppsRequestProcessor {
 
         let auth = self.auth_manager.auth().await;
         let mcp_manager = self.thread_manager.mcp_manager();
-        let mcp_config = mcp_manager.runtime_config(&config).await;
+        let mcp_config = match thread {
+            Some(thread) => thread.runtime_mcp_config(&config).await,
+            None => mcp_manager.runtime_config(&config).await,
+        };
         if !codex_mcp::host_owned_codex_apps_enabled(&mcp_config, auth.as_ref()) {
             return Ok(Some(AppsListResponse {
                 data: Vec::new(),
@@ -98,6 +101,7 @@ impl AppsRequestProcessor {
                     request,
                     params,
                     config,
+                    mcp_config,
                     environment_manager,
                     mcp_manager,
                     plugins_manager,
@@ -111,17 +115,20 @@ impl AppsRequestProcessor {
         self.shutdown_token.cancel();
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn apps_list_task(
         outgoing: Arc<OutgoingMessageSender>,
         request_id: ConnectionRequestId,
         params: AppsListParams,
         config: Config,
+        mcp_config: codex_mcp::McpConfig,
         environment_manager: Arc<EnvironmentManager>,
         mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
+        let retry_mcp_config = mcp_config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
         let retry_mcp_manager = Arc::clone(&mcp_manager);
         let retry_plugins_manager = Arc::clone(&plugins_manager);
@@ -129,6 +136,7 @@ impl AppsRequestProcessor {
             &outgoing,
             params,
             config,
+            mcp_config,
             environment_manager,
             mcp_manager,
             plugins_manager,
@@ -148,6 +156,7 @@ impl AppsRequestProcessor {
                 &outgoing,
                 retry_params,
                 retry_config,
+                retry_mcp_config,
                 retry_environment_manager,
                 retry_mcp_manager,
                 retry_plugins_manager,
@@ -163,6 +172,7 @@ impl AppsRequestProcessor {
         outgoing: &Arc<OutgoingMessageSender>,
         params: AppsListParams,
         config: Config,
+        mcp_config: codex_mcp::McpConfig,
         environment_manager: Arc<EnvironmentManager>,
         mcp_manager: Arc<McpManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -189,47 +199,62 @@ impl AppsRequestProcessor {
                 loaded_plugins.capability_summaries(),
             );
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
+        let extension_managed_apps_enabled =
+            codex_mcp::extension_managed_codex_apps_enabled(&mcp_config);
+        let load_cached_all_connectors = async {
+            if extension_managed_apps_enabled {
+                None
+            } else {
+                connectors::list_cached_all_connectors(&config, &plugin_apps).await
+            }
+        };
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(
+            connectors::list_cached_accessible_connectors_from_mcp_tools_with_mcp_config(
                 &config,
-                mcp_manager.as_ref(),
+                &mcp_config,
             ),
-            connectors::list_cached_all_connectors(&config, &plugin_apps)
+            load_cached_all_connectors,
         );
         let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let accessible_config = config.clone();
+        let accessible_mcp_config = mcp_config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_mcp_config(
                 &accessible_config,
                 force_refetch,
                 Arc::clone(&environment_manager),
                 mcp_manager,
+                accessible_mcp_config,
             )
             .await
             .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
-        let all_config = config.clone();
-        let all_plugin_apps = plugin_apps.clone();
-        tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(
-                &all_config,
-                force_refetch,
-                &all_plugin_apps,
-            )
-            .await
-            .map_err(|err| format!("failed to list apps: {err}"));
-            let _ = tx.send(AppListLoadResult::Directory(result));
-        });
+        if !extension_managed_apps_enabled {
+            let all_config = config.clone();
+            let all_plugin_apps = plugin_apps.clone();
+            tokio::spawn(async move {
+                let result = connectors::list_all_connectors_with_options(
+                    &all_config,
+                    force_refetch,
+                    &all_plugin_apps,
+                )
+                .await
+                .map_err(|err| format!("failed to list apps: {err}"));
+                let _ = tx.send(AppListLoadResult::Directory(result));
+            });
+        } else {
+            drop(tx);
+        }
 
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
-        let mut all_loaded = false;
+        let mut all_loaded = extension_managed_apps_enabled;
         let mut codex_apps_ready = true;
         let mut last_notified_apps = None;
 

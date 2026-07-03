@@ -126,6 +126,7 @@ enum TransportRecipe {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
+        allow_stored_oauth: bool,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     },
@@ -391,6 +392,7 @@ impl RmcpClient {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
+        allow_stored_oauth: bool,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
@@ -402,6 +404,7 @@ impl RmcpClient {
             env_http_headers,
             store_mode,
             keyring_backend_kind,
+            allow_stored_oauth,
             http_client,
             auth_provider,
         };
@@ -781,6 +784,7 @@ impl RmcpClient {
                 env_http_headers,
                 store_mode,
                 keyring_backend_kind,
+                allow_stored_oauth,
                 http_client,
                 auth_provider,
             } => {
@@ -796,6 +800,7 @@ impl RmcpClient {
                 let initial_oauth_tokens = if bearer_token.is_none()
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
+                    && *allow_stored_oauth
                 {
                     match load_oauth_tokens(server_name, url, *store_mode, *keyring_backend_kind) {
                         Ok(tokens) => tokens,

@@ -17,11 +17,14 @@ use crate::McpAuthStatusEntry;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::CodexAppsToolsFetchSource;
+use crate::codex_apps_cache::codex_apps_tools_cache_key;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::mcp::codex_apps_server_uses_codex_auth_cache;
+use crate::mcp::mcp_server_has_configured_request_auth;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -195,6 +198,9 @@ impl McpConnectionManager {
                 });
             let shares_codex_apps_tools_cache = should_share_codex_apps_tools_cache(
                 &server_name,
+                &server,
+                auth,
+                &codex_apps_tools_cache_key,
                 uses_env_bearer_token,
                 enable_codex_apps_tools_cache,
             );
@@ -202,14 +208,8 @@ impl McpConnectionManager {
                 codex_apps_tools_cache
                     .context(codex_home.clone(), codex_apps_tools_cache_key.clone())
             });
-            // If Codex Apps has an env bearer token, that is its auth path. Do
-            // not also attach the ambient CodexAuth provider.
             let runtime_auth_provider =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME && uses_env_bearer_token {
-                    None
-                } else {
-                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone())
-                };
+                chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider.clone());
             let async_managed_client = AsyncManagedClient::new(
                 server_name.clone(),
                 startup_submit_id.clone(),
@@ -435,6 +435,14 @@ impl McpConnectionManager {
 
     pub fn is_host_owned_codex_apps_server(&self, server_name: &str) -> bool {
         server_name == CODEX_APPS_MCP_SERVER_NAME && self.server_metadata.contains_key(server_name)
+    }
+
+    /// Returns whether the Apps client cache is pinned to this CodexAuth identity.
+    pub fn uses_shared_codex_apps_tools_cache_for(&self, auth: Option<&CodexAuth>) -> bool {
+        let auth_key = codex_apps_tools_cache_key(auth);
+        self.clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .is_some_and(|client| client.uses_codex_apps_tools_cache_for(&auth_key))
     }
 
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
@@ -908,9 +916,9 @@ fn chatgpt_auth_provider_for_server(
     server: &EffectiveMcpServer,
     chatgpt_auth_provider: Option<SharedAuthProvider>,
 ) -> Option<SharedAuthProvider> {
-    if !server
-        .configured_config()
-        .is_some_and(|config| matches!(&config.auth, McpServerAuth::ChatGpt))
+    let config = server.configured_config()?;
+    if !matches!(&config.auth, McpServerAuth::ChatGpt)
+        || mcp_server_has_configured_request_auth(config)
     {
         return None;
     }
@@ -919,10 +927,16 @@ fn chatgpt_auth_provider_for_server(
 
 fn should_share_codex_apps_tools_cache(
     server_name: &str,
+    server: &EffectiveMcpServer,
+    auth: Option<&CodexAuth>,
+    cache_key: &CodexAppsToolsCacheKey,
     uses_env_bearer_token: bool,
     cache_enabled: bool,
 ) -> bool {
-    server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token && cache_enabled
+    server_name == CODEX_APPS_MCP_SERVER_NAME
+        && !uses_env_bearer_token
+        && cache_enabled
+        && codex_apps_server_uses_codex_auth_cache(server, auth, cache_key)
 }
 
 async fn emit_update(

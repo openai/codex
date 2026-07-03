@@ -275,7 +275,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
     let cached = with_accessible_connectors_cache_cleared(|| {
         refresh_accessible_connectors_cache_from_mcp_tools(
-            &config, /*auth*/ None, /*extension_managed_apps_enabled*/ false, &tools,
+            &config, /*auth*/ None, /*uses_shared_codex_apps_tools_cache*/ true, &tools,
         );
         read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
     });
@@ -340,7 +340,7 @@ async fn extension_managed_apps_do_not_write_accessible_connectors_cache() {
 
     let cached = with_accessible_connectors_cache_cleared(|| {
         refresh_accessible_connectors_cache_from_mcp_tools(
-            &config, /*auth*/ None, /*extension_managed_apps_enabled*/ true, &tools,
+            &config, /*auth*/ None, /*uses_shared_codex_apps_tools_cache*/ false, &tools,
         );
         read_cached_accessible_connectors(&cache_key)
     });

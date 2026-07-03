@@ -46,6 +46,7 @@ use tokio_util::sync::CancellationToken;
 use crate::McpServerSource;
 use crate::ResolvedMcpCatalog;
 use crate::codex_apps_cache::CodexAppsToolsCache;
+use crate::codex_apps_cache::CodexAppsToolsCacheKey;
 use crate::codex_apps_cache::codex_apps_tools_cache_key;
 use crate::connection_manager::McpConnectionManager;
 use crate::runtime::McpRuntimeContext;
@@ -248,8 +249,34 @@ pub fn extension_managed_codex_apps_enabled(config: &McpConfig) -> bool {
             .server(CODEX_APPS_MCP_SERVER_NAME)
             .is_some_and(|server| {
                 matches!(server.source(), McpServerSource::Extension { .. })
-                    && matches!(&server.config().auth, &McpServerAuth::OAuth)
+                    && (matches!(&server.config().auth, &McpServerAuth::OAuth)
+                        || mcp_server_has_configured_request_auth(server.config()))
             })
+}
+
+pub(crate) fn mcp_server_has_configured_request_auth(server: &McpServerConfig) -> bool {
+    let McpServerTransportConfig::StreamableHttp {
+        bearer_token_env_var,
+        http_headers,
+        env_http_headers,
+        ..
+    } = &server.transport
+    else {
+        return false;
+    };
+
+    bearer_token_env_var.is_some()
+        || http_headers
+            .as_ref()
+            .is_some_and(|headers| headers.keys().any(|name| is_request_auth_header(name)))
+        || env_http_headers
+            .as_ref()
+            .is_some_and(|headers| headers.keys().any(|name| is_request_auth_header(name)))
+}
+
+fn is_request_auth_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("authorization")
+        || name.eq_ignore_ascii_case("x-openai-actor-authorization")
 }
 
 pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
@@ -265,7 +292,55 @@ pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
-    effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
+    let mut servers =
+        effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth);
+    if config
+        .mcp_server_catalog
+        .server(CODEX_APPS_MCP_SERVER_NAME)
+        .is_some_and(|server| mcp_server_has_configured_request_auth(server.config()))
+        && let Some(server) = servers.get_mut(CODEX_APPS_MCP_SERVER_NAME)
+    {
+        server.disable_stored_oauth();
+    }
+    servers
+}
+
+/// Returns whether Codex Apps can safely use caches partitioned by CodexAuth.
+pub fn codex_apps_tools_cache_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
+    if config.apps_mcp_product_sku.is_some() {
+        return false;
+    }
+    if !config
+        .mcp_server_catalog
+        .server(CODEX_APPS_MCP_SERVER_NAME)
+        .is_some_and(|server| matches!(server.source(), McpServerSource::Compatibility { .. }))
+    {
+        return false;
+    }
+
+    let cache_key = codex_apps_tools_cache_key(auth);
+    effective_mcp_servers(config, auth)
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .is_some_and(|server| codex_apps_server_uses_codex_auth_cache(server, auth, &cache_key))
+}
+
+pub(crate) fn codex_apps_server_uses_codex_auth_cache(
+    server: &EffectiveMcpServer,
+    auth: Option<&CodexAuth>,
+    cache_key: &CodexAppsToolsCacheKey,
+) -> bool {
+    let Some(server) = server.configured_config() else {
+        return false;
+    };
+    let McpServerTransportConfig::StreamableHttp { .. } = &server.transport else {
+        return false;
+    };
+
+    matches!(&server.auth, McpServerAuth::ChatGpt)
+        && !mcp_server_has_configured_request_auth(server)
+        && auth.is_some_and(CodexAuth::uses_codex_backend)
+        && codex_apps_tools_cache_key(auth) == *cache_key
+        && cache_key.can_partition_shared_cache()
 }
 
 /// Converts a materialized server map to its auth-gated runtime view.
@@ -348,7 +423,7 @@ pub async fn read_mcp_resource(
         config.codex_home.clone(),
         codex_apps_tools_cache,
         codex_apps_tools_cache_key(auth),
-        /*enable_codex_apps_tools_cache*/ !extension_managed_codex_apps_enabled(config),
+        /*enable_codex_apps_tools_cache*/ codex_apps_tools_cache_enabled(config, auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,
@@ -426,7 +501,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.codex_home.clone(),
         codex_apps_tools_cache,
         codex_apps_tools_cache_key(auth),
-        /*enable_codex_apps_tools_cache*/ !extension_managed_codex_apps_enabled(config),
+        /*enable_codex_apps_tools_cache*/ codex_apps_tools_cache_enabled(config, auth),
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         /*supports_openai_form_elicitation*/ false,

@@ -545,7 +545,8 @@ async fn build_skills_and_plugins(
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
-    let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
+    let apps_enabled = turn_context.apps_enabled(step_context.mcp.config());
+    let mcp_tools = if apps_enabled || !mentioned_plugins.is_empty() {
         // Plugin mentions need raw MCP/app inventory even when app tools
         // are normally hidden so we can describe the plugin's currently
         // usable capabilities for this turn.
@@ -557,13 +558,13 @@ async fn build_skills_and_plugins(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
+            Err(_) if apps_enabled => return None,
             Err(_) => Vec::new(),
         }
     } else {
         Vec::new()
     };
-    let available_connectors = if turn_context.apps_enabled() {
+    let available_connectors = if apps_enabled {
         let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
             connector_snapshot
                 .connector_ids()
@@ -1171,7 +1172,7 @@ async fn run_sampling_request(
     fields(
         turn_id = %step_context.turn.sub_id,
         model = %step_context.turn.model_info.slug,
-        apps_enabled = step_context.turn.apps_enabled()
+        apps_enabled = step_context.turn.apps_enabled(step_context.mcp.config())
     )
 )]
 pub(crate) async fn built_tools(
@@ -1194,7 +1195,7 @@ pub(crate) async fn built_tools(
         .await;
     let connector_snapshot = step_context.mcp.config().connector_snapshot.clone();
 
-    let apps_enabled = turn_context.apps_enabled();
+    let apps_enabled = turn_context.apps_enabled(step_context.mcp.config());
     let accessible_connectors =
         apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
     let accessible_connectors_with_enabled_state =

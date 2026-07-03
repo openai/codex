@@ -14,13 +14,23 @@ pub(crate) enum McpServerLaunch {
 #[derive(Debug, Clone)]
 pub struct EffectiveMcpServer {
     launch: McpServerLaunch,
+    allow_stored_oauth: bool,
 }
 
 impl EffectiveMcpServer {
     pub fn configured(config: McpServerConfig) -> Self {
         Self {
             launch: McpServerLaunch::Configured(Box::new(config)),
+            allow_stored_oauth: true,
         }
+    }
+
+    pub(crate) fn disable_stored_oauth(&mut self) {
+        self.allow_stored_oauth = false;
+    }
+
+    pub(crate) fn allows_stored_oauth(&self) -> bool {
+        self.allow_stored_oauth
     }
 
     pub(crate) fn launch(&self) -> &McpServerLaunch {

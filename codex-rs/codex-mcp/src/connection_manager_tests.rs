@@ -732,8 +732,14 @@ fn filter_tools_applies_per_server_filters() {
 
 #[test]
 fn codex_apps_env_bearer_token_bypasses_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::ChatGpt);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = codex_apps_tools_cache_key(Some(&auth));
     assert!(!should_share_codex_apps_tools_cache(
         CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        Some(&auth),
+        &cache_key,
         /*uses_env_bearer_token*/ true,
         /*cache_enabled*/ true,
     ));
@@ -741,20 +747,187 @@ fn codex_apps_env_bearer_token_bypasses_shared_tools_cache() {
 
 #[test]
 fn extension_managed_codex_apps_bypass_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::ChatGpt);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = codex_apps_tools_cache_key(Some(&auth));
     assert!(!should_share_codex_apps_tools_cache(
         CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        Some(&auth),
+        &cache_key,
         /*uses_env_bearer_token*/ false,
         /*cache_enabled*/ false,
     ));
 }
 
 #[test]
-fn codex_apps_chatgpt_auth_uses_shared_tools_cache() {
-    assert!(should_share_codex_apps_tools_cache(
+fn codex_apps_oauth_bypasses_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::OAuth);
+    let cache_key = codex_apps_tools_cache_key(/*auth*/ None);
+    assert!(!should_share_codex_apps_tools_cache(
         CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        /*auth*/ None,
+        &cache_key,
         /*uses_env_bearer_token*/ false,
         /*cache_enabled*/ true,
     ));
+}
+
+#[test]
+fn codex_apps_chatgpt_auth_uses_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::ChatGpt);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = codex_apps_tools_cache_key(Some(&auth));
+    assert!(should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        Some(&auth),
+        &cache_key,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ true,
+    ));
+}
+
+#[test]
+fn codex_apps_without_chatgpt_auth_bypasses_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::ChatGpt);
+    let cache_key = codex_apps_tools_cache_key(/*auth*/ None);
+    assert!(!should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        /*auth*/ None,
+        &cache_key,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ true,
+    ));
+}
+
+#[test]
+fn codex_apps_unsafe_or_mismatched_cache_key_bypasses_shared_tools_cache() {
+    let server = codex_apps_server_for_cache(McpServerAuth::ChatGpt);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = CodexAppsToolsCacheKey {
+        account_id: Some("workspace-id".to_string()),
+        chatgpt_user_id: None,
+        is_workspace_account: true,
+    };
+    let workspace_user_only_key = CodexAppsToolsCacheKey {
+        account_id: None,
+        chatgpt_user_id: Some("user-id".to_string()),
+        is_workspace_account: true,
+    };
+    let empty_identity_key = CodexAppsToolsCacheKey {
+        account_id: Some(" ".to_string()),
+        chatgpt_user_id: Some(String::new()),
+        is_workspace_account: true,
+    };
+
+    assert!(!cache_key.can_partition_shared_cache());
+    assert!(!workspace_user_only_key.can_partition_shared_cache());
+    assert!(!empty_identity_key.can_partition_shared_cache());
+    assert!(!should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        Some(&auth),
+        &cache_key,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ true,
+    ));
+}
+
+#[test]
+fn codex_apps_authorization_header_bypasses_shared_tools_cache() {
+    let mut config = crate::mcp::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+    );
+    let McpServerTransportConfig::StreamableHttp { http_headers, .. } = &mut config.transport
+    else {
+        panic!("expected streamable HTTP Apps server");
+    };
+    *http_headers = Some(HashMap::from([(
+        "Authorization".to_string(),
+        "Bearer external".to_string(),
+    )]));
+    let server = EffectiveMcpServer::configured(config);
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let cache_key = codex_apps_tools_cache_key(Some(&auth));
+
+    assert!(!should_share_codex_apps_tools_cache(
+        CODEX_APPS_MCP_SERVER_NAME,
+        &server,
+        Some(&auth),
+        &cache_key,
+        /*uses_env_bearer_token*/ false,
+        /*cache_enabled*/ true,
+    ));
+}
+
+#[test]
+fn configured_actor_auth_suppresses_ambient_chatgpt_provider() {
+    let mut config = crate::mcp::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+    );
+    let McpServerTransportConfig::StreamableHttp { http_headers, .. } = &mut config.transport
+    else {
+        panic!("expected streamable HTTP Apps server");
+    };
+    *http_headers = Some(HashMap::from([(
+        "X-OpenAI-Actor-Authorization".to_string(),
+        "actor-biscuit".to_string(),
+    )]));
+    let server = EffectiveMcpServer::configured(config);
+    let provider = codex_model_provider::auth_provider_from_auth(
+        &CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+
+    assert!(chatgpt_auth_provider_for_server(&server, Some(provider)).is_none());
+}
+
+#[tokio::test]
+async fn shared_codex_apps_cache_requires_matching_auth_identity() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let codex_home = tempdir().expect("tempdir");
+    let cache_context = CodexAppsToolsCache::default().context(
+        codex_home.path().to_path_buf(),
+        codex_apps_tools_cache_key(Some(&auth)),
+    );
+    let mut client = create_ready_async_managed_client(Vec::new()).await;
+    client.is_codex_apps_mcp_server = true;
+    client.codex_apps_tools_cache_context = Some(cache_context);
+
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager
+        .clients
+        .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client);
+
+    assert!(manager.uses_shared_codex_apps_tools_cache_for(Some(&auth)));
+    assert!(!manager.uses_shared_codex_apps_tools_cache_for(/*auth*/ None));
+}
+
+fn codex_apps_server_for_cache(auth: McpServerAuth) -> EffectiveMcpServer {
+    let mut config = crate::mcp::codex_apps_mcp_server_config(
+        "https://chatgpt.com",
+        /*apps_mcp_product_sku*/ None,
+    );
+    config.auth = auth;
+    let McpServerTransportConfig::StreamableHttp {
+        bearer_token_env_var,
+        ..
+    } = &mut config.transport
+    else {
+        panic!("expected streamable HTTP Apps server");
+    };
+    *bearer_token_env_var = None;
+    EffectiveMcpServer::configured(config)
 }
 
 #[tokio::test]

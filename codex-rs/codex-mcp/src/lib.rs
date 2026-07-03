@@ -40,6 +40,7 @@ pub use codex_apps_cache::CodexAppsToolsCache;
 pub use codex_apps_cache::CodexAppsToolsCacheKey;
 pub use codex_apps_cache::codex_apps_tools_cache_key;
 pub use mcp::codex_apps_mcp_server_config;
+pub use mcp::codex_apps_tools_cache_enabled;
 pub use mcp::configured_mcp_servers;
 pub use mcp::effective_mcp_servers;
 pub use mcp::effective_mcp_servers_from_configured;

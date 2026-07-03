@@ -226,6 +226,10 @@ impl AccountRequestProcessor {
                 );
             }
         }
+
+        if !thread_manager.list_thread_ids().await.is_empty() {
+            crate::mcp_refresh::queue_best_effort_refresh(thread_manager, config_manager).await;
+        }
     }
 
     fn spawn_effective_plugins_changed_task(
