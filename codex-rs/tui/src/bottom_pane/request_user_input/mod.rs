@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::app::app_server_requests::AppServerRequestIdentity;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -155,8 +156,9 @@ impl FooterTip {
 pub(crate) struct RequestUserInputOverlay {
     app_event_tx: AppEventSender,
     request: ToolRequestUserInputParams,
+    request_identity: Option<AppServerRequestIdentity>,
     // Queue of incoming requests to process after the current one.
-    queue: VecDeque<ToolRequestUserInputParams>,
+    queue: VecDeque<(ToolRequestUserInputParams, Option<AppServerRequestIdentity>)>,
     // Reuse the shared chat composer so notes/freeform answers match the
     // primary input styling and behavior.
     composer: ChatComposer,
@@ -193,8 +195,29 @@ impl RequestUserInputOverlay {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_keymap(
         request: ToolRequestUserInputParams,
+        app_event_tx: AppEventSender,
+        has_input_focus: bool,
+        enhanced_keys_supported: bool,
+        disable_paste_burst: bool,
+        keymap: RuntimeKeymap,
+    ) -> Self {
+        Self::new_with_keymap_and_identity(
+            request,
+            /*request_identity*/ None,
+            app_event_tx,
+            has_input_focus,
+            enhanced_keys_supported,
+            disable_paste_burst,
+            keymap,
+        )
+    }
+
+    pub(crate) fn new_with_keymap_and_identity(
+        request: ToolRequestUserInputParams,
+        request_identity: Option<AppServerRequestIdentity>,
         app_event_tx: AppEventSender,
         has_input_focus: bool,
         enhanced_keys_supported: bool,
@@ -217,6 +240,7 @@ impl RequestUserInputOverlay {
         let mut overlay = Self {
             app_event_tx,
             request,
+            request_identity,
             queue: VecDeque::new(),
             composer,
             answers: Vec::new(),
@@ -260,8 +284,9 @@ impl RequestUserInputOverlay {
     }
 
     fn advance_queue_or_complete_at(&mut self, now: Instant) {
-        if let Some(next) = self.queue.pop_front() {
+        if let Some((next, identity)) = self.queue.pop_front() {
             self.request = next;
+            self.request_identity = identity;
             self.request_started_at = now;
             self.auto_resolution_snoozed = false;
             self.reset_for_request();
@@ -910,12 +935,9 @@ impl RequestUserInputOverlay {
                 },
             );
         }
-        self.app_event_tx.user_input_answer(
-            self.request.turn_id.clone(),
-            ToolRequestUserInputResponse {
-                answers: answers.clone(),
-            },
-        );
+        self.send_user_input_answer(ToolRequestUserInputResponse {
+            answers: answers.clone(),
+        });
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::RequestUserInputResultCell {
                 questions: self.request.questions.clone(),
@@ -929,12 +951,9 @@ impl RequestUserInputOverlay {
     fn submit_empty_auto_resolution(&mut self, now: Instant) {
         self.confirm_unanswered = None;
         let answers: HashMap<String, ToolRequestUserInputAnswer> = HashMap::new();
-        self.app_event_tx.user_input_answer(
-            self.request.turn_id.clone(),
-            ToolRequestUserInputResponse {
-                answers: answers.clone(),
-            },
-        );
+        self.send_user_input_answer(ToolRequestUserInputResponse {
+            answers: answers.clone(),
+        });
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::RequestUserInputResultCell {
                 questions: self.request.questions.clone(),
@@ -945,15 +964,43 @@ impl RequestUserInputOverlay {
         self.advance_queue_or_complete_at(now);
     }
 
+    fn send_user_input_answer(&self, response: ToolRequestUserInputResponse) {
+        match &self.request_identity {
+            Some(identity) => self.app_event_tx.app_server_user_input_answer(
+                identity.thread_id,
+                identity.request_id.clone(),
+                self.request.turn_id.clone(),
+                response,
+            ),
+            None => self
+                .app_event_tx
+                .user_input_answer(self.request.turn_id.clone(), response),
+        }
+    }
+
     fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
-        let ResolvedAppServerRequest::UserInput { call_id } = request else {
+        let ResolvedAppServerRequest::UserInput {
+            thread_id,
+            request_id,
+            turn_id,
+            call_id,
+        } = request
+        else {
             return false;
         };
 
         let queue_len = self.queue.len();
-        self.queue
-            .retain(|queued_request| queued_request.item_id != *call_id);
-        if self.request.item_id == *call_id {
+        self.queue.retain(|(queued_request, identity)| {
+            identity.as_ref().is_none_or(|identity| {
+                identity.thread_id != *thread_id || identity.request_id != *request_id
+            }) || queued_request.turn_id != *turn_id
+                || queued_request.item_id != *call_id
+        });
+        if self.request_identity.as_ref().is_some_and(|identity| {
+            identity.thread_id == *thread_id && identity.request_id == *request_id
+        }) && self.request.turn_id == *turn_id
+            && self.request.item_id == *call_id
+        {
             self.advance_queue_or_complete_at(Instant::now());
             return true;
         }
@@ -1500,8 +1547,9 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn try_consume_user_input_request(
         &mut self,
         request: ToolRequestUserInputParams,
-    ) -> Option<ToolRequestUserInputParams> {
-        self.queue.push_back(request);
+        identity: Option<AppServerRequestIdentity>,
+    ) -> Option<(ToolRequestUserInputParams, Option<AppServerRequestIdentity>)> {
+        self.queue.push_back((request, identity));
         None
     }
 
@@ -1516,6 +1564,8 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
+    use codex_app_server_protocol::RequestId;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -1543,6 +1593,28 @@ mod tests {
             rx.try_recv().is_err(),
             "unexpected AppEvents before interrupt completion"
         );
+    }
+
+    fn expect_exact_user_input_answer(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        expected_thread_id: ThreadId,
+        expected_request_id: RequestId,
+        expected_turn_id: &str,
+    ) {
+        let event = std::iter::from_fn(|| rx.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::ResolveAppServerRequest { .. }))
+            .expect("expected exact app-server user-input response");
+        let AppEvent::ResolveAppServerRequest {
+            thread_id,
+            request_id,
+            op: Op::UserInputAnswer { id, .. },
+        } = event
+        else {
+            panic!("expected exact user-input response");
+        };
+        assert_eq!(thread_id, expected_thread_id);
+        assert_eq!(request_id, expected_request_id);
+        assert_eq!(id, expected_turn_id);
     }
 
     fn question_with_options(id: &str, header: &str) -> ToolRequestUserInputQuestion {
@@ -1739,20 +1811,83 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(request_event(
-            "turn-2",
-            vec![question_with_options("q2", "Second")],
-        ));
-        overlay.try_consume_user_input_request(request_event(
-            "turn-3",
-            vec![question_with_options("q3", "Third")],
-        ));
+        overlay.try_consume_user_input_request(
+            request_event("turn-2", vec![question_with_options("q2", "Second")]),
+            None,
+        );
+        overlay.try_consume_user_input_request(
+            request_event("turn-3", vec![question_with_options("q3", "Third")]),
+            None,
+        );
 
         overlay.submit_answers();
         assert_eq!(overlay.request.turn_id, "turn-2");
 
         overlay.submit_answers();
         assert_eq!(overlay.request.turn_id, "turn-3");
+    }
+
+    #[test]
+    fn manual_app_server_answer_emits_exact_origin_identity() {
+        let (tx, mut rx) = test_sender();
+        let thread_id =
+            ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let request_id = RequestId::String("1".to_string());
+        let mut overlay = RequestUserInputOverlay::new_with_keymap_and_identity(
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+                auto_resolution_ms: None,
+            },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_id.clone(),
+            }),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
+        );
+
+        overlay.submit_answers();
+
+        expect_exact_user_input_answer(&mut rx, thread_id, request_id, "turn-1");
+    }
+
+    #[test]
+    fn auto_resolved_app_server_answer_emits_exact_origin_identity() {
+        let (tx, mut rx) = test_sender();
+        let thread_id =
+            ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let request_id = RequestId::Integer(1);
+        let mut overlay = RequestUserInputOverlay::new_with_keymap_and_identity(
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q1", "First")],
+                auto_resolution_ms: Some(60_000),
+            },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_id.clone(),
+            }),
+            tx,
+            /*has_input_focus*/ true,
+            /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
+        );
+        let now = Instant::now();
+        overlay.request_started_at =
+            now - AUTO_RESOLUTION_HIDDEN_GRACE - AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
+
+        assert!(overlay.pre_draw_tick(now));
+
+        expect_exact_user_input_answer(&mut rx, thread_id, request_id, "turn-1");
     }
 
     #[test]
@@ -1765,20 +1900,26 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
-            thread_id: "thread-1".to_string(),
-            item_id: "call-2".to_string(),
-            turn_id: "turn-2".to_string(),
-            questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
-        });
-        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
-            thread_id: "thread-1".to_string(),
-            item_id: "call-3".to_string(),
-            turn_id: "turn-3".to_string(),
-            questions: vec![question_with_options("q3", "Third")],
-            auto_resolution_ms: None,
-        });
+        overlay.try_consume_user_input_request(
+            ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                item_id: "call-2".to_string(),
+                turn_id: "turn-2".to_string(),
+                questions: vec![question_with_options("q2", "Second")],
+                auto_resolution_ms: None,
+            },
+            None,
+        );
+        overlay.try_consume_user_input_request(
+            ToolRequestUserInputParams {
+                thread_id: "thread-1".to_string(),
+                item_id: "call-3".to_string(),
+                turn_id: "turn-3".to_string(),
+                questions: vec![question_with_options("q3", "Third")],
+                auto_resolution_ms: None,
+            },
+            None,
+        );
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
@@ -2004,10 +2145,13 @@ mod tests {
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
         );
-        overlay.try_consume_user_input_request(request_event_with_auto_resolution(
-            "turn-2",
-            vec![question_with_options("q2", "Second")],
-        ));
+        overlay.try_consume_user_input_request(
+            request_event_with_auto_resolution(
+                "turn-2",
+                vec![question_with_options("q2", "Second")],
+            ),
+            None,
+        );
         let now = Instant::now();
         let total_timeout = AUTO_RESOLUTION_HIDDEN_GRACE + AUTO_RESOLUTION_VISIBLE_COUNTDOWN;
         overlay.request_started_at = now - total_timeout;
@@ -2029,22 +2173,53 @@ mod tests {
     #[test]
     fn resolved_request_dismisses_overlay_without_emitting_events() {
         let (tx, mut rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
+        let thread_id =
+            ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let request_id = RequestId::String("request-b".to_string());
+        let mut overlay = RequestUserInputOverlay::new_with_keymap_and_identity(
             ToolRequestUserInputParams {
-                thread_id: "thread-1".to_string(),
+                thread_id: thread_id.to_string(),
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
                 auto_resolution_ms: None,
             },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_id.clone(),
+            }),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
         );
 
         assert!(
+            !overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+                    .expect("valid thread id"),
+                request_id: request_id.clone(),
+                turn_id: "turn-1".to_string(),
+                call_id: "call-1".to_string(),
+            })
+        );
+        assert!(!overlay.done);
+        assert!(
+            !overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                thread_id,
+                request_id: RequestId::String("request-a".to_string()),
+                turn_id: "turn-1".to_string(),
+                call_id: "call-1".to_string(),
+            }),
+            "a stale request with the same semantic key must not dismiss the current prompt"
+        );
+        assert!(!overlay.done);
+        assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                thread_id,
+                request_id,
+                turn_id: "turn-1".to_string(),
                 call_id: "call-1".to_string(),
             })
         );
@@ -2056,38 +2231,56 @@ mod tests {
     }
 
     #[test]
-    fn resolved_current_request_advances_to_next_same_turn_prompt() {
+    fn resolved_current_request_advances_to_reused_item_in_next_turn() {
         let (tx, mut rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
+        let thread_id =
+            ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let request_a = RequestId::String("request-a".to_string());
+        let request_b = RequestId::String("request-b".to_string());
+        let mut overlay = RequestUserInputOverlay::new_with_keymap_and_identity(
             ToolRequestUserInputParams {
-                thread_id: "thread-1".to_string(),
+                thread_id: thread_id.to_string(),
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
                 auto_resolution_ms: None,
             },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_a.clone(),
+            }),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
         );
-        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
-            thread_id: "thread-1".to_string(),
-            item_id: "call-2".to_string(),
-            turn_id: "turn-1".to_string(),
-            questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
-        });
+        overlay.try_consume_user_input_request(
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-1".to_string(),
+                turn_id: "turn-2".to_string(),
+                questions: vec![question_with_options("q2", "Second")],
+                auto_resolution_ms: None,
+            },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_b,
+            }),
+        );
 
         assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
+                thread_id,
+                request_id: request_a,
+                turn_id: "turn-1".to_string(),
                 call_id: "call-1".to_string(),
             })
         );
 
-        assert!(!overlay.done, "newer same-turn prompt should stay pending");
-        assert_eq!(overlay.request.item_id, "call-2");
-        assert_eq!(overlay.request.turn_id, "turn-1");
+        assert!(!overlay.done, "newer cross-turn prompt should stay pending");
+        assert_eq!(overlay.request.item_id, "call-1");
+        assert_eq!(overlay.request.turn_id, "turn-2");
         assert_eq!(overlay.request.questions[0].id, "q2");
         assert!(
             rx.try_recv().is_err(),
@@ -2098,37 +2291,62 @@ mod tests {
     #[test]
     fn resolved_queued_request_removes_only_that_prompt() {
         let (tx, mut rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
+        let thread_id =
+            ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+        let request_a = RequestId::String("request-a".to_string());
+        let request_b = RequestId::String("request-b".to_string());
+        let request_c = RequestId::String("request-c".to_string());
+        let mut overlay = RequestUserInputOverlay::new_with_keymap_and_identity(
             ToolRequestUserInputParams {
-                thread_id: "thread-1".to_string(),
+                thread_id: thread_id.to_string(),
                 item_id: "call-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 questions: vec![question_with_options("q1", "First")],
                 auto_resolution_ms: None,
             },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_a,
+            }),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,
             /*disable_paste_burst*/ false,
+            RuntimeKeymap::defaults(),
         );
-        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
-            thread_id: "thread-1".to_string(),
-            item_id: "call-2".to_string(),
-            turn_id: "turn-1".to_string(),
-            questions: vec![question_with_options("q2", "Second")],
-            auto_resolution_ms: None,
-        });
-        overlay.try_consume_user_input_request(ToolRequestUserInputParams {
-            thread_id: "thread-1".to_string(),
-            item_id: "call-3".to_string(),
-            turn_id: "turn-1".to_string(),
-            questions: vec![question_with_options("q3", "Third")],
-            auto_resolution_ms: None,
-        });
+        overlay.try_consume_user_input_request(
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-1".to_string(),
+                turn_id: "turn-2".to_string(),
+                questions: vec![question_with_options("q2", "Second")],
+                auto_resolution_ms: None,
+            },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_b.clone(),
+            }),
+        );
+        overlay.try_consume_user_input_request(
+            ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                item_id: "call-3".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q3", "Third")],
+                auto_resolution_ms: None,
+            },
+            Some(AppServerRequestIdentity {
+                thread_id,
+                request_id: request_c,
+            }),
+        );
 
         assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
-                call_id: "call-2".to_string(),
+                thread_id,
+                request_id: request_b,
+                turn_id: "turn-2".to_string(),
+                call_id: "call-1".to_string(),
             })
         );
 

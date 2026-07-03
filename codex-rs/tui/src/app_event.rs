@@ -26,6 +26,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
@@ -158,6 +159,13 @@ pub(crate) enum AppEvent {
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,
+        op: AppCommand,
+    },
+
+    /// Resolve one exact app-server request generation.
+    ResolveAppServerRequest {
+        thread_id: ThreadId,
+        request_id: AppServerRequestId,
         op: AppCommand,
     },
 

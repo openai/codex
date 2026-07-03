@@ -65,9 +65,17 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
+                let Ok(thread_id) = codex_protocol::ThreadId::from_string(&notification.thread_id)
+                else {
+                    tracing::warn!(
+                        thread_id = notification.thread_id,
+                        "ignoring server request resolution with invalid thread_id"
+                    );
+                    return;
+                };
                 if let Some(request) = self
                     .pending_app_server_requests
-                    .resolve_notification(&notification.request_id)
+                    .resolve_notification(thread_id, &notification.request_id)
                 {
                     self.chat_widget.dismiss_app_server_request(&request);
                 }
