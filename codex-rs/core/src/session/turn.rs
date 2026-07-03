@@ -37,7 +37,6 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
-use crate::responses_retry::ResponsesRetryOutcome;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
@@ -1153,11 +1152,8 @@ async fn run_sampling_request(
         Arc::clone(&router),
         Arc::clone(&turn_diff_tracker),
     );
-    let max_stream_retries = turn_context.provider.info().stream_max_retries();
-    let max_request_retries = turn_context.provider.info().request_max_retries();
-    client_session.use_caller_managed_http_request_retries();
-    let mut stream_retries = 0;
-    let mut request_retries = 0;
+    let max_retries = turn_context.provider.info().stream_max_retries();
+    let mut retries = 0;
     let mut server_overloaded_retries = 0;
     let mut initial_input = Some(input);
     let mut original_input = None;
@@ -1175,14 +1171,12 @@ async fn run_sampling_request(
             turn_context.as_ref(),
             base_instructions.clone(),
         );
-        let mut response_stream_opened = false;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_store),
             client_session,
-            &mut response_stream_opened,
             responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
@@ -1217,16 +1211,12 @@ async fn run_sampling_request(
             return Err(err);
         }
 
-        let http_request_failed_to_open =
-            !sess.services.model_client.responses_websocket_enabled() && !response_stream_opened;
-        let (retry_counter, max_retries) = if should_retry_server_overload {
-            (&mut server_overloaded_retries, max_stream_retries)
-        } else if http_request_failed_to_open {
-            (&mut request_retries, max_request_retries)
+        let retry_counter = if should_retry_server_overload {
+            &mut server_overloaded_retries
         } else {
-            (&mut stream_retries, max_stream_retries)
+            &mut retries
         };
-        let retry_outcome = handle_retryable_response_stream_error(
+        handle_retryable_response_stream_error(
             retry_counter,
             max_retries,
             err,
@@ -1237,10 +1227,6 @@ async fn run_sampling_request(
             cancellation_token.child_token(),
         )
         .await?;
-        if retry_outcome == ResponsesRetryOutcome::TransportFallback {
-            request_retries = 0;
-            stream_retries = 0;
-        }
         turn_context.turn_timing_state.record_sampling_retry();
     }
 }
@@ -1983,7 +1969,6 @@ async fn try_run_sampling_request(
     turn_context: Arc<TurnContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
-    response_stream_opened: &mut bool,
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
@@ -2009,7 +1994,7 @@ async fn try_run_sampling_request(
         .enabled(Feature::ConcurrentReasoningSummaries)
         && turn_context.provider.info().is_openai();
     let mut stream = client_session
-        .stream(
+        .stream_with_deferred_server_overload_retries(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
@@ -2017,12 +2002,12 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,
+            true,
             &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-    *response_stream_opened = true;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;

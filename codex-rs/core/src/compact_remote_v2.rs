@@ -17,7 +17,6 @@ use crate::hook_runtime::run_post_compact_hooks;
 use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CompactionTurnMetadata;
-use crate::responses_retry::ResponsesRetryOutcome;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::session::Session;
@@ -348,21 +347,17 @@ async fn run_remote_compaction_request_v2(
     responses_metadata: &CodexResponsesMetadata,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<RemoteCompactionV2Output> {
-    let max_stream_retries = turn_context
+    let max_retries = turn_context
         .provider
         .info()
         .stream_max_retries()
         .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);
-    let max_request_retries = turn_context.provider.info().request_max_retries();
-    client_session.use_caller_managed_http_request_retries();
-    let mut stream_retries = 0;
-    let mut request_retries = 0;
+    let mut retries = 0;
     let mut server_overloaded_retries = 0;
     loop {
-        let mut response_stream_opened = false;
         let result = async {
             let stream = client_session
-                .stream(
+                .stream_with_deferred_server_overload_retries(
                     prompt,
                     &turn_context.model_info,
                     &turn_context.session_telemetry,
@@ -370,10 +365,10 @@ async fn run_remote_compaction_request_v2(
                     turn_context.reasoning_summary,
                     turn_context.config.service_tier.clone(),
                     responses_metadata,
+                    true,
                     &InferenceTraceContext::disabled(),
                 )
                 .await?;
-            response_stream_opened = true;
             collect_compaction_output(stream).await
         }
         .or_cancel(cancellation_token)
@@ -388,17 +383,12 @@ async fn run_remote_compaction_request_v2(
                 if !err.is_retryable() && !should_retry_server_overload {
                     return Err(err);
                 }
-                let http_request_failed_to_open =
-                    !sess.services.model_client.responses_websocket_enabled()
-                        && !response_stream_opened;
-                let (retry_counter, max_retries) = if should_retry_server_overload {
-                    (&mut server_overloaded_retries, max_stream_retries)
-                } else if http_request_failed_to_open {
-                    (&mut request_retries, max_request_retries)
+                let retry_counter = if should_retry_server_overload {
+                    &mut server_overloaded_retries
                 } else {
-                    (&mut stream_retries, max_stream_retries)
+                    &mut retries
                 };
-                let retry_outcome = handle_retryable_response_stream_error(
+                handle_retryable_response_stream_error(
                     retry_counter,
                     max_retries,
                     err,
@@ -409,10 +399,6 @@ async fn run_remote_compaction_request_v2(
                     cancellation_token.child_token(),
                 )
                 .await?;
-                if retry_outcome == ResponsesRetryOutcome::TransportFallback {
-                    request_retries = 0;
-                    stream_retries = 0;
-                }
             }
         }
     }

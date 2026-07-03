@@ -686,7 +686,7 @@ async fn summarize_context_three_requests_and_instructions() {
 }
 
 #[tokio::test]
-async fn local_compact_keeps_provider_http_5xx_retries() -> Result<()> {
+async fn local_compact_keeps_provider_server_overload_retries() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let responses = mount_response_sequence(
@@ -696,7 +696,12 @@ async fn local_compact_keeps_provider_http_5xx_retries() -> Result<()> {
                 ev_assistant_message("m1", FIRST_REPLY),
                 ev_completed("r1"),
             ])),
-            ResponseTemplate::new(500).set_body_string("temporary compact failure"),
+            ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "server_is_overloaded",
+                    "message": "temporary compact failure"
+                }
+            })),
             sse_response(sse(vec![
                 ev_assistant_message("m2", SUMMARY_TEXT),
                 ev_completed("r2"),

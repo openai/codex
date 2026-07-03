@@ -27,6 +27,36 @@ fn map_api_error_maps_server_overloaded_from_503_body() {
 }
 
 #[test]
+fn server_overload_transport_detection_is_narrow() {
+    let error = |status, body: &str| TransportError::Http {
+        status,
+        url: None,
+        headers: None,
+        body: Some(body.to_string()),
+    };
+    for code in ["server_is_overloaded", "slow_down"] {
+        let body = serde_json::json!({ "error": { "code": code } }).to_string();
+        assert!(is_server_overloaded_transport_error(&error(
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            &body,
+        )));
+    }
+
+    assert!(!is_server_overloaded_transport_error(&error(
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        "unavailable",
+    )));
+    assert!(!is_server_overloaded_transport_error(&error(
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        r#"{"error":{"code":"other"}}"#,
+    )));
+    assert!(!is_server_overloaded_transport_error(&error(
+        http::StatusCode::INTERNAL_SERVER_ERROR,
+        r#"{"error":{"code":"server_is_overloaded"}}"#,
+    )));
+}
+
+#[test]
 fn map_api_error_maps_cloudflare_blocked_response_to_user_message() {
     let mut headers = HeaderMap::new();
     headers.insert(CF_RAY_HEADER, http::HeaderValue::from_static("ray-id"));

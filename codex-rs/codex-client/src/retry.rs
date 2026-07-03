@@ -48,8 +48,21 @@ pub fn backoff(base: Duration, attempt: u64) -> Duration {
 
 pub async fn run_with_retry<T, F, Fut>(
     policy: RetryPolicy,
+    make_req: impl FnMut() -> Request,
+    op: F,
+) -> Result<T, TransportError>
+where
+    F: Fn(Request, u64) -> Fut,
+    Fut: Future<Output = Result<T, TransportError>>,
+{
+    run_with_retry_if(policy, make_req, op, |_| true).await
+}
+
+pub async fn run_with_retry_if<T, F, Fut>(
+    policy: RetryPolicy,
     mut make_req: impl FnMut() -> Request,
     op: F,
+    retry_if: impl Fn(&TransportError) -> bool,
 ) -> Result<T, TransportError>
 where
     F: Fn(Request, u64) -> Fut,
@@ -60,9 +73,10 @@ where
         match op(req, attempt).await {
             Ok(resp) => return Ok(resp),
             Err(err)
-                if policy
-                    .retry_on
-                    .should_retry(&err, attempt, policy.max_attempts) =>
+                if retry_if(&err)
+                    && policy
+                        .retry_on
+                        .should_retry(&err, attempt, policy.max_attempts) =>
             {
                 sleep(backoff(policy.base_delay, attempt + 1)).await;
             }

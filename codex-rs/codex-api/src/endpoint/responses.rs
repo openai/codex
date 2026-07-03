@@ -26,6 +26,7 @@ use tracing::instrument;
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
+    defer_server_overloaded_retries: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +44,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,
+            defer_server_overloaded_retries: false,
         }
     }
 
@@ -54,7 +56,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: self.session.with_request_telemetry(request),
             sse_telemetry: sse,
+            defer_server_overloaded_retries: self.defer_server_overloaded_retries,
         }
+    }
+
+    /// Return capacity-coded 503s to a caller that applies a slower retry policy.
+    pub fn with_deferred_server_overload_retries(mut self, defer: bool) -> Self {
+        self.defer_server_overloaded_retries = defer;
+        self
     }
 
     #[instrument(
@@ -93,8 +102,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream_encoded(body, headers, compression, turn_state)
-            .await
+        self.stream_encoded(
+            body,
+            headers,
+            compression,
+            turn_state,
+            self.defer_server_overloaded_retries,
+        )
+        .await
     }
 
     fn path() -> &'static str {
@@ -121,8 +136,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Result<ResponseStream, ApiError> {
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        self.stream_encoded(body, extra_headers, compression, turn_state)
-            .await
+        self.stream_encoded(
+            body,
+            extra_headers,
+            compression,
+            turn_state,
+            self.defer_server_overloaded_retries,
+        )
+        .await
     }
 
     async fn stream_encoded(
@@ -131,6 +152,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        defer_server_overloaded_retries: bool,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
@@ -144,6 +166,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 Self::path(),
                 extra_headers,
                 Some(body),
+                defer_server_overloaded_retries,
                 |req| {
                     req.headers.insert(
                         http::header::ACCEPT,
