@@ -612,7 +612,7 @@ fn untrusted_permission_and_windows_backend_gates_require_composed_authority() {
 
 #[test]
 fn untrusted_without_filesystem_containment_requires_complete_composed_authority() {
-    let outer = untrusted_powershell_command("Get-Location");
+    let outer = absolute_untrusted_powershell_command("Get-Location");
     let inner = vec_str(&["Get-Location"]);
     let partial_policy = format!(
         "{}\n{}",
@@ -698,6 +698,26 @@ fn untrusted_without_filesystem_containment_requires_complete_composed_authority
         ),
         untrusted_skip(/*bypass_sandbox*/ true),
         "complete composed authority remains sufficient without a sandbox",
+    );
+
+    let bare_outer = untrusted_powershell_command("Get-Location");
+    let bare_full_policy = format!(
+        "{}\n{}",
+        prefix_rule_for(&bare_outer, "allow"),
+        prefix_rule_for(&inner, "allow")
+    );
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&bare_full_policy),
+            &bare_outer,
+            std::slice::from_ref(&inner),
+            AskForApproval::OnRequest,
+            &disabled,
+            WindowsSandboxLevel::Disabled,
+            SandboxPermissions::UseDefault,
+        ),
+        one_shot(/*reason*/ None),
+        "a bare executable spelling cannot establish exact outer authority",
     );
 
     let managed_unrestricted = PermissionProfile::from_runtime_permissions(
