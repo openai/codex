@@ -119,7 +119,6 @@ enum ActionKind {
     },
     RunUnifiedExecCommand {
         command: &'static str,
-        shell: Option<&'static str>,
         justification: Option<&'static str>,
     },
     ApplyPatchFreeform {
@@ -269,7 +268,6 @@ impl ActionKind {
             }
             ActionKind::RunUnifiedExecCommand {
                 command,
-                shell,
                 justification,
             } => {
                 let event = exec_command_event(
@@ -277,7 +275,6 @@ impl ActionKind {
                     command,
                     Some(1000),
                     sandbox_permissions,
-                    *shell,
                     *justification,
                 )?;
                 Ok((event, Some(command.to_string())))
@@ -359,7 +356,6 @@ fn exec_command_event(
     cmd: &str,
     yield_time_ms: Option<u64>,
     sandbox_permissions: SandboxPermissions,
-    shell: Option<&str>,
     justification: Option<&str>,
 ) -> Result<Value> {
     let mut args = json!({
@@ -367,9 +363,6 @@ fn exec_command_event(
     });
     if let Some(yield_time_ms) = yield_time_ms {
         args["yield_time_ms"] = json!(yield_time_ms);
-    }
-    if let Some(shell) = shell {
-        args["shell"] = json!(shell);
     }
     if sandbox_permissions.requests_sandbox_override() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
@@ -1052,25 +1045,10 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApprovalWithAmendment {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
-                expected_execpolicy_amendment: None,
+                expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
-            },
-        },
-        ScenarioSpec {
-            name: "known_safe_escalation_unless_trusted_rejects",
-            approval_policy: UnlessTrusted,
-            sandbox_policy: workspace_write(false),
-            action: ActionKind::RunCommand {
-                command: "echo known-safe-escalation-unless-trusted",
-            },
-            sandbox_permissions: SandboxPermissions::RequireEscalated,
-            features: vec![],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::Auto,
-            expectation: Expectation::CommandFailure {
-                output_contains: "you should not ask for escalated permissions",
             },
         },
         ScenarioSpec {
@@ -1723,7 +1701,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "echo \"hello unified exec\"",
-                shell: None,
                 justification: None,
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -1742,7 +1719,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             action: ActionKind::RunUnifiedExecCommand {
                 command: "python3 -c 'print('\"'\"'escalated unified exec'\"'\"')'",
-                shell: None,
                 justification: Some(DEFAULT_UNIFIED_EXEC_JUSTIFICATION),
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -1762,7 +1738,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             action: ActionKind::RunUnifiedExecCommand {
                 command: "git reset --hard",
-                shell: None,
                 justification: None,
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -1782,7 +1757,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunUnifiedExecCommand {
                 command: "cat <<'EOF' > /tmp/out.txt \nhello\nEOF",
-                shell: None,
                 justification: None,
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -1802,7 +1776,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_policy: workspace_write(false),
             action: ActionKind::RunUnifiedExecCommand {
                 command: "cat ./one.txt && touch ./two.txt",
-                shell: None,
                 justification: None,
             },
             sandbox_permissions: SandboxPermissions::RequireEscalated,
@@ -1811,27 +1784,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApproval {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
-            },
-            expectation: Expectation::CommandFailure {
-                output_contains: "rejected by user",
-            },
-        },
-        ScenarioSpec {
-            name: "model selected path shell cannot inherit safe inner command",
-            approval_policy: AskForApproval::UnlessTrusted,
-            sandbox_policy: workspace_write(false),
-            action: ActionKind::RunUnifiedExecCommand {
-                command: "ls",
-                shell: Some("/tmp/workspace/bash"),
-                justification: None,
-            },
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![Feature::UnifiedExec],
-            model_override: Some("gpt-5.2"),
-            outcome: Outcome::ExecApprovalWithAmendment {
-                decision: ReviewDecision::Denied,
-                expected_reason: None,
-                expected_execpolicy_amendment: None,
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -2168,6 +2120,149 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
     assert!(fs::read_to_string(&path)?.contains("after"));
     let _ = fs::remove_file(path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn exec_approval_cannot_resolve_patch_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        });
+    let test = builder.build(&server).await?;
+
+    let target = TargetPath::OutsideWorkspace("apply_patch_reject_exec_response.txt");
+    let (path, patch_path) = target.resolve_for_patch(&test);
+    let _path_cleanup = tempfile::TempPath::try_from_path(path.clone())?;
+    let _ = fs::remove_file(&path);
+    let patch = build_add_file_patch(&patch_path, "approved by patch response");
+    let call_id = "apply_patch_reject_exec_response";
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_apply_patch_custom_tool_call(call_id, &patch),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "apply patch with typed approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    let approval = expect_patch_approval(&test, call_id).await;
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.call_id.clone(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.call_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+    assert_eq!(fs::read_to_string(&path)?, "approved by patch response\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn patch_approval_cannot_resolve_exec_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    let call_id = "exec_reject_patch_response";
+    let target = test.config.cwd.join("exec_reject_patch_response.txt");
+    let _target_cleanup = tempfile::TempPath::try_from_path(target.clone())?;
+    let command = "touch exec_reject_patch_response.txt";
+
+    let event = shell_event(
+        call_id,
+        command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            event,
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "run command with typed approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    let approval = expect_exec_approval(&test, command).await;
+
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.effective_approval_id(),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+    assert!(target.exists());
 
     Ok(())
 }
@@ -3116,7 +3211,7 @@ exec {remote_bash_exec} "$@"
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn sandbox_override_with_invalid_prefix_rule_does_not_propose_an_amendment() -> Result<()> {
+async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -3159,14 +3254,17 @@ async fn sandbox_override_with_invalid_prefix_rule_does_not_propose_an_amendment
     .await?;
 
     let approval = expect_exec_approval(&test, command).await;
-    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    let amendment = approval
+        .proposed_execpolicy_amendment
+        .expect("should have a proposed execpolicy amendment");
+    assert!(amendment.command.contains(&command.to_string()));
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn approving_sandbox_override_does_not_persist_a_fallback_rule() -> Result<()> {
+async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -3210,13 +3308,18 @@ async fn approving_sandbox_override_does_not_persist_a_fallback_rule() -> Result
 
     let approval = expect_exec_approval(&test, command).await;
     let approval_id = approval.effective_approval_id();
-    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    let amendment = approval
+        .proposed_execpolicy_amendment
+        .expect("should have a proposed execpolicy amendment");
+    assert!(amendment.command.contains(&command.to_string()));
 
     test.codex
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: amendment.clone(),
+            },
         })
         .await?;
     wait_for_completion(&test).await;
@@ -3258,17 +3361,7 @@ async fn approving_sandbox_override_does_not_persist_a_fallback_rule() -> Result
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, command).await;
-    let approval_id = approval.effective_approval_id();
-    assert_eq!(approval.proposed_execpolicy_amendment, None);
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval_id,
-            turn_id: None,
-            decision: ReviewDecision::Approved,
-        })
-        .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_without_approval(&test).await;
 
     let second_output = parse_result(
         &second_results

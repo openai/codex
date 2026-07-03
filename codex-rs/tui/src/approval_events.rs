@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use crate::diff_model::FileChange;
 use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionApprovalPurpose;
 use codex_app_server_protocol::ExecPolicyAmendment;
 use codex_app_server_protocol::NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment;
@@ -24,6 +25,8 @@ pub(crate) struct ExecApprovalRequestEvent {
     pub(crate) call_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) approval_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approval_purpose: Option<CommandExecutionApprovalPurpose>,
     #[serde(default)]
     pub(crate) turn_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +56,10 @@ impl ExecApprovalRequestEvent {
     pub(crate) fn effective_available_decisions(&self) -> Vec<CommandExecutionApprovalDecision> {
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
+            None if is_callback_scoped(self.approval_id.as_deref(), self.approval_purpose) => vec![
+                CommandExecutionApprovalDecision::Accept,
+                CommandExecutionApprovalDecision::Cancel,
+            ],
             None => Self::default_available_decisions(
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),
@@ -95,7 +102,10 @@ impl ExecApprovalRequestEvent {
             ];
         }
 
-        let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+        let mut decisions = vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::AcceptForSession,
+        ];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(
                 CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
@@ -106,6 +116,20 @@ impl ExecApprovalRequestEvent {
         decisions.push(CommandExecutionApprovalDecision::Cancel);
         decisions
     }
+}
+
+pub(crate) fn is_callback_scoped(
+    approval_id: Option<&str>,
+    approval_purpose: Option<CommandExecutionApprovalPurpose>,
+) -> bool {
+    approval_id.is_some()
+        || matches!(
+            approval_purpose,
+            Some(
+                CommandExecutionApprovalPurpose::Execve
+                    | CommandExecutionApprovalPurpose::SandboxRetry
+            )
+        )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

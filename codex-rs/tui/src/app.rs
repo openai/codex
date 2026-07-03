@@ -22,6 +22,7 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::TurnPermissionsOverride;
 use crate::app_server_session::app_server_rate_limit_snapshots;
+use crate::approval_events::is_callback_scoped;
 use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
@@ -303,6 +304,8 @@ fn collab_receiver_is_not_found(
 }
 
 fn default_exec_approval_decisions(
+    approval_id: Option<&str>,
+    approval_purpose: Option<codex_app_server_protocol::CommandExecutionApprovalPurpose>,
     network_approval_context: Option<&codex_app_server_protocol::NetworkApprovalContext>,
     proposed_execpolicy_amendment: Option<&codex_app_server_protocol::ExecPolicyAmendment>,
     proposed_network_policy_amendments: Option<
@@ -312,6 +315,13 @@ fn default_exec_approval_decisions(
 ) -> Vec<codex_app_server_protocol::CommandExecutionApprovalDecision> {
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use codex_app_server_protocol::NetworkPolicyRuleAction;
+
+    if is_callback_scoped(approval_id, approval_purpose) {
+        return vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::Cancel,
+        ];
+    }
 
     if network_approval_context.is_some() {
         let mut decisions = vec![
@@ -340,7 +350,10 @@ fn default_exec_approval_decisions(
         ];
     }
 
-    let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+    let mut decisions = vec![
+        CommandExecutionApprovalDecision::Accept,
+        CommandExecutionApprovalDecision::AcceptForSession,
+    ];
     if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
         decisions.push(
             CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {

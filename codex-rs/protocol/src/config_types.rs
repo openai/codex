@@ -296,21 +296,37 @@ pub enum Personality {
     Pragmatic,
 }
 
-/// Controls whether the model receives multi-agent delegation instructions and,
-/// when it does, whether it should only spawn sub-agents after an explicit user
-/// request or may delegate proactively when doing so would help. `none` leaves
-/// the multi-agent tools available without injecting delegation instructions.
-#[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
-)]
-#[serde(rename_all = "camelCase")]
+/// Controls the effective multi-agent delegation instructions for a turn. `custom` means the
+/// configured mode hint defines the policy instead of a built-in policy.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Display, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase", from = "MultiAgentModeWire")]
 #[ts(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum MultiAgentMode {
-    None,
+    Custom(String),
     #[default]
     ExplicitRequestOnly,
     Proactive,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MultiAgentModeWire {
+    None,
+    Custom(String),
+    ExplicitRequestOnly,
+    Proactive,
+}
+
+impl From<MultiAgentModeWire> for MultiAgentMode {
+    fn from(value: MultiAgentModeWire) -> Self {
+        match value {
+            MultiAgentModeWire::None => Self::Custom(String::new()),
+            MultiAgentModeWire::Custom(hint_text) => Self::Custom(hint_text),
+            MultiAgentModeWire::ExplicitRequestOnly => Self::ExplicitRequestOnly,
+            MultiAgentModeWire::Proactive => Self::Proactive,
+        }
+    }
 }
 
 #[derive(

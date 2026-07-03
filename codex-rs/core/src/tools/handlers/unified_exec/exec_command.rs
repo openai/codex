@@ -1,8 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::exec_policy::ExecPolicyInputSource;
-use crate::exec_policy::shell_executable_is_path_qualified;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
@@ -191,13 +189,6 @@ impl ExecCommandHandler {
                 parse_arguments(&arguments)?
             }
         };
-        let input_source = match args.shell.as_deref() {
-            None => ExecPolicyInputSource::Configured,
-            Some(shell) if !shell_executable_is_path_qualified(shell) => {
-                ExecPolicyInputSource::ModelSelectedBare
-            }
-            Some(_) => ExecPolicyInputSource::ModelSelectedPath,
-        };
         let hook_command = args.cmd.clone();
         // TODO(anp) wire PathUri through implicit skills instead of skipping on foreign paths
         if let Some(native_cwd) = native_cwd.as_ref() {
@@ -370,7 +361,6 @@ impl ExecCommandHandler {
                         .permissions_preapproved,
                     justification,
                     prefix_rule,
-                    input_source,
                 },
                 &context,
             )

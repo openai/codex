@@ -214,17 +214,32 @@ pub struct GuardianAssessmentEvent {
     pub action: GuardianAssessmentAction,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecApprovalPurpose {
+    Initial,
+    Execve,
+    SandboxRetry,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated command execution item.
     pub call_id: String,
     /// Identifier for this specific approval callback.
     ///
-    /// When absent, the approval is for the command item itself (`call_id`).
-    /// This is present for subcommand approvals (via execve intercept).
+    /// When present, responses must use this ID instead of the command-item
+    /// `call_id`. Absence preserves legacy/cacheable approval routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub approval_id: Option<String>,
+    /// Semantic purpose of this approval request.
+    ///
+    /// Compatibility senders may omit this field; consumers should then use
+    /// [`Self::effective_approval_purpose`] for compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_purpose: Option<ExecApprovalPurpose>,
     /// Turn ID that this command belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -286,6 +301,13 @@ impl ExecApprovalRequestEvent {
         // senders, so we fall back to the legacy logic if it's not present.
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
+            None if Self::is_callback_scoped(
+                self.approval_id.as_deref(),
+                self.approval_purpose,
+            ) =>
+            {
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            }
             None => Self::default_available_decisions(
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),
@@ -293,6 +315,29 @@ impl ExecApprovalRequestEvent {
                 self.additional_permissions.as_ref(),
             ),
         }
+    }
+
+    pub fn is_callback_scoped(
+        approval_id: Option<&str>,
+        approval_purpose: Option<ExecApprovalPurpose>,
+    ) -> bool {
+        approval_id.is_some()
+            || matches!(
+                approval_purpose,
+                Some(ExecApprovalPurpose::Execve | ExecApprovalPurpose::SandboxRetry)
+            )
+    }
+
+    pub fn effective_approval_purpose(&self) -> ExecApprovalPurpose {
+        self.approval_purpose.unwrap_or_else(|| {
+            if self.approval_id.is_none() {
+                ExecApprovalPurpose::Initial
+            } else if self.reason.is_some() {
+                ExecApprovalPurpose::SandboxRetry
+            } else {
+                ExecApprovalPurpose::Execve
+            }
+        })
     }
 
     pub fn default_available_decisions(
@@ -320,7 +365,7 @@ impl ExecApprovalRequestEvent {
             return vec![ReviewDecision::Approved, ReviewDecision::Abort];
         }
 
-        let mut decisions = vec![ReviewDecision::Approved];
+        let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: prefix.clone(),
@@ -416,6 +461,129 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn cacheable_command_defaults_offer_session_and_exact_execpolicy_amendment() {
+        let amendment = ExecPolicyAmendment::new(vec!["cargo".to_string(), "test".to_string()]);
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                /*network_approval_context*/ None,
+                Some(&amendment),
+                /*proposed_network_policy_amendments*/ None,
+                /*additional_permissions*/ None,
+            ),
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedExecpolicyAmendment {
+                    proposed_execpolicy_amendment: amendment,
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[test]
+    fn network_defaults_keep_exact_deny_amendment_hidden() {
+        let context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+        let allow = NetworkPolicyAmendment {
+            host: context.host.clone(),
+            action: NetworkPolicyRuleAction::Allow,
+        };
+        let deny = NetworkPolicyAmendment {
+            host: context.host.clone(),
+            action: NetworkPolicyRuleAction::Deny,
+        };
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                Some(&context),
+                /*proposed_execpolicy_amendment*/ None,
+                Some(&[allow.clone(), deny]),
+                /*additional_permissions*/ None,
+            ),
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: allow,
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[test]
+    fn exec_approval_purpose_is_optional_and_overrides_legacy_inference() {
+        let mut value = serde_json::json!({
+            "call_id": "command-item",
+            "approval_id": "callback",
+            "turn_id": "turn",
+            "started_at_ms": 0,
+            "command": ["echo", "hi"],
+            "cwd": test_path_buf("/tmp"),
+            "reason": "display text",
+            "parsed_cmd": [],
+        });
+        let legacy: ExecApprovalRequestEvent =
+            serde_json::from_value(value.clone()).expect("legacy event");
+        assert_eq!(
+            (
+                legacy.effective_approval_purpose(),
+                legacy.effective_available_decisions(),
+            ),
+            (
+                ExecApprovalPurpose::SandboxRetry,
+                vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            )
+        );
+
+        for (wire, expected) in [
+            ("initial", ExecApprovalPurpose::Initial),
+            ("execve", ExecApprovalPurpose::Execve),
+            ("sandbox_retry", ExecApprovalPurpose::SandboxRetry),
+        ] {
+            value["approval_purpose"] = serde_json::Value::String(wire.to_string());
+            let event: ExecApprovalRequestEvent =
+                serde_json::from_value(value.clone()).expect("event with explicit purpose");
+            assert_eq!(event.effective_approval_purpose(), expected);
+        }
+
+        for (approval_id, purpose, callback_scoped) in [
+            (None, Some("initial"), false),
+            (Some("callback"), Some("initial"), true),
+            (None, Some("execve"), true),
+            (None, Some("sandbox_retry"), true),
+        ] {
+            value["approval_id"] = approval_id
+                .map(|id| serde_json::Value::String(id.to_string()))
+                .unwrap_or(serde_json::Value::Null);
+            value["approval_purpose"] = purpose
+                .map(|purpose| serde_json::Value::String(purpose.to_string()))
+                .unwrap_or(serde_json::Value::Null);
+            let mut event: ExecApprovalRequestEvent =
+                serde_json::from_value(value.clone()).expect("callback scope event");
+            let expected = if callback_scoped {
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            } else {
+                vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedForSession,
+                    ReviewDecision::Abort,
+                ]
+            };
+            assert_eq!(event.effective_available_decisions(), expected);
+            event.available_decisions = Some(vec![ReviewDecision::ApprovedForSession]);
+            assert_eq!(
+                event.effective_available_decisions(),
+                vec![ReviewDecision::ApprovedForSession]
+            );
+        }
+    }
 
     #[test]
     fn guardian_assessment_action_deserializes_command_shape() {

@@ -1,7 +1,16 @@
 mod powershell_parser;
+mod powershell_preparse;
 
 pub mod is_dangerous_command;
 pub mod is_safe_command;
 #[cfg(windows)]
 pub(crate) mod windows_safe_commands;
+pub(crate) use powershell_parser::PowershellParseOutcome;
+pub(crate) use powershell_parser::TrustedPowerShellFlavor;
+pub(crate) use powershell_parser::is_trusted_powershell_parser_executable;
+pub(crate) use powershell_parser::parse_powershell_ast_commands_with_trusted_flavor;
+#[cfg(all(test, windows))]
+pub(crate) use powershell_parser::trusted_standard_pwsh_invocation_path;
+#[cfg(all(test, windows))]
+pub(crate) use powershell_parser::trusted_windows_powershell_invocation_path;
 pub(crate) use powershell_parser::try_parse_powershell_ast_commands;

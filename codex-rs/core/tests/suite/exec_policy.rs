@@ -8,7 +8,13 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+#[cfg(windows)]
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::Op;
+#[cfg(windows)]
+use codex_protocol::protocol::ReviewDecision;
+#[cfg(windows)]
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -24,6 +30,8 @@ use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 fn collaboration_mode_for_model(model: String) -> CollaborationMode {
     CollaborationMode {
@@ -89,14 +97,259 @@ fn assert_no_matched_rules_invariant(output_item: &Value) {
 }
 
 #[cfg(windows)]
+fn installed_windows_powershell() -> PathBuf {
+    codex_shell_command::powershell::try_find_powershell_executable_blocking()
+        .expect("Windows PowerShell must be installed")
+        .into_path_buf()
+}
+
+#[cfg(windows)]
+fn enable_unified_exec(config: &mut codex_core::config::Config) {
+    config
+        .features
+        .enable(Feature::UnifiedExec)
+        .expect("test config should allow feature update");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_before_execution()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(enable_unified_exec);
+    let test = builder.build(&server).await?;
+
+    let fake_powershell = test.config.cwd.join("powershell.exe");
+    fs::copy(installed_windows_powershell(), &fake_powershell)
+        .expect("copy Windows PowerShell into the test workspace");
+    let fake_powershell = fake_powershell
+        .to_str()
+        .expect("the test workspace path must be valid UTF-8")
+        .to_string();
+
+    let sentinel = test.config.cwd.join("workspace-powershell-started.txt");
+    let marker = "WORKSPACE_POWERSHELL_STARTED";
+    let sentinel_arg = sentinel
+        .to_str()
+        .expect("the sentinel path must be valid UTF-8")
+        .replace('\'', "''");
+    let script =
+        format!("Set-Content -LiteralPath '{sentinel_arg}' started; Write-Output '{marker}'");
+    let expected_command = vec![
+        fake_powershell.clone(),
+        "-Command".to_string(),
+        script.clone(),
+    ];
+    let call_id = "unified-exec-workspace-powershell-one-shot";
+    let args = json!({
+        "shell": fake_powershell.clone(),
+        "cmd": script,
+        "yield_time_ms": 1_000,
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-workspace-powershell-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-workspace-powershell-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-workspace-powershell-1", "done"),
+            ev_completed("resp-workspace-powershell-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run a read-only command with a workspace PowerShell copy",
+        AskForApproval::UnlessTrusted,
+        PermissionProfile::Disabled,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        !sentinel.exists(),
+        "the requested workspace PowerShell must not start before approval"
+    );
+    let approval = match event {
+        EventMsg::ExecApprovalRequest(approval) => approval,
+        EventMsg::ExecCommandBegin(begin) => {
+            panic!("workspace PowerShell began before approval: {begin:?}")
+        }
+        EventMsg::ExecCommandEnd(end) => {
+            panic!("workspace PowerShell completed before approval: {end:?}")
+        }
+        EventMsg::TurnAborted(aborted) => {
+            panic!("turn aborted before one-shot approval: {aborted:?}")
+        }
+        EventMsg::TurnComplete(_) => panic!("expected one-shot approval before completion"),
+        _ => unreachable!(),
+    };
+    assert_eq!(approval.call_id, call_id);
+    assert_eq!(approval.command, expected_command);
+    assert_eq!(approval.cwd, test.config.cwd);
+    let approval_id = approval
+        .approval_id
+        .clone()
+        .expect("one-shot approval must carry a callback ID");
+    assert_ne!(approval_id, call_id);
+    assert_eq!(
+        approval.approval_purpose,
+        Some(ExecApprovalPurpose::Initial)
+    );
+    assert_eq!(
+        approval.effective_approval_purpose(),
+        ExecApprovalPurpose::Initial
+    );
+    assert_eq!(
+        approval.effective_available_decisions(),
+        vec![ReviewDecision::Approved, ReviewDecision::Abort]
+    );
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    assert!(!sentinel.exists());
+
+    let approval_turn_id = approval.turn_id.clone();
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval_id,
+            turn_id: Some(approval_turn_id.clone()),
+            decision: ReviewDecision::Abort,
+        })
+        .await?;
+
+    let aborted = match wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+        )
+    })
+    .await
+    {
+        EventMsg::TurnAborted(aborted) => aborted,
+        EventMsg::ExecCommandBegin(begin) => {
+            panic!("workspace PowerShell began after abort: {begin:?}")
+        }
+        EventMsg::ExecCommandEnd(end) => {
+            panic!("workspace PowerShell completed after abort: {end:?}")
+        }
+        EventMsg::TurnComplete(_) => panic!("aborted approval unexpectedly completed the turn"),
+        _ => unreachable!(),
+    };
+    assert_eq!(aborted.turn_id.as_deref(), Some(approval_turn_id.as_str()));
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+    assert!(
+        !sentinel.exists(),
+        "aborting the one-shot approval must never start the requested workspace PowerShell"
+    );
+    assert!(
+        results_mock.requests().is_empty(),
+        "aborting the one-shot approval must not continue the turn"
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn unified_exec_configured_authoritative_windows_powershell_runs_without_approval()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let powershell = installed_windows_powershell();
+    let configured_shell = codex_core::shell::get_shell_by_model_provided_path(&powershell);
+    let mut builder = test_codex()
+        .with_config(enable_unified_exec)
+        .with_user_shell(configured_shell);
+    let test = builder.build(&server).await?;
+
+    let call_id = "unified-exec-authoritative-windows-powershell";
+    let args = json!({
+        "cmd": "Get-Location",
+        "yield_time_ms": 1_000,
+    });
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-authoritative-powershell-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-authoritative-powershell-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-authoritative-powershell-1", "done"),
+            ev_completed("resp-authoritative-powershell-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run a read-only command with authoritative Windows PowerShell",
+        AskForApproval::UnlessTrusted,
+        PermissionProfile::Disabled,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ExecApprovalRequest(approval) => {
+            panic!(
+                "authoritative Windows PowerShell should not require approval: {:?}",
+                approval.command
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        !output.contains("rejected:") && !output.contains("blocked by policy"),
+        "unexpected output: {output}"
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
 #[tokio::test]
 async fn unified_exec_disabled_windows_sandbox_rejects_managed_read_only_command() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::UnifiedExec)
-            .expect("test config should allow feature update");
+        enable_unified_exec(config);
         config
             .features
             .disable(Feature::WindowsSandbox)

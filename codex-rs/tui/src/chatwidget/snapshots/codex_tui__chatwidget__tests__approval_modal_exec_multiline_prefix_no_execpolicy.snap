@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 1249
 expression: contents
 ---
 
@@ -11,6 +12,7 @@ expression: contents
   PY
 
 › 1. Yes, proceed (y)
-  2. No, and tell Codex what to do differently (esc)
+  2. Yes, and don't ask again for this command in this session (a)
+  3. No, and tell Codex what to do differently (esc)
 
   Press enter to confirm or esc to cancel

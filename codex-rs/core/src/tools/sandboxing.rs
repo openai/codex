@@ -19,6 +19,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
@@ -81,9 +82,19 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = ReviewDecision>,
 {
-    // To be defensive here, don't bother with checking the cache if keys are empty.
+    // Empty keys deliberately make this request one-shot: ask and record the
+    // decision, but neither consult nor populate the session cache.
     if keys.is_empty() {
-        return fetch().await;
+        let decision = fetch().await;
+        services.session_telemetry.counter(
+            "codex.approval.requested",
+            /*inc*/ 1,
+            &[
+                ("tool", tool_name),
+                ("approved", decision.to_opaque_string()),
+            ],
+        );
+        return decision;
     }
 
     let already_approved = {
@@ -122,6 +133,12 @@ pub(crate) struct ApprovalCtx<'a> {
     pub session: &'a Arc<Session>,
     pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
+    /// Identifies this specific approval prompt when a tool item can prompt
+    /// more than once (for example, an unsandboxed retry).
+    pub approval_id: Option<String>,
+    /// Describes why this callback is being emitted independently of display
+    /// text or whether it carries a callback-specific ID.
+    pub approval_purpose: ExecApprovalPurpose,
     /// Guardian review lifecycle ID for this approval, when guardian is reviewing it.
     ///
     /// This is separate from `call_id`: `call_id` identifies the tool item under
@@ -176,6 +193,10 @@ pub(crate) enum ExecApprovalRequirement {
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
+    /// Approval is required for this invocation, but the decision must not be
+    /// reused from or written to the session approval cache.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    NeedsOneShotApproval { reason: Option<String> },
     /// Execution forbidden for this tool call.
     Forbidden { reason: String },
 }
@@ -193,6 +214,10 @@ impl ExecApprovalRequirement {
             } => Some(prefix),
             _ => None,
         }
+    }
+
+    pub(crate) fn is_one_shot(&self) -> bool {
+        matches!(self, Self::NeedsOneShotApproval { .. })
     }
 }
 

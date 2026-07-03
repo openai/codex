@@ -507,7 +507,7 @@ impl ChatWidget {
                 use crate::diff_model::FileChange;
 
                 self.on_apply_patch_approval_request(
-                    "1".to_string(),
+                    /*app_server_request_id*/ None,
                     ApplyPatchApprovalRequestEvent {
                         call_id: "1".to_string(),
                         turn_id: "turn-1".to_string(),

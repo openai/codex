@@ -1145,7 +1145,6 @@ impl UnifiedExecProcessManager {
                     request.sandbox_permissions
                 },
                 prefix_rule: request.prefix_rule.clone(),
-                input_source: request.input_source,
             })
             .await;
         let req = UnifiedExecToolRequest {

@@ -1,6 +1,7 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -85,7 +86,7 @@ pub(crate) struct RunningTask {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<(PendingApprovalKind, String), PendingApproval>,
     pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -99,6 +100,33 @@ pub(crate) struct TurnState {
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
 
+pub(crate) struct PendingApproval {
+    tx_approve: oneshot::Sender<ReviewDecision>,
+    accepted_decisions: Vec<ReviewDecision>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PendingApprovalKind {
+    Exec,
+    Patch,
+}
+
+impl PendingApproval {
+    pub(crate) fn accepts(&self, decision: &ReviewDecision) -> bool {
+        matches!(
+            decision,
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort
+        ) || self
+            .accepted_decisions
+            .iter()
+            .any(|available| available == decision)
+    }
+
+    pub(crate) fn send(self, decision: ReviewDecision) {
+        self.tx_approve.send(decision).ok();
+    }
+}
+
 pub(crate) struct PendingRequestPermissions {
     pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
     pub(crate) requested_permissions: RequestPermissionProfile,
@@ -110,15 +138,28 @@ impl TurnState {
         &mut self,
         key: String,
         tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.insert(key, tx)
+        kind: PendingApprovalKind,
+        accepted_decisions: Vec<ReviewDecision>,
+    ) -> Result<(), PendingApproval> {
+        let pending_approval = PendingApproval {
+            tx_approve: tx,
+            accepted_decisions,
+        };
+        match self.pending_approvals.entry((kind, key)) {
+            Entry::Vacant(entry) => {
+                entry.insert(pending_approval);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(pending_approval),
+        }
     }
 
     pub(crate) fn remove_pending_approval(
         &mut self,
         key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.remove(key)
+        kind: PendingApprovalKind,
+    ) -> Option<PendingApproval> {
+        self.pending_approvals.remove(&(kind, key.to_string()))
     }
 
     pub(crate) fn clear_pending_waiters(&mut self) {
@@ -239,3 +280,7 @@ impl TurnState {
         self.strict_auto_review_enabled
     }
 }
+
+#[cfg(test)]
+#[path = "turn_tests.rs"]
+mod tests;

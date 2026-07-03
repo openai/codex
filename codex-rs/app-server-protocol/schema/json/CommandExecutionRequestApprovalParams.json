@@ -273,6 +273,14 @@
         }
       ]
     },
+    "CommandExecutionApprovalPurpose": {
+      "enum": [
+        "initial",
+        "execve",
+        "sandboxRetry"
+      ],
+      "type": "string"
+    },
     "FileSystemAccessMode": {
       "enum": [
         "read",
@@ -521,11 +529,22 @@
   },
   "properties": {
     "approvalId": {
-      "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
+      "description": "Opaque identifier for this specific approval callback, when present.\n\nUse the JSON-RPC request ID for the response. When tracking callback UI or state outside that envelope, use this instead of `itemId` when it is present. Absence is a legacy/cacheable compatibility path.",
       "type": [
         "string",
         "null"
       ]
+    },
+    "approvalPurpose": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandExecutionApprovalPurpose"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Semantic purpose of this approval request. Compatibility events may omit it."
     },
     "command": {
       "description": "The command to be executed.",

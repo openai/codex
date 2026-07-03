@@ -26,6 +26,8 @@ use crate::error::TextPosition;
 use crate::error::TextRange;
 use crate::executable_name::executable_lookup_key;
 use crate::executable_name::executable_path_lookup_key;
+#[cfg(windows)]
+use crate::executable_name::has_windows_verbatim_or_device_prefix;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
@@ -449,8 +451,14 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                     value.get_type()
                 ))
             })?;
-            let path = parse_literal_absolute_path(raw)?;
-            let Some(path_name) = executable_path_lookup_key(path.as_path()) else {
+            #[cfg(windows)]
+            if has_windows_verbatim_or_device_prefix(Path::new(raw)) {
+                return Err(Error::InvalidRule(format!(
+                    "host_executable path `{raw}` must use an ordinary Win32 path spelling; use an exact prefix_rule for namespace paths"
+                ))
+                .into());
+            }
+            let Some(path_name) = executable_path_lookup_key(Path::new(raw)) else {
                 return Err(Error::InvalidRule(format!(
                     "host_executable path `{raw}` must have basename `{name}`"
                 ))
@@ -462,6 +470,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                 ))
                 .into());
             }
+            let path = parse_literal_absolute_path(raw)?;
             if !parsed_paths.iter().any(|existing| existing == &path) {
                 parsed_paths.push(path);
             }

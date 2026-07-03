@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadRollbackOrigin {
@@ -111,6 +112,18 @@ impl App {
         };
         let mut store = channel.store.lock().await;
         store.note_outbound_op(op);
+    }
+
+    async fn note_resolved_app_server_request(
+        &mut self,
+        thread_id: ThreadId,
+        request_id: &AppServerRequestId,
+    ) {
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let mut store = channel.store.lock().await;
+        store.note_resolved_app_server_request(request_id);
     }
 
     pub(super) async fn note_active_thread_outbound_op(&mut self, op: &AppCommand) {
@@ -219,7 +232,7 @@ impl App {
     ) -> std::io::Result<Option<ThreadInteractiveRequest>> {
         let thread_label = Some(self.thread_label(thread_id));
         Ok(match request {
-            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+            ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                 let network_approval_context = params.network_approval_context.clone();
                 let additional_permissions = params.additional_permissions.clone();
                 let proposed_execpolicy_amendment = params.proposed_execpolicy_amendment.clone();
@@ -227,6 +240,7 @@ impl App {
                     params.proposed_network_policy_amendments.clone();
                 Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
                     thread_id,
+                    app_server_request_id: Some(request_id.clone()),
                     thread_label,
                     id: params
                         .approval_id
@@ -241,6 +255,8 @@ impl App {
                     reason: params.reason.clone(),
                     available_decisions: params.available_decisions.clone().unwrap_or_else(|| {
                         default_exec_approval_decisions(
+                            params.approval_id.as_deref(),
+                            params.approval_purpose,
                             network_approval_context.as_ref(),
                             proposed_execpolicy_amendment.as_ref(),
                             proposed_network_policy_amendments.as_deref(),
@@ -251,9 +267,10 @@ impl App {
                     additional_permissions,
                 }))
             }
-            ServerRequest::FileChangeRequestApproval { params, .. } => Some(
+            ServerRequest::FileChangeRequestApproval { request_id, params } => Some(
                 ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
                     thread_id,
+                    app_server_request_id: Some(request_id.clone()),
                     thread_label,
                     id: params.item_id.clone(),
                     reason: params.reason.clone(),
@@ -315,7 +332,7 @@ impl App {
                     }
                 }
             }
-            ServerRequest::PermissionsRequestApproval { params, .. } => {
+            ServerRequest::PermissionsRequestApproval { request_id, params } => {
                 // TODO(anp): Remove this native-path localization error path once core permission
                 // paths remain PathUri after crossing the app-server boundary.
                 let permissions = params.permissions.clone().try_into().map_err(|err| {
@@ -327,6 +344,7 @@ impl App {
                 Some(ThreadInteractiveRequest::Approval(
                     ApprovalRequest::Permissions {
                         thread_id,
+                        app_server_request_id: Some(request_id.clone()),
                         thread_label,
                         call_id: params.item_id.clone(),
                         environment_id: params.environment_id.clone(),
@@ -436,13 +454,6 @@ impl App {
         op: AppCommand,
     ) -> Result<()> {
         crate::session_log::log_outbound_op(&op);
-
-        if self
-            .try_resolve_app_server_request(app_server, thread_id, &op)
-            .await?
-        {
-            return Ok(());
-        }
 
         if self
             .try_submit_active_thread_op_via_app_server(app_server, thread_id, &op)
@@ -793,18 +804,24 @@ impl App {
         }
     }
 
-    pub(super) async fn try_resolve_app_server_request(
+    pub(super) async fn resolve_app_server_request(
         &mut self,
         app_server: &AppServerSession,
         thread_id: ThreadId,
+        request_id: AppServerRequestId,
         op: &AppCommand,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let Some(resolution) = self
             .pending_app_server_requests
-            .take_resolution(op)
+            .take_resolution(thread_id, &request_id, op)
             .map_err(|err| color_eyre::eyre::eyre!(err))?
         else {
-            return Ok(false);
+            tracing::debug!(
+                thread_id = %thread_id,
+                request_id = ?request_id,
+                "ignoring stale app-server request response"
+            );
+            return Ok(());
         };
 
         match app_server
@@ -813,17 +830,18 @@ impl App {
         {
             Ok(()) => {
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
-                    self.note_thread_outbound_op(thread_id, op).await;
+                    self.note_resolved_app_server_request(thread_id, &request_id)
+                        .await;
                     self.refresh_pending_thread_approvals().await;
                     self.refresh_side_parent_status_from_store(thread_id).await;
                 }
-                Ok(true)
+                Ok(())
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
                     "Failed to resolve app-server request for thread {thread_id}: {err}"
                 ));
-                Ok(false)
+                Ok(())
             }
         }
     }

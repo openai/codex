@@ -16,6 +16,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::AppServerRequestIdentity;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -1397,10 +1398,13 @@ impl BottomPane {
         }
     }
 
-    /// Called when the agent requests user input.
-    pub fn push_user_input_request(&mut self, request: ToolRequestUserInputParams) {
-        let request = if let Some(view) = self.view_stack.last_mut() {
-            match view.try_consume_user_input_request(request) {
+    pub(crate) fn push_user_input_request_with_identity(
+        &mut self,
+        request: ToolRequestUserInputParams,
+        identity: Option<AppServerRequestIdentity>,
+    ) {
+        let (request, identity) = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_user_input_request(request, identity) {
                 Some(request) => request,
                 None => {
                     self.request_redraw();
@@ -1408,11 +1412,12 @@ impl BottomPane {
                 }
             }
         } else {
-            request
+            (request, identity)
         };
 
-        let modal = RequestUserInputOverlay::new_with_keymap(
+        let modal = RequestUserInputOverlay::new_with_keymap_and_identity(
             request,
+            identity,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
@@ -1854,6 +1859,7 @@ mod tests {
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
+    use codex_app_server_protocol::RequestId;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
@@ -1908,6 +1914,7 @@ mod tests {
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             thread_id: codex_protocol::ThreadId::new(),
+            app_server_request_id: Some(RequestId::String("request-b".to_string())),
             thread_label: None,
             id: "1".to_string(),
             environment_id: None,
@@ -1947,7 +1954,7 @@ mod tests {
         }
 
         fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
-            let ResolvedAppServerRequest::ExecApproval { id } = request else {
+            let ResolvedAppServerRequest::ExecApproval { id, .. } = request else {
                 return false;
             };
             if self.dismiss_exec_id != Some(id.as_str()) {
@@ -2148,7 +2155,10 @@ mod tests {
         assert_eq!(pane.delayed_approval_requests.len(), 1);
         while let Ok(event) = rx.try_recv() {
             assert!(
-                !matches!(event, AppEvent::SubmitThreadOp { .. }),
+                !matches!(
+                    event,
+                    AppEvent::SubmitThreadOp { .. } | AppEvent::ResolveAppServerRequest { .. }
+                ),
                 "delayed approval shortcut should not submit an approval: {event:?}"
             );
         }
@@ -2169,7 +2179,7 @@ mod tests {
 
         let mut approval_decision = None;
         while let Ok(event) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
+            if let AppEvent::ResolveAppServerRequest {
                 op: Op::ExecApproval { decision, .. },
                 ..
             } = event
@@ -2191,10 +2201,17 @@ mod tests {
         let mut pane = test_pane(tx);
         let now = Instant::now();
         pane.last_composer_activity_at = Some(now);
-        pane.push_approval_request(exec_request(), &features);
+        let request = exec_request();
+        let ApprovalRequest::Exec { thread_id, .. } = &request else {
+            unreachable!("test helper should return an exec request");
+        };
+        let thread_id = *thread_id;
+        pane.push_approval_request(request, &features);
 
         assert!(
             pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id,
+                request_id: RequestId::String("request-b".to_string()),
                 id: "1".to_string(),
             })
         );
@@ -2223,6 +2240,8 @@ mod tests {
 
         assert!(
             pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: codex_protocol::ThreadId::default(),
+                request_id: RequestId::String("request-1".to_string()),
                 id: "request-1".to_string(),
             })
         );
@@ -2252,6 +2271,8 @@ mod tests {
 
         assert!(
             !pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: codex_protocol::ThreadId::default(),
+                request_id: RequestId::String("request-1".to_string()),
                 id: "request-1".to_string(),
             })
         );

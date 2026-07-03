@@ -497,6 +497,7 @@ async fn handle_exec_approval(
     cancel_token: &CancellationToken,
 ) {
     let approval_id_for_op = event.effective_approval_id();
+    let approval_purpose = event.approval_purpose;
     let ExecApprovalRequestEvent {
         call_id,
         approval_id,
@@ -538,6 +539,7 @@ async fn handle_exec_approval(
             &approval_id_for_op,
             cancel_token,
             Some(&review_cancel),
+            /*pending_approval_to_cancel*/ None,
         )
         .await
     } else {
@@ -546,6 +548,7 @@ async fn handle_exec_approval(
                 parent_ctx,
                 call_id,
                 approval_id,
+                approval_purpose,
                 environment_id,
                 command,
                 cwd,
@@ -559,6 +562,7 @@ async fn handle_exec_approval(
             &approval_id_for_op,
             cancel_token,
             /*review_cancel_token*/ None,
+            Some(PendingApprovalToCancel::Exec),
         )
         .await
     };
@@ -647,6 +651,7 @@ async fn handle_patch_approval(
                 &approval_id,
                 cancel_token,
                 Some(&review_cancel),
+                /*pending_approval_to_cancel*/ None,
             )
             .await,
         )
@@ -665,6 +670,7 @@ async fn handle_patch_approval(
             &approval_id,
             cancel_token,
             /*review_cancel_token*/ None,
+            Some(PendingApprovalToCancel::Patch),
         )
         .await
     };
@@ -763,6 +769,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         &event.call_id,
         cancel_token,
         Some(&review_cancel),
+        /*pending_approval_to_cancel*/ None,
     )
     .await;
     let selected_label = match decision {
@@ -884,13 +891,21 @@ where
     }
 }
 
-/// Await an approval decision, aborting on cancellation.
+#[derive(Clone, Copy, Debug)]
+enum PendingApprovalToCancel {
+    Exec,
+    Patch,
+}
+
+/// Await an approval decision, aborting any matching parent approval waiter on
+/// cancellation. Guardian-only reviews do not create such a waiter.
 async fn await_approval_with_cancel<F>(
     fut: F,
     parent_session: &Session,
     approval_id: &str,
     cancel_token: &CancellationToken,
     review_cancel_token: Option<&CancellationToken>,
+    pending_approval_to_cancel: Option<PendingApprovalToCancel>,
 ) -> codex_protocol::protocol::ReviewDecision
 where
     F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
@@ -901,9 +916,25 @@ where
             if let Some(review_cancel_token) = review_cancel_token {
                 review_cancel_token.cancel();
             }
-            parent_session
-                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
-                .await;
+            match pending_approval_to_cancel {
+                Some(PendingApprovalToCancel::Exec) => {
+                    parent_session
+                        .notify_exec_approval(
+                            approval_id,
+                            codex_protocol::protocol::ReviewDecision::Abort,
+                        )
+                        .await;
+                }
+                Some(PendingApprovalToCancel::Patch) => {
+                    parent_session
+                        .notify_patch_approval(
+                            approval_id,
+                            codex_protocol::protocol::ReviewDecision::Abort,
+                        )
+                        .await;
+                }
+                None => {}
+            }
             codex_protocol::protocol::ReviewDecision::Abort
         }
         decision = fut => {
