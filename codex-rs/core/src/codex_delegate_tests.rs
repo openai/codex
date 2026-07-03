@@ -399,6 +399,83 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 }
 
 #[tokio::test]
+async fn handle_exec_approval_preserves_retry_id_through_non_guardian_parent_round_trip() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    parent_ctx.config = Arc::new(config);
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let cancel_token = cancel_token.clone();
+        async move {
+            handle_exec_approval(
+                codex.as_ref(),
+                "child-turn-1".to_string(),
+                &parent_session,
+                &parent_ctx,
+                delegated_retry_exec_approval_event(),
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request_event = timeout(Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("exec approval event timed out")
+        .expect("exec approval event missing");
+    let EventMsg::ExecApprovalRequest(request) = request_event.msg else {
+        panic!("expected ExecApprovalRequest event");
+    };
+    assert_eq!(request.call_id, "command-item-1");
+    assert_eq!(request.approval_id.as_deref(), Some("retry-id"));
+    assert_eq!(
+        request.approval_purpose,
+        Some(ExecApprovalPurpose::SandboxRetry)
+    );
+
+    parent_session
+        .notify_exec_approval("retry-id", ReviewDecision::Approved)
+        .await;
+
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("handle_exec_approval hung")
+        .expect("handle_exec_approval join error");
+    let submission = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("exec approval response timed out")
+        .expect("exec approval response missing");
+    assert_eq!(
+        submission.op,
+        Op::ExecApproval {
+            id: "retry-id".to_string(),
+            turn_id: Some("child-turn-1".to_string()),
+            decision: ReviewDecision::Approved,
+        }
+    );
+}
+
+#[tokio::test]
 async fn delegated_exec_preserves_raw_purpose_and_cancel_cleans_retry_waiter() {
     let (parent_session, parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;

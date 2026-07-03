@@ -3,8 +3,8 @@ Module: orchestrator
 
 Central place for approvals + sandbox selection + retry semantics. Drives a
 simple sequence for any ToolRuntime: approval → select sandbox → attempt →
-retry with an escalated sandbox strategy on denial (no re‑approval thanks to
-caching).
+retry with an escalated sandbox strategy on denial. Cacheable approvals can
+cover that retry; explicitly one-shot approvals cannot.
 */
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
@@ -35,12 +35,14 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use std::time::Instant;
+use uuid::Uuid;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -49,6 +51,13 @@ pub(crate) struct ToolOrchestrator {
 pub(crate) struct OrchestratorRunResult<Out> {
     pub output: Out,
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PermissionRequestHookMode {
+    Skip,
+    DenyOnly,
+    AllowAndDeny,
 }
 
 impl ToolOrchestrator {
@@ -164,6 +173,8 @@ impl ToolOrchestrator {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        approval_id: None,
+                        approval_purpose: ExecApprovalPurpose::Initial,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: None,
                         network_approval_context: None,
@@ -174,7 +185,7 @@ impl ToolOrchestrator {
                         tool_ctx.call_id.as_str(),
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ false,
+                        PermissionRequestHookMode::Skip,
                         &otel,
                     )
                     .await?;
@@ -193,12 +204,18 @@ impl ToolOrchestrator {
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason.clone()));
             }
-            ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            ExecApprovalRequirement::NeedsApproval { reason, .. }
+            | ExecApprovalRequirement::NeedsOneShotApproval { reason } => {
                 let guardian_review_id = use_guardian.then(new_guardian_review_id);
+                let approval_id = requirement
+                    .is_one_shot()
+                    .then(|| Uuid::new_v4().to_string());
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
                     turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
+                    approval_id,
+                    approval_purpose: ExecApprovalPurpose::Initial,
                     guardian_review_id: guardian_review_id.clone(),
                     retry_reason: reason.clone(),
                     network_approval_context: None,
@@ -209,7 +226,7 @@ impl ToolOrchestrator {
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     tool_ctx,
-                    /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                    permission_request_hook_mode(strict_auto_review, &requirement),
                     &otel,
                 )
                 .await?;
@@ -386,15 +403,25 @@ impl ToolOrchestrator {
 
                 // Strict auto-review approval covers the sandboxed attempt only;
                 // retrying without the sandbox requires a fresh guardian review.
-                let bypass_retry_approval = !strict_auto_review
-                    && tool.should_bypass_approval(approval_policy, already_approved)
-                    && network_approval_context.is_none();
+                let bypass_retry_approval = can_bypass_retry_approval(
+                    strict_auto_review,
+                    &requirement,
+                    tool.should_bypass_approval(approval_policy, already_approved),
+                    network_approval_context.is_some(),
+                );
                 if !bypass_retry_approval {
+                    // A tool item can produce both an initial approval and a
+                    // later retry approval. Give the retry its own unguessable
+                    // waiter ID so a duplicated/replayed response for the
+                    // initial prompt cannot resolve the new waiter.
+                    let retry_approval_id = Uuid::new_v4().to_string();
                     let guardian_review_id = use_guardian.then(new_guardian_review_id);
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
                         turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
+                        approval_id: Some(retry_approval_id),
+                        approval_purpose: ExecApprovalPurpose::SandboxRetry,
                         guardian_review_id: guardian_review_id.clone(),
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
@@ -407,7 +434,14 @@ impl ToolOrchestrator {
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        /*evaluate_permission_request_hooks*/ !strict_auto_review,
+                        if strict_auto_review {
+                            PermissionRequestHookMode::Skip
+                        } else {
+                            // A retry asks for new phase-specific authority.
+                            // Hooks may deny it, but a command-only Allow must
+                            // still fall through to the callback.
+                            PermissionRequestHookMode::DenyOnly
+                        },
                         &otel,
                     )
                     .await?;
@@ -516,13 +550,13 @@ impl ToolOrchestrator {
         permission_request_run_id: &str,
         approval_ctx: ApprovalCtx<'_>,
         tool_ctx: &ToolCtx,
-        evaluate_permission_request_hooks: bool,
+        permission_request_hook_mode: PermissionRequestHookMode,
         otel: &codex_otel::SessionTelemetry,
     ) -> Result<ReviewDecision, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
-        if evaluate_permission_request_hooks
+        if permission_request_hook_mode != PermissionRequestHookMode::Skip
             && let Some(permission_request) = tool.permission_request_payload(req)
         {
             let tool_name = flat_tool_name(&tool_ctx.tool_name);
@@ -534,7 +568,9 @@ impl ToolOrchestrator {
             )
             .await
             {
-                Some(PermissionRequestDecision::Allow) => {
+                Some(PermissionRequestDecision::Allow)
+                    if permission_request_hook_mode == PermissionRequestHookMode::AllowAndDeny =>
+                {
                     let decision = ReviewDecision::Approved;
                     otel.tool_decision(
                         tool_name.as_ref(),
@@ -554,7 +590,7 @@ impl ToolOrchestrator {
                     );
                     return Err(ToolError::Rejected(message));
                 }
-                None => {}
+                Some(PermissionRequestDecision::Allow) | None => {}
             }
         }
 
@@ -604,6 +640,31 @@ impl ToolOrchestrator {
     }
 }
 
+fn can_bypass_retry_approval(
+    strict_auto_review: bool,
+    requirement: &ExecApprovalRequirement,
+    policy_bypasses_approval: bool,
+    has_network_approval_context: bool,
+) -> bool {
+    !strict_auto_review
+        && !requirement.is_one_shot()
+        && policy_bypasses_approval
+        && !has_network_approval_context
+}
+
+fn permission_request_hook_mode(
+    strict_auto_review: bool,
+    requirement: &ExecApprovalRequirement,
+) -> PermissionRequestHookMode {
+    if strict_auto_review {
+        PermissionRequestHookMode::Skip
+    } else if requirement.is_one_shot() {
+        PermissionRequestHookMode::DenyOnly
+    } else {
+        PermissionRequestHookMode::AllowAndDeny
+    }
+}
+
 fn sandbox_outcome_from_tool_error(err: &ToolError) -> Option<&'static str> {
     match err {
         ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { .. })) => Some("denied"),
@@ -618,3 +679,7 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
 }
+
+#[cfg(test)]
+#[path = "orchestrator_tests.rs"]
+mod tests;

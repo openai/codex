@@ -127,6 +127,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
     type ApprovalKey = ApprovalKey;
 
     fn approval_keys(&self, req: &ShellRequest) -> Vec<Self::ApprovalKey> {
+        if req.exec_approval_requirement.is_one_shot() {
+            return Vec::new();
+        }
         vec![ApprovalKey {
             environment_id: req.turn_environment.environment_id.clone(),
             command: canonicalize_command_for_approval(&req.command),
@@ -141,7 +144,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
-        let keys = self.approval_keys(req);
+        // A callback-scoped prompt represents new authority for one concrete
+        // phase, such as an unsandboxed retry. It must not reuse or populate
+        // the command's session approval cache.
+        let single_use = req.exec_approval_requirement.is_one_shot() || ctx.approval_id.is_some();
+        let keys = if single_use {
+            Vec::new()
+        } else {
+            self.approval_keys(req)
+        };
         let command = req.command.clone();
         let cwd = req.cwd.clone();
         let environment_id = Some(req.turn_environment.environment_id.clone());
@@ -150,7 +161,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
+        let approval_id = ctx.approval_id.clone();
+        let approval_purpose = ctx.approval_purpose;
         let guardian_review_id = ctx.guardian_review_id.clone();
+        let network_approval_context = ctx.network_approval_context.clone();
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
                 return review_approval_request(
@@ -170,18 +184,19 @@ impl Approvable<ShellRequest> for ShellRuntime {
                 .await;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
-                let available_decisions = None;
+                let available_decisions =
+                    single_use.then(|| vec![ReviewDecision::Approved, ReviewDecision::Abort]);
                 session
                     .request_command_approval(
                         turn,
                         call_id,
-                        /*approval_id*/ None,
-                        /*approval_purpose*/ None,
+                        approval_id,
+                        Some(approval_purpose),
                         environment_id,
                         command,
                         cwd,
                         reason,
-                        ctx.network_approval_context.clone(),
+                        network_approval_context,
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
