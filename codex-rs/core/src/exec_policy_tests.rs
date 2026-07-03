@@ -1315,79 +1315,61 @@ async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_gra
 }
 
 #[tokio::test]
-async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision() {
+async fn mixed_rule_and_sandbox_prompt_requires_every_granular_category_in_either_order() {
     let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
     let mut parser = PolicyParser::new();
     parser
         .parse("test.rules", policy_src)
         .expect("parse policy");
     let manager = ExecPolicyManager::new(Arc::new(parser.build()));
-    let command = vec![
-        "bash".to_string(),
-        "-lc".to_string(),
-        "git status && madeup-cmd".to_string(),
+    let cases = [
+        ("rule then sandbox", "git status && madeup-cmd"),
+        ("sandbox then rule", "madeup-cmd && git status"),
     ];
 
-    let requirement = manager
-        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-            command: &command,
-            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            permission_profile: PermissionProfile::read_only(),
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            sandbox_permissions: SandboxPermissions::RequireEscalated,
-            prefix_rule: None,
-        })
-        .await;
+    for (order, script) in cases {
+        let command = vec!["bash".to_string(), "-lc".to_string(), script.to_string()];
+        for (rules, sandbox_approval, expected_rejection) in [
+            (false, false, Some(REJECT_RULES_APPROVAL_REASON)),
+            (false, true, Some(REJECT_RULES_APPROVAL_REASON)),
+            (true, false, Some(REJECT_SANDBOX_APPROVAL_REASON)),
+            (true, true, None),
+        ] {
+            let requirement = manager
+                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                        sandbox_approval,
+                        rules,
+                        skill_approval: true,
+                        request_permissions: true,
+                        mcp_elicitations: true,
+                    }),
+                    permission_profile: PermissionProfile::read_only(),
+                    windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                    sandbox_permissions: SandboxPermissions::RequireEscalated,
+                    prefix_rule: None,
+                })
+                .await;
+            let expected = match expected_rejection {
+                Some(reason) => ExecApprovalRequirement::Forbidden {
+                    reason: reason.to_string(),
+                },
+                None => ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!(
+                        "`{}` requires approval by policy",
+                        render_shlex_command(&command)
+                    )),
+                    proposed_execpolicy_amendment: None,
+                },
+            };
 
-    assert!(matches!(
-        requirement,
-        ExecApprovalRequirement::NeedsApproval { .. }
-    ));
-}
-
-#[tokio::test]
-async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled() {
-    let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
-    let mut parser = PolicyParser::new();
-    parser
-        .parse("test.rules", policy_src)
-        .expect("parse policy");
-    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
-    let command = vec![
-        "bash".to_string(),
-        "-lc".to_string(),
-        "git status && madeup-cmd".to_string(),
-    ];
-
-    let requirement = manager
-        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-            command: &command,
-            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: false,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            permission_profile: PermissionProfile::read_only(),
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            sandbox_permissions: SandboxPermissions::RequireEscalated,
-            prefix_rule: None,
-        })
-        .await;
-
-    assert_eq!(
-        requirement,
-        ExecApprovalRequirement::Forbidden {
-            reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+            assert_eq!(
+                requirement, expected,
+                "{order} with rules={rules} and sandbox_approval={sandbox_approval}",
+            );
         }
-    );
+    }
 }
 
 #[tokio::test]

@@ -19,6 +19,23 @@ fn powershell_command(script: &str) -> Vec<String> {
     ]
 }
 
+fn untrusted_powershell_command(script: &str) -> Vec<String> {
+    vec![
+        "powershell.exe".to_string(),
+        "-Command".to_string(),
+        script.to_string(),
+    ]
+}
+
+fn prefix_rule_for(command: &[String], decision: &str) -> String {
+    let pattern = command
+        .iter()
+        .map(|word| format!(r#""{}""#, starlark_string(word)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"prefix_rule(pattern=[{pattern}], decision="{decision}")"#)
+}
+
 fn outer_result(command: &[String], prompt: bool) -> ExecApprovalRequirement {
     let amendment = Some(ExecPolicyAmendment::new(command.to_vec()));
     if prompt {
@@ -63,111 +80,644 @@ async fn requirement(
     permission_profile: PermissionProfile,
     sandbox_permissions: SandboxPermissions,
 ) -> ExecApprovalRequirement {
-    exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
-        policy_src: policy_src.map(str::to_owned),
-        command: command.to_vec(),
+    requirement_with_options(
+        policy_src,
+        command,
         approval_policy,
         permission_profile,
+        WindowsSandboxLevel::RestrictedToken,
         sandbox_permissions,
-        prefix_rule: None,
-    })
+        /*prefix_rule*/ None,
+    )
     .await
 }
 
-#[tokio::test]
-async fn rejects_untrusted_powershell_across_approval_and_sandbox_modes() {
-    let trusted = trusted_windows_powershell();
+async fn requirement_with_options(
+    policy_src: Option<&str>,
+    command: &[String],
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+    windows_sandbox_level: WindowsSandboxLevel,
+    sandbox_permissions: SandboxPermissions,
+    prefix_rule: Option<Vec<String>>,
+) -> ExecApprovalRequirement {
+    let policy = policy_from_src(policy_src);
+    ExecPolicyManager::new(policy)
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command,
+            approval_policy,
+            permission_profile,
+            windows_sandbox_level,
+            sandbox_permissions,
+            prefix_rule,
+        })
+        .await
+}
+
+fn composed_untrusted_requirement(
+    policy_src: Option<&str>,
+    outer_argv: &[String],
+    commands: &[Vec<String>],
+    approval_policy: AskForApproval,
+    permission_profile: &PermissionProfile,
+    windows_sandbox_level: WindowsSandboxLevel,
+    sandbox_permissions: SandboxPermissions,
+) -> ExecApprovalRequirement {
+    let policy = policy_from_src(policy_src);
+    create_untrusted_powershell_approval_requirement(
+        policy.as_ref(),
+        outer_argv,
+        commands,
+        UnmatchedCommandContext {
+            approval_policy,
+            permission_profile,
+            windows_sandbox_level,
+            sandbox_permissions,
+            used_complex_parsing: false,
+            command_origin: ExecPolicyCommandOrigin::PowerShell,
+        },
+    )
+}
+
+fn one_shot(reason: Option<String>) -> ExecApprovalRequirement {
+    ExecApprovalRequirement::NeedsOneShotApproval { reason }
+}
+
+fn untrusted_skip(bypass_sandbox: bool) -> ExecApprovalRequirement {
+    ExecApprovalRequirement::Skip {
+        bypass_sandbox,
+        proposed_execpolicy_amendment: None,
+    }
+}
+
+#[test]
+fn untrusted_parsed_state_retains_exact_outer_argv_and_trusted_state_does_not() {
+    let outer_argv = vec_str(&[
+        r"\\?\C:\Workspace\PoWeRsHeLl.ExE. ",
+        "-NoProfile",
+        "-Command",
+        "echo First; Write-Output SECOND",
+    ]);
+    let commands = vec![
+        vec_str(&["echo", "First"]),
+        vec_str(&["Write-Output", "SECOND"]),
+    ];
+
+    let Some(powershell_policy::PreparedPowerShell::Parsed(untrusted)) =
+        powershell_policy::prepare_classified(
+            &outer_argv,
+            PowerShellExecPolicyParse::UntrustedRuntime {
+                outcome: PowerShellExecPolicyParseOutcome::Commands(commands.clone()),
+            },
+        )
+    else {
+        panic!("nonempty inspected untrusted PowerShell should remain policy-evaluable");
+    };
+    pretty_assertions::assert_eq!(untrusted.commands(), commands);
+    pretty_assertions::assert_eq!(
+        untrusted.untrusted_outer_argv(),
+        Some(outer_argv.as_slice())
+    );
+
+    let Some(powershell_policy::PreparedPowerShell::Parsed(trusted)) =
+        powershell_policy::prepare_classified(
+            &outer_argv,
+            PowerShellExecPolicyParse::TrustedRuntime {
+                outcome: PowerShellExecPolicyParseOutcome::Commands(vec![vec_str(&[
+                    "Get-Location",
+                ])]),
+            },
+        )
+    else {
+        panic!("trusted parsed PowerShell should remain parsed");
+    };
+    pretty_assertions::assert_eq!(trusted.untrusted_outer_argv(), None);
+}
+
+#[test]
+fn untrusted_opaque_failed_and_empty_parser_states_remain_terminal() {
+    let command = untrusted_powershell_command("echo blocked");
+    let rendered = render_shlex_command(&command);
     let cases = [
         (
-            "untrusted parsed runtime",
-            vec_str(&["powershell.EXE.CmD", "-Command", "echo allowed"]),
-            Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#),
-            "the PowerShell runtime is not a protected system executable",
+            PowerShellExecPolicyParseOutcome::Commands(Vec::new()),
+            "the protected system parser returned an empty command while inspecting an untrusted PowerShell wrapper",
         ),
         (
-            "untrusted opaque body",
-            vec_str(&[
-                "powershell.exe",
-                "-NonInteractive",
-                "-Command",
-                "echo blocked",
-            ]),
-            None,
+            PowerShellExecPolicyParseOutcome::Commands(vec![Vec::new()]),
+            "the protected system parser returned an empty command while inspecting an untrusted PowerShell wrapper",
+        ),
+        (
+            PowerShellExecPolicyParseOutcome::Commands(vec![vec![String::new()]]),
+            "the protected system parser returned an empty command while inspecting an untrusted PowerShell wrapper",
+        ),
+        (
+            PowerShellExecPolicyParseOutcome::Unsupported,
             "an untrusted PowerShell wrapper could not be inspected with the protected system parser",
         ),
         (
-            "full outer rule for bare runtime",
-            vec_str(&["powershell.exe", "-Command", "echo allowed"]),
-            Some(
-                r#"prefix_rule(pattern=["powershell.exe", "-Command", "echo allowed"], decision="allow")"#,
-            ),
-            "the PowerShell runtime is not a protected system executable",
+            PowerShellExecPolicyParseOutcome::Failed,
+            "the protected system parser failed while inspecting an untrusted PowerShell wrapper",
         ),
-        (
-            "verbatim path alias",
-            vec![
-                format!(r"\\?\{trusted}."),
-                "-Command".to_string(),
-                "echo allowed".to_string(),
-            ],
-            Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#),
-            "the PowerShell runtime is not a protected system executable",
-        ),
-        (
-            "device path alias",
-            vec![
-                format!(r"\\.\{trusted} "),
-                "-Command".to_string(),
-                "echo allowed".to_string(),
-            ],
-            Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#),
-            "the PowerShell runtime is not a protected system executable",
-        ),
-    ];
-    let policies = [
-        AskForApproval::Never,
-        AskForApproval::OnRequest,
-        AskForApproval::UnlessTrusted,
-        granular(/*rules*/ false, /*sandbox_approval*/ false),
-        granular(/*rules*/ false, /*sandbox_approval*/ true),
-        granular(/*rules*/ true, /*sandbox_approval*/ false),
-        granular(/*rules*/ true, /*sandbox_approval*/ true),
-    ];
-    let profiles = [
-        PermissionProfile::Disabled,
-        PermissionProfile::read_only(),
-        PermissionProfile::default(),
-        PermissionProfile::External {
-            network: NetworkSandboxPolicy::Restricted,
-        },
     ];
 
-    for (name, command, policy_src, reason) in cases {
-        let rendered = render_shlex_command(&command);
-        for approval_policy in policies {
-            for permission_profile in &profiles {
-                let requirement =
-                    exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
-                        policy_src: policy_src.map(str::to_owned),
-                        command: command.clone(),
-                        approval_policy,
-                        permission_profile: permission_profile.clone(),
-                        sandbox_permissions: SandboxPermissions::UseDefault,
-                        prefix_rule: None,
-                    })
-                    .await;
-
-                pretty_assertions::assert_eq!(
-                    requirement,
-                    ExecApprovalRequirement::Forbidden {
-                        reason: format!("`{rendered}` rejected: {reason}"),
-                    },
-                    "{} with {approval_policy:?} and {permission_profile:?}",
-                    name
-                );
-            }
-        }
+    for (outcome, reason) in cases {
+        let Some(powershell_policy::PreparedPowerShell::Terminal(requirement)) =
+            powershell_policy::prepare_classified(
+                &command,
+                PowerShellExecPolicyParse::UntrustedRuntime { outcome },
+            )
+        else {
+            panic!("untrusted opaque, failed, and empty states must remain terminal");
+        };
+        pretty_assertions::assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: format!("`{rendered}` rejected: {reason}"),
+            },
+        );
     }
+}
+
+#[test]
+fn untrusted_outer_and_every_inner_command_compose_with_strictest_wins() {
+    let outer = vec_str(&[r"C:\workspace\powershell.exe", "-Command", "echo allowed"]);
+    let rendered = render_shlex_command(&outer);
+    let echo = vec_str(&["echo", "allowed"]);
+    let later = vec_str(&["madeup-later", "value"]);
+    let full_outer_allow = prefix_rule_for(&outer, "allow");
+    let short_outer_allow = prefix_rule_for(&outer[..1], "allow");
+    let outer_prompt = prefix_rule_for(&outer, "prompt");
+    let outer_forbidden = prefix_rule_for(&outer, "forbidden");
+    let echo_allow = prefix_rule_for(&echo[..1], "allow");
+    let echo_prompt = prefix_rule_for(&echo[..1], "prompt");
+    let echo_forbidden = prefix_rule_for(&echo[..1], "forbidden");
+    let later_prompt = prefix_rule_for(&later[..1], "prompt");
+    let later_forbidden = prefix_rule_for(&later[..1], "forbidden");
+    let policy_prompt_reason = Some(format!("`{rendered}` requires approval by policy"));
+
+    let cases = vec![
+        (
+            "complete outer and every inner explicit allow",
+            format!("{full_outer_allow}\n{echo_allow}"),
+            vec![echo.clone()],
+            untrusted_skip(true),
+        ),
+        (
+            "short outer allow remains sandbox preserving",
+            format!("{short_outer_allow}\n{echo_allow}"),
+            vec![echo.clone()],
+            untrusted_skip(false),
+        ),
+        (
+            "heuristic inner allow cannot establish full authority",
+            full_outer_allow.clone(),
+            vec![vec_str(&["Get-Location"])],
+            untrusted_skip(false),
+        ),
+        (
+            "inner prompt dominates outer allow",
+            format!("{full_outer_allow}\n{echo_prompt}"),
+            vec![echo.clone()],
+            one_shot(policy_prompt_reason.clone()),
+        ),
+        (
+            "outer prompt dominates inner allow",
+            format!("{outer_prompt}\n{echo_allow}"),
+            vec![echo.clone()],
+            one_shot(policy_prompt_reason.clone()),
+        ),
+        (
+            "unmatched outer prompts even with inner allow",
+            echo_allow.clone(),
+            vec![echo.clone()],
+            one_shot(None),
+        ),
+        (
+            "outer forbidden is terminal",
+            format!("{outer_forbidden}\n{echo_allow}"),
+            vec![echo.clone()],
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{rendered}` rejected: policy forbids commands starting with `{rendered}`"
+                ),
+            },
+        ),
+        (
+            "inner forbidden is terminal",
+            format!("{full_outer_allow}\n{echo_forbidden}"),
+            vec![echo.clone()],
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{rendered}` rejected: policy forbids commands starting with `echo`"
+                ),
+            },
+        ),
+        (
+            "later statement prompt participates",
+            format!("{full_outer_allow}\n{echo_allow}\n{later_prompt}"),
+            vec![echo.clone(), later.clone()],
+            one_shot(policy_prompt_reason.clone()),
+        ),
+        (
+            "later statement forbidden participates",
+            format!("{full_outer_allow}\n{echo_allow}\n{later_forbidden}"),
+            vec![echo.clone(), later.clone()],
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{rendered}` rejected: policy forbids commands starting with `madeup-later`"
+                ),
+            },
+        ),
+        (
+            "nested wrapper does not inherit outer authority",
+            full_outer_allow,
+            vec![vec_str(&["powershell.exe", "-Command", "Get-Location"])],
+            untrusted_skip(false),
+        ),
+    ];
+
+    for (name, policy_src, commands, expected) in cases {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&policy_src),
+                &outer,
+                &commands,
+                AskForApproval::OnRequest,
+                &PermissionProfile::read_only(),
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            ),
+            expected,
+            "{name}",
+        );
+    }
+}
+
+#[test]
+fn untrusted_unmatched_outer_and_mixed_prompt_causes_follow_approval_policy() {
+    let outer = untrusted_powershell_command("echo allowed");
+    let echo = vec_str(&["echo", "allowed"]);
+    let echo_allow = prefix_rule_for(&echo[..1], "allow");
+
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&echo_allow),
+            &outer,
+            std::slice::from_ref(&echo),
+            AskForApproval::Never,
+            &PermissionProfile::Disabled,
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::UseDefault,
+        ),
+        ExecApprovalRequirement::Forbidden {
+            reason: format!(
+                "`{}` rejected: blocked by policy",
+                render_shlex_command(&outer)
+            ),
+        },
+    );
+    for approval_policy in [AskForApproval::OnRequest, AskForApproval::UnlessTrusted] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&echo_allow),
+                &outer,
+                std::slice::from_ref(&echo),
+                approval_policy,
+                &PermissionProfile::Disabled,
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            ),
+            one_shot(None),
+            "{approval_policy:?}",
+        );
+    }
+
+    let outer_prompt = prefix_rule_for(&outer, "prompt");
+    let mixed_policy = format!("{outer_prompt}\n{echo_allow}");
+    for (rules, sandbox_approval, expected) in [
+        (
+            false,
+            false,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            false,
+            true,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            true,
+            false,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            true,
+            true,
+            one_shot(Some(format!(
+                "`{}` requires approval by policy",
+                render_shlex_command(&outer)
+            ))),
+        ),
+    ] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&mixed_policy),
+                &outer,
+                std::slice::from_ref(&echo),
+                granular(rules, sandbox_approval),
+                &PermissionProfile::read_only(),
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::RequireEscalated,
+            ),
+            expected,
+            "rules={rules}, sandbox_approval={sandbox_approval}",
+        );
+    }
+
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&mixed_policy),
+            &outer,
+            std::slice::from_ref(&echo),
+            granular(/*rules*/ true, /*sandbox_approval*/ false),
+            &PermissionProfile::read_only(),
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::UseDefault,
+        ),
+        one_shot(Some(format!(
+            "`{}` requires approval by policy",
+            render_shlex_command(&outer)
+        ))),
+        "a rule-only prompt does not require sandbox approval",
+    );
+
+    let full_outer_allow = prefix_rule_for(&outer, "allow");
+    pretty_assertions::assert_eq!(
+        composed_untrusted_requirement(
+            Some(&full_outer_allow),
+            &outer,
+            std::slice::from_ref(&echo),
+            granular(/*rules*/ false, /*sandbox_approval*/ true),
+            &PermissionProfile::read_only(),
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::RequireEscalated,
+        ),
+        one_shot(None),
+        "a sandbox-only prompt does not require rules approval",
+    );
+}
+
+#[test]
+fn untrusted_permission_and_windows_backend_gates_require_composed_authority() {
+    use SandboxPermissions as SP;
+    use WindowsSandboxLevel as WSL;
+
+    let outer = untrusted_powershell_command("Get-Content Cargo.toml");
+    let inner = vec_str(&["Get-Content", "Cargo.toml"]);
+    let partial_policy = format!(
+        "{}\n{}",
+        prefix_rule_for(&outer[..1], "allow"),
+        prefix_rule_for(&inner[..1], "allow")
+    );
+    let full_policy = format!(
+        "{}\n{}",
+        prefix_rule_for(&outer, "allow"),
+        prefix_rule_for(&inner[..1], "allow")
+    );
+    let denied_read_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let external_profile = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
+    };
+
+    for (name, profile, level, permissions, prompts) in [
+        (
+            "managed default",
+            PermissionProfile::read_only(),
+            WSL::RestrictedToken,
+            SP::UseDefault,
+            false,
+        ),
+        (
+            "managed escalation",
+            PermissionProfile::read_only(),
+            WSL::RestrictedToken,
+            SP::RequireEscalated,
+            true,
+        ),
+        (
+            "additional permissions",
+            PermissionProfile::read_only(),
+            WSL::RestrictedToken,
+            SP::WithAdditionalPermissions,
+            true,
+        ),
+        (
+            "missing managed backend",
+            PermissionProfile::read_only(),
+            WSL::Disabled,
+            SP::UseDefault,
+            true,
+        ),
+        (
+            "denied-read escalation",
+            denied_read_profile,
+            WSL::RestrictedToken,
+            SP::RequireEscalated,
+            false,
+        ),
+        (
+            "disabled profile",
+            PermissionProfile::Disabled,
+            WSL::Disabled,
+            SP::RequireEscalated,
+            false,
+        ),
+        (
+            "external default",
+            external_profile.clone(),
+            WSL::RestrictedToken,
+            SP::UseDefault,
+            false,
+        ),
+        (
+            "external escalation",
+            external_profile,
+            WSL::RestrictedToken,
+            SP::RequireEscalated,
+            true,
+        ),
+    ] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&partial_policy),
+                &outer,
+                std::slice::from_ref(&inner),
+                AskForApproval::OnRequest,
+                &profile,
+                level,
+                permissions,
+            ),
+            if prompts {
+                one_shot(None)
+            } else {
+                untrusted_skip(false)
+            },
+            "{name}",
+        );
+    }
+
+    for (level, permissions) in [
+        (WSL::RestrictedToken, SP::RequireEscalated),
+        (WSL::RestrictedToken, SP::WithAdditionalPermissions),
+        (WSL::Disabled, SP::UseDefault),
+    ] {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&full_policy),
+                &outer,
+                std::slice::from_ref(&inner),
+                AskForApproval::OnRequest,
+                &PermissionProfile::read_only(),
+                level,
+                permissions,
+            ),
+            untrusted_skip(true),
+            "composed authority should cover {level:?} and {permissions:?}",
+        );
+    }
+}
+
+#[test]
+fn untrusted_wrapper_identity_uses_exact_outer_and_restrictive_basename_rules() {
+    let path_a = vec_str(&[r"C:\workspace-a\powershell.exe", "-Command", "echo allowed"]);
+    let path_b = vec_str(&[r"C:\workspace-b\powershell.exe", "-Command", "echo allowed"]);
+    let inner = vec_str(&["echo", "allowed"]);
+    let inner_allow = prefix_rule_for(&inner[..1], "allow");
+    let basename_allow = prefix_rule_for(&vec_str(&["powershell.exe"]), "allow");
+    let exact_a_allow = prefix_rule_for(&path_a, "allow");
+    let basename_prompt = prefix_rule_for(&vec_str(&["powershell.exe"]), "prompt");
+    let basename_forbidden = prefix_rule_for(&vec_str(&["powershell.exe"]), "forbidden");
+    let mut extended = path_a.clone();
+    extended.insert(1, "-NoProfile".to_string());
+    let namespace_outer = vec_str(&[
+        r"\\?\C:\attacker\powershell.exe.",
+        "-Command",
+        "echo allowed",
+    ]);
+    let namespace_policy = format!(
+        "{}\nhost_executable(name = \"powershell\", paths = [\"C:\\\\trusted\\\\powershell.exe\"])\n{inner_allow}",
+        prefix_rule_for(&vec_str(&["powershell.exe."]), "allow")
+    );
+    let rendered_a = render_shlex_command(&path_a);
+    let cases = vec![
+        (
+            "basename Allow",
+            path_a.clone(),
+            format!("{basename_allow}\n{inner_allow}"),
+            one_shot(None),
+        ),
+        (
+            "path A rule against B",
+            path_b,
+            format!("{exact_a_allow}\n{inner_allow}"),
+            one_shot(None),
+        ),
+        (
+            "basename Prompt",
+            path_a.clone(),
+            format!("{exact_a_allow}\n{basename_prompt}\n{inner_allow}"),
+            one_shot(Some(format!("`{rendered_a}` requires approval by policy"))),
+        ),
+        (
+            "basename Forbidden",
+            path_a,
+            format!("{exact_a_allow}\n{basename_forbidden}\n{inner_allow}"),
+            ExecApprovalRequirement::Forbidden {
+                reason: format!(
+                    "`{rendered_a}` rejected: policy forbids commands starting with `powershell.exe`"
+                ),
+            },
+        ),
+        (
+            "extended argv",
+            extended,
+            format!("{exact_a_allow}\n{inner_allow}"),
+            one_shot(None),
+        ),
+        (
+            "mapped namespace",
+            namespace_outer,
+            namespace_policy,
+            one_shot(None),
+        ),
+    ];
+
+    for (name, outer, policy_src, expected) in cases {
+        pretty_assertions::assert_eq!(
+            composed_untrusted_requirement(
+                Some(&policy_src),
+                &outer,
+                std::slice::from_ref(&inner),
+                AskForApproval::OnRequest,
+                &PermissionProfile::read_only(),
+                WindowsSandboxLevel::RestrictedToken,
+                SandboxPermissions::UseDefault,
+            ),
+            expected,
+            "{name}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn untrusted_parsed_results_ignore_requested_amendments() {
+    let command = untrusted_powershell_command("echo allowed");
+    let inner_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
+    let requested_prefix = Some(vec_str(&["echo"]));
+
+    pretty_assertions::assert_eq!(
+        requirement_with_options(
+            /*policy_src*/ None,
+            &command,
+            AskForApproval::OnRequest,
+            PermissionProfile::read_only(),
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::UseDefault,
+            requested_prefix.clone(),
+        )
+        .await,
+        one_shot(None),
+    );
+
+    let full_policy = format!("{}\n{inner_allow}", prefix_rule_for(&command, "allow"));
+    pretty_assertions::assert_eq!(
+        requirement_with_options(
+            Some(&full_policy),
+            &command,
+            AskForApproval::OnRequest,
+            PermissionProfile::read_only(),
+            WindowsSandboxLevel::RestrictedToken,
+            SandboxPermissions::UseDefault,
+            requested_prefix,
+        )
+        .await,
+        untrusted_skip(true),
+    );
 }
 
 #[test]

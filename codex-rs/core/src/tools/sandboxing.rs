@@ -196,13 +196,6 @@ pub(crate) enum ExecApprovalRequirement {
     /// Approval is required for this invocation, but the decision must not be
     /// reused from or written to the session approval cache.
     #[cfg_attr(not(windows), allow(dead_code))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        expect(
-            dead_code,
-            reason = "constructed by the later stacked Windows policy layer"
-        )
-    )]
     NeedsOneShotApproval { reason: Option<String> },
     /// Execution forbidden for this tool call.
     Forbidden { reason: String },

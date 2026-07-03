@@ -170,28 +170,49 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PromptCauses {
+    rules: bool,
+    sandbox: bool,
+}
+
+fn prompt_causes(matched_rules: &[RuleMatch]) -> PromptCauses {
+    matched_rules
+        .iter()
+        .fold(PromptCauses::default(), |mut causes, rule_match| {
+            match rule_match {
+                RuleMatch::PrefixRuleMatch {
+                    decision: Decision::Prompt,
+                    ..
+                } => causes.rules = true,
+                RuleMatch::HeuristicsRuleMatch {
+                    decision: Decision::Prompt,
+                    ..
+                } => causes.sandbox = true,
+                RuleMatch::PrefixRuleMatch { .. } | RuleMatch::HeuristicsRuleMatch { .. } => {}
+            }
+            causes
+        })
+}
+
 /// Returns a rejection reason when `approval_policy` disallows surfacing the
 /// current prompt to the user.
 ///
-/// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
-/// prompts so granular `rules` and `sandbox_approval` settings are honored
-/// independently. When both are present, policy-rule prompts take precedence.
-pub(crate) fn prompt_is_rejected_by_policy(
+/// `causes` retains every represented policy-rule and sandbox/escalation
+/// category so granular settings are honored independently. When both are
+/// present and disabled, policy-rule prompts take precedence.
+fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
-    prompt_is_rule: bool,
+    causes: PromptCauses,
 ) -> Option<&'static str> {
     match approval_policy {
         AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
         AskForApproval::OnRequest => None,
         AskForApproval::UnlessTrusted => None,
         AskForApproval::Granular(granular_config) => {
-            if prompt_is_rule {
-                if !granular_config.allows_rules_approval() {
-                    Some(REJECT_RULES_APPROVAL_REASON)
-                } else {
-                    None
-                }
-            } else if !granular_config.allows_sandbox_approval() {
+            if causes.rules && !granular_config.allows_rules_approval() {
+                Some(REJECT_RULES_APPROVAL_REASON)
+            } else if causes.sandbox && !granular_config.allows_sandbox_approval() {
                 Some(REJECT_SANDBOX_APPROVAL_REASON)
             } else {
                 None
@@ -290,7 +311,24 @@ impl ExecPolicyManager {
                 Some(powershell_policy::PreparedPowerShell::Terminal(requirement)) => {
                     return requirement;
                 }
-                Some(powershell_policy::PreparedPowerShell::Parsed(parsed)) => (Some(parsed), true),
+                Some(powershell_policy::PreparedPowerShell::Parsed(parsed)) => {
+                    if let Some(outer_argv) = parsed.untrusted_outer_argv() {
+                        return create_untrusted_powershell_approval_requirement(
+                            exec_policy.as_ref(),
+                            outer_argv,
+                            parsed.commands(),
+                            UnmatchedCommandContext {
+                                approval_policy,
+                                permission_profile: &permission_profile,
+                                windows_sandbox_level,
+                                sandbox_permissions,
+                                used_complex_parsing: false,
+                                command_origin: ExecPolicyCommandOrigin::PowerShell,
+                            },
+                        );
+                    }
+                    (Some(parsed), true)
+                }
                 Some(powershell_policy::PreparedPowerShell::Unsupported) => (None, true),
                 None => (None, false),
             };
@@ -378,32 +416,28 @@ impl ExecPolicyManager {
             .max()
             .unwrap_or(Decision::Forbidden);
 
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        let managed_filesystem_restrictions =
-            profile_has_managed_filesystem_restrictions(&permission_profile);
-        let permission_delta_requires_outer = match (&permission_profile, sandbox_permissions) {
-            (PermissionProfile::Disabled, _) => false,
-            (_, SandboxPermissions::WithAdditionalPermissions) => true,
-            (PermissionProfile::External { .. }, SandboxPermissions::RequireEscalated) => true,
-            (PermissionProfile::Managed { .. }, SandboxPermissions::RequireEscalated) => {
-                unsandboxed_execution_allowed(&file_system_sandbox_policy)
-            }
-            (_, SandboxPermissions::UseDefault) => false,
-        };
+        let permission_delta_requires_outer =
+            permission_delta_requires_outer_authority(&permission_profile, sandbox_permissions);
         let parsed_powershell_needs_outer_approval = parsed_powershell_outer.is_some()
             && !exact_outer_allow
             && (permission_delta_requires_outer
-                || (cfg!(windows)
-                    && windows_sandbox_level == WindowsSandboxLevel::Disabled
-                    && managed_filesystem_restrictions));
-        if evaluation.decision == Decision::Allow && parsed_powershell_needs_outer_approval {
-            evaluation.decision = Decision::Prompt;
+                || missing_managed_windows_sandbox_backend(
+                    &permission_profile,
+                    windows_sandbox_level,
+                ));
+        if evaluation.decision != Decision::Forbidden && parsed_powershell_needs_outer_approval {
             evaluation
                 .matched_rules
                 .push(RuleMatch::HeuristicsRuleMatch {
                     command: command.to_vec(),
                     decision: Decision::Prompt,
                 });
+            evaluation.decision = evaluation
+                .matched_rules
+                .iter()
+                .map(RuleMatch::decision)
+                .max()
+                .unwrap_or(Decision::Forbidden);
         }
 
         let requested_amendment = if parsed_powershell_outer.is_some() {
@@ -426,10 +460,8 @@ impl ExecPolicyManager {
                 reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
-                let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt
-                });
-                match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
+                let causes = prompt_causes(&evaluation.matched_rules);
+                match prompt_is_rejected_by_policy(approval_policy, causes) {
                     Some(reason) => ExecApprovalRequirement::Forbidden {
                         reason: reason.to_string(),
                     },
@@ -438,7 +470,7 @@ impl ExecPolicyManager {
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
                             match (
                                 parsed_powershell_outer,
-                                prompt_is_rule,
+                                causes.rules,
                                 auto_amendment_allowed,
                             ) {
                                 (Some(outer), false, _) => {
@@ -580,6 +612,130 @@ impl ExecPolicyManager {
         updated_policy.add_network_rule(&host, protocol, decision, justification)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn create_untrusted_powershell_approval_requirement(
+    exec_policy: &Policy,
+    outer_argv: &[String],
+    commands: &[Vec<String>],
+    context: UnmatchedCommandContext<'_>,
+) -> ExecApprovalRequirement {
+    let match_options = MatchOptions {
+        resolve_host_executables: true,
+    };
+    let inner_fallback =
+        |command: &[String]| render_decision_for_unmatched_command(command, context);
+
+    let mut matched_rules = Vec::new();
+    let mut every_inner_explicit_allow = !commands.is_empty();
+    for command in commands {
+        let inner_matches = exec_policy.matches_for_command_with_options(
+            command,
+            Some(&inner_fallback),
+            &match_options,
+        );
+        every_inner_explicit_allow &= !command.is_empty()
+            && inner_matches.iter().any(|rule_match| {
+                matches!(
+                    rule_match,
+                    RuleMatch::PrefixRuleMatch {
+                        decision: Decision::Allow,
+                        ..
+                    }
+                )
+            });
+        matched_rules.extend(inner_matches);
+    }
+
+    let outer_fallback = |_command: &[String]| match context.approval_policy {
+        AskForApproval::Never => Decision::Forbidden,
+        AskForApproval::OnRequest | AskForApproval::UnlessTrusted | AskForApproval::Granular(_) => {
+            Decision::Prompt
+        }
+    };
+    matched_rules.extend(
+        exec_policy
+            .matches_for_command_with_restrictive_host_rules(outer_argv, Some(&outer_fallback)),
+    );
+
+    let raw_match_options = MatchOptions {
+        resolve_host_executables: false,
+    };
+    let raw_full_outer_allow = exec_policy
+        .matches_for_command_with_options(
+            outer_argv,
+            /*heuristics_fallback*/ None,
+            &raw_match_options,
+        )
+        .iter()
+        .any(|rule_match| {
+            matches!(
+                rule_match,
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix,
+                    decision: Decision::Allow,
+                    ..
+                } if matched_prefix.len() == outer_argv.len()
+            )
+        });
+    let composed_full_authority = raw_full_outer_allow && every_inner_explicit_allow;
+
+    let mut evaluation = Evaluation {
+        decision: matched_rules
+            .iter()
+            .map(RuleMatch::decision)
+            .max()
+            .unwrap_or(Decision::Forbidden),
+        matched_rules,
+    };
+    let permission_or_backend_gate = permission_delta_requires_outer_authority(
+        context.permission_profile,
+        context.sandbox_permissions,
+    ) || missing_managed_windows_sandbox_backend(
+        context.permission_profile,
+        context.windows_sandbox_level,
+    );
+    if evaluation.decision != Decision::Forbidden
+        && permission_or_backend_gate
+        && !composed_full_authority
+    {
+        evaluation
+            .matched_rules
+            .push(RuleMatch::HeuristicsRuleMatch {
+                command: outer_argv.to_vec(),
+                decision: Decision::Prompt,
+            });
+        evaluation.decision = evaluation
+            .matched_rules
+            .iter()
+            .map(RuleMatch::decision)
+            .max()
+            .unwrap_or(Decision::Forbidden);
+    }
+
+    match evaluation.decision {
+        Decision::Forbidden => ExecApprovalRequirement::Forbidden {
+            reason: derive_forbidden_reason(outer_argv, &evaluation),
+        },
+        Decision::Prompt => {
+            match prompt_is_rejected_by_policy(
+                context.approval_policy,
+                prompt_causes(&evaluation.matched_rules),
+            ) {
+                Some(reason) => ExecApprovalRequirement::Forbidden {
+                    reason: reason.to_string(),
+                },
+                None => ExecApprovalRequirement::NeedsOneShotApproval {
+                    reason: derive_prompt_reason(outer_argv, &evaluation),
+                },
+            }
+        }
+        Decision::Allow => ExecApprovalRequirement::Skip {
+            bypass_sandbox: composed_full_authority,
+            proposed_execpolicy_amendment: None,
+        },
     }
 }
 
@@ -863,6 +1019,30 @@ fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionPr
             FileSystemSandboxKind::Restricted
         )
         && !file_system_sandbox_policy.has_full_disk_write_access()
+}
+
+fn permission_delta_requires_outer_authority(
+    permission_profile: &PermissionProfile,
+    sandbox_permissions: SandboxPermissions,
+) -> bool {
+    match (permission_profile, sandbox_permissions) {
+        (PermissionProfile::Disabled, _) => false,
+        (_, SandboxPermissions::WithAdditionalPermissions) => true,
+        (PermissionProfile::External { .. }, SandboxPermissions::RequireEscalated) => true,
+        (PermissionProfile::Managed { .. }, SandboxPermissions::RequireEscalated) => {
+            unsandboxed_execution_allowed(&permission_profile.file_system_sandbox_policy())
+        }
+        (_, SandboxPermissions::UseDefault) => false,
+    }
+}
+
+fn missing_managed_windows_sandbox_backend(
+    permission_profile: &PermissionProfile,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> bool {
+    cfg!(windows)
+        && windows_sandbox_level == WindowsSandboxLevel::Disabled
+        && profile_has_managed_filesystem_restrictions(permission_profile)
 }
 
 fn default_policy_path(codex_home: &Path) -> PathBuf {

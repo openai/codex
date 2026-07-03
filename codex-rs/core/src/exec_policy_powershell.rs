@@ -10,8 +10,14 @@ pub(super) enum PreparedPowerShell {
     Unsupported,
 }
 
+enum RuntimeTrust {
+    Trusted,
+    Untrusted { outer_argv: Vec<String> },
+}
+
 pub(super) struct ParsedPowerShell {
     commands: Vec<Vec<String>>,
+    runtime: RuntimeTrust,
 }
 
 pub(super) fn prepare(command: &[String]) -> Option<PreparedPowerShell> {
@@ -27,7 +33,10 @@ pub(super) fn prepare_classified(
     match parsed {
         PowerShellExecPolicyParse::TrustedRuntime {
             outcome: PowerShellExecPolicyParseOutcome::Commands(commands),
-        } => Some(PreparedPowerShell::Parsed(ParsedPowerShell { commands })),
+        } => Some(PreparedPowerShell::Parsed(ParsedPowerShell {
+            commands,
+            runtime: RuntimeTrust::Trusted,
+        })),
         PowerShellExecPolicyParse::TrustedRuntime {
             outcome: PowerShellExecPolicyParseOutcome::Unsupported,
         } => Some(PreparedPowerShell::Unsupported),
@@ -35,10 +44,24 @@ pub(super) fn prepare_classified(
             outcome: PowerShellExecPolicyParseOutcome::Failed,
         } => Some(forbidden(command, "the protected PowerShell parser failed")),
         PowerShellExecPolicyParse::UntrustedRuntime {
+            outcome: PowerShellExecPolicyParseOutcome::Commands(commands),
+        } if !commands.is_empty()
+            && commands
+                .iter()
+                .all(|inner| !inner.is_empty() && inner.iter().all(|word| !word.is_empty())) =>
+        {
+            Some(PreparedPowerShell::Parsed(ParsedPowerShell {
+                commands,
+                runtime: RuntimeTrust::Untrusted {
+                    outer_argv: command.to_vec(),
+                },
+            }))
+        }
+        PowerShellExecPolicyParse::UntrustedRuntime {
             outcome: PowerShellExecPolicyParseOutcome::Commands(_),
         } => Some(forbidden(
             command,
-            "the PowerShell runtime is not a protected system executable",
+            "the protected system parser returned an empty command while inspecting an untrusted PowerShell wrapper",
         )),
         PowerShellExecPolicyParse::UntrustedRuntime {
             outcome: PowerShellExecPolicyParseOutcome::Unsupported,
@@ -64,5 +87,12 @@ fn forbidden(command: &[String], reason: &str) -> PreparedPowerShell {
 impl ParsedPowerShell {
     pub(super) fn commands(&self) -> &[Vec<String>] {
         &self.commands
+    }
+
+    pub(super) fn untrusted_outer_argv(&self) -> Option<&[String]> {
+        match &self.runtime {
+            RuntimeTrust::Trusted => None,
+            RuntimeTrust::Untrusted { outer_argv } => Some(outer_argv),
+        }
     }
 }
