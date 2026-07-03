@@ -79,8 +79,46 @@ fn host_program_path(name: &str) -> String {
     host_absolute_path(&["usr", "bin", &executable_name])
 }
 
+fn posix_script_program_path(name: &str) -> String {
+    host_program_path(name).replace('\\', "/")
+}
+
 fn starlark_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn prefix_rule_for(pattern: &[String], decision: &str) -> String {
+    let pattern = pattern
+        .iter()
+        .map(|token| format!("\"{}\"", starlark_string(token)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("prefix_rule(pattern=[{pattern}], decision=\"{decision}\")")
+}
+
+async fn requirement_with_provenance(
+    policy_src: Option<&str>,
+    command: &[String],
+    approval_policy: AskForApproval,
+    permission_profile: PermissionProfile,
+    sandbox_permissions: SandboxPermissions,
+    provenance: ShellApprovalProvenance,
+) -> ExecApprovalRequirement {
+    let permission_expansion_was_requested = sandbox_permissions.requests_sandbox_override();
+    ExecPolicyManager::new(policy_from_src(policy_src))
+        .create_exec_approval_requirement_for_command_with_provenance(
+            ExecApprovalRequest {
+                command,
+                approval_policy,
+                permission_profile,
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                sandbox_permissions,
+                prefix_rule: None,
+            },
+            provenance,
+            permission_expansion_was_requested,
+        )
+        .await
 }
 
 async fn write_project_trust_config(
@@ -906,14 +944,7 @@ EOF"#
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "zsh".to_string(),
-                "-lc".to_string(),
-                r#"cat <<'EOF' > /some/important/folder/test.txt
-hello world
-EOF"#
-                    .to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1143,6 +1174,1050 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
 }
 
 #[test]
+fn known_safe_sandbox_override_is_checked_before_the_safelist() {
+    let command = vec_str(&["echo", "hello"]);
+    let granular = GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    };
+
+    for (approval_policy, expected) in [
+        (AskForApproval::OnRequest, Decision::Prompt),
+        (AskForApproval::UnlessTrusted, Decision::Prompt),
+        (AskForApproval::Granular(granular), Decision::Prompt),
+        (AskForApproval::Never, Decision::Forbidden),
+    ] {
+        assert_eq!(
+            render_decision_for_unmatched_command(
+                &command,
+                UnmatchedCommandContext {
+                    approval_policy,
+                    permission_profile: &PermissionProfile::workspace_write(),
+                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    sandbox_permissions: SandboxPermissions::RequireEscalated,
+                    used_complex_parsing: false,
+                    command_origin: ExecPolicyCommandOrigin::Generic,
+                },
+            ),
+            expected,
+            "{approval_policy:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_resolved_posix_wrapper_composes_exact_outer_and_every_inner() {
+    let outer = vec![
+        host_program_path("sh"),
+        "-c".to_string(),
+        "echo ok".to_string(),
+    ];
+    let inner_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
+    let full_outer_allow = prefix_rule_for(&outer, "allow");
+    let short_outer_allow = prefix_rule_for(&outer[..1], "allow");
+    let basename_outer_allow = prefix_rule_for(&vec_str(&["sh"]), "allow");
+    let basename_outer_prompt = prefix_rule_for(&vec_str(&["sh"]), "prompt");
+    let basename_outer_forbidden = prefix_rule_for(&vec_str(&["sh"]), "forbidden");
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{inner_allow}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{short_outer_allow}\n{inner_allow}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{basename_outer_allow}\n{inner_allow}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&full_outer_allow),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        "a heuristic-safe inner command is not explicit authority",
+    );
+
+    let rendered = render_shlex_command(&outer);
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!(
+                "{full_outer_allow}\n{basename_outer_prompt}\n{inner_allow}"
+            )),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval {
+            reason: Some(format!("`{rendered}` requires approval by policy")),
+        },
+        "a restrictive basename Prompt must survive an exact outer Allow",
+    );
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!(
+                "{full_outer_allow}\n{basename_outer_forbidden}\n{inner_allow}"
+            )),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: format!("`{rendered}` rejected: policy forbids commands starting with `sh`"),
+        },
+        "a restrictive basename Forbidden must survive an exact outer Allow",
+    );
+
+    let path_b_program = host_absolute_path(&[
+        "workspace-b",
+        "bin",
+        if cfg!(windows) { "sh.exe" } else { "sh" },
+    ]);
+    let path_b = vec![path_b_program, "-c".to_string(), "echo ok".to_string()];
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{inner_allow}")),
+            &path_b,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+        "an exact rule for path A must not authorize path B",
+    );
+}
+
+#[tokio::test]
+async fn model_resolved_posix_wrapper_uses_strictest_outer_and_inner_decision() {
+    let outer = vec![
+        host_program_path("bash"),
+        "-lc".to_string(),
+        "echo first; later value".to_string(),
+    ];
+    let full_outer_allow = prefix_rule_for(&outer, "allow");
+    let echo_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
+    let later_prompt = prefix_rule_for(&vec_str(&["later"]), "prompt");
+    let later_forbidden = prefix_rule_for(&vec_str(&["later"]), "forbidden");
+    let rendered = render_shlex_command(&outer);
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{echo_allow}\n{later_prompt}")),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval {
+            reason: Some(format!("`{rendered}` requires approval by policy")),
+        },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!(
+                "{full_outer_allow}\n{echo_allow}\n{later_forbidden}"
+            )),
+            &outer,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: format!("`{rendered}` rejected: policy forbids commands starting with `later`"),
+        },
+    );
+}
+
+#[tokio::test]
+async fn nested_posix_wrapper_cannot_hide_an_inner_forbidden_rule() {
+    let command = vec_str(&["bash", "-lc", "bash -lc 'rm -rf target'"]);
+    let rm_forbidden = prefix_rule_for(&vec_str(&["rm"]), "forbidden");
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&rm_forbidden),
+            &command,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: format!(
+                "`{}` rejected: policy forbids commands starting with `rm`",
+                render_shlex_command(&command)
+            ),
+        },
+    );
+}
+
+#[tokio::test]
+async fn incomplete_untrusted_posix_analysis_is_one_shot_without_rules_and_terminal_with_rules() {
+    let opaque = vec_str(&["/workspace/bin/sh", "-c", "echo hello > marker.txt"]);
+
+    assert_eq!(
+        requirement_with_provenance(
+            /*policy_src*/ None,
+            &opaque,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+    );
+
+    assert!(matches!(
+        requirement_with_provenance(
+            /*policy_src*/ None,
+            &opaque,
+            AskForApproval::Never,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden { .. }
+    ));
+
+    let unrelated_rule = prefix_rule_for(&vec_str(&["unrelated"]), "allow");
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&unrelated_rule),
+            &opaque,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: format!(
+                "`{}` rejected: cannot completely inspect an untrusted shell wrapper while command policy rules are active",
+                render_shlex_command(&opaque)
+            ),
+        },
+    );
+}
+
+#[tokio::test]
+async fn configured_incomplete_posix_body_cannot_hide_a_forbidden_descendant() {
+    let rm_forbidden = prefix_rule_for(&vec_str(&["rm"]), "forbidden");
+    for command in [
+        vec_str(&[
+            "/bin/bash",
+            "-lc",
+            "echo ok > out; bash -lc 'rm -rf target'",
+        ]),
+        vec_str(&[
+            "/bin/bash",
+            "-lc",
+            "for target in one; do rm -rf \"$target\"; done",
+        ]),
+        vec_str(&["/bin/bash", "-lc", r#"find . "$FLAGS" rm -rf {} ';' > out"#]),
+        vec_str(&["/bin/bash", "-lc", r#"env "$ARGS" > out"#]),
+    ] {
+        assert!(matches!(
+            requirement_with_provenance(
+                Some(&rm_forbidden),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::UseDefault,
+                ShellApprovalProvenance::configured(),
+            )
+            .await,
+            ExecApprovalRequirement::Forbidden { .. }
+        ));
+
+        assert!(matches!(
+            requirement_with_provenance(
+                /*policy_src*/ None,
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::UseDefault,
+                ShellApprovalProvenance::configured(),
+            )
+            .await,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                ..
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn opaque_non_posix_model_runtime_is_one_shot_without_rules_and_terminal_with_rules() {
+    let commands = [vec_str(&["cmd.exe", "/C", "echo hello"]), {
+        #[cfg(not(windows))]
+        {
+            vec_str(&["pwsh", "-Command", "Write-Output hello"])
+        }
+        #[cfg(windows)]
+        {
+            vec_str(&["cmd.exe", "/D", "/C", "echo hello"])
+        }
+    }];
+
+    for command in commands {
+        assert_eq!(
+            requirement_with_provenance(
+                /*policy_src*/ None,
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::UseDefault,
+                ShellApprovalProvenance::local_model_resolved(),
+            )
+            .await,
+            ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+            "{command:?}",
+        );
+
+        let unrelated_rule = prefix_rule_for(&vec_str(&["unrelated"]), "allow");
+        assert!(
+            matches!(
+                requirement_with_provenance(
+                    Some(&unrelated_rule),
+                    &command,
+                    AskForApproval::OnRequest,
+                    PermissionProfile::workspace_write(),
+                    SandboxPermissions::UseDefault,
+                    ShellApprovalProvenance::local_model_resolved(),
+                )
+                .await,
+                ExecApprovalRequirement::Forbidden { .. }
+            ),
+            "{command:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn incomplete_untrusted_posix_analysis_respects_granular_sandbox_approval() {
+    let opaque = vec_str(&["/workspace/bin/sh", "-c", "echo hi > marker"]);
+
+    for (sandbox_approval, expected) in [
+        (
+            false,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            true,
+            ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+        ),
+    ] {
+        assert_eq!(
+            requirement_with_provenance(
+                /*policy_src*/ None,
+                &opaque,
+                AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval,
+                    rules: false,
+                    skill_approval: true,
+                    request_permissions: true,
+                    mcp_elicitations: true,
+                }),
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::UseDefault,
+                ShellApprovalProvenance::local_model_resolved(),
+            )
+            .await,
+            expected,
+            "sandbox_approval={sandbox_approval}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn delegators_fail_closed_but_literal_shell_name_arguments_remain_complete() {
+    let echo_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
+    for script in [
+        "env bash -c 'echo hidden'",
+        "command ./bash -c 'echo hidden'",
+        "exec bash -c 'echo hidden'",
+        "eval 'echo hidden'",
+        ". ./payload.sh",
+        "source ./payload.sh",
+        "trap 'rm -rf target' EXIT",
+        "xargs rm -rf",
+        "find . -name target -exec rm -rf {} ';'",
+        "dash -c 'rm -rf target'",
+        "env FOO=bar -u bash",
+        r#""$CMD" arg"#,
+    ] {
+        let delegated = vec![
+            "/workspace/bin/sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+        ];
+        for provenance in [
+            ShellApprovalProvenance::local_model_resolved(),
+            ShellApprovalProvenance::configured(),
+        ] {
+            assert!(
+                matches!(
+                    requirement_with_provenance(
+                        Some(&echo_allow),
+                        &delegated,
+                        AskForApproval::OnRequest,
+                        PermissionProfile::workspace_write(),
+                        SandboxPermissions::UseDefault,
+                        provenance,
+                    )
+                    .await,
+                    ExecApprovalRequirement::Forbidden { .. }
+                ),
+                "{script}, {provenance:?}",
+            );
+        }
+    }
+
+    let literal = vec![
+        host_program_path("sh"),
+        "-c".to_string(),
+        "echo bash".to_string(),
+    ];
+    let full_outer_allow = prefix_rule_for(&literal, "allow");
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&format!("{full_outer_allow}\n{echo_allow}")),
+            &literal,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+}
+
+#[tokio::test]
+async fn configured_delegators_without_rules_preserve_legacy_sandboxed_behavior() {
+    for script in [
+        "env echo hi",
+        "sudo echo hi",
+        "xargs echo",
+        "find . -exec echo {} ';'",
+    ] {
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ];
+        for provenance in [
+            ShellApprovalProvenance::configured(),
+            ShellApprovalProvenance::remote_model_hint(),
+        ] {
+            assert!(
+                matches!(
+                    requirement_with_provenance(
+                        /*policy_src*/ None,
+                        &command,
+                        AskForApproval::OnRequest,
+                        PermissionProfile::workspace_write(),
+                        SandboxPermissions::UseDefault,
+                        provenance,
+                    )
+                    .await,
+                    ExecApprovalRequirement::Skip {
+                        bypass_sandbox: false,
+                        ..
+                    }
+                ),
+                "{script}, {provenance:?}",
+            );
+        }
+
+        assert_eq!(
+            requirement_with_provenance(
+                /*policy_src*/ None,
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::UseDefault,
+                ShellApprovalProvenance::local_model_resolved(),
+            )
+            .await,
+            ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+            "{script}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn posix_wrappers_require_complete_authority_without_filesystem_containment() {
+    let inner = vec_str(&["echo", "hello"]);
+    let model_command = vec![
+        host_program_path("zsh"),
+        "-lc".to_string(),
+        shlex_try_join(inner.iter().map(String::as_str)).expect("quote inner command"),
+    ];
+    let full_inner_allow = prefix_rule_for(&inner, "allow");
+    let full_model_outer_allow = prefix_rule_for(&model_command, "allow");
+    let nested_wrapper = vec![
+        posix_script_program_path("sh"),
+        "-c".to_string(),
+        shlex_try_join(inner.iter().map(String::as_str)).expect("quote nested body"),
+    ];
+    let configured_command = vec![
+        host_program_path("zsh"),
+        "-lc".to_string(),
+        shlex_try_join(nested_wrapper.iter().map(String::as_str)).expect("quote nested wrapper"),
+    ];
+    let full_nested_wrapper_allow = prefix_rule_for(&nested_wrapper, "allow");
+
+    for (name, provenance, command, partial_policy, full_policy) in [
+        (
+            "local model-resolved wrapper",
+            ShellApprovalProvenance::local_model_resolved(),
+            model_command,
+            full_model_outer_allow.clone(),
+            format!("{full_model_outer_allow}\n{full_inner_allow}"),
+        ),
+        (
+            "configured nested wrapper",
+            ShellApprovalProvenance::configured(),
+            configured_command,
+            full_nested_wrapper_allow.clone(),
+            format!("{full_nested_wrapper_allow}\n{full_inner_allow}"),
+        ),
+    ] {
+        assert_eq!(
+            requirement_with_provenance(
+                Some(&partial_policy),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::Disabled,
+                SandboxPermissions::UseDefault,
+                provenance,
+            )
+            .await,
+            ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+            "partial authority must prompt for {name}",
+        );
+        assert_eq!(
+            requirement_with_provenance(
+                Some(&full_policy),
+                &command,
+                AskForApproval::OnRequest,
+                PermissionProfile::Disabled,
+                SandboxPermissions::UseDefault,
+                provenance,
+            )
+            .await,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+            "complete authority remains sufficient for {name}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn configured_exact_allow_can_authorize_an_opaque_nested_shell_only() {
+    let inner = vec![
+        posix_script_program_path("sh"),
+        "/tmp/approved-script".to_string(),
+    ];
+    let command = vec![
+        host_program_path("zsh"),
+        "-lc".to_string(),
+        shlex_try_join(inner.iter().map(String::as_str)).expect("quote nested shell command"),
+    ];
+    let inner_allow = prefix_rule_for(&inner, "allow");
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&inner_allow),
+            &command,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    let outer_allow = prefix_rule_for(&command, "allow");
+    assert!(matches!(
+        requirement_with_provenance(
+            Some(&format!("{outer_allow}\n{inner_allow}")),
+            &command,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::local_model_resolved(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden { .. }
+    ));
+}
+
+#[tokio::test]
+async fn bare_nested_shell_allow_never_establishes_wrapper_authority() {
+    let outer_shell = host_program_path("zsh");
+    let bare_wrapper = vec_str(&["bash", "-lc", "echo hello"]);
+    let bare = vec![
+        outer_shell.clone(),
+        "-lc".to_string(),
+        shlex_try_join(bare_wrapper.iter().map(String::as_str)).expect("quote bare nested wrapper"),
+    ];
+    let echo_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
+    let bare_rules = format!("{}\n{echo_allow}", prefix_rule_for(&bare_wrapper, "allow"));
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&bare_rules),
+            &bare,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&bare_rules),
+            &bare,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+        },
+    );
+
+    let relative_wrapper = vec_str(&["./bash", "-lc", "echo hello"]);
+    let relative = vec![
+        outer_shell.clone(),
+        "-lc".to_string(),
+        shlex_try_join(relative_wrapper.iter().map(String::as_str))
+            .expect("quote relative nested wrapper"),
+    ];
+    let relative_rules = format!(
+        "{}\n{echo_allow}",
+        prefix_rule_for(&relative_wrapper, "allow")
+    );
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&relative_rules),
+            &relative,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&relative_rules),
+            &relative,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden {
+            reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+        },
+    );
+
+    let absolute_wrapper = vec![
+        posix_script_program_path("bash"),
+        "-lc".to_string(),
+        "echo hello".to_string(),
+    ];
+    let absolute = vec![
+        outer_shell.clone(),
+        "-lc".to_string(),
+        shlex_try_join(absolute_wrapper.iter().map(String::as_str))
+            .expect("quote absolute nested wrapper"),
+    ];
+    let absolute_rules = format!(
+        "{}\n{echo_allow}",
+        prefix_rule_for(&absolute_wrapper, "allow")
+    );
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&absolute_rules),
+            &absolute,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    let opaque_bare = vec![outer_shell, "-lc".to_string(), "bash".to_string()];
+    let opaque_bare_allow = prefix_rule_for(&vec_str(&["bash"]), "allow");
+    assert!(matches!(
+        requirement_with_provenance(
+            Some(&opaque_bare_allow),
+            &opaque_bare,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Forbidden { .. }
+    ));
+}
+
+#[test]
+fn wrapper_authority_uses_controller_native_absolute_paths() {
+    assert!(executable_spelling_is_absolute(&host_program_path("bash")));
+
+    let foreign_absolute = if cfg!(windows) {
+        "/usr/bin/bash"
+    } else {
+        r"C:\Program Files\Git\bin\bash.exe"
+    };
+    assert!(
+        !executable_spelling_is_absolute(foreign_absolute),
+        "foreign-target absolute paths conservatively cannot establish bypass authority"
+    );
+}
+
+#[test]
+fn posix_analysis_is_bounded_and_plain_find_is_not_a_delegator() {
+    for query in [
+        vec_str(&["command", "-v", "bash"]),
+        vec_str(&["trap", "-p"]),
+    ] {
+        assert!(
+            !command_may_hide_nested_execution(&query),
+            "query-only form was classified as a delegator: {query:?}"
+        );
+    }
+    for external in [
+        vec_str(&["/repo/command", "-v", "bash"]),
+        vec_str(&["./trap", "-p"]),
+        vec_str(&["command.exe", "-v", "bash"]),
+        vec_str(&["COMMAND", "-v", "bash"]),
+    ] {
+        assert!(
+            command_may_hide_nested_execution(&external),
+            "external executable was treated as a shell builtin: {external:?}"
+        );
+    }
+
+    let mut nested_script = "echo leaf".to_string();
+    for _ in 0..=MAX_POSIX_POLICY_DEPTH {
+        nested_script = format!(
+            "bash -lc {}",
+            shlex_try_join([nested_script.as_str()]).expect("quote nested script")
+        );
+    }
+    let depth_limited = vec!["/bin/bash".to_string(), "-lc".to_string(), nested_script];
+    let depth_analysis = analyze_posix_policy(
+        &depth_limited,
+        ShellApprovalProvenance::local_model_resolved(),
+    )
+    .expect("POSIX analysis");
+    assert_eq!(
+        depth_analysis.completeness,
+        PosixAnalysisCompleteness::Incomplete
+    );
+    assert!(depth_analysis.contains_untrusted_wrapper);
+
+    let candidate_script = (0..=MAX_POSIX_POLICY_CANDIDATES)
+        .map(|index| format!("echo value{index}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let candidate_limited = vec!["/bin/bash".to_string(), "-lc".to_string(), candidate_script];
+    let candidate_analysis =
+        analyze_posix_policy(&candidate_limited, ShellApprovalProvenance::configured())
+            .expect("POSIX analysis");
+    assert_eq!(
+        candidate_analysis.completeness,
+        PosixAnalysisCompleteness::Incomplete
+    );
+    assert_eq!(
+        candidate_analysis.candidates.len(),
+        MAX_POSIX_POLICY_CANDIDATES
+    );
+
+    let oversized = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "x".repeat(MAX_POSIX_POLICY_SCRIPT_BYTES + 1),
+    ];
+    let oversized_analysis =
+        analyze_posix_policy(&oversized, ShellApprovalProvenance::local_model_resolved())
+            .expect("POSIX analysis");
+    assert_eq!(
+        oversized_analysis.completeness,
+        PosixAnalysisCompleteness::Incomplete
+    );
+
+    let plain_find = vec_str(&["/bin/bash", "-lc", "find . -name target"]);
+    let plain_find_analysis =
+        analyze_posix_policy(&plain_find, ShellApprovalProvenance::configured())
+            .expect("POSIX analysis");
+    assert_eq!(
+        plain_find_analysis.completeness,
+        PosixAnalysisCompleteness::Complete
+    );
+    assert!(!plain_find_analysis.contains_untrusted_wrapper);
+}
+
+#[tokio::test]
+async fn remote_model_hint_does_not_distrust_the_environment_runtime_but_never_amends() {
+    let safe = vec_str(&["echo", "hello"]);
+    assert_eq!(
+        requirement_with_provenance(
+            /*policy_src*/ None,
+            &safe,
+            AskForApproval::OnRequest,
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::remote_model_hint(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+
+    let unsafe_command = vec_str(&["cargo", "build"]);
+    assert_eq!(
+        requirement_with_provenance(
+            /*policy_src*/ None,
+            &unsafe_command,
+            AskForApproval::UnlessTrusted,
+            PermissionProfile::read_only(),
+            SandboxPermissions::UseDefault,
+            ShellApprovalProvenance::remote_model_hint(),
+        )
+        .await,
+        ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+    );
+}
+
+#[tokio::test]
+async fn model_resolved_rule_and_permission_prompts_require_both_granular_categories() {
+    let command = vec_str(&["/workspace/bin/sh", "-c", "echo hello"]);
+    let policy_src = format!(
+        "{}\n{}\n{}",
+        prefix_rule_for(&command, "allow"),
+        prefix_rule_for(&vec_str(&["echo"]), "allow"),
+        prefix_rule_for(&vec_str(&["echo", "hello"]), "prompt"),
+    );
+    let rendered = render_shlex_command(&command);
+
+    for (rules, sandbox_approval, expected) in [
+        (
+            false,
+            true,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            true,
+            false,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+            },
+        ),
+        (
+            true,
+            true,
+            ExecApprovalRequirement::NeedsOneShotApproval {
+                reason: Some(format!("`{rendered}` requires approval by policy")),
+            },
+        ),
+    ] {
+        assert_eq!(
+            requirement_with_provenance(
+                Some(&policy_src),
+                &command,
+                AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval,
+                    rules,
+                    skill_approval: true,
+                    request_permissions: true,
+                    mcp_elicitations: true,
+                }),
+                PermissionProfile::workspace_write(),
+                SandboxPermissions::RequireEscalated,
+                ShellApprovalProvenance::local_model_resolved(),
+            )
+            .await,
+            expected,
+            "rules={rules}, sandbox_approval={sandbox_approval}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_selected_requested_prefix_cannot_reenable_an_amendment() {
+    let command = vec_str(&["/workspace/bin/sh", "-c", "echo hello"]);
+    let requirement = ExecPolicyManager::default()
+        .create_exec_approval_requirement_for_command_with_provenance(
+            ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                permission_profile: PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: Some(vec_str(&["echo"])),
+            },
+            ShellApprovalProvenance::local_model_resolved(),
+            /*permission_expansion_was_requested*/ false,
+        )
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsOneShotApproval { reason: None },
+    );
+}
+
+#[tokio::test]
+async fn preapproved_permission_expansion_cannot_generate_a_sticky_amendment() {
+    let command = vec_str(&["cargo", "build"]);
+    let manager = ExecPolicyManager::default();
+    for (sandbox_permissions, permission_expansion_was_requested) in [
+        (SandboxPermissions::UseDefault, true),
+        (SandboxPermissions::RequireEscalated, false),
+    ] {
+        let requirement = manager
+            .create_exec_approval_requirement_for_configured_command(
+                ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::UnlessTrusted,
+                    permission_profile: PermissionProfile::read_only(),
+                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    sandbox_permissions,
+                    prefix_rule: Some(vec_str(&["cargo"])),
+                },
+                permission_expansion_was_requested,
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+            "sandbox_permissions={sandbox_permissions:?}, permission_expansion_was_requested={permission_expansion_was_requested}",
+        );
+    }
+}
+
+#[test]
 fn managed_cwd_write_profile_has_filesystem_restrictions() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -1233,10 +2308,7 @@ async fn exec_approval_requirement_prompts_for_inline_additional_permissions_und
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "touch".to_string(),
-                "requested-dir/requested-but-unused.txt".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1255,10 +2327,7 @@ async fn exec_approval_requirement_prompts_for_known_safe_escalation_under_on_re
         },
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "echo".to_string(),
-                "hello".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         },
     )
     .await;
@@ -1373,6 +2442,97 @@ async fn mixed_rule_and_sandbox_prompt_requires_every_granular_category_in_eithe
 }
 
 #[tokio::test]
+async fn same_command_policy_prompt_and_sandbox_override_require_both_categories() {
+    let command = vec_str(&["git", "status"]);
+    let prompt_policies = [
+        prefix_rule_for(&vec_str(&["git"]), "prompt"),
+        format!(
+            "{}\n{}",
+            prefix_rule_for(&vec_str(&["git"]), "allow"),
+            prefix_rule_for(&command, "prompt"),
+        ),
+        format!(
+            "{}\n{}",
+            prefix_rule_for(&vec_str(&["git"]), "prompt"),
+            prefix_rule_for(&command, "allow"),
+        ),
+    ];
+
+    for policy_src in prompt_policies {
+        for (rules, sandbox_approval, expected) in [
+            (
+                false,
+                true,
+                ExecApprovalRequirement::Forbidden {
+                    reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+                },
+            ),
+            (
+                true,
+                false,
+                ExecApprovalRequirement::Forbidden {
+                    reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+                },
+            ),
+            (
+                true,
+                true,
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!(
+                        "`{}` requires approval by policy",
+                        render_shlex_command(&command)
+                    )),
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+        ] {
+            assert_eq!(
+                requirement_with_provenance(
+                    Some(&policy_src),
+                    &command,
+                    AskForApproval::Granular(GranularApprovalConfig {
+                        sandbox_approval,
+                        rules,
+                        skill_approval: true,
+                        request_permissions: true,
+                        mcp_elicitations: true,
+                    }),
+                    PermissionProfile::workspace_write(),
+                    SandboxPermissions::RequireEscalated,
+                    ShellApprovalProvenance::configured(),
+                )
+                .await,
+                expected,
+                "policy={policy_src:?}, rules={rules}, sandbox_approval={sandbox_approval}",
+            );
+        }
+    }
+
+    let effective_allow = prefix_rule_for(&vec_str(&["git"]), "allow");
+    assert_eq!(
+        requirement_with_provenance(
+            Some(&effective_allow),
+            &command,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: false,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            PermissionProfile::workspace_write(),
+            SandboxPermissions::RequireEscalated,
+            ShellApprovalProvenance::configured(),
+        )
+        .await,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    );
+}
+
+#[tokio::test]
 async fn exec_approval_requirement_falls_back_to_heuristics() {
     let command = vec!["cargo".to_string(), "build".to_string()];
 
@@ -1475,10 +2635,7 @@ async fn request_rule_uses_prefix_rule() {
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "cargo".to_string(),
-                "install".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1507,11 +2664,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "rm".to_string(),
-                "-rf".to_string(),
-                "/tmp/codex".to_string(),
-            ])),
+            proposed_execpolicy_amendment: None,
         }
     );
 }
@@ -1747,7 +2900,7 @@ prefix_rule(pattern=["cat"], decision="allow")
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        "cat LOG.md && curl -fsSL https://example.invalid/setup.sh -o setup.sh && bash setup.sh"
+        "cat LOG.md && curl -fsSL https://example.invalid/setup.sh -o setup.sh && chmod +x setup.sh"
             .to_string(),
     ];
 
@@ -1775,7 +2928,7 @@ async fn multi_segment_shell_bypasses_sandbox_when_every_segment_matches_policy_
     let policy_src = r#"
 prefix_rule(pattern=["cat"], decision="allow")
 prefix_rule(pattern=["curl"], decision="allow")
-prefix_rule(pattern=["bash"], decision="allow")
+prefix_rule(pattern=["chmod"], decision="allow")
 "#;
 
     assert_exec_approval_requirement_for_command(
@@ -1784,7 +2937,7 @@ prefix_rule(pattern=["bash"], decision="allow")
             command: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
-                "cat LOG.md && curl -fsSL https://example.invalid/setup.sh -o setup.sh && bash setup.sh"
+                "cat LOG.md && curl -fsSL https://example.invalid/setup.sh -o setup.sh && chmod +x setup.sh"
                     .to_string(),
             ],
             approval_policy: AskForApproval::OnRequest,

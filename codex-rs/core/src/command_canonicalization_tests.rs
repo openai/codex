@@ -2,6 +2,10 @@ use super::canonicalize_command_for_approval;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 
+fn posix(shell: &str, mode: &str, script: &str) -> Vec<String> {
+    vec![shell.to_string(), mode.to_string(), script.to_string()]
+}
+
 fn powershell(executable: &str, command_flag: &str, script: &str) -> Vec<String> {
     vec![
         executable.to_string(),
@@ -12,54 +16,58 @@ fn powershell(executable: &str, command_flag: &str, script: &str) -> Vec<String>
 }
 
 #[test]
-fn canonicalizes_word_only_shell_scripts_to_inner_command() {
-    let command_a = vec![
-        "/bin/bash".to_string(),
-        "-lc".to_string(),
-        "cargo test -p codex-core".to_string(),
-    ];
-    let command_b = vec![
-        "bash".to_string(),
-        "-lc".to_string(),
-        "cargo   test   -p codex-core".to_string(),
+fn preserves_exact_posix_approval_identity() {
+    let base = posix("/bin/bash", "-lc", "printf '%s\\n' value");
+    let commands = vec![
+        base.clone(),
+        posix("bash", "-lc", "printf '%s\\n' value"),
+        posix("./bash", "-lc", "printf '%s\\n' value"),
+        posix("/tmp/workspace/bash", "-lc", "printf '%s\\n' value"),
+        posix("/bin/zsh", "-lc", "printf '%s\\n' value"),
+        posix("/bin/sh", "-lc", "printf '%s\\n' value"),
+        posix("/bin/bash", "-c", "printf '%s\\n' value"),
+        posix("/bin/bash", "-lc", "printf  '%s\\n'  value"),
+        posix("/bin/bash", "-lc", "printf \"%s\\n\" value"),
+        posix("/bin/bash", "-lc", "printf '%s\\n' *"),
+        posix("/bin/bash", "-lc", "printf '%s\\n' ~"),
+        posix("/bin/bash", "-lc", "printf '%s\\n' \"$(id)\""),
+        posix("/bin/bash", "-lc", "printf '%s\\n' value >out"),
+        posix("/bin/bash", "-lc", "python3 <<'PY'\nprint('value')\nPY"),
+        posix("/bin/bash", "-lc", ""),
+        posix("/bin/bash", "-lc", "printf '%s\\n' changed"),
+        vec![
+            "printf".to_string(),
+            "%s\\n".to_string(),
+            "value".to_string(),
+        ],
     ];
 
+    let keys: HashSet<_> = commands
+        .iter()
+        .map(|command| canonicalize_command_for_approval(command))
+        .collect();
+
+    assert_eq!(keys.len(), commands.len());
     assert_eq!(
-        canonicalize_command_for_approval(&command_a),
-        vec![
-            "cargo".to_string(),
-            "test".to_string(),
-            "-p".to_string(),
-            "codex-core".to_string(),
-        ]
+        canonicalize_command_for_approval(&base),
+        canonicalize_command_for_approval(&base)
     );
-    assert_eq!(
-        canonicalize_command_for_approval(&command_a),
-        canonicalize_command_for_approval(&command_b)
-    );
+    for command in commands {
+        assert_eq!(canonicalize_command_for_approval(&command), command);
+    }
 }
 
 #[test]
-fn canonicalizes_heredoc_scripts_to_stable_script_key() {
-    let script = "python3 <<'PY'\nprint('hello')\nPY";
-    let command_a = vec![
-        "/bin/zsh".to_string(),
-        "-lc".to_string(),
-        script.to_string(),
-    ];
-    let command_b = vec!["zsh".to_string(), "-lc".to_string(), script.to_string()];
+fn posix_identity_does_not_collide_with_raw_marker_argv() {
+    let shell = posix("/bin/bash", "-lc", "echo marker");
+    let mut marker_argv = vec!["__codex_shell_script__".to_string()];
+    marker_argv.extend(shell.iter().cloned());
 
-    assert_eq!(
-        canonicalize_command_for_approval(&command_a),
-        vec![
-            "__codex_shell_script__".to_string(),
-            "-lc".to_string(),
-            script.to_string(),
-        ]
-    );
-    assert_eq!(
-        canonicalize_command_for_approval(&command_a),
-        canonicalize_command_for_approval(&command_b)
+    assert_eq!(canonicalize_command_for_approval(&shell), shell);
+    assert_eq!(canonicalize_command_for_approval(&marker_argv), marker_argv);
+    assert_ne!(
+        canonicalize_command_for_approval(&shell),
+        canonicalize_command_for_approval(&marker_argv)
     );
 }
 

@@ -280,13 +280,100 @@ fn create_env_preserves_existing_pathext_case_insensitively_on_windows() {
 
     let result = create_env_from_vars(vars, &policy, /*thread_id*/ None);
 
-    let pathext_vars = result
-        .iter()
-        .filter(|(key, _)| key.eq_ignore_ascii_case("PATHEXT"))
-        .collect::<Vec<_>>();
+    assert_eq!(
+        result,
+        HashMap::from([(
+            "PATHEXT".to_string(),
+            ".COM;.EXE;.BAT;.CMD;.PS1".to_string(),
+        )])
+    );
+}
 
-    assert_eq!(pathext_vars.len(), 1);
-    assert_eq!(pathext_vars[0].1, ".COM;.EXE;.BAT;.CMD;.PS1");
+#[test]
+#[cfg(target_os = "windows")]
+fn create_env_prefers_configured_canonical_path_over_inherited_aliases() {
+    let vars = make_vars(&[
+        ("Path", "C:\\inherited-mixed"),
+        ("path", "C:\\inherited-lower"),
+    ]);
+    let mut policy = ShellEnvironmentPolicy {
+        inherit: ShellEnvironmentPolicyInherit::All,
+        ignore_default_excludes: true,
+        ..Default::default()
+    };
+    policy
+        .r#set
+        .insert("PATH".to_string(), "C:\\configured".to_string());
+
+    let result = create_env_from_vars(vars, &policy, /*thread_id*/ None);
+
+    assert_eq!(
+        result.get("PATH").map(String::as_str),
+        Some("C:\\configured")
+    );
+    assert_eq!(
+        result
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("PATH"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn create_env_prefers_configured_path_alias_over_inherited_canonical_key() {
+    let vars = make_vars(&[("PATH", "C:\\inherited")]);
+    let mut policy = ShellEnvironmentPolicy {
+        inherit: ShellEnvironmentPolicyInherit::All,
+        ignore_default_excludes: true,
+        ..Default::default()
+    };
+    policy
+        .r#set
+        .insert("path".to_string(), "C:\\configured-alias".to_string());
+
+    let result = create_env_from_vars(vars, &policy, /*thread_id*/ None);
+
+    assert_eq!(
+        result.get("PATH").map(String::as_str),
+        Some("C:\\configured-alias")
+    );
+    assert_eq!(
+        result
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("PATH"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn create_env_prefers_configured_canonical_pathext_and_removes_aliases() {
+    let vars = make_vars(&[("PathExt", ".COM;.EXE;.BAT;.CMD")]);
+    let mut policy = ShellEnvironmentPolicy {
+        inherit: ShellEnvironmentPolicyInherit::All,
+        ignore_default_excludes: true,
+        ..Default::default()
+    };
+    policy
+        .r#set
+        .insert("pathext".to_string(), ".EXE;.CMD".to_string());
+    policy
+        .r#set
+        .insert("PATHEXT".to_string(), ".EXE".to_string());
+
+    let result = create_env_from_vars(vars, &policy, /*thread_id*/ None);
+
+    assert_eq!(result.get("PATHEXT").map(String::as_str), Some(".EXE"));
+    assert_eq!(
+        result
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case("PATHEXT"))
+            .count(),
+        1
+    );
 }
 
 #[test]

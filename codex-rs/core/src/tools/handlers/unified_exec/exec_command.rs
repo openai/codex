@@ -1,8 +1,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::exec_env::create_env;
+use crate::exec_policy::ShellApprovalProvenance;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
+use crate::shell::resolve_model_provided_shell_in;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -32,7 +35,7 @@ use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_shell_command::shell_detect::detect_shell_type;
+use codex_shell_command::shell_detect::detect_shell_type_from_hint;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
@@ -56,6 +59,29 @@ pub(crate) struct ExecCommandHandlerOptions {
 
 pub struct ExecCommandHandler {
     options: ExecCommandHandlerOptions,
+}
+
+#[cfg(windows)]
+pub(super) fn shell_environment_value<'a>(
+    environment: &'a std::collections::HashMap<String, String>,
+    name: &str,
+) -> Option<&'a str> {
+    if let Some(value) = environment.get(name) {
+        return Some(value);
+    }
+    environment
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .min_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, value)| value.as_str())
+}
+
+#[cfg(not(windows))]
+pub(super) fn shell_environment_value<'a>(
+    environment: &'a std::collections::HashMap<String, String>,
+    name: &str,
+) -> Option<&'a str> {
+    environment.get(name).map(String::as_str)
 }
 
 impl Default for ExecCommandHandler {
@@ -204,41 +230,83 @@ impl ExecCommandHandler {
             shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         // Remote environments may use a different OS and must build commands with their native
         // shell; fall back to the session shell when the environment did not report one.
-        let shell = turn_environment
+        let environment_shell = turn_environment
             .shell
             .clone()
             .map(Arc::new)
             .unwrap_or_else(|| session.user_shell());
-        // TODO(anp): Resolve requested shells in remote environments instead of restricting
-        // commands to the reported default shell.
-        if environment.is_remote()
-            && let Some(requested_shell) = args.shell.take()
-        {
-            let Some(remote_shell) = turn_environment.shell.as_ref() else {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "environment `{}` does not report a shell",
-                    turn_environment.environment_id
-                )));
-            };
-            if detect_shell_type(Path::new(&requested_shell)) != Some(remote_shell.shell_type) {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "environment `{}` only supports `{}`",
-                    turn_environment.environment_id,
-                    remote_shell.name()
-                )));
+        let (selected_shell, shell_approval_provenance) = if environment.is_remote() {
+            match args.shell.take() {
+                Some(requested_shell) => {
+                    let Some(remote_shell) = turn_environment.shell.as_ref() else {
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "environment `{}` does not report a shell",
+                            turn_environment.environment_id
+                        )));
+                    };
+                    if detect_shell_type_from_hint(&requested_shell)
+                        != Some(remote_shell.shell_type)
+                    {
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "environment `{}` only supports `{}`",
+                            turn_environment.environment_id,
+                            remote_shell.name()
+                        )));
+                    }
+                    (
+                        Arc::new(remote_shell.clone()),
+                        ShellApprovalProvenance::remote_model_hint(),
+                    )
+                }
+                None => (environment_shell, ShellApprovalProvenance::configured()),
             }
-        }
-        let process_id = manager.allocate_process_id().await;
+        } else if matches!(&shell_mode, codex_tools::UnifiedExecShellMode::Direct) {
+            match args.shell.as_deref() {
+                Some(requested_shell) => {
+                    let resolution_cwd = native_cwd.as_ref().ok_or_else(|| {
+                        FunctionCallError::RespondToModel(
+                            "cannot resolve a local shell against a foreign working directory"
+                                .to_string(),
+                        )
+                    })?;
+                    let shell_env = create_env(
+                        &turn.config.permissions.shell_environment_policy,
+                        /*thread_id*/ None,
+                    );
+                    let search_path =
+                        shell_environment_value(&shell_env, "PATH").unwrap_or_default();
+                    let path_ext =
+                        shell_environment_value(&shell_env, "PATHEXT").map(std::ffi::OsStr::new);
+                    let resolved_shell = resolve_model_provided_shell_in(
+                        Path::new(requested_shell),
+                        std::ffi::OsStr::new(search_path),
+                        path_ext,
+                        resolution_cwd.as_path(),
+                    )
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                    (
+                        Arc::new(resolved_shell),
+                        ShellApprovalProvenance::local_model_resolved(),
+                    )
+                }
+                None => (environment_shell, ShellApprovalProvenance::configured()),
+            }
+        } else {
+            (environment_shell, ShellApprovalProvenance::configured())
+        };
         let resolved_command = get_command(
             &args,
-            shell,
+            selected_shell,
+            shell_approval_provenance,
             &shell_mode,
             turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
         let shell_type = resolved_command.shell_type;
+        let shell_approval_provenance = resolved_command.shell_approval_provenance;
         let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+        let process_id = manager.allocate_process_id().await;
 
         let ExecCommandArgs {
             tty,
@@ -361,6 +429,7 @@ impl ExecCommandHandler {
                         .permissions_preapproved,
                     justification,
                     prefix_rule,
+                    shell_approval_provenance,
                 },
                 &context,
             )

@@ -46,6 +46,12 @@ enum PushedExecScenario {
     ReplayGap,
 }
 
+#[derive(Debug)]
+struct ExecServerObservation {
+    process_read_requests: usize,
+    process_start_argv: Vec<String>,
+}
+
 async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Value {
     loop {
         match timeout(Duration::from_secs(5), websocket.next())
@@ -109,7 +115,7 @@ async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
 async fn serve_exec_with_pushed_events(
     listener: TcpListener,
     scenario: PushedExecScenario,
-) -> usize {
+) -> ExecServerObservation {
     let mut websocket = accept_initialized_exec_server(listener).await;
     send_environment_info(&mut websocket).await;
 
@@ -144,6 +150,16 @@ async fn serve_exec_with_pushed_events(
         .as_str()
         .expect("process/start should include processId")
         .to_string();
+    let process_start_argv = process_start["params"]["argv"]
+        .as_array()
+        .expect("process/start should include argv")
+        .iter()
+        .map(|arg| {
+            arg.as_str()
+                .expect("process/start argv entries should be strings")
+                .to_string()
+        })
+        .collect();
 
     let replay_output = |seq| -> &'static [u8] {
         match seq {
@@ -350,7 +366,10 @@ async fn serve_exec_with_pushed_events(
                     }),
                 )
                 .await;
-                return process_read_requests;
+                return ExecServerObservation {
+                    process_read_requests,
+                    process_start_argv,
+                };
             }
             method => panic!("unexpected exec-server request: {method:?}"),
         }
@@ -448,7 +467,7 @@ async fn exec_command_consumes_pushed_remote_process_events(
             _ => {}
         }
     }
-    let process_read_requests = timeout(Duration::from_secs(5), exec_server)
+    let observation = timeout(Duration::from_secs(5), exec_server)
         .await
         .context("fake exec-server should observe process cleanup")??;
     let request = response_mock
@@ -464,26 +483,161 @@ async fn exec_command_consumes_pushed_remote_process_events(
             assert!(saw_exec_command_begin);
             assert!(output.contains("Process exited with code 0"));
             assert!(output.contains(COMPLETE_OUTPUT));
-            assert_eq!(process_read_requests, 0, "unexpected compatibility read");
+            assert_eq!(
+                observation.process_read_requests, 0,
+                "unexpected compatibility read"
+            );
         }
         PushedExecScenario::DirectDenied => {
             assert!(!saw_exec_command_begin);
             assert!(output.contains("Process exited with code 1"));
-            assert_eq!(process_read_requests, 0, "unexpected compatibility read");
+            assert_eq!(
+                observation.process_read_requests, 0,
+                "unexpected compatibility read"
+            );
         }
         PushedExecScenario::LegacyExit => {
             assert!(!saw_exec_command_begin);
             assert!(output.contains("Process exited with code 1"));
-            assert_eq!(process_read_requests, 1, "expected compatibility read");
+            assert_eq!(
+                observation.process_read_requests, 1,
+                "expected compatibility read"
+            );
         }
         PushedExecScenario::ReplayGap => {
             assert_ne!(success, Some(false));
             assert!(saw_exec_command_begin);
             assert_eq!(output.matches(RECOVERED_OUTPUT).count(), 1);
             assert_eq!(output.matches(RETAINED_OUTPUT).count(), 1);
-            assert_eq!(process_read_requests, 1, "expected replay recovery read");
+            assert_eq!(
+                observation.process_read_requests, 1,
+                "expected replay recovery read"
+            );
         }
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_explicit_shell_hint_uses_environment_reported_executable() -> Result<()> {
+    const MODEL_SHELL_HINT: &str = r"C:\attacker\ZSH.ExE";
+    const COMMAND: &str = "echo remote-hint-ok";
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    CALL_ID,
+                    "exec_command",
+                    &json!({
+                        "shell": MODEL_SHELL_HINT,
+                        "cmd": COMMAND,
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let exec_server_url = format!("ws://{}", listener.local_addr()?);
+    let exec_server = tokio::spawn(serve_exec_with_pushed_events(
+        listener,
+        PushedExecScenario::Complete,
+    ));
+    let mut builder = test_codex()
+        .with_exec_server_url(exec_server_url)
+        .with_config(|config| {
+            config.project_doc_max_bytes = 0;
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = timeout(Duration::from_secs(5), builder.build(&server))
+        .await
+        .context("thread startup should connect to the fake exec-server")??;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a remote command with an explicit shell hint".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+    loop {
+        let event = timeout(Duration::from_secs(5), test.codex.next_event())
+            .await
+            .context("turn should complete")??
+            .msg;
+        if matches!(event, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    let observation = timeout(Duration::from_secs(5), exec_server)
+        .await
+        .context("fake exec-server should observe process cleanup")??;
+    assert_eq!(
+        observation.process_start_argv,
+        ["/bin/zsh", "-c", COMMAND],
+        "the model hint must not replace the environment-reported shell"
+    );
+    assert!(
+        observation
+            .process_start_argv
+            .iter()
+            .all(|arg| !arg.to_ascii_lowercase().contains("attacker")),
+        "process/start must not contain the model-supplied path"
+    );
+    assert_eq!(
+        observation.process_read_requests, 0,
+        "unexpected compatibility read"
+    );
+
+    let request = response_mock
+        .last_request()
+        .context("model should receive the exec_command output")?;
+    let (output, success) = request
+        .function_call_output_content_and_success(CALL_ID)
+        .context("exec_command output should be model visible")?;
+    let output = output.context("exec_command output should contain text")?;
+    assert_ne!(success, Some(false));
+    assert!(output.contains("Process exited with code 0"));
+    assert!(output.contains(COMPLETE_OUTPUT));
 
     Ok(())
 }

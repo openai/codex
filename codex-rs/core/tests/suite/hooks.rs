@@ -38,8 +38,8 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_target_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
@@ -4012,7 +4012,10 @@ async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
 #[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_host_windows!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "uses a POSIX delayed-output command to exercise session completion"
+    );
 
     let server = start_mock_server().await;
     let start_call_id = "posttooluse-exec-session-start";
@@ -4020,7 +4023,6 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     let command = "sleep 1; printf session-post-hook-output".to_string();
     let start_args = serde_json::json!({
         "cmd": command,
-        "shell": "/bin/sh",
         "login": false,
         "tty": false,
         "yield_time_ms": 250,

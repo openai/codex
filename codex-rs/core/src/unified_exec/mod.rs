@@ -36,6 +36,7 @@ use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 
+use crate::exec_policy::ShellApprovalProvenance;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -107,6 +108,7 @@ pub(crate) struct ExecCommandRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
+    pub shell_approval_provenance: ShellApprovalProvenance,
 }
 
 #[derive(Debug)]

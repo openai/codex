@@ -1120,6 +1120,43 @@ mod tests {
         assert_eq!(child_env(&params), expected);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_env_policy_rebuild_coalesces_windows_shell_search_variables() {
+        let mut params = test_exec_params(HashMap::new());
+        params.env_policy = Some(ExecEnvPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::from([
+                ("Path".to_string(), r"C:\configured-alias".to_string()),
+                ("PATH".to_string(), r"C:\configured-canonical".to_string()),
+                ("PathExt".to_string(), ".EXE;.CMD".to_string()),
+            ]),
+            include_only: Vec::new(),
+        });
+
+        let env = child_env(&params);
+
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some(r"C:\configured-canonical")
+        );
+        assert_eq!(env.get("PATHEXT").map(String::as_str), Some(".EXE;.CMD"));
+        assert_eq!(
+            env.keys()
+                .filter(|key| key.eq_ignore_ascii_case("PATH"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            env.keys()
+                .filter(|key| key.eq_ignore_ascii_case("PATHEXT"))
+                .count(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn exit_before_shutdown_records_success() {
         let (backend, metrics, exporter) = telemetry_backend();
