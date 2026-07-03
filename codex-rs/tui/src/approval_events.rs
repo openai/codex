@@ -53,6 +53,10 @@ impl ExecApprovalRequestEvent {
     pub(crate) fn effective_available_decisions(&self) -> Vec<CommandExecutionApprovalDecision> {
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
+            None if self.approval_id.is_some() => vec![
+                CommandExecutionApprovalDecision::Accept,
+                CommandExecutionApprovalDecision::Cancel,
+            ],
             None => Self::default_available_decisions(
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),

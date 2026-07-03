@@ -11,7 +11,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
-        approval_id: Some("call-short".into()),
+        approval_id: None,
         turn_id: "turn-short".into(),
         environment_id: Some("remote".to_string()),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -377,7 +377,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
-        approval_id: Some("call-multi".into()),
+        approval_id: None,
         turn_id: "turn-multi".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -429,7 +429,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        approval_id: Some("call-long".into()),
+        approval_id: None,
         turn_id: "turn-long".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), long],

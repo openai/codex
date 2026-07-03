@@ -241,6 +241,7 @@ impl App {
                     reason: params.reason.clone(),
                     available_decisions: params.available_decisions.clone().unwrap_or_else(|| {
                         default_exec_approval_decisions(
+                            params.approval_id.as_deref(),
                             network_approval_context.as_ref(),
                             proposed_execpolicy_amendment.as_ref(),
                             proposed_network_policy_amendments.as_deref(),

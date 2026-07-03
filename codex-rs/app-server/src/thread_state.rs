@@ -1,5 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -28,6 +29,13 @@ use tokio::sync::watch;
 use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CommandExecutionItemMetadata {
+    pub(crate) command: String,
+    pub(crate) cwd: LegacyAppPathString,
+    pub(crate) command_actions: Vec<CommandAction>,
+}
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
@@ -70,7 +78,7 @@ pub(crate) enum ThreadListenerCommand {
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
-    pub(crate) command_execution_started: HashSet<String>,
+    pub(crate) command_execution_started: HashMap<String, CommandExecutionItemMetadata>,
     pub(crate) last_error: Option<TurnError>,
 }
 

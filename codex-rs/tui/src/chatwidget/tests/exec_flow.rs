@@ -8,7 +8,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
-        approval_id: Some("call-short".into()),
+        approval_id: None,
         turn_id: "turn-short".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -88,26 +88,30 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    handle_exec_approval_request(
-        &mut chat,
-        "sub-short",
-        ExecApprovalRequestEvent {
-            call_id: "call-parent".into(),
-            approval_id: Some("approval-subcommand".into()),
-            turn_id: "turn-short".into(),
-            environment_id: None,
-            command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
-            reason: Some(
-                "this is a test reason such as one that would be produced by the model".into(),
-            ),
-            network_approval_context: None,
-            proposed_execpolicy_amendment: None,
-            proposed_network_policy_amendments: None,
-            additional_permissions: None,
-            available_decisions: None,
-        },
+    let event = ExecApprovalRequestEvent {
+        call_id: "call-parent".into(),
+        approval_id: Some("approval-subcommand".into()),
+        turn_id: "turn-short".into(),
+        environment_id: None,
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: None,
+    };
+    assert_eq!(
+        event.effective_available_decisions(),
+        vec![
+            codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+            codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel,
+        ]
     );
+    handle_exec_approval_request(&mut chat, "sub-short", event);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
@@ -137,7 +141,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
-        approval_id: Some("call-multi".into()),
+        approval_id: None,
         turn_id: "turn-multi".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -191,7 +195,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        approval_id: Some("call-long".into()),
+        approval_id: None,
         turn_id: "turn-long".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), long],
@@ -1116,7 +1120,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
-        approval_id: Some("call-approve-cmd".into()),
+        approval_id: None,
         turn_id: "turn-approve-cmd".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -1174,7 +1178,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
-        approval_id: Some("call-approve-cmd-noreason".into()),
+        approval_id: None,
         turn_id: "turn-approve-cmd-noreason".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -1221,7 +1225,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
     let command = vec!["bash".into(), "-lc".into(), script];
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-multiline-trunc".into(),
-        approval_id: Some("call-approve-cmd-multiline-trunc".into()),
+        approval_id: None,
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
         environment_id: None,
         command: command.clone(),

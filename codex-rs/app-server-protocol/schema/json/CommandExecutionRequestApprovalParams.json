@@ -521,7 +521,7 @@
   },
   "properties": {
     "approvalId": {
-      "description": "Unique identifier for this specific approval callback.\n\nFor a command item with only one approval callback, this is absent.\n\nWhen multiple callbacks can belong to one parent `itemId` (for example, a zsh-exec-bridge subcommand or an unsandboxed retry), `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
+      "description": "Opaque identifier for this specific approval callback, when present.\n\nUse the JSON-RPC request ID for the response. When tracking callback UI or state outside that envelope, use this instead of `itemId` when it is present. Absence is a legacy/cacheable compatibility path.",
       "type": [
         "string",
         "null"

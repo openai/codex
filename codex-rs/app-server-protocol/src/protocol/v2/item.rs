@@ -1444,13 +1444,11 @@ pub struct CommandExecutionRequestApprovalParams {
     /// Unix timestamp (in milliseconds) when this approval request started.
     #[ts(type = "number")]
     pub started_at_ms: i64,
-    /// Unique identifier for this specific approval callback.
+    /// Opaque identifier for this specific approval callback, when present.
     ///
-    /// For a command item with only one approval callback, this is absent.
-    ///
-    /// When multiple callbacks can belong to one parent `itemId` (for example,
-    /// a zsh-exec-bridge subcommand or an unsandboxed retry), `approvalId` is a
-    /// distinct opaque callback id (a UUID) used to disambiguate routing.
+    /// Use the JSON-RPC request ID for the response. When tracking callback UI
+    /// or state outside that envelope, use this instead of `itemId` when it is
+    /// present. Absence is a legacy/cacheable compatibility path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub approval_id: Option<String>,
