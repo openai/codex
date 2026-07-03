@@ -793,6 +793,91 @@ fn accepted_command_decisions_add_only_exact_proposed_network_denials() {
     }));
 }
 
+#[tokio::test]
+async fn callback_without_explicit_decisions_is_one_shot() {
+    let (session, turn_context, rx_events) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let request = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        async move {
+            session
+                .request_command_approval(
+                    turn_context.as_ref(),
+                    "command-item".to_string(),
+                    Some("callback".to_string()),
+                    /*environment_id*/ None,
+                    vec!["echo".to_string(), "hi".to_string()],
+                    test_path_buf("/tmp").abs(),
+                    /*reason*/ None,
+                    /*network_approval_context*/ None,
+                    /*proposed_execpolicy_amendment*/ None,
+                    /*additional_permissions*/ None,
+                    /*available_decisions*/ None,
+                )
+                .await
+        }
+    });
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("approval event timed out")
+        .expect("approval event missing");
+    let EventMsg::ExecApprovalRequest(event) = event.msg else {
+        panic!("expected exec approval event");
+    };
+    assert_eq!(
+        event.available_decisions,
+        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort])
+    );
+    session
+        .notify_exec_approval("callback", ReviewDecision::Abort)
+        .await;
+    assert_eq!(
+        request.await.expect("approval request task"),
+        ReviewDecision::Abort
+    );
+
+    let explicit_request = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        async move {
+            session
+                .request_command_approval(
+                    turn_context.as_ref(),
+                    "command-item".to_string(),
+                    Some("explicit-callback".to_string()),
+                    /*environment_id*/ None,
+                    vec!["echo".to_string(), "hi".to_string()],
+                    test_path_buf("/tmp").abs(),
+                    /*reason*/ None,
+                    /*network_approval_context*/ None,
+                    /*proposed_execpolicy_amendment*/ None,
+                    /*additional_permissions*/ None,
+                    Some(vec![ReviewDecision::ApprovedForSession]),
+                )
+                .await
+        }
+    });
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("explicit approval event timed out")
+        .expect("explicit approval event missing");
+    let EventMsg::ExecApprovalRequest(event) = event.msg else {
+        panic!("expected exec approval event");
+    };
+    assert_eq!(
+        event.available_decisions,
+        Some(vec![ReviewDecision::ApprovedForSession])
+    );
+    session
+        .notify_exec_approval("explicit-callback", ReviewDecision::ApprovedForSession)
+        .await;
+    assert_eq!(
+        explicit_request.await.expect("explicit approval task"),
+        ReviewDecision::ApprovedForSession
+    );
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DuplicateApprovalRequestKind {
     Exec,

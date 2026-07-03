@@ -2525,6 +2525,49 @@ async fn inactive_thread_exec_approval_preserves_context() {
 }
 
 #[tokio::test]
+async fn callback_exec_approval_falls_back_to_one_shot_decisions() -> std::io::Result<()> {
+    use codex_app_server_protocol::CommandExecutionApprovalDecision as Decision;
+    let app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    let request = exec_approval_request(
+        thread_id,
+        "turn-approval",
+        "call-approval",
+        Some("callback"),
+    );
+    let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+        available_decisions,
+        ..
+    })) = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await?
+    else {
+        panic!("expected exec approval request");
+    };
+    assert_eq!(
+        available_decisions,
+        vec![Decision::Accept, Decision::Cancel]
+    );
+
+    let mut request = request;
+    let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+        unreachable!();
+    };
+    params.available_decisions = Some(vec![Decision::AcceptForSession]);
+    let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+        available_decisions,
+        ..
+    })) = app
+        .interactive_request_for_thread_request(thread_id, &request)
+        .await?
+    else {
+        panic!("expected exec approval request");
+    };
+    assert_eq!(available_decisions, vec![Decision::AcceptForSession]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
     let app = make_test_app().await;
     let thread_id = ThreadId::new();

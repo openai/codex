@@ -11,13 +11,11 @@ export type CommandExecutionRequestApprovalParams = {threadId: string, turnId: s
  * Unix timestamp (in milliseconds) when this approval request started.
  */
 startedAtMs: number, /**
- * Unique identifier for this specific approval callback.
+ * Opaque identifier for this specific approval callback, when present.
  *
- * For regular shell/unified_exec approvals, this is null.
- *
- * For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to
- * one parent `itemId`, so `approvalId` is a distinct opaque callback id
- * (a UUID) used to disambiguate routing.
+ * Use the JSON-RPC request ID for the response. When tracking callback UI
+ * or state outside that envelope, use this instead of `itemId` when it is
+ * present. Absence is a legacy/cacheable compatibility path.
  */
 approvalId?: string | null, /**
  * Environment in which the command will run.
