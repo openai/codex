@@ -86,7 +86,7 @@ async fn stores_config_and_starts_configured_turn_after_idle() {
             Arc::new(codex_core::test_support::EmptyUserInstructionsProvider),
             /*analytics_events_client*/ None,
             Arc::clone(&thread_store),
-            state_db.clone(),
+            codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id.clone(),
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
