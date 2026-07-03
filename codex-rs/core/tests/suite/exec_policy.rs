@@ -173,36 +173,34 @@ async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_befor
     )
     .await?;
 
-    let approval = loop {
-        let event = wait_for_event(&test.codex, |event| {
-            matches!(
-                event,
-                EventMsg::ExecApprovalRequest(_)
-                    | EventMsg::ExecCommandBegin(_)
-                    | EventMsg::ExecCommandEnd(_)
-                    | EventMsg::TurnAborted(_)
-                    | EventMsg::TurnComplete(_)
-            )
-        })
-        .await;
-        assert!(
-            !sentinel.exists(),
-            "the requested workspace PowerShell must not start before approval"
-        );
-        match event {
-            EventMsg::ExecApprovalRequest(approval) => break approval,
-            EventMsg::ExecCommandBegin(begin) => {
-                panic!("workspace PowerShell began before approval: {begin:?}")
-            }
-            EventMsg::ExecCommandEnd(end) => {
-                panic!("workspace PowerShell completed before approval: {end:?}")
-            }
-            EventMsg::TurnAborted(aborted) => {
-                panic!("turn aborted before one-shot approval: {aborted:?}")
-            }
-            EventMsg::TurnComplete(_) => panic!("expected one-shot approval before completion"),
-            _ => unreachable!(),
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    assert!(
+        !sentinel.exists(),
+        "the requested workspace PowerShell must not start before approval"
+    );
+    let approval = match event {
+        EventMsg::ExecApprovalRequest(approval) => approval,
+        EventMsg::ExecCommandBegin(begin) => {
+            panic!("workspace PowerShell began before approval: {begin:?}")
         }
+        EventMsg::ExecCommandEnd(end) => {
+            panic!("workspace PowerShell completed before approval: {end:?}")
+        }
+        EventMsg::TurnAborted(aborted) => {
+            panic!("turn aborted before one-shot approval: {aborted:?}")
+        }
+        EventMsg::TurnComplete(_) => panic!("expected one-shot approval before completion"),
+        _ => unreachable!(),
     };
     assert_eq!(approval.call_id, call_id);
     assert_eq!(approval.command, expected_command);
