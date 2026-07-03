@@ -249,29 +249,63 @@ mod tests {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ThreadSubscriptionKind {
+    Implicit,
+    Explicit,
+}
+
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
-    connection_ids: HashSet<ConnectionId>,
+    connection_subscriptions: HashMap<ConnectionId, ThreadSubscriptionKind>,
     has_connections_watcher: watch::Sender<bool>,
+    has_explicit_subscribers_watcher: watch::Sender<bool>,
 }
 
 impl Default for ThreadEntry {
     fn default() -> Self {
         Self {
             state: Arc::new(Mutex::new(ThreadState::default())),
-            connection_ids: HashSet::new(),
+            connection_subscriptions: HashMap::new(),
             has_connections_watcher: watch::channel(false).0,
+            has_explicit_subscribers_watcher: watch::channel(false).0,
         }
     }
 }
 
 impl ThreadEntry {
-    fn update_has_connections(&self) {
+    fn attach_connection(
+        &mut self,
+        connection_id: ConnectionId,
+        subscription_kind: ThreadSubscriptionKind,
+    ) {
+        self.connection_subscriptions
+            .entry(connection_id)
+            .and_modify(|existing_kind| {
+                if subscription_kind == ThreadSubscriptionKind::Explicit {
+                    *existing_kind = ThreadSubscriptionKind::Explicit;
+                }
+            })
+            .or_insert(subscription_kind);
+        self.update_connection_watchers();
+    }
+
+    fn update_connection_watchers(&self) {
         let _ = self.has_connections_watcher.send_if_modified(|current| {
             let prev = *current;
-            *current = !self.connection_ids.is_empty();
+            *current = !self.connection_subscriptions.is_empty();
             prev != *current
         });
+        let _ = self
+            .has_explicit_subscribers_watcher
+            .send_if_modified(|current| {
+                let prev = *current;
+                *current = self
+                    .connection_subscriptions
+                    .values()
+                    .any(|kind| *kind == ThreadSubscriptionKind::Explicit);
+                prev != *current
+            });
     }
 }
 
@@ -321,8 +355,8 @@ impl ThreadStateManager {
         state
             .threads
             .get(&thread_id)?
-            .connection_ids
-            .iter()
+            .connection_subscriptions
+            .keys()
             .filter_map(|connection_id| {
                 state
                     .live_connections
@@ -355,7 +389,13 @@ impl ThreadStateManager {
         state
             .threads
             .get(&thread_id)
-            .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
+            .map(|thread_entry| {
+                thread_entry
+                    .connection_subscriptions
+                    .keys()
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -471,29 +511,34 @@ impl ThreadStateManager {
                 }
             }
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
-                thread_entry.connection_ids.remove(&connection_id);
-                thread_entry.update_has_connections();
+                thread_entry.connection_subscriptions.remove(&connection_id);
+                thread_entry.update_connection_watchers();
             }
         };
 
         true
     }
 
-    #[cfg(test)]
-    pub(crate) async fn has_subscribers(&self, thread_id: ThreadId) -> bool {
+    pub(crate) async fn has_explicit_subscribers(&self, thread_id: ThreadId) -> bool {
         self.state
             .lock()
             .await
             .threads
             .get(&thread_id)
-            .is_some_and(|thread_entry| !thread_entry.connection_ids.is_empty())
+            .is_some_and(|thread_entry| {
+                thread_entry
+                    .connection_subscriptions
+                    .values()
+                    .any(|kind| *kind == ThreadSubscriptionKind::Explicit)
+            })
     }
 
-    pub(crate) async fn try_ensure_connection_subscribed(
+    pub(crate) async fn try_ensure_connection_attached(
         &self,
         thread_id: ThreadId,
         connection_id: ConnectionId,
         experimental_raw_events: bool,
+        subscription_kind: ThreadSubscriptionKind,
     ) -> Option<Arc<Mutex<ThreadState>>> {
         let thread_state = {
             let mut state = self.state.lock().await;
@@ -506,8 +551,7 @@ impl ThreadStateManager {
                 .or_default()
                 .insert(thread_id);
             let thread_entry = state.threads.entry(thread_id).or_default();
-            thread_entry.connection_ids.insert(connection_id);
-            thread_entry.update_has_connections();
+            thread_entry.attach_connection(connection_id, subscription_kind);
             thread_entry.state.clone()
         };
         {
@@ -534,8 +578,7 @@ impl ThreadStateManager {
             .or_default()
             .insert(thread_id);
         let thread_entry = state.threads.entry(thread_id).or_default();
-        thread_entry.connection_ids.insert(connection_id);
-        thread_entry.update_has_connections();
+        thread_entry.attach_connection(connection_id, ThreadSubscriptionKind::Explicit);
         true
     }
 
@@ -549,22 +592,22 @@ impl ThreadStateManager {
                 .unwrap_or_default();
             for thread_id in &thread_ids {
                 if let Some(thread_entry) = state.threads.get_mut(thread_id) {
-                    thread_entry.connection_ids.remove(&connection_id);
-                    thread_entry.update_has_connections();
+                    thread_entry.connection_subscriptions.remove(&connection_id);
+                    thread_entry.update_connection_watchers();
                 }
             }
             thread_ids
                 .into_iter()
                 .filter(|thread_id| {
-                    state
-                        .threads
-                        .get(thread_id)
-                        .is_some_and(|thread_entry| thread_entry.connection_ids.is_empty())
+                    state.threads.get(thread_id).is_some_and(|thread_entry| {
+                        thread_entry.connection_subscriptions.is_empty()
+                    })
                 })
                 .collect::<Vec<_>>()
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn subscribe_to_has_connections(
         &self,
         thread_id: ThreadId,
@@ -574,5 +617,16 @@ impl ThreadStateManager {
             .threads
             .get(&thread_id)
             .map(|thread_entry| thread_entry.has_connections_watcher.subscribe())
+    }
+
+    pub(crate) async fn subscribe_to_has_explicit_subscribers(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<watch::Receiver<bool>> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)
+            .map(|thread_entry| thread_entry.has_explicit_subscribers_watcher.subscribe())
     }
 }

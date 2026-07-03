@@ -871,12 +871,14 @@ impl ThreadRequestProcessor {
         conversation_id: ThreadId,
         connection_id: ConnectionId,
         raw_events_enabled: bool,
+        subscription_kind: ThreadSubscriptionKind,
     ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
         super::thread_lifecycle::ensure_conversation_listener(
             self.listener_task_context(),
             conversation_id,
             connection_id,
             raw_events_enabled,
+            subscription_kind,
         )
         .await
     }
@@ -1234,6 +1236,7 @@ impl ThreadRequestProcessor {
                 thread_id,
                 request_id.connection_id,
                 experimental_raw_events,
+                ThreadSubscriptionKind::Explicit,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.attach_listener",
@@ -2574,7 +2577,7 @@ impl ThreadRequestProcessor {
         self.thread_watch_manager.subscribe_running_turn_count()
     }
 
-    /// Best-effort: ensure initialized connections are subscribed to this thread.
+    /// Best-effort: implicitly attach initialized connections to this thread.
     pub(crate) async fn try_attach_thread_listener(
         &self,
         thread_id: ThreadId,
@@ -2603,8 +2606,13 @@ impl ThreadRequestProcessor {
 
         for connection_id in connection_ids {
             log_listener_attach_result(
-                self.ensure_conversation_listener(thread_id, connection_id, raw_events_enabled)
-                    .await,
+                self.ensure_conversation_listener(
+                    thread_id,
+                    connection_id,
+                    raw_events_enabled,
+                    ThreadSubscriptionKind::Implicit,
+                )
+                .await,
                 thread_id,
                 connection_id,
                 "thread",
@@ -2797,6 +2805,7 @@ impl ThreadRequestProcessor {
                         thread_id,
                         request_id.connection_id,
                         /*raw_events_enabled*/ false,
+                        ThreadSubscriptionKind::Explicit,
                     )
                     .await,
                     thread_id,
@@ -3017,11 +3026,10 @@ impl ThreadRequestProcessor {
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
-                let has_subscribers = !self
+                let has_explicit_subscribers = self
                     .thread_state_manager
-                    .subscribed_connection_ids(existing_thread_id)
-                    .await
-                    .is_empty();
+                    .has_explicit_subscribers(existing_thread_id)
+                    .await;
                 let loaded_status = self
                     .thread_watch_manager
                     .loaded_status_for_thread(&existing_thread_id.to_string())
@@ -3029,7 +3037,10 @@ impl ThreadRequestProcessor {
                 let is_running =
                     matches!(existing_thread.agent_status().await, AgentStatus::Running);
 
-                if !has_subscribers && matches!(loaded_status, ThreadStatus::Idle) && !is_running {
+                if !has_explicit_subscribers
+                    && matches!(loaded_status, ThreadStatus::Idle)
+                    && !is_running
+                {
                     // A loaded idle thread is only a cache entry. Shut it down
                     // before removing it so cold resume cannot duplicate a
                     // thread that timed out during shutdown.
@@ -3543,6 +3554,7 @@ impl ThreadRequestProcessor {
                 thread_id,
                 request_id.connection_id,
                 /*raw_events_enabled*/ false,
+                ThreadSubscriptionKind::Explicit,
             )
             .await,
             thread_id,

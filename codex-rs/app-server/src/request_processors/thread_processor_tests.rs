@@ -1252,8 +1252,11 @@ mod thread_processor_behavior_tests {
             .connection_initialized(connection, ConnectionCapabilities::default())
             .await;
         manager
-            .try_ensure_connection_subscribed(
-                thread_id, connection, /*experimental_raw_events*/ false,
+            .try_ensure_connection_attached(
+                thread_id,
+                connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Explicit,
             )
             .await
             .expect("connection should be live");
@@ -1301,18 +1304,20 @@ mod thread_processor_behavior_tests {
             .connection_initialized(connection_b, ConnectionCapabilities::default())
             .await;
         manager
-            .try_ensure_connection_subscribed(
+            .try_ensure_connection_attached(
                 thread_id,
                 connection_a,
                 /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Implicit,
             )
             .await
             .expect("connection_a should be live");
         manager
-            .try_ensure_connection_subscribed(
+            .try_ensure_connection_attached(
                 thread_id,
                 connection_b,
                 /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Implicit,
             )
             .await
             .expect("connection_b should be live");
@@ -1337,6 +1342,130 @@ mod thread_processor_behavior_tests {
     }
 
     #[tokio::test]
+    async fn implicit_attachment_delivers_without_retaining_thread() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("946c661d-d913-4384-97c9-5c62f7a8f1e4")?;
+        let connection = ConnectionId(1);
+
+        manager
+            .connection_initialized(connection, ConnectionCapabilities::default())
+            .await;
+        manager
+            .try_ensure_connection_attached(
+                thread_id,
+                connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Implicit,
+            )
+            .await
+            .expect("connection should be live");
+
+        assert_eq!(
+            manager.subscribed_connection_ids(thread_id).await,
+            vec![connection]
+        );
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.wait_for_thread_subscriber(thread_id),
+        )
+        .await?;
+        let mut has_explicit_subscribers = manager
+            .subscribe_to_has_explicit_subscribers(thread_id)
+            .await
+            .expect("thread should have a subscription watcher");
+        assert!(!*has_explicit_subscribers.borrow());
+
+        manager
+            .try_ensure_connection_attached(
+                thread_id,
+                connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Explicit,
+            )
+            .await
+            .expect("connection should be live");
+        tokio::time::timeout(Duration::from_secs(1), has_explicit_subscribers.changed()).await??;
+        assert!(*has_explicit_subscribers.borrow());
+
+        manager
+            .try_ensure_connection_attached(
+                thread_id,
+                connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Implicit,
+            )
+            .await
+            .expect("connection should be live");
+        assert!(*has_explicit_subscribers.borrow());
+
+        assert!(
+            manager
+                .unsubscribe_connection_from_thread(thread_id, connection)
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), has_explicit_subscribers.changed()).await??;
+        assert!(!*has_explicit_subscribers.borrow());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removing_last_explicit_subscriber_preserves_implicit_delivery() -> Result<()> {
+        let manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("1951c0e7-7ec2-4e26-9b20-02407c8450a6")?;
+        let implicit_connection = ConnectionId(1);
+        let explicit_connection = ConnectionId(2);
+
+        manager
+            .connection_initialized(implicit_connection, ConnectionCapabilities::default())
+            .await;
+        manager
+            .connection_initialized(explicit_connection, ConnectionCapabilities::default())
+            .await;
+        manager
+            .try_ensure_connection_attached(
+                thread_id,
+                implicit_connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Implicit,
+            )
+            .await
+            .expect("implicit connection should be live");
+        manager
+            .try_ensure_connection_attached(
+                thread_id,
+                explicit_connection,
+                /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Explicit,
+            )
+            .await
+            .expect("explicit connection should be live");
+        let mut has_explicit_subscribers = manager
+            .subscribe_to_has_explicit_subscribers(thread_id)
+            .await
+            .expect("thread should have a subscription watcher");
+        assert!(*has_explicit_subscribers.borrow());
+
+        assert!(
+            manager
+                .unsubscribe_connection_from_thread(thread_id, explicit_connection)
+                .await
+        );
+        tokio::time::timeout(Duration::from_secs(1), has_explicit_subscribers.changed()).await??;
+
+        assert!(!*has_explicit_subscribers.borrow());
+        assert_eq!(
+            manager.subscribed_connection_ids(thread_id).await,
+            vec![implicit_connection]
+        );
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.wait_for_thread_subscriber(thread_id),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn adding_connection_to_thread_updates_has_connections_watcher() -> Result<()> {
         let manager = ThreadStateManager::new();
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
@@ -1350,10 +1479,11 @@ mod thread_processor_behavior_tests {
             .connection_initialized(connection_b, ConnectionCapabilities::default())
             .await;
         manager
-            .try_ensure_connection_subscribed(
+            .try_ensure_connection_attached(
                 thread_id,
                 connection_a,
                 /*experimental_raw_events*/ false,
+                ThreadSubscriptionKind::Explicit,
             )
             .await
             .expect("connection_a should be live");
@@ -1426,13 +1556,16 @@ mod thread_processor_behavior_tests {
 
         assert!(
             manager
-                .try_ensure_connection_subscribed(
-                    thread_id, connection, /*experimental_raw_events*/ false
+                .try_ensure_connection_attached(
+                    thread_id,
+                    connection,
+                    /*experimental_raw_events*/ false,
+                    ThreadSubscriptionKind::Implicit,
                 )
                 .await
                 .is_none()
         );
-        assert!(!manager.has_subscribers(thread_id).await);
+        assert!(!manager.has_explicit_subscribers(thread_id).await);
         Ok(())
     }
 

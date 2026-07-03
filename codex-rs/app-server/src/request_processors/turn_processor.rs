@@ -1430,6 +1430,7 @@ impl TurnRequestProcessor {
             conversation_id,
             connection_id,
             raw_events_enabled,
+            ThreadSubscriptionKind::Explicit,
         )
         .await
     }

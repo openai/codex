@@ -543,6 +543,7 @@ use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use crate::thread_state::ThreadSubscriptionKind;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 

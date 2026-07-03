@@ -18,8 +18,8 @@ pub(super) struct ListenerTaskContext {
 
 struct UnloadingState {
     delay: Duration,
-    has_subscribers_rx: watch::Receiver<bool>,
-    has_subscribers: (bool, Instant),
+    has_retaining_subscribers_rx: watch::Receiver<bool>,
+    has_retaining_subscribers: (bool, Instant),
     thread_status_rx: watch::Receiver<ThreadStatus>,
     is_active: (bool, Instant),
 }
@@ -30,30 +30,30 @@ impl UnloadingState {
         thread_id: ThreadId,
         delay: Duration,
     ) -> Option<Self> {
-        let has_subscribers_rx = listener_task_context
+        let has_retaining_subscribers_rx = listener_task_context
             .thread_state_manager
-            .subscribe_to_has_connections(thread_id)
+            .subscribe_to_has_explicit_subscribers(thread_id)
             .await?;
         let thread_status_rx = listener_task_context
             .thread_watch_manager
             .subscribe(thread_id)
             .await?;
-        let has_subscribers = (*has_subscribers_rx.borrow(), Instant::now());
+        let has_retaining_subscribers = (*has_retaining_subscribers_rx.borrow(), Instant::now());
         let is_active = (
             matches!(*thread_status_rx.borrow(), ThreadStatus::Active { .. }),
             Instant::now(),
         );
         Some(Self {
             delay,
-            has_subscribers_rx,
-            has_subscribers,
+            has_retaining_subscribers_rx,
+            has_retaining_subscribers,
             thread_status_rx,
             is_active,
         })
     }
 
     fn unloading_target(&self) -> Option<Instant> {
-        match (self.has_subscribers, self.is_active) {
+        match (self.has_retaining_subscribers, self.is_active) {
             ((false, has_no_subscribers_since), (false, is_inactive_since)) => {
                 Some(std::cmp::max(has_no_subscribers_since, is_inactive_since) + self.delay)
             }
@@ -62,15 +62,27 @@ impl UnloadingState {
     }
 
     fn sync_receiver_values(&mut self) {
-        let has_subscribers = *self.has_subscribers_rx.borrow();
-        if self.has_subscribers.0 != has_subscribers {
-            self.has_subscribers = (has_subscribers, Instant::now());
+        let has_retaining_subscribers = *self.has_retaining_subscribers_rx.borrow();
+        if self.has_retaining_subscribers.0 != has_retaining_subscribers {
+            self.has_retaining_subscribers = (has_retaining_subscribers, Instant::now());
         }
 
         let is_active = matches!(*self.thread_status_rx.borrow(), ThreadStatus::Active { .. });
         if self.is_active.0 != is_active {
             self.is_active = (is_active, Instant::now());
         }
+    }
+
+    fn note_retaining_subscriber_change(&mut self) {
+        self.has_retaining_subscribers =
+            (*self.has_retaining_subscribers_rx.borrow(), Instant::now());
+    }
+
+    fn note_thread_status_change(&mut self) {
+        self.is_active = (
+            matches!(*self.thread_status_rx.borrow(), ThreadStatus::Active { .. }),
+            Instant::now(),
+        );
     }
 
     fn should_unload_now(&mut self) -> bool {
@@ -89,11 +101,6 @@ impl UnloadingState {
         loop {
             self.sync_receiver_values();
             let unloading_target = self.unloading_target();
-            if let Some(target) = unloading_target
-                && target <= Instant::now()
-            {
-                return true;
-            }
             let unloading_sleep = async {
                 if let Some(target) = unloading_target {
                     tokio::time::sleep_until(target.into()).await;
@@ -102,19 +109,20 @@ impl UnloadingState {
                 }
             };
             tokio::select! {
-                _ = unloading_sleep => return true,
-                changed = self.has_subscribers_rx.changed() => {
+                biased;
+                changed = self.has_retaining_subscribers_rx.changed() => {
                     if changed.is_err() {
                         return false;
                     }
-                    self.sync_receiver_values();
+                    self.note_retaining_subscriber_change();
                 },
                 changed = self.thread_status_rx.changed() => {
                     if changed.is_err() {
                         return false;
                     }
-                    self.sync_receiver_values();
+                    self.note_thread_status_change();
                 },
+                _ = unloading_sleep => return true,
             }
         }
     }
@@ -140,6 +148,7 @@ pub(super) async fn ensure_conversation_listener(
     conversation_id: ThreadId,
     connection_id: ConnectionId,
     raw_events_enabled: bool,
+    subscription_kind: ThreadSubscriptionKind,
 ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
     let conversation = match listener_task_context
         .thread_manager
@@ -162,7 +171,12 @@ pub(super) async fn ensure_conversation_listener(
         }
         let Some(thread_state) = listener_task_context
             .thread_state_manager
-            .try_ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
+            .try_ensure_connection_attached(
+                conversation_id,
+                connection_id,
+                raw_events_enabled,
+                subscription_kind,
+            )
             .await
         else {
             return Ok(EnsureConversationListenerResult::ConnectionClosed);
@@ -413,7 +427,7 @@ pub(super) async fn unload_thread_without_subscribers(
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
 ) {
-    info!("thread {thread_id} has no subscribers and is idle; shutting down");
+    info!("thread {thread_id} has no retaining subscribers and is idle; shutting down");
 
     // Any pending app-server -> client requests for this thread can no longer be
     // answered; cancel their callbacks before shutdown/unload.
@@ -800,3 +814,7 @@ pub(super) fn set_thread_status_and_interrupt_stale_turns(
     }
     thread.status = status;
 }
+
+#[cfg(test)]
+#[path = "thread_lifecycle_tests.rs"]
+mod tests;
