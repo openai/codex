@@ -1,6 +1,7 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -139,14 +140,18 @@ impl TurnState {
         tx: oneshot::Sender<ReviewDecision>,
         kind: PendingApprovalKind,
         accepted_decisions: Vec<ReviewDecision>,
-    ) -> Option<PendingApproval> {
-        self.pending_approvals.insert(
-            (kind, key),
-            PendingApproval {
-                tx_approve: tx,
-                accepted_decisions,
-            },
-        )
+    ) -> Result<(), PendingApproval> {
+        let pending_approval = PendingApproval {
+            tx_approve: tx,
+            accepted_decisions,
+        };
+        match self.pending_approvals.entry((kind, key)) {
+            Entry::Vacant(entry) => {
+                entry.insert(pending_approval);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(pending_approval),
+        }
     }
 
     pub(crate) fn remove_pending_approval(

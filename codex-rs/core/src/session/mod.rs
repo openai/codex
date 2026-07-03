@@ -2182,7 +2182,7 @@ impl Session {
         );
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let prev_entry = {
+        let insert_result = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
@@ -2194,11 +2194,13 @@ impl Session {
                         accepted_decisions,
                     )
                 }
-                None => None,
+                None => return ReviewDecision::Abort,
             }
         };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
+        if let Err(duplicate_approval) = insert_result {
+            warn!("Rejecting duplicate pending exec approval for call_id: {effective_approval_id}");
+            duplicate_approval.send(ReviewDecision::Abort);
+            return rx_approve.await.unwrap_or(ReviewDecision::Abort);
         }
 
         let parsed_cmd = parse_command(&command);
@@ -2237,7 +2239,7 @@ impl Session {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
-        let prev_entry = {
+        let insert_result = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
@@ -2249,11 +2251,16 @@ impl Session {
                         vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession],
                     )
                 }
-                None => None,
+                None => {
+                    tx_approve.send(ReviewDecision::Abort).ok();
+                    return rx_approve;
+                }
             }
         };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {approval_id}");
+        if let Err(duplicate_approval) = insert_result {
+            warn!("Rejecting duplicate pending patch approval for call_id: {approval_id}");
+            duplicate_approval.send(ReviewDecision::Abort);
+            return rx_approve;
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
