@@ -1048,6 +1048,10 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     let codex = test_codex()
         .with_config(move |config| {
             config.model_provider.name = non_openai_provider_name;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("set permission profile");
         })
         .build(&server)
         .await
