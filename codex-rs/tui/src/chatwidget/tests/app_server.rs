@@ -296,8 +296,9 @@ async fn invalid_url_elicitation_is_declined() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SubmitThreadOp {
+        Ok(AppEvent::ResolveAppServerRequest {
             thread_id: op_thread_id,
+            request_id: codex_app_server_protocol::RequestId::Integer(9),
             op: Op::ResolveElicitation {
                 server_name,
                 request_id: codex_app_server_protocol::RequestId::Integer(9),

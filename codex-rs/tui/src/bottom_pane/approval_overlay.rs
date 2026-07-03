@@ -72,6 +72,7 @@ use ratatui::widgets::Wrap;
 pub(crate) enum ApprovalRequest {
     Exec {
         thread_id: ThreadId,
+        app_server_request_id: Option<RequestId>,
         thread_label: Option<String>,
         id: String,
         environment_id: Option<String>,
@@ -83,6 +84,7 @@ pub(crate) enum ApprovalRequest {
     },
     Permissions {
         thread_id: ThreadId,
+        app_server_request_id: Option<RequestId>,
         thread_label: Option<String>,
         call_id: String,
         environment_id: Option<String>,
@@ -91,6 +93,7 @@ pub(crate) enum ApprovalRequest {
     },
     ApplyPatch {
         thread_id: ThreadId,
+        app_server_request_id: Option<RequestId>,
         thread_label: Option<String>,
         id: String,
         reason: Option<String>,
@@ -125,19 +128,46 @@ impl ApprovalRequest {
         }
     }
 
+    fn app_server_request_id(&self) -> Option<&RequestId> {
+        match self {
+            ApprovalRequest::Exec {
+                app_server_request_id,
+                ..
+            }
+            | ApprovalRequest::Permissions {
+                app_server_request_id,
+                ..
+            }
+            | ApprovalRequest::ApplyPatch {
+                app_server_request_id,
+                ..
+            } => app_server_request_id.as_ref(),
+            ApprovalRequest::McpElicitation { request_id, .. } => Some(request_id),
+        }
+    }
+
     pub(super) fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
+        if self.thread_id() != request.thread_id()
+            || self.app_server_request_id() != Some(request.request_id())
+        {
+            return false;
+        }
         match (self, request) {
             (
                 ApprovalRequest::Exec { id, .. },
-                ResolvedAppServerRequest::ExecApproval { id: resolved_id },
+                ResolvedAppServerRequest::ExecApproval {
+                    id: resolved_id, ..
+                },
             ) => id == resolved_id,
             (
                 ApprovalRequest::Permissions { call_id, .. },
-                ResolvedAppServerRequest::PermissionsApproval { id },
+                ResolvedAppServerRequest::PermissionsApproval { id, .. },
             ) => call_id == id,
             (
                 ApprovalRequest::ApplyPatch { id, .. },
-                ResolvedAppServerRequest::FileChangeApproval { id: resolved_id },
+                ResolvedAppServerRequest::FileChangeApproval {
+                    id: resolved_id, ..
+                },
             ) => id == resolved_id,
             (
                 ApprovalRequest::McpElicitation {
@@ -148,6 +178,7 @@ impl ApprovalRequest {
                 ResolvedAppServerRequest::McpElicitation {
                     server_name: resolved_server_name,
                     request_id: resolved_request_id,
+                    ..
                 },
             ) => server_name == resolved_server_name && request_id == resolved_request_id,
             _ => false,
@@ -382,8 +413,12 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx
-            .exec_approval(thread_id, id.to_string(), decision);
+        self.app_event_tx.exec_approval(
+            thread_id,
+            request.app_server_request_id().cloned(),
+            id.to_string(),
+            decision,
+        );
     }
 
     fn handle_permissions_decision(
@@ -427,6 +462,7 @@ impl ApprovalOverlay {
         let thread_id = request.thread_id();
         self.app_event_tx.request_permissions_response(
             thread_id,
+            request.app_server_request_id().cloned(),
             call_id.to_string(),
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: granted_permissions,
@@ -437,15 +473,15 @@ impl ApprovalOverlay {
     }
 
     fn handle_patch_decision(&self, id: &str, decision: FileChangeApprovalDecision) {
-        let Some(thread_id) = self
-            .current_request
-            .as_ref()
-            .map(ApprovalRequest::thread_id)
-        else {
+        let Some(request) = self.current_request.as_ref() else {
             return;
         };
-        self.app_event_tx
-            .patch_approval(thread_id, id.to_string(), decision);
+        self.app_event_tx.patch_approval(
+            request.thread_id(),
+            request.app_server_request_id().cloned(),
+            id.to_string(),
+            decision,
+        );
     }
 
     fn handle_elicitation_decision(
@@ -1227,6 +1263,7 @@ mod tests {
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             id: "test".to_string(),
             environment_id: None,
@@ -1244,6 +1281,7 @@ mod tests {
     fn make_permissions_request() -> ApprovalRequest {
         ApprovalRequest::Permissions {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             call_id: "test".to_string(),
             environment_id: None,
@@ -1331,7 +1369,7 @@ mod tests {
         assert!(view.is_complete());
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
+            if let AppEvent::ResolveAppServerRequest {
                 op: Op::ResolveElicitation { decision: d, .. },
                 ..
             } = ev
@@ -1362,12 +1400,48 @@ mod tests {
     }
 
     #[test]
+    fn app_server_approval_emits_exact_request_resolution() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let request_id = RequestId::Integer(1);
+        let mut request = make_exec_request();
+        let thread_id = request.thread_id();
+        let ApprovalRequest::Exec {
+            app_server_request_id,
+            ..
+        } = &mut request
+        else {
+            unreachable!("test helper should return an exec request");
+        };
+        *app_server_request_id = Some(request_id.clone());
+        let mut view = make_overlay(request, tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        let event = std::iter::from_fn(|| rx.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::ResolveAppServerRequest { .. }))
+            .expect("expected exact app-server resolution event");
+        let AppEvent::ResolveAppServerRequest {
+            thread_id: event_thread_id,
+            request_id: event_request_id,
+            op: Op::ExecApproval { id, .. },
+        } = event
+        else {
+            panic!("expected exact exec approval resolution");
+        };
+        assert_eq!(event_thread_id, thread_id);
+        assert_eq!(event_request_id, request_id);
+        assert_eq!(id, "test");
+    }
+
+    #[test]
     fn deny_shortcut_submits_denied_exec_decision() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: None,
                 id: "test".to_string(),
                 environment_id: None,
@@ -1412,6 +1486,7 @@ mod tests {
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: None,
                 id: "test".to_string(),
                 environment_id: None,
@@ -1462,10 +1537,40 @@ mod tests {
     fn resolved_request_dismisses_overlay_without_emitting_abort() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = make_overlay(make_exec_request(), tx, Features::with_defaults());
+        let request_id = RequestId::String("request-b".to_string());
+        let mut request = make_exec_request();
+        let ApprovalRequest::Exec {
+            app_server_request_id,
+            ..
+        } = &mut request
+        else {
+            unreachable!("test helper should return an exec request");
+        };
+        *app_server_request_id = Some(request_id.clone());
+        let thread_id = request.thread_id();
+        let mut view = make_overlay(request, tx, Features::with_defaults());
 
         assert!(
+            !view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id: ThreadId::new(),
+                request_id: request_id.clone(),
+                id: "test".to_string(),
+            })
+        );
+        assert!(!view.is_complete());
+        assert!(
+            !view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id,
+                request_id: RequestId::String("request-a".to_string()),
+                id: "test".to_string(),
+            }),
+            "a stale request with the same semantic key must not dismiss the current prompt"
+        );
+        assert!(!view.is_complete());
+        assert!(
             view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                thread_id,
+                request_id,
                 id: "test".to_string(),
             })
         );
@@ -1487,6 +1592,7 @@ mod tests {
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id,
+                app_server_request_id: None,
                 thread_label: Some("Robie [explorer]".to_string()),
                 id: "test".to_string(),
                 environment_id: None,
@@ -1522,6 +1628,7 @@ mod tests {
         let mut view = make_overlay_with_keymap(
             ApprovalRequest::Exec {
                 thread_id,
+                app_server_request_id: None,
                 thread_label: Some("Robie [explorer]".to_string()),
                 id: "test".to_string(),
                 environment_id: None,
@@ -1561,6 +1668,7 @@ mod tests {
         let view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: Some("Robie [explorer]".to_string()),
                 id: "test".to_string(),
                 environment_id: None,
@@ -1590,6 +1698,7 @@ mod tests {
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: None,
                 id: "test".to_string(),
                 environment_id: None,
@@ -1643,6 +1752,7 @@ mod tests {
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: None,
                 id: "test".to_string(),
                 environment_id: None,
@@ -1683,6 +1793,7 @@ mod tests {
         let command = vec!["echo".into(), "hello".into(), "world".into()];
         let exec_request = ApprovalRequest::Exec {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             id: "test".into(),
             environment_id: None,
@@ -1982,6 +2093,7 @@ mod tests {
         let tx = AppEventSender::new(tx);
         let exec_request = ApprovalRequest::Exec {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             id: "test".into(),
             environment_id: None,
@@ -2039,6 +2151,7 @@ mod tests {
         let tx = AppEventSender::new(tx);
         let exec_request = ApprovalRequest::Exec {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             id: "test".into(),
             environment_id: None,
@@ -2094,6 +2207,7 @@ mod tests {
         );
         let request = ApprovalRequest::ApplyPatch {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: Some("Banach [worker]".to_string()),
             id: "test".to_string(),
             reason: None,
@@ -2120,6 +2234,7 @@ mod tests {
         let tx = AppEventSender::new(tx);
         let exec_request = ApprovalRequest::Exec {
             thread_id: ThreadId::new(),
+            app_server_request_id: None,
             thread_label: None,
             id: "test".into(),
             environment_id: None,
@@ -2257,6 +2372,7 @@ mod tests {
         let mut view = make_overlay(
             ApprovalRequest::Exec {
                 thread_id: ThreadId::new(),
+                app_server_request_id: None,
                 thread_label: None,
                 id: "test".into(),
                 environment_id: None,
@@ -2305,7 +2421,7 @@ mod tests {
 
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
+            if let AppEvent::ResolveAppServerRequest {
                 op: Op::ResolveElicitation { decision: d, .. },
                 ..
             } = ev
@@ -2339,7 +2455,7 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let mut esc_decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
+            if let AppEvent::ResolveAppServerRequest {
                 op: Op::ResolveElicitation { decision, .. },
                 ..
             } = ev
@@ -2369,7 +2485,7 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         let mut n_decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
+            if let AppEvent::ResolveAppServerRequest {
                 op: Op::ResolveElicitation { decision, .. },
                 ..
             } = ev

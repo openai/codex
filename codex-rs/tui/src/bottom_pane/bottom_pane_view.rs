@@ -1,3 +1,4 @@
+use crate::app::app_server_requests::AppServerRequestIdentity;
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -116,8 +117,9 @@ pub(crate) trait BottomPaneView: Renderable {
     fn try_consume_user_input_request(
         &mut self,
         request: ToolRequestUserInputParams,
-    ) -> Option<ToolRequestUserInputParams> {
-        Some(request)
+        identity: Option<AppServerRequestIdentity>,
+    ) -> Option<(ToolRequestUserInputParams, Option<AppServerRequestIdentity>)> {
+        Some((request, identity))
     }
 
     /// Try to handle a supported MCP server elicitation form request; return the original value if

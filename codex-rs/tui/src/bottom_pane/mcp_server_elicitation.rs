@@ -1213,6 +1213,7 @@ impl McpServerElicitationOverlay {
 
     fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
         let ResolvedAppServerRequest::McpElicitation {
+            thread_id,
             server_name,
             request_id,
         } = request
@@ -1222,9 +1223,14 @@ impl McpServerElicitationOverlay {
 
         let queue_len = self.queue.len();
         self.queue.retain(|queued_request| {
-            queued_request.server_name != *server_name || queued_request.request_id != *request_id
+            queued_request.thread_id != *thread_id
+                || queued_request.server_name != *server_name
+                || queued_request.request_id != *request_id
         });
-        if self.request.server_name == *server_name && self.request.request_id == *request_id {
+        if self.request.thread_id == *thread_id
+            && self.request.server_name == *server_name
+            && self.request.request_id == *request_id
+        {
             self.advance_queue_or_complete();
             return true;
         }
@@ -2178,14 +2184,16 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
-        let AppEvent::SubmitThreadOp {
+        let AppEvent::ResolveAppServerRequest {
             thread_id: resolved_thread_id,
+            request_id: outer_request_id,
             op,
         } = event
         else {
-            panic!("expected SubmitThreadOp");
+            panic!("expected ResolveAppServerRequest");
         };
         assert_eq!(resolved_thread_id, thread_id);
+        assert_eq!(outer_request_id, request_id("request-1"));
         assert_eq!(
             op,
             Op::ResolveElicitation {
@@ -2269,14 +2277,16 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
-        let AppEvent::SubmitThreadOp {
+        let AppEvent::ResolveAppServerRequest {
             thread_id: resolved_thread_id,
+            request_id: outer_request_id,
             op,
         } = event
         else {
-            panic!("expected SubmitThreadOp");
+            panic!("expected ResolveAppServerRequest");
         };
         assert_eq!(resolved_thread_id, thread_id);
+        assert_eq!(outer_request_id, request_id("request-1"));
         assert_eq!(
             op,
             Op::ResolveElicitation {
@@ -2323,14 +2333,16 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
-        let AppEvent::SubmitThreadOp {
+        let AppEvent::ResolveAppServerRequest {
             thread_id: resolved_thread_id,
+            request_id: outer_request_id,
             op,
         } = event
         else {
-            panic!("expected SubmitThreadOp");
+            panic!("expected ResolveAppServerRequest");
         };
         assert_eq!(resolved_thread_id, thread_id);
+        assert_eq!(outer_request_id, request_id("request-1"));
         assert_eq!(
             op,
             Op::ResolveElicitation {
@@ -2376,14 +2388,16 @@ mod tests {
         assert_eq!(overlay.on_ctrl_c(), CancellationEvent::Handled);
 
         let event = rx.try_recv().expect("expected resolution");
-        let AppEvent::SubmitThreadOp {
+        let AppEvent::ResolveAppServerRequest {
             thread_id: resolved_thread_id,
+            request_id: outer_request_id,
             op,
         } = event
         else {
-            panic!("expected SubmitThreadOp");
+            panic!("expected ResolveAppServerRequest");
         };
         assert_eq!(resolved_thread_id, thread_id);
+        assert_eq!(outer_request_id, request_id("request-1"));
         assert_eq!(
             op,
             Op::ResolveElicitation {
@@ -2512,7 +2526,16 @@ mod tests {
         );
 
         assert!(
+            !overlay.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id: ThreadId::new(),
+                server_name: "server-1".to_string(),
+                request_id: request_id("request-1"),
+            })
+        );
+        assert_eq!(overlay.request.message, "First");
+        assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id,
                 server_name: "server-1".to_string(),
                 request_id: request_id("request-1"),
             })
@@ -2525,6 +2548,7 @@ mod tests {
 
         assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::McpElicitation {
+                thread_id,
                 server_name: "server-1".to_string(),
                 request_id: request_id("request-2"),
             })
