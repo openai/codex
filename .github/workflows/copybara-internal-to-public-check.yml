@@ -7,9 +7,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-projection
-
 jobs:
   build-test:
     name: Internal to public projection build-test
@@ -37,6 +34,7 @@ jobs:
       - name: Create public projection
         env:
           COPYBARA_JAR: ${{ steps.copybara.outputs.copybara_jar }}
+          PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-projection
         run: |
           set -euo pipefail
           java -jar "${COPYBARA_JAR}" migrate .copybara/copy.bara.sky internal_to_public_projection "${GITHUB_WORKSPACE}" \
@@ -45,15 +43,15 @@ jobs:
             --force-message="Validate public projection"
 
       - name: Verify codex-rs Cargo manifests inherit workspace settings
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 .github/scripts/verify_cargo_workspace_manifests.py
 
       - name: Verify codex-tui does not import codex-core directly
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 .github/scripts/verify_tui_core_boundary.py
 
       - name: Verify Bazel clippy flags match Cargo workspace lints
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
       - name: Install just
@@ -62,7 +60,7 @@ jobs:
           tool: just@1.51.0
 
       - name: Check rusty_v8 MODULE.bazel checksums
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: |
           python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
           just test-github-scripts
@@ -76,11 +74,11 @@ jobs:
           install-test-prereqs: "true"
 
       - name: Check MODULE.bazel.lock is up to date
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: ./scripts/check-module-bazel-lock.sh
 
       - name: Bazel test //...
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
@@ -132,7 +130,7 @@ jobs:
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
 
       - name: Test Codex package builder
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
 
       - name: Setup pnpm
@@ -146,11 +144,11 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: pnpm install --frozen-lockfile
 
       - name: Stage npm package
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -165,11 +163,11 @@ jobs:
             --output-dir "$OUTPUT_DIR"
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: ./scripts/asciicheck.py README.md
 
       - name: Check root README ToC
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: python3 scripts/readme_toc.py README.md
 
       - name: Install uv
@@ -178,9 +176,9 @@ jobs:
           version: "0.11.3"
 
       - name: Check formatting (run `just fmt` to fix)
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: just fmt-check
 
       - name: Prettier (run `pnpm run format:fix` to fix)
-        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        working-directory: ${{ runner.temp }}/codex-public-projection
         run: pnpm run format

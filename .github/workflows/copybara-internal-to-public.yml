@@ -11,10 +11,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PUBLIC_BASE: ${{ runner.temp }}/codex-public-base
-  PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-export
-
 concurrency:
   group: copybara-internal-to-public
   cancel-in-progress: false
@@ -45,6 +41,8 @@ jobs:
         env:
           COPYBARA_JAR: ${{ steps.copybara.outputs.copybara_jar }}
           INTERNAL_REF: ${{ inputs.internal_ref }}
+          PUBLIC_BASE: ${{ runner.temp }}/codex-public-base
+          PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-export
         run: |
           set -euo pipefail
 
