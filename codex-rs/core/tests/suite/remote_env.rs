@@ -248,32 +248,27 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
+async fn compatible_remote_path_hint_uses_environment_shell_in_remote_cwd() -> Result<()> {
     const CALL_ID: &str = "remote-explicit-shell";
 
     skip_if_no_remote_env!(Ok(()));
 
-    let (shell, command) = match test_target_os() {
-        TestTargetOs::Linux => (
-            "bash",
-            r#"case "$PWD" in /tmp/codex-core-test-cwd-*) ;; *) echo "unexpected cwd: $PWD" >&2; exit 1 ;; esac"#,
-        ),
-        TestTargetOs::Windows => (
-            "powershell",
-            r#"$cwd = (Get-Location).Path; if ($cwd -notlike 'C:\codex-core-test-cwd-*') { Write-Error "unexpected cwd: $cwd"; exit 1 }"#,
-        ),
+    let (shell, expected_cwd_prefix) = match test_target_os() {
+        TestTargetOs::Linux => ("/attacker/bash", "/tmp/codex-core-test-cwd-"),
+        TestTargetOs::Windows => (r"C:\attacker\PowerShell.ExE", r"C:\codex-core-test-cwd-"),
         TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
     };
 
     let server = start_mock_server().await;
     let arguments = serde_json::to_string(&json!({
-        "cmd": command,
+        "cmd": "pwd",
         "shell": shell,
         "login": false,
         "yield_time_ms": 10_000,
     }))?;
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
         config
             .features
             .enable(Feature::UnifiedExec)
@@ -312,9 +307,14 @@ async fn explicit_remote_shell_runs_in_remote_cwd() -> Result<()> {
         .function_call_output_content_and_success(CALL_ID)
         .context("remote shell tool result should be present")?;
     assert_ne!(success, Some(false));
+    let output = output.context("remote shell command should return output")?;
     assert!(
-        output.is_some_and(|output| output.contains("Process exited with code 0")),
-        "remote shell command should exit successfully",
+        output.contains("Process exited with code 0"),
+        "remote shell command should exit successfully: {output}",
+    );
+    assert!(
+        output.contains(expected_cwd_prefix),
+        "remote shell command should run in the remote cwd: {output}",
     );
 
     Ok(())

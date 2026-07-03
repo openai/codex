@@ -1045,7 +1045,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             outcome: Outcome::ExecApprovalWithAmendment {
                 decision: ReviewDecision::Denied,
                 expected_reason: None,
-                expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
+                expected_execpolicy_amendment: None,
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
@@ -1790,6 +1790,164 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
     ]
+}
+
+#[cfg(unix)]
+#[test_case("./ls", "ls" ; "direct_relative_executable")]
+#[test_case("./zsh -c ls", "zsh" ; "configured_shell_with_relative_nested_shell")]
+#[tokio::test(flavor = "current_thread")]
+async fn fake_shell_sandbox_override_prompts_before_execution(
+    authored_command: &str,
+    executable_name: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let configured_shell =
+        codex_core::shell::get_shell_by_model_provided_path(&PathBuf::from("/bin/sh"));
+    let expected_command =
+        configured_shell.derive_exec_args(authored_command, /*use_login_shell*/ false);
+    let mut builder = test_codex()
+        .with_user_shell(configured_shell)
+        .with_config(move |config| {
+            config.permissions.allow_login_shell = false;
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set workspace-write sandbox policy");
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        });
+    let test = builder.build(&server).await?;
+
+    let fake_executable = test.cwd.path().join(executable_name);
+    let sentinel = test.cwd.path().join(format!("{executable_name}.started"));
+    fs::write(
+        &fake_executable,
+        "#!/bin/sh\nprintf '%s\\n' started > \"$0.started\"\n",
+    )?;
+    let mut permissions = fs::metadata(&fake_executable)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_executable, permissions)?;
+    assert!(!sentinel.exists(), "sentinel must start absent");
+
+    let call_id = format!("fake-shell-sandbox-override-{executable_name}");
+    let event = shell_event(
+        &call_id,
+        authored_command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-fake-shell-1"),
+            event,
+            ev_completed("resp-fake-shell-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-fake-shell-1", "done"),
+            ev_completed("resp-fake-shell-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "run the fake shell with an explicit sandbox override",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    // Shell-command begin/end events describe the logical tool call, not the
+    // child-process lifetime: the begin event intentionally precedes policy
+    // evaluation. The executable sentinel is the authority boundary here.
+    let approval = loop {
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ExecCommandBegin(_)
+                    | EventMsg::ExecCommandEnd(_)
+                    | EventMsg::TurnComplete(_)
+            )
+        })
+        .await;
+        assert!(
+            !sentinel.exists(),
+            "fake executable must not run before approval"
+        );
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => break approval,
+            EventMsg::ExecCommandBegin(_) => continue,
+            EventMsg::ExecCommandEnd(end) => {
+                panic!("logical shell call ended before approval: {end:?}")
+            }
+            EventMsg::TurnComplete(_) => panic!("expected approval before turn completion"),
+            _ => unreachable!(),
+        }
+    };
+    assert_eq!(approval.call_id, call_id);
+    assert_eq!(approval.command, expected_command);
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    assert!(
+        !sentinel.exists(),
+        "fake executable must remain stopped while approval is pending"
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    loop {
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ExecCommandEnd(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await;
+        assert!(
+            !sentinel.exists(),
+            "denying approval must not run the fake executable"
+        );
+        if matches!(event, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+    assert!(
+        !sentinel.exists(),
+        "denying approval must not run the fake executable"
+    );
+
+    let output = parse_result(
+        &results_mock
+            .single_request()
+            .function_call_output(call_id.as_str()),
+    );
+    assert!(
+        output.stdout.contains("rejected by user"),
+        "tool result should report the normal user rejection: {}",
+        output.stdout
+    );
+
+    Ok(())
 }
 
 #[test_case(ScenarioGroup::DangerFullAccess ; "danger_full_access")]
@@ -3211,7 +3369,7 @@ exec {remote_bash_exec} "$@"
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
+async fn permission_expansion_does_not_offer_fallback_rule_for_compound_command() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -3230,7 +3388,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        /*timeout_ms*/ 1_000,
+        /*timeout_ms*/ 10_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -3244,6 +3402,14 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
         ]),
     )
     .await;
+    let _results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-invalid-prefix-no-amendment", "done"),
+            ev_completed("resp-invalid-prefix-no-amendment-results"),
+        ]),
+    )
+    .await;
 
     submit_turn(
         &test,
@@ -3254,17 +3420,22 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     .await?;
 
     let approval = expect_exec_approval(&test, command).await;
-    let amendment = approval
-        .proposed_execpolicy_amendment
-        .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(&command.to_string()));
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_completion(&test).await;
 
     Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
+async fn approving_permission_expansion_does_not_persist_compound_command() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -3283,7 +3454,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        /*timeout_ms*/ 1_000,
+        /*timeout_ms*/ 10_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -3294,6 +3465,14 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
             ev_response_created("resp-invalid-prefix-1"),
             event,
             ev_completed("resp-invalid-prefix-1"),
+        ]),
+    )
+    .await;
+    let first_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-invalid-prefix-first", "done"),
+            ev_completed("resp-invalid-prefix-first-results"),
         ]),
     )
     .await;
@@ -3308,21 +3487,19 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
 
     let approval = expect_exec_approval(&test, command).await;
     let approval_id = approval.effective_approval_id();
-    let amendment = approval
-        .proposed_execpolicy_amendment
-        .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(&command.to_string()));
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
 
     test.codex
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: None,
-            decision: ReviewDecision::ApprovedExecpolicyAmendment {
-                proposed_execpolicy_amendment: amendment.clone(),
-            },
+            decision: ReviewDecision::Approved,
         })
         .await?;
     wait_for_completion(&test).await;
+
+    let first_output = parse_result(&first_results.single_request().function_call_output(call_id));
+    assert_eq!(first_output.exit_code.unwrap_or(0), 0);
 
     let call_id = "invalid-prefix-rule-again";
     let command =
@@ -3330,7 +3507,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
-        /*timeout_ms*/ 1_000,
+        /*timeout_ms*/ 10_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
     )?;
@@ -3361,16 +3538,24 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
+    let approval = expect_exec_approval(&test, command).await;
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_completion(&test).await;
 
     let second_output = parse_result(
         &second_results
             .single_request()
             .function_call_output(call_id),
     );
-    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
     assert!(
-        second_output.stdout.is_empty(),
+        second_output.stdout.contains("rejected by user"),
         "unexpected stdout: {}",
         second_output.stdout
     );

@@ -7,6 +7,7 @@ the process manager to spawn PTYs once an ExecRequest is prepared.
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
+use crate::exec_policy::ShellApprovalProvenance;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::review_approval_request;
@@ -43,11 +44,13 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
@@ -80,6 +83,7 @@ pub struct UnifiedExecRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub shell_approval_provenance: ShellApprovalProvenance,
 }
 
 /// Cache key for approval decisions that can be reused across equivalent
@@ -132,6 +136,57 @@ fn build_unified_exec_sandbox_command(
         managed_network,
         additional_permissions,
     })
+}
+
+fn maybe_wrap_environment_shell_command_with_snapshot(
+    command: &[String],
+    shell_approval_provenance: ShellApprovalProvenance,
+    session_shell: &crate::shell::Shell,
+    shell_snapshot: Option<&codex_utils_absolute_path::AbsolutePathBuf>,
+    explicit_env_overrides: &HashMap<String, String>,
+    env: &HashMap<String, String>,
+    runtime_path_prepends: &RuntimePathPrepends,
+) -> Vec<String> {
+    if shell_approval_provenance.is_local_model_resolved() {
+        return command.to_vec();
+    }
+
+    maybe_wrap_shell_lc_with_snapshot(
+        command,
+        session_shell,
+        shell_snapshot,
+        explicit_env_overrides,
+        env,
+        runtime_path_prepends,
+    )
+}
+
+fn apply_post_policy_powershell_runtime_adjustments(
+    command: &[String],
+    shell_type: ShellType,
+    shell_approval_provenance: ShellApprovalProvenance,
+    sandbox: SandboxType,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> Vec<String> {
+    // A locally model-selected executable is part of the command identity that
+    // was resolved and evaluated by policy. Do not mutate its approved argv at
+    // runtime; configured and remote-environment shells retain the established
+    // profile and UTF-8 adjustments.
+    if shell_approval_provenance.is_local_model_resolved() {
+        return command.to_vec();
+    }
+
+    let command = disable_powershell_profile_for_elevated_windows_sandbox(
+        command,
+        Some(&shell_type),
+        sandbox,
+        windows_sandbox_level,
+    );
+    if matches!(shell_type, ShellType::PowerShell) {
+        prefix_powershell_script_with_utf8(&command)
+    } else {
+        command
+    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -384,8 +439,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command = if environment_is_remote {
             base_command.to_vec()
         } else {
-            maybe_wrap_shell_lc_with_snapshot(
+            maybe_wrap_environment_shell_command_with_snapshot(
                 base_command,
+                req.shell_approval_provenance,
                 shell,
                 shell_snapshot_location.as_ref(),
                 &explicit_env_overrides,
@@ -393,17 +449,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &runtime_path_prepends,
             )
         };
-        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+        let command = apply_post_policy_powershell_runtime_adjustments(
             &command,
-            Some(&req.shell_type),
+            req.shell_type,
+            req.shell_approval_provenance,
             attempt.sandbox,
             attempt.windows_sandbox_level,
         );
-        let command = if matches!(req.shell_type, ShellType::PowerShell) {
-            prefix_powershell_script_with_utf8(&command)
-        } else {
-            command
-        };
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command = build_unified_exec_sandbox_command(
@@ -713,6 +765,99 @@ mod tests {
         assert_eq!(decision, ReviewDecision::Approved);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn local_model_resolved_shell_reaches_spawn_command_without_snapshot_wrapper() {
+        let temp_dir = tempdir().expect("create snapshot temp dir");
+        let snapshot_path = temp_dir.path().join("shell.snapshot");
+        std::fs::write(&snapshot_path, "export SNAPSHOT_MARKER=1\n").expect("write shell snapshot");
+        let snapshot = AbsolutePathBuf::try_from(snapshot_path).expect("absolute snapshot path");
+        let session_shell = crate::shell::Shell {
+            shell_type: ShellType::Sh,
+            shell_path: "/bin/sh".into(),
+        };
+        let command = vec![
+            "/workspace/fake/sh".to_string(),
+            "-lc".to_string(),
+            "echo exact".to_string(),
+        ];
+        let explicit_env_overrides = HashMap::new();
+        let env = HashMap::new();
+        let runtime_path_prepends = RuntimePathPrepends::default();
+
+        let model_resolved = maybe_wrap_environment_shell_command_with_snapshot(
+            &command,
+            ShellApprovalProvenance::local_model_resolved(),
+            &session_shell,
+            Some(&snapshot),
+            &explicit_env_overrides,
+            &env,
+            &runtime_path_prepends,
+        );
+        let configured = maybe_wrap_environment_shell_command_with_snapshot(
+            &command,
+            ShellApprovalProvenance::configured(),
+            &session_shell,
+            Some(&snapshot),
+            &explicit_env_overrides,
+            &env,
+            &runtime_path_prepends,
+        );
+
+        assert_eq!(model_resolved, command);
+        assert_eq!(model_resolved[0], "/workspace/fake/sh");
+        assert_ne!(configured, model_resolved);
+        assert_eq!(configured[0], "/bin/sh");
+    }
+
+    #[test]
+    fn local_model_resolved_powershell_argv_is_not_mutated_after_policy() {
+        let command = vec![
+            "C:/workspace/fake/powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output exact".to_string(),
+        ];
+        let transformed = vec![
+            "C:/workspace/fake/powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!(
+                "{}Write-Output exact",
+                codex_shell_command::powershell::UTF8_OUTPUT_PREFIX
+            ),
+        ];
+
+        for (name, provenance, expected) in [
+            (
+                "local model-resolved",
+                ShellApprovalProvenance::local_model_resolved(),
+                &command,
+            ),
+            (
+                "configured",
+                ShellApprovalProvenance::configured(),
+                &transformed,
+            ),
+            (
+                "remote model hint",
+                ShellApprovalProvenance::remote_model_hint(),
+                &transformed,
+            ),
+        ] {
+            assert_eq!(
+                apply_post_policy_powershell_runtime_adjustments(
+                    &command,
+                    ShellType::PowerShell,
+                    provenance,
+                    SandboxType::WindowsRestrictedToken,
+                    WindowsSandboxLevel::Elevated,
+                ),
+                *expected,
+                "{name} behavior changed"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn unified_exec_uses_the_trusted_sandbox_cwd() {
         let cwd_dir = tempdir().expect("create process temp dir");
@@ -745,6 +890,7 @@ mod tests {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             },
+            shell_approval_provenance: ShellApprovalProvenance::configured(),
         };
 
         assert_eq!(
@@ -844,6 +990,7 @@ mod tests {
             additional_permissions_preapproved: false,
             justification: None,
             exec_approval_requirement,
+            shell_approval_provenance: ShellApprovalProvenance::configured(),
         }
     }
 

@@ -2024,6 +2024,162 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_shell_resolution_failure_precedes_process_allocation_and_events() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let invalid_call_id = "uexec-missing-model-shell";
+    let invalid_args = serde_json::json!({
+        "shell": "./missing/sh",
+        "cmd": "true",
+        "login": false,
+    });
+    let start_call_id = "uexec-after-missing-model-shell";
+    let start_args = serde_json::json!({
+        "cmd": "tail -f /dev/null",
+        "yield_time_ms": 10,
+        "tty": false,
+    });
+    let interrupt_call_id = "uexec-after-missing-model-shell-interrupt";
+    let interrupt_args = serde_json::json!({
+        "chars": "\u{3}",
+        "session_id": 1000,
+        "yield_time_ms": 1000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-missing-shell-1"),
+            ev_function_call(
+                invalid_call_id,
+                "exec_command",
+                &serde_json::to_string(&invalid_args)?,
+            ),
+            ev_completed("resp-missing-shell-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-missing-shell-2"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-missing-shell-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-missing-shell-3"),
+            ev_function_call(
+                interrupt_call_id,
+                "write_stdin",
+                &serde_json::to_string(&interrupt_args)?,
+            ),
+            ev_completed("resp-missing-shell-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-missing-shell-4"),
+            ev_assistant_message("msg-missing-shell", "done"),
+            ev_completed("resp-missing-shell-4"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "resolve a model-selected shell before allocating a process",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let mut valid_begin = None;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) if approval.call_id == invalid_call_id => {
+                panic!("shell resolution failure must precede approval: {approval:?}")
+            }
+            EventMsg::ExecCommandBegin(begin) if begin.call_id == invalid_call_id => {
+                panic!("shell resolution failure must precede begin events: {begin:?}")
+            }
+            EventMsg::ExecCommandEnd(end) if end.call_id == invalid_call_id => {
+                panic!("shell resolution failure must precede end events: {end:?}")
+            }
+            EventMsg::ExecCommandBegin(begin) if begin.call_id == start_call_id => {
+                assert!(
+                    valid_begin.is_none(),
+                    "expected one begin event for the valid follow-up command"
+                );
+                valid_begin = Some(begin);
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let valid_begin = valid_begin.expect("the valid follow-up command should begin normally");
+    assert_eq!(
+        valid_begin.process_id.as_deref(),
+        Some("1000"),
+        "failed shell resolution must not consume the first process ID"
+    );
+
+    let invalid_output = request_log
+        .function_call_output_text(invalid_call_id)
+        .expect("missing typed shell-resolution failure output");
+    assert!(
+        invalid_output.contains("model-provided shell")
+            && invalid_output.contains("does not exist"),
+        "unexpected shell-resolution failure: {invalid_output:?}"
+    );
+    assert!(
+        !invalid_output.contains("Process running with session ID"),
+        "failed shell resolution must not claim a running process: {invalid_output:?}"
+    );
+
+    let start_output = parse_unified_exec_output(
+        &request_log
+            .function_call_output_text(start_call_id)
+            .expect("missing valid follow-up exec_command output"),
+    )?;
+    assert_eq!(
+        start_output.process_id.as_deref(),
+        Some("1000"),
+        "the first successfully allocated process should retain deterministic ID 1000"
+    );
+    assert!(
+        start_output.exit_code.is_none(),
+        "the valid process should still be running before write_stdin interrupts it"
+    );
+
+    let interrupt_output = parse_unified_exec_output(
+        &request_log
+            .function_call_output_text(interrupt_call_id)
+            .expect("missing write_stdin interrupt output"),
+    )?;
+    assert!(
+        interrupt_output.process_id.is_none(),
+        "write_stdin should clear the interrupted process from the session map"
+    );
+    assert_eq!(
+        interrupt_output.exit_code,
+        Some(130),
+        "write_stdin should preserve the normal Unix SIGINT exit status"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
     // TODO(anp): Add a target-Windows test for explicit interrupt handling.

@@ -1,7 +1,10 @@
 use codex_exec_server::ShellInfo;
 use codex_shell_command::shell_detect::DetectedShell;
+use codex_shell_command::shell_detect::ModelShellResolveError;
 use serde::Deserialize;
 use serde::Serialize;
+use std::ffi::OsStr;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub use codex_shell_command::shell_detect::ShellType;
@@ -81,8 +84,28 @@ fn ultimate_fallback_shell() -> Shell {
     codex_shell_command::shell_detect::ultimate_fallback_shell().into()
 }
 
+/// Legacy configured-shell compatibility helper.
+///
+/// Production model-selected shell input must use
+/// [`resolve_model_provided_shell_in`] so a missing executable cannot fall
+/// back to a different shell.
 pub fn get_shell_by_model_provided_path(shell_path: &PathBuf) -> Shell {
     codex_shell_command::shell_detect::get_shell_by_model_provided_path(shell_path).into()
+}
+
+pub(crate) fn resolve_model_provided_shell_in(
+    shell_path: &Path,
+    search_path: &OsStr,
+    path_ext: Option<&OsStr>,
+    cwd: &Path,
+) -> Result<Shell, ModelShellResolveError> {
+    codex_shell_command::shell_detect::resolve_model_provided_shell_in(
+        shell_path,
+        search_path,
+        path_ext,
+        cwd,
+    )
+    .map(Into::into)
 }
 
 pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell> {

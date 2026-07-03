@@ -1,4 +1,6 @@
 use super::*;
+use crate::exec_policy::ShellApprovalProvenance;
+use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::default_user_shell;
 use codex_exec_server::Environment;
@@ -7,6 +9,8 @@ use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::session::step_context::StepContext;
@@ -21,6 +25,46 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
 const TEST_TRUNCATION_POLICY: TruncationPolicy = TruncationPolicy::Tokens(10_000);
+
+fn selected_shell(shell_type: ShellType, shell_path: impl Into<PathBuf>) -> Arc<Shell> {
+    Arc::new(Shell {
+        shell_type,
+        shell_path: shell_path.into(),
+    })
+}
+
+#[test]
+fn shell_environment_lookup_prefers_exact_canonical_key() {
+    let environment = HashMap::from([
+        ("Path".to_string(), "inherited-path".to_string()),
+        ("PATH".to_string(), "configured-path".to_string()),
+        ("PathExt".to_string(), ".CMD".to_string()),
+        ("PATHEXT".to_string(), ".EXE".to_string()),
+    ]);
+
+    assert_eq!(
+        super::exec_command::shell_environment_value(&environment, "PATH"),
+        Some("configured-path")
+    );
+    assert_eq!(
+        super::exec_command::shell_environment_value(&environment, "PATHEXT"),
+        Some(".EXE")
+    );
+}
+
+#[test]
+fn shell_environment_lookup_case_folds_only_on_windows() {
+    let environment = HashMap::from([("Path".to_string(), "inherited-path".to_string())]);
+
+    assert_eq!(
+        super::exec_command::shell_environment_value(&environment, "PATH"),
+        if cfg!(windows) {
+            Some("inherited-path")
+        } else {
+            None
+        }
+    );
+}
 
 async fn invocation_for_payload(
     tool_name: &str,
@@ -53,6 +97,7 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
     let resolved = get_command(
         &args,
         Arc::new(default_user_shell()),
+        ShellApprovalProvenance::configured(),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -61,33 +106,42 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
 
     assert_eq!(command.len(), 3);
     assert_eq!(command[2], "echo hello");
+    assert_eq!(
+        resolved.shell_approval_provenance,
+        ShellApprovalProvenance::configured()
+    );
     Ok(())
 }
 
 #[test]
-fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
-    let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+fn test_get_command_uses_already_resolved_explicit_bash_shell() -> anyhow::Result<()> {
+    let json = r#"{"cmd": "echo hello", "shell": "bash"}"#;
 
     let args: ExecCommandArgs = parse_arguments(json)?;
 
-    assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+    assert_eq!(args.shell.as_deref(), Some("bash"));
+    let resolved_path = if cfg!(windows) {
+        r"C:\resolved\bash.exe"
+    } else {
+        "/resolved/bash"
+    };
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        selected_shell(ShellType::Bash, resolved_path),
+        ShellApprovalProvenance::local_model_resolved(),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
     .map_err(anyhow::Error::msg)?;
     let command = resolved.command;
 
-    assert_eq!(command.last(), Some(&"echo hello".to_string()));
-    if command
-        .iter()
-        .any(|arg| arg.eq_ignore_ascii_case("-Command"))
-    {
-        assert!(command.contains(&"-NoProfile".to_string()));
-    }
+    assert_eq!(command.first().map(String::as_str), Some(resolved_path));
+    assert_eq!(command.last().map(String::as_str), Some("echo hello"));
+    assert_eq!(
+        resolved.shell_approval_provenance,
+        ShellApprovalProvenance::local_model_resolved()
+    );
     Ok(())
 }
 
@@ -115,7 +169,8 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        selected_shell(ShellType::PowerShell, powershell_path),
+        ShellApprovalProvenance::local_model_resolved(),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -124,6 +179,10 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
 
     assert_eq!(command[2], "echo hello");
     assert_eq!(resolved.shell_type, ShellType::PowerShell);
+    assert_eq!(
+        resolved.shell_approval_provenance,
+        ShellApprovalProvenance::local_model_resolved()
+    );
     Ok(())
 }
 
@@ -137,7 +196,8 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
 
     let resolved = get_command(
         &args,
-        Arc::new(default_user_shell()),
+        selected_shell(ShellType::Cmd, "cmd"),
+        ShellApprovalProvenance::local_model_resolved(),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ true,
     )
@@ -145,6 +205,46 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
     let command = resolved.command;
 
     assert_eq!(command[2], "echo hello");
+    assert_eq!(
+        resolved.shell_approval_provenance,
+        ShellApprovalProvenance::local_model_resolved()
+    );
+    Ok(())
+}
+
+#[test]
+fn test_get_command_preserves_remote_hint_provenance_after_discarding_spelling()
+-> anyhow::Result<()> {
+    let json = r#"{"cmd": "pwd", "shell": "/attacker/bash"}"#;
+    let mut args: ExecCommandArgs = parse_arguments(json)?;
+    assert_eq!(args.shell.take().as_deref(), Some("/attacker/bash"));
+    let reported_shell = if cfg!(windows) {
+        r"C:\environment\bash.exe"
+    } else {
+        "/environment/bash"
+    };
+
+    let resolved = get_command(
+        &args,
+        selected_shell(ShellType::Bash, reported_shell),
+        ShellApprovalProvenance::remote_model_hint(),
+        &UnifiedExecShellMode::Direct,
+        /*allow_login_shell*/ false,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(
+        resolved,
+        ResolvedCommand {
+            command: vec![
+                reported_shell.to_string(),
+                "-c".to_string(),
+                "pwd".to_string(),
+            ],
+            shell_type: ShellType::Bash,
+            shell_approval_provenance: ShellApprovalProvenance::remote_model_hint(),
+        }
+    );
     Ok(())
 }
 
@@ -156,6 +256,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
     let err = get_command(
         &args,
         Arc::new(default_user_shell()),
+        ShellApprovalProvenance::configured(),
         &UnifiedExecShellMode::Direct,
         /*allow_login_shell*/ false,
     )
@@ -189,6 +290,7 @@ fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
     let err = get_command(
         &args,
         Arc::new(default_user_shell()),
+        ShellApprovalProvenance::configured(),
         &shell_mode,
         /*allow_login_shell*/ true,
     )
@@ -197,6 +299,39 @@ fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
     assert!(
         err.contains("`shell` is not supported for local zsh-fork exec"),
         "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_get_command_marks_zsh_fork_configured() -> anyhow::Result<()> {
+    let args: ExecCommandArgs = parse_arguments(r#"{"cmd": "echo hello"}"#)?;
+    let shell_zsh_path = AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+        r"C:\opt\codex\zsh"
+    } else {
+        "/opt/codex/zsh"
+    })?;
+    let shell_mode = UnifiedExecShellMode::ZshFork(ZshForkConfig {
+        shell_zsh_path,
+        main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+            r"C:\opt\codex\codex-execve-wrapper"
+        } else {
+            "/opt/codex/codex-execve-wrapper"
+        })?,
+    });
+
+    let resolved = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        ShellApprovalProvenance::configured(),
+        &shell_mode,
+        /*allow_login_shell*/ false,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(
+        resolved.shell_approval_provenance,
+        ShellApprovalProvenance::configured()
     );
     Ok(())
 }

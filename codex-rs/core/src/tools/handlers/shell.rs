@@ -165,22 +165,37 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     );
     emitter.begin(event_ctx).await;
 
-    let exec_approval_requirement = session
-        .services
-        .exec_policy
-        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-            command: &exec_params.command,
-            approval_policy: turn.approval_policy.value(),
-            permission_profile: turn.permission_profile(),
-            windows_sandbox_level: turn.windows_sandbox_level,
-            sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
-                codex_protocol::models::SandboxPermissions::UseDefault
-            } else {
-                effective_additional_permissions.sandbox_permissions
-            },
-            prefix_rule,
-        })
-        .await;
+    let exec_approval_request = ExecApprovalRequest {
+        command: &exec_params.command,
+        approval_policy: turn.approval_policy.value(),
+        permission_profile: turn.permission_profile(),
+        windows_sandbox_level: turn.windows_sandbox_level,
+        sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
+            codex_protocol::models::SandboxPermissions::UseDefault
+        } else {
+            effective_additional_permissions.sandbox_permissions
+        },
+        prefix_rule,
+    };
+    let exec_approval_requirement = if effective_additional_permissions.permissions_preapproved {
+        session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_configured_command(
+                exec_approval_request,
+                /*permission_expansion_was_requested*/
+                effective_additional_permissions
+                    .sandbox_permissions
+                    .requests_sandbox_override(),
+            )
+            .await
+    } else {
+        session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(exec_approval_request)
+            .await
+    };
 
     let req = ShellRequest {
         command: exec_params.command.clone(),

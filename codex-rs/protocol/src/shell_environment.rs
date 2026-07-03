@@ -40,7 +40,48 @@ where
             env_map.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
         }
     }
+    #[cfg(target_os = "windows")]
+    normalize_windows_shell_search_environment(&mut env_map, policy);
     env_map
+}
+
+/// Canonicalize the case-insensitive variables that control Windows
+/// executable lookup before the environment is used for resolution or launch.
+///
+/// The map is case-sensitive even on Windows, so inherited and configured
+/// spellings can otherwise coexist. A configured entry wins over an inherited
+/// entry, and the canonical spelling wins if the policy itself contains more
+/// than one case variant.
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_shell_search_environment(
+    env: &mut HashMap<String, String>,
+    policy: &ShellEnvironmentPolicy,
+) {
+    for canonical_key in ["PATH", "PATHEXT"] {
+        let configured_value = windows_environment_value(&policy.r#set, canonical_key)
+            .filter(|(key, value)| env.get(*key) == Some(*value))
+            .map(|(_, value)| value.clone());
+        let value = configured_value.or_else(|| {
+            windows_environment_value(env, canonical_key).map(|(_, value)| value.clone())
+        });
+
+        env.retain(|key, _| !key.eq_ignore_ascii_case(canonical_key));
+        if let Some(value) = value {
+            env.insert(canonical_key.to_string(), value);
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_environment_value<'a>(
+    env: &'a HashMap<String, String>,
+    canonical_key: &str,
+) -> Option<(&'a String, &'a String)> {
+    env.get_key_value(canonical_key).or_else(|| {
+        env.iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(canonical_key))
+            .min_by(|(left, _), (right, _)| left.cmp(right))
+    })
 }
 
 pub fn populate_env<I>(
@@ -114,6 +155,39 @@ const UNIX_CORE_ENV_VARS: &[&str] = &[
     "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME",
     "USER",
 ];
+
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn windows_shell_search_normalization_prefers_configured_canonical_keys() {
+        let mut env = HashMap::from([
+            ("Path".to_string(), r"C:\inherited".to_string()),
+            ("path".to_string(), r"C:\configured-alias".to_string()),
+            ("PATH".to_string(), r"C:\configured-canonical".to_string()),
+            ("PathExt".to_string(), ".COM;.EXE;.CMD".to_string()),
+        ]);
+        let policy = ShellEnvironmentPolicy {
+            r#set: HashMap::from([
+                ("path".to_string(), r"C:\configured-alias".to_string()),
+                ("PATH".to_string(), r"C:\configured-canonical".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        normalize_windows_shell_search_environment(&mut env, &policy);
+
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("PATH".to_string(), r"C:\configured-canonical".to_string()),
+                ("PATHEXT".to_string(), ".COM;.EXE;.CMD".to_string()),
+            ])
+        );
+    }
+}
 
 #[cfg(target_os = "windows")]
 pub const WINDOWS_CORE_ENV_VARS: &[&str] = &[
@@ -208,6 +282,48 @@ mod windows_tests {
         let expected = HashMap::from([("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string())]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn create_env_policy_rebuild_coalesces_windows_path_and_pathext() {
+        let vars = make_vars(&[
+            ("Path", r"C:\inherited-bin"),
+            ("PATH", r"C:\other-inherited-bin"),
+            ("PathExt", ".COM;.EXE;.BAT;.CMD"),
+        ]);
+        let mut policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+        policy
+            .r#set
+            .insert("PATH".to_string(), r"C:\configured-bin".to_string());
+        policy
+            .r#set
+            .insert("pathext".to_string(), ".EXE".to_string());
+
+        let result = create_env_from_vars(vars, &policy, /*thread_id*/ None);
+
+        assert_eq!(
+            result.get("PATH").map(String::as_str),
+            Some(r"C:\configured-bin")
+        );
+        assert_eq!(result.get("PATHEXT").map(String::as_str), Some(".EXE"));
+        assert_eq!(
+            result
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("PATH"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            result
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("PATHEXT"))
+                .count(),
+            1
+        );
     }
 }
 
