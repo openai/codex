@@ -303,6 +303,7 @@ fn collab_receiver_is_not_found(
 }
 
 fn default_exec_approval_decisions(
+    approval_id: Option<&str>,
     network_approval_context: Option<&codex_app_server_protocol::NetworkApprovalContext>,
     proposed_execpolicy_amendment: Option<&codex_app_server_protocol::ExecPolicyAmendment>,
     proposed_network_policy_amendments: Option<
@@ -312,6 +313,13 @@ fn default_exec_approval_decisions(
 ) -> Vec<codex_app_server_protocol::CommandExecutionApprovalDecision> {
     use codex_app_server_protocol::CommandExecutionApprovalDecision;
     use codex_app_server_protocol::NetworkPolicyRuleAction;
+
+    if approval_id.is_some() {
+        return vec![
+            CommandExecutionApprovalDecision::Accept,
+            CommandExecutionApprovalDecision::Cancel,
+        ];
+    }
 
     if network_approval_context.is_some() {
         let mut decisions = vec![
@@ -340,7 +348,10 @@ fn default_exec_approval_decisions(
         ];
     }
 
-    let mut decisions = vec![CommandExecutionApprovalDecision::Accept];
+    let mut decisions = vec![
+        CommandExecutionApprovalDecision::Accept,
+        CommandExecutionApprovalDecision::AcceptForSession,
+    ];
     if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
         decisions.push(
             CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {

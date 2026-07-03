@@ -6,6 +6,7 @@
 //! together with the replay behavior that consumes them.
 
 use super::*;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 
 #[derive(Debug, Clone)]
 pub(super) struct ThreadEventSnapshot {
@@ -233,6 +234,11 @@ impl ThreadEventStore {
         T: Into<AppCommand>,
     {
         self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    pub(super) fn note_resolved_app_server_request(&mut self, request_id: &AppServerRequestId) {
+        self.pending_interactive_replay
+            .note_resolved_app_server_request(request_id);
     }
 
     pub(super) fn op_can_change_pending_replay_state<T>(op: T) -> bool

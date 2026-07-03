@@ -11,29 +11,28 @@ impl ChatWidget {
         request: ServerRequest,
         replay_kind: Option<ReplayKind>,
     ) {
-        let id = request.id().to_string();
         match request {
-            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+            ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                 let fallback_cwd = self.config.cwd.clone();
                 self.on_exec_approval_request(
-                    id,
+                    Some(request_id),
                     exec_approval_request_from_params(params, &fallback_cwd),
                 );
             }
-            ServerRequest::FileChangeRequestApproval { params, .. } => {
+            ServerRequest::FileChangeRequestApproval { request_id, params } => {
                 self.on_apply_patch_approval_request(
-                    id,
+                    Some(request_id),
                     patch_approval_request_from_params(params),
                 );
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.on_elicitation_request(request_id, params);
             }
-            ServerRequest::PermissionsRequestApproval { params, .. } => {
+            ServerRequest::PermissionsRequestApproval { request_id, params } => {
                 // TODO(anp): Remove this native-path localization error path once core permission
                 // paths remain PathUri after crossing the app-server boundary.
                 match request_permissions_from_params(params) {
-                    Ok(event) => self.on_request_permissions(event),
+                    Ok(event) => self.on_request_permissions(Some(request_id), event),
                     Err(err) => {
                         self.add_error_message(format!(
                             "failed to localize requested filesystem paths: {err}"
@@ -41,8 +40,8 @@ impl ChatWidget {
                     }
                 }
             }
-            ServerRequest::ToolRequestUserInput { params, .. } => {
-                self.on_request_user_input(params);
+            ServerRequest::ToolRequestUserInput { request_id, params } => {
+                self.on_request_user_input(Some(request_id), params);
             }
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::AttestationGenerate { .. }

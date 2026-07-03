@@ -6,25 +6,33 @@
 use super::*;
 
 impl ChatWidget {
-    pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
+    pub(super) fn on_exec_approval_request(
+        &mut self,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: ExecApprovalRequestEvent,
+    ) {
         self.record_visible_turn_activity();
         let ev2 = ev.clone();
+        let app_server_request_id2 = app_server_request_id.clone();
+        let thread_id = self.thread_id;
         self.defer_or_handle(
-            |q| q.push_exec_approval(ev),
-            |s| s.handle_exec_approval_now(ev2),
+            |q| q.push_exec_approval(thread_id, app_server_request_id, ev),
+            |s| s.handle_exec_approval_now(thread_id, app_server_request_id2, ev2),
         );
     }
 
     pub(super) fn on_apply_patch_approval_request(
         &mut self,
-        _id: String,
+        app_server_request_id: Option<AppServerRequestId>,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
         self.record_visible_turn_activity();
         let ev2 = ev.clone();
+        let app_server_request_id2 = app_server_request_id.clone();
+        let thread_id = self.thread_id;
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(ev),
-            |s| s.handle_apply_patch_approval_now(ev2),
+            |q| q.push_apply_patch_approval(thread_id, app_server_request_id, ev),
+            |s| s.handle_apply_patch_approval_now(thread_id, app_server_request_id2, ev2),
         );
     }
 
@@ -267,25 +275,45 @@ impl ChatWidget {
         );
     }
 
-    pub(super) fn on_request_user_input(&mut self, ev: ToolRequestUserInputParams) {
+    pub(super) fn on_request_user_input(
+        &mut self,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: ToolRequestUserInputParams,
+    ) {
         self.record_visible_turn_activity();
         let ev2 = ev.clone();
+        let app_server_request_id2 = app_server_request_id.clone();
         self.defer_or_handle(
-            |q| q.push_user_input(ev),
-            |s| s.handle_request_user_input_now(ev2),
+            |q| q.push_user_input(app_server_request_id, ev),
+            |s| s.handle_request_user_input_now(app_server_request_id2, ev2),
         );
     }
 
-    pub(super) fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+    pub(super) fn on_request_permissions(
+        &mut self,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: RequestPermissionsEvent,
+    ) {
         self.record_visible_turn_activity();
         let ev2 = ev.clone();
+        let app_server_request_id2 = app_server_request_id.clone();
+        let thread_id = self.thread_id;
         self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
+            |q| q.push_request_permissions(thread_id, app_server_request_id, ev),
+            |s| s.handle_request_permissions_now(thread_id, app_server_request_id2, ev2),
         );
     }
 
-    pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
+    pub(crate) fn handle_exec_approval_now(
+        &mut self,
+        origin_thread_id: Option<ThreadId>,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: ExecApprovalRequestEvent,
+    ) {
+        if app_server_request_id.is_some() && origin_thread_id.is_none() {
+            tracing::warn!("ignoring app-server exec approval without an active thread");
+            return;
+        }
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -293,7 +321,8 @@ impl ChatWidget {
 
         let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id: origin_thread_id.unwrap_or_default(),
+            app_server_request_id,
             thread_label: None,
             id: ev.effective_approval_id(),
             environment_id: ev.environment_id,
@@ -312,11 +341,21 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
+    pub(crate) fn handle_apply_patch_approval_now(
+        &mut self,
+        origin_thread_id: Option<ThreadId>,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: ApplyPatchApprovalRequestEvent,
+    ) {
+        if app_server_request_id.is_some() && origin_thread_id.is_none() {
+            tracing::warn!("ignoring app-server patch approval without an active thread");
+            return;
+        }
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id: origin_thread_id.unwrap_or_default(),
+            app_server_request_id,
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
@@ -347,8 +386,13 @@ impl ChatWidget {
             server_name: params.server_name.clone(),
         });
 
-        let thread_id = ThreadId::from_string(&params.thread_id)
-            .unwrap_or_else(|_| self.thread_id.unwrap_or_default());
+        let Ok(thread_id) = ThreadId::from_string(&params.thread_id) else {
+            tracing::warn!(
+                thread_id = params.thread_id,
+                "ignoring MCP elicitation with invalid thread_id"
+            );
+            return;
+        };
         if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_url_app_server_request(
             thread_id,
             &params.server_name,
@@ -419,7 +463,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_user_input_now(&mut self, ev: ToolRequestUserInputParams) {
+    pub(crate) fn handle_request_user_input_now(
+        &mut self,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: ToolRequestUserInputParams,
+    ) {
         self.flush_answer_stream_with_separator();
         let question_count = ev.questions.len();
         let summary = Notification::user_input_request_summary(&ev.questions);
@@ -429,7 +477,24 @@ impl ChatWidget {
             (count, _) => format!("{count} questions requested"),
         };
         self.notify(Notification::PlanModePrompt { title });
-        self.bottom_pane.push_user_input_request(ev);
+        let identity = match app_server_request_id {
+            Some(request_id) => {
+                let Ok(thread_id) = ThreadId::from_string(&ev.thread_id) else {
+                    tracing::warn!(
+                        thread_id = ev.thread_id,
+                        "ignoring app-server user-input request with invalid thread_id"
+                    );
+                    return;
+                };
+                Some(AppServerRequestIdentity {
+                    thread_id,
+                    request_id,
+                })
+            }
+            None => None,
+        };
+        self.bottom_pane
+            .push_user_input_request_with_identity(ev, identity);
         self.set_ambient_pet_notification(
             crate::pets::PetNotificationKind::Waiting,
             /*body*/ None,
@@ -437,10 +502,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+    pub(crate) fn handle_request_permissions_now(
+        &mut self,
+        origin_thread_id: Option<ThreadId>,
+        app_server_request_id: Option<AppServerRequestId>,
+        ev: RequestPermissionsEvent,
+    ) {
+        if app_server_request_id.is_some() && origin_thread_id.is_none() {
+            tracing::warn!("ignoring app-server permissions approval without an active thread");
+            return;
+        }
         self.flush_answer_stream_with_separator();
         let request = ApprovalRequest::Permissions {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id: origin_thread_id.unwrap_or_default(),
+            app_server_request_id,
             thread_label: None,
             call_id: ev.call_id,
             environment_id: ev.environment_id,

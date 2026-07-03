@@ -220,8 +220,8 @@ pub struct ExecApprovalRequestEvent {
     pub call_id: String,
     /// Identifier for this specific approval callback.
     ///
-    /// When absent, the approval is for the command item itself (`call_id`).
-    /// This is present for subcommand approvals (via execve intercept).
+    /// When present, responses must use this ID instead of the command-item
+    /// `call_id`. Absence preserves legacy/cacheable approval routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub approval_id: Option<String>,
@@ -286,6 +286,9 @@ impl ExecApprovalRequestEvent {
         // senders, so we fall back to the legacy logic if it's not present.
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
+            None if self.approval_id.is_some() => {
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            }
             None => Self::default_available_decisions(
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),
@@ -469,6 +472,32 @@ mod tests {
                 },
                 ReviewDecision::Abort,
             ]
+        );
+    }
+
+    #[test]
+    fn callback_without_explicit_decisions_is_one_shot() {
+        let value = serde_json::json!({
+            "call_id": "command-item",
+            "approval_id": "callback",
+            "turn_id": "turn",
+            "started_at_ms": 0,
+            "command": ["echo", "hi"],
+            "cwd": test_path_buf("/tmp"),
+            "reason": null,
+            "parsed_cmd": [],
+        });
+        let mut event: ExecApprovalRequestEvent =
+            serde_json::from_value(value).expect("callback event");
+        assert_eq!(
+            event.effective_available_decisions(),
+            vec![ReviewDecision::Approved, ReviewDecision::Abort]
+        );
+
+        event.available_decisions = Some(vec![ReviewDecision::ApprovedForSession]);
+        assert_eq!(
+            event.effective_available_decisions(),
+            vec![ReviewDecision::ApprovedForSession]
         );
     }
 

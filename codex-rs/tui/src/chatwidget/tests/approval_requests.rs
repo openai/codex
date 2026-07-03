@@ -11,7 +11,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
-        approval_id: Some("call-short".into()),
+        approval_id: None,
         turn_id: "turn-short".into(),
         environment_id: Some("remote".to_string()),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -372,12 +372,59 @@ async fn exec_approval_uses_approval_id_when_present() {
 }
 
 #[tokio::test]
+async fn deferred_app_server_approval_preserves_origin_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let origin_thread_id =
+        ThreadId::try_from("00000000-0000-0000-0000-000000000001").expect("valid thread id");
+    let focused_thread_id =
+        ThreadId::try_from("00000000-0000-0000-0000-000000000002").expect("valid thread id");
+    let request_id = AppServerRequestId::String("request-1".to_string());
+    chat.interrupts.push_exec_approval(
+        Some(origin_thread_id),
+        Some(request_id.clone()),
+        ExecApprovalRequestEvent {
+            call_id: "call".to_string(),
+            approval_id: Some("approval".to_string()),
+            turn_id: "turn".to_string(),
+            environment_id: None,
+            command: vec!["true".to_string()],
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            reason: None,
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            available_decisions: None,
+        },
+    );
+    chat.thread_id = Some(focused_thread_id);
+
+    chat.flush_interrupt_queue();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    let event = std::iter::from_fn(|| rx.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::ResolveAppServerRequest { .. }))
+        .expect("expected exact app-server resolution");
+    let AppEvent::ResolveAppServerRequest {
+        thread_id,
+        request_id: event_request_id,
+        op: Op::ExecApproval { id, .. },
+    } = event
+    else {
+        panic!("expected exact exec approval resolution");
+    };
+    assert_eq!(thread_id, origin_thread_id);
+    assert_eq!(event_request_id, request_id);
+    assert_eq!(id, "approval");
+}
+
+#[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
-        approval_id: Some("call-multi".into()),
+        approval_id: None,
         turn_id: "turn-multi".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -429,7 +476,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        approval_id: Some("call-long".into()),
+        approval_id: None,
         turn_id: "turn-long".into(),
         environment_id: None,
         command: vec!["bash".into(), "-lc".into(), long],

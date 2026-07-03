@@ -601,7 +601,8 @@ pub(super) fn handle_exec_approval_request(
     id: impl Into<String>,
     event: ExecApprovalRequestEvent,
 ) {
-    chat.on_exec_approval_request(id.into(), event);
+    let _ = id.into();
+    chat.on_exec_approval_request(/*app_server_request_id*/ None, event);
 }
 
 pub(super) fn handle_apply_patch_approval_request(
@@ -609,7 +610,8 @@ pub(super) fn handle_apply_patch_approval_request(
     id: impl Into<String>,
     event: ApplyPatchApprovalRequestEvent,
 ) {
-    chat.on_apply_patch_approval_request(id.into(), event);
+    let _ = id.into();
+    chat.on_apply_patch_approval_request(/*app_server_request_id*/ None, event);
 }
 
 fn file_update_changes_from_tui(changes: HashMap<PathBuf, FileChange>) -> Vec<FileUpdateChange> {

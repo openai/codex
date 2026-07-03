@@ -582,23 +582,26 @@ async fn request_user_input_notification_overrides_pending_agent_turn_complete_n
     chat.notify(Notification::AgentTurnComplete {
         response: "done".to_string(),
     });
-    chat.handle_request_user_input_now(ToolRequestUserInputParams {
-        thread_id: "thread-1".to_string(),
-        item_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![ToolRequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![ToolRequestUserInputOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
-        auto_resolution_ms: None,
-    });
+    chat.handle_request_user_input_now(
+        /*app_server_request_id*/ None,
+        ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![ToolRequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![ToolRequestUserInputOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+            auto_resolution_ms: None,
+        },
+    );
 
     assert_matches!(
         chat.pending_notification,
@@ -612,23 +615,26 @@ async fn handle_request_user_input_sets_pending_notification() {
     chat.config.tui_notifications.notifications =
         Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
-    chat.handle_request_user_input_now(ToolRequestUserInputParams {
-        thread_id: "thread-1".to_string(),
-        item_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![ToolRequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![ToolRequestUserInputOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
-        auto_resolution_ms: None,
-    });
+    chat.handle_request_user_input_now(
+        /*app_server_request_id*/ None,
+        ToolRequestUserInputParams {
+            thread_id: "thread-1".to_string(),
+            item_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![ToolRequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![ToolRequestUserInputOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+            auto_resolution_ms: None,
+        },
+    );
 
     assert_matches!(
         chat.pending_notification,

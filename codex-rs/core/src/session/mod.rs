@@ -2134,9 +2134,9 @@ impl Session {
     /// cleared before a response arrives, treat it as an abort so interrupted
     /// turns do not continue on a synthetic denial.
     ///
-    /// Note that if `available_decisions` is `None`, then the other fields will
-    /// be used to derive the available decisions via
-    /// [ExecApprovalRequestEvent::default_available_decisions].
+    /// If `available_decisions` is `None`, callback-scoped requests with an
+    /// `approval_id` offer only approve or abort. Other requests derive their
+    /// decisions via [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
     #[expect(
         clippy::await_holding_invalid_type,
@@ -2172,12 +2172,16 @@ impl Session {
             ]
         });
         let available_decisions = available_decisions.unwrap_or_else(|| {
-            ExecApprovalRequestEvent::default_available_decisions(
-                network_approval_context.as_ref(),
-                proposed_execpolicy_amendment.as_ref(),
-                proposed_network_policy_amendments.as_deref(),
-                additional_permissions.as_ref(),
-            )
+            if approval_id.is_some() {
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            } else {
+                ExecApprovalRequestEvent::default_available_decisions(
+                    network_approval_context.as_ref(),
+                    proposed_execpolicy_amendment.as_ref(),
+                    proposed_network_policy_amendments.as_deref(),
+                    additional_permissions.as_ref(),
+                )
+            }
         });
         let accepted_decisions = accepted_command_approval_decisions(
             available_decisions.clone(),

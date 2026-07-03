@@ -640,6 +640,27 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     assert_eq!(approved_subcommand_strings.len(), 2);
     assert!(approved_subcommand_strings[0].contains(&first_file.display().to_string()));
     assert!(approved_subcommand_strings[1].contains(&second_file.display().to_string()));
+    let parent_started_metadata = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.expect("item/started params"))?;
+            if let ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                command_actions,
+                ..
+            } = started.item
+                && id == "call-zsh-fork-subcommand-decline"
+            {
+                return Ok::<_, anyhow::Error>((command, cwd, command_actions));
+            }
+        }
+    })
+    .await??;
     let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
             let completed_notif = mcp
@@ -664,6 +685,9 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         Ok(Ok(parent_completed_command_execution)) => {
             let ThreadItem::CommandExecution {
                 id,
+                command,
+                cwd,
+                command_actions,
                 status,
                 aggregated_output,
                 ..
@@ -673,6 +697,11 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             };
             assert_eq!(id, "call-zsh-fork-subcommand-decline");
             assert_eq!(status, CommandExecutionStatus::Declined);
+            assert_eq!(
+                (command, cwd, command_actions),
+                parent_started_metadata,
+                "parent completion metadata was replaced by a child callback"
+            );
             if let Some(output) = aggregated_output.as_deref() {
                 assert!(
                     output == "exec command rejected by user"

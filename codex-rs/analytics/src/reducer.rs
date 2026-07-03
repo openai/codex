@@ -969,15 +969,12 @@ impl AnalyticsReducer {
                         .and_then(|network| network.enabled)
                         .unwrap_or(false);
                 let requested_additional_permissions = params.additional_permissions.is_some();
-                let trigger = if params.approval_id.is_some() {
-                    ReviewTrigger::ExecveIntercept
-                } else if requested_network_access {
-                    ReviewTrigger::NetworkPolicyDenial
-                } else if requested_additional_permissions {
-                    ReviewTrigger::SandboxDenial
-                } else {
-                    ReviewTrigger::Initial
-                };
+                let trigger = command_execution_review_trigger(
+                    params.approval_id.as_deref(),
+                    params.reason.as_deref(),
+                    requested_additional_permissions,
+                    requested_network_access,
+                );
                 let Some(started_at_ms) = option_i64_to_u64(Some(params.started_at_ms)) else {
                     return;
                 };
@@ -2320,6 +2317,33 @@ fn guardian_review_subject_metadata(
     }
 }
 
+fn command_execution_review_trigger(
+    approval_id: Option<&str>,
+    reason: Option<&str>,
+    requested_additional_permissions: bool,
+    requested_network_access: bool,
+) -> ReviewTrigger {
+    if requested_network_access {
+        return ReviewTrigger::NetworkPolicyDenial;
+    }
+
+    // Both execve interception and a command's unsandboxed retry use a
+    // callback-specific approval ID. A retry also carries the sandbox denial
+    // reason, while an execve interception does not. Initial command prompts
+    // can carry a justification, but do not have a callback-specific ID.
+    if approval_id.is_some() {
+        if reason.is_some() {
+            ReviewTrigger::SandboxDenial
+        } else {
+            ReviewTrigger::ExecveIntercept
+        }
+    } else if requested_additional_permissions {
+        ReviewTrigger::SandboxDenial
+    } else {
+        ReviewTrigger::Initial
+    }
+}
+
 fn guardian_review_requested_additional_permissions(action: &GuardianApprovalReviewAction) -> bool {
     match action {
         GuardianApprovalReviewAction::ApplyPatch { .. }
@@ -2841,6 +2865,75 @@ mod tests {
         assert!(matches!(
             guardian_review_result(GuardianApprovalReviewStatus::TimedOut),
             Some((ReviewStatus::TimedOut, ReviewResolution::None))
+        ));
+    }
+
+    #[test]
+    fn command_execution_review_trigger_distinguishes_retry_from_execve() {
+        assert!(matches!(
+            command_execution_review_trigger(
+                Some("retry-id"),
+                Some("sandbox denied"),
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::SandboxDenial
+        ));
+        assert!(matches!(
+            command_execution_review_trigger(
+                Some("execve-id"),
+                /*reason*/ None,
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::ExecveIntercept
+        ));
+        assert!(matches!(
+            command_execution_review_trigger(
+                /*approval_id*/ None,
+                Some("initial justification"),
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::Initial
+        ));
+    }
+
+    #[test]
+    fn command_execution_review_trigger_uses_semantic_precedence() {
+        assert!(matches!(
+            command_execution_review_trigger(
+                Some("network-id"),
+                Some("network denied"),
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ true,
+            ),
+            ReviewTrigger::NetworkPolicyDenial
+        ));
+        assert!(matches!(
+            command_execution_review_trigger(
+                Some("permissions-id"),
+                /*reason*/ None,
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::ExecveIntercept
+        ));
+        assert!(matches!(
+            command_execution_review_trigger(
+                /*approval_id*/ None, /*reason*/ None,
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::SandboxDenial
+        ));
+        assert!(matches!(
+            command_execution_review_trigger(
+                /*approval_id*/ None, /*reason*/ None,
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
+            ReviewTrigger::Initial
         ));
     }
 }
