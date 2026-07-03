@@ -39,9 +39,37 @@ class ValidateMessageTest(unittest.TestCase):
                     capture=True,
                 ),
                 call(
+                    ["gh", "api", f"repos/openai/codex/commits/{commit}"],
+                    capture=True,
+                ),
+            ],
+        )
+
+    def test_offline_validation_uses_local_commit_object(self) -> None:
+        commit = "0123456789abcdef0123456789abcdef01234567"
+        value = (
+            "Improve public behavior\n\n"
+            f"See https://github.com/openai/codex/commit/{commit}."
+        )
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(message_policy, "run") as run,
+        ):
+            root = Path(temp_dir)
+            message_policy.validate_message(
+                value,
+                root,
+                root / "message.txt",
+                verify_public_references=False,
+            )
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
                     ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
                     cwd=root,
-                ),
+                )
             ],
         )
 

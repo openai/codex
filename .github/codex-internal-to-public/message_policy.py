@@ -57,7 +57,7 @@ def validate_message(
     public_repo: Path,
     output_file: Path,
     *,
-    verify_public_prs: bool = True,
+    verify_public_references: bool = True,
 ) -> None:
     if "\r" in message:
         raise RuntimeError("Commit message must use Unix line endings.")
@@ -81,7 +81,9 @@ def validate_message(
     if body:
         message = f"{message}\n\n{body}"
     validate_message_text(
-        message, public_repo, verify_public_prs=verify_public_prs
+        message,
+        public_repo,
+        verify_public_references=verify_public_references,
     )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(f"{message}\n", encoding="utf-8")
@@ -119,7 +121,7 @@ def ensure_model_input_size(label: str, value: str, max_bytes: int) -> None:
 
 
 def validate_message_text(
-    message: str, public_repo: Path, *, verify_public_prs: bool
+    message: str, public_repo: Path, *, verify_public_references: bool
 ) -> None:
     for description, pattern in FORBIDDEN_MESSAGE_PATTERNS.items():
         match = pattern.search(message)
@@ -143,14 +145,20 @@ def validate_message_text(
             f"{bare_commit.group(0)}"
         )
 
-    if verify_public_prs:
+    if verify_public_references:
         for pr_number in PR_URL_RE.findall(message):
             run(["gh", "api", f"repos/openai/codex/pulls/{pr_number}"], capture=True)
-    for commit_revision in COMMIT_URL_RE.findall(message):
-        run(
-            ["git", "cat-file", "-e", f"{commit_revision}^{{commit}}"],
-            cwd=public_repo,
-        )
+        for commit_revision in COMMIT_URL_RE.findall(message):
+            run(
+                ["gh", "api", f"repos/openai/codex/commits/{commit_revision}"],
+                capture=True,
+            )
+    else:
+        for commit_revision in COMMIT_URL_RE.findall(message):
+            run(
+                ["git", "cat-file", "-e", f"{commit_revision}^{{commit}}"],
+                cwd=public_repo,
+            )
 
 
 def run(
@@ -189,7 +197,7 @@ def main() -> int:
         message_file.read_text(encoding="utf-8"),
         Path(sys.argv[2]),
         message_file,
-        verify_public_prs=command == "check",
+        verify_public_references=command == "check",
     )
     print("Commit message satisfies the public message policy.")
     return 0

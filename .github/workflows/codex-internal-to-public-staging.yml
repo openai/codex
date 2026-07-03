@@ -102,13 +102,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout public message workspace
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openai/codex
-          fetch-depth: 0
-          persist-credentials: false
-          path: message-workspace
+      - name: Clone public main history
+        run: |
+          git clone \
+            --branch main \
+            --filter=blob:none \
+            --no-checkout \
+            --no-tags \
+            --single-branch \
+            https://github.com/openai/codex.git \
+            message-workspace
 
       - name: Download public-only message inputs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -183,14 +186,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Checkout public history
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: openai/codex
-          fetch-depth: 0
-          persist-credentials: false
-          path: public-history
 
       - name: Download generated public message
         if: ${{ needs.prepare.outputs.message_override != 'true' }}

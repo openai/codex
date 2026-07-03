@@ -100,7 +100,8 @@ Its repository file inputs are limited to:
 - full public Codex PR or commit URLs mechanically extracted from the source message;
 - the public message prompt, authoritative `message_policy.py` validator, and Codex permission
   profile; and
-- a full clone of public `openai/codex` history into which the isolated branch is imported.
+- a blob-filtered, single-branch clone of the complete public `openai/codex` `main` history into
+  which the isolated branch is imported.
 
 The synthetic branch deliberately has no internal ancestry. Its root omits the internal state file,
 and both commits omit `.github`. The public repository may lag the staging branches, so the root is
@@ -110,9 +111,9 @@ internal checkout or internal Git object into the model job.
 
 The two synthetic commits are not a compressed public history and may share no ancestry with
 `origin/main`. Since the workflow checks out the synthetic target branch, an unqualified `git log`
-shows only those two commits. The prompt tells Codex to name `origin/main` or another public ref
-explicitly when researching real public history, and to use public GitHub access for pull-request
-context.
+shows only those two commits. The prompt tells Codex to name `origin/main` explicitly when
+researching real public history and to use public GitHub access for other branches, pull requests,
+and commits. Historical blobs are fetched on demand through the partial clone.
 
 The model prompt lives in `commit_message_prompt.md`; edit that file to change message policy.
 Repository contents and candidate URLs are explicitly untrusted. The `public-commit-message`
@@ -140,9 +141,9 @@ the profile.
 A fresh validation job parses the Markdown commit message and rejects internal repo and pipeline
 names; Slack, Notion, Google Docs, and Google Drive URLs; shorthand GitHub references such as
 `openai/codex#12345`; bare or abbreviated commit SHAs; and unsupported
-`github.com/openai/...` URLs. Any public PR URL is checked through the GitHub API, and every public
-commit URL must name a full 40-character object present in the public clone. Extracted public
-references are limited to ten URLs and 2,000 bytes.
+`github.com/openai/...` URLs. Public PR and commit URLs are checked directly through the GitHub API,
+so this job does not clone the public repository. Extracted public references are limited to ten
+URLs and 2,000 bytes.
 
 The subject should normally fit within 72 characters, but validation does not enforce that
 guideline. The body is GitHub-Flavored Markdown and may use headings, lists, tables, links, and
