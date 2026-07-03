@@ -160,6 +160,7 @@ mod tests {
         ExecApprovalRequestEvent {
             call_id: call_id.to_string(),
             approval_id: approval_id.map(str::to_string),
+            approval_purpose: None,
             turn_id: "turn".to_string(),
             environment_id: None,
             command: vec!["true".to_string()],

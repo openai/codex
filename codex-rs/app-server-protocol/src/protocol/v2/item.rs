@@ -11,6 +11,7 @@ use super::shared::v2_enum_from_core;
 use crate::protocol::item_builders::command_actions_for_path_uri;
 use crate::protocol::item_builders::convert_patch_changes;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_protocol::approvals::ExecApprovalPurpose as CoreExecApprovalPurpose;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
@@ -70,6 +71,14 @@ pub enum CommandExecutionApprovalDecision {
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
     Cancel,
+}
+
+v2_enum_from_core! {
+    pub enum CommandExecutionApprovalPurpose from CoreExecApprovalPurpose {
+        Initial,
+        Execve,
+        SandboxRetry,
+    }
 }
 
 impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
@@ -1452,6 +1461,10 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub approval_id: Option<String>,
+    /// Semantic purpose of this approval request. Compatibility events may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub approval_purpose: Option<CommandExecutionApprovalPurpose>,
     /// Environment in which the command will run.
     #[serde(default)]
     pub environment_id: Option<String>,

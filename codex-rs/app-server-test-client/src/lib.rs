@@ -2065,6 +2065,7 @@ impl CodexClient {
             item_id,
             started_at_ms: _,
             approval_id,
+            approval_purpose: _,
             environment_id,
             reason,
             network_approval_context,

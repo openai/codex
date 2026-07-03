@@ -106,6 +106,7 @@ use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionApprovalPurpose;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
@@ -970,6 +971,7 @@ impl AnalyticsReducer {
                         .unwrap_or(false);
                 let requested_additional_permissions = params.additional_permissions.is_some();
                 let trigger = command_execution_review_trigger(
+                    params.approval_purpose,
                     params.approval_id.as_deref(),
                     params.reason.as_deref(),
                     requested_additional_permissions,
@@ -2318,6 +2320,7 @@ fn guardian_review_subject_metadata(
 }
 
 fn command_execution_review_trigger(
+    approval_purpose: Option<CommandExecutionApprovalPurpose>,
     approval_id: Option<&str>,
     reason: Option<&str>,
     requested_additional_permissions: bool,
@@ -2327,20 +2330,22 @@ fn command_execution_review_trigger(
         return ReviewTrigger::NetworkPolicyDenial;
     }
 
-    // Both execve interception and a command's unsandboxed retry use a
-    // callback-specific approval ID. A retry also carries the sandbox denial
-    // reason, while an execve interception does not. Initial command prompts
-    // can carry a justification, but do not have a callback-specific ID.
-    if approval_id.is_some() {
-        if reason.is_some() {
-            ReviewTrigger::SandboxDenial
+    let purpose = approval_purpose.unwrap_or_else(|| {
+        if approval_id.is_none() {
+            CommandExecutionApprovalPurpose::Initial
+        } else if reason.is_some() {
+            CommandExecutionApprovalPurpose::SandboxRetry
         } else {
-            ReviewTrigger::ExecveIntercept
+            CommandExecutionApprovalPurpose::Execve
         }
-    } else if requested_additional_permissions {
-        ReviewTrigger::SandboxDenial
-    } else {
-        ReviewTrigger::Initial
+    });
+    match purpose {
+        CommandExecutionApprovalPurpose::SandboxRetry => ReviewTrigger::SandboxDenial,
+        CommandExecutionApprovalPurpose::Execve => ReviewTrigger::ExecveIntercept,
+        CommandExecutionApprovalPurpose::Initial if requested_additional_permissions => {
+            ReviewTrigger::SandboxDenial
+        }
+        CommandExecutionApprovalPurpose::Initial => ReviewTrigger::Initial,
     }
 }
 
@@ -2869,48 +2874,103 @@ mod tests {
     }
 
     #[test]
-    fn command_execution_review_trigger_distinguishes_retry_from_execve() {
-        assert!(matches!(
-            command_execution_review_trigger(
-                Some("retry-id"),
-                Some("sandbox denied"),
+    fn command_execution_review_trigger_uses_explicit_purpose_and_precedence() {
+        use CommandExecutionApprovalPurpose as Purpose;
+        let cases = [
+            (
+                Some(Purpose::Initial),
+                Some("id"),
+                None,
                 false,
-                false
+                false,
+                ReviewTrigger::Initial,
             ),
-            ReviewTrigger::SandboxDenial
-        ));
-        assert!(matches!(
-            command_execution_review_trigger(Some("execve-id"), None, false, false),
-            ReviewTrigger::ExecveIntercept
-        ));
-        assert!(matches!(
-            command_execution_review_trigger(None, Some("initial justification"), false, false),
-            ReviewTrigger::Initial
-        ));
-    }
-
-    #[test]
-    fn command_execution_review_trigger_uses_semantic_precedence() {
-        assert!(matches!(
-            command_execution_review_trigger(
-                Some("network-id"),
-                Some("network denied"),
+            (
+                Some(Purpose::Initial),
+                Some("id"),
+                Some("reason"),
+                false,
+                false,
+                ReviewTrigger::Initial,
+            ),
+            (
+                Some(Purpose::Execve),
+                Some("id"),
+                None,
+                false,
+                false,
+                ReviewTrigger::ExecveIntercept,
+            ),
+            (
+                Some(Purpose::Execve),
+                Some("id"),
+                Some("reason"),
+                true,
+                false,
+                ReviewTrigger::ExecveIntercept,
+            ),
+            (
+                Some(Purpose::SandboxRetry),
+                Some("id"),
+                None,
+                false,
+                false,
+                ReviewTrigger::SandboxDenial,
+            ),
+            (
+                Some(Purpose::SandboxRetry),
+                Some("id"),
+                Some("reason"),
+                false,
+                false,
+                ReviewTrigger::SandboxDenial,
+            ),
+            (
+                Some(Purpose::Initial),
+                None,
+                None,
+                true,
+                false,
+                ReviewTrigger::SandboxDenial,
+            ),
+            (
+                Some(Purpose::Execve),
+                Some("id"),
+                None,
                 true,
                 true,
+                ReviewTrigger::NetworkPolicyDenial,
             ),
-            ReviewTrigger::NetworkPolicyDenial
-        ));
-        assert!(matches!(
-            command_execution_review_trigger(Some("permissions-id"), None, true, false),
-            ReviewTrigger::ExecveIntercept
-        ));
-        assert!(matches!(
-            command_execution_review_trigger(None, None, true, false),
-            ReviewTrigger::SandboxDenial
-        ));
-        assert!(matches!(
-            command_execution_review_trigger(None, None, false, false),
-            ReviewTrigger::Initial
-        ));
+            (
+                None,
+                Some("id"),
+                Some("reason"),
+                false,
+                false,
+                ReviewTrigger::SandboxDenial,
+            ),
+            (
+                None,
+                Some("id"),
+                None,
+                false,
+                false,
+                ReviewTrigger::ExecveIntercept,
+            ),
+            (
+                None,
+                None,
+                Some("reason"),
+                false,
+                false,
+                ReviewTrigger::Initial,
+            ),
+        ];
+        for (purpose, id, reason, permissions, network, expected) in cases {
+            assert_eq!(
+                command_execution_review_trigger(purpose, id, reason, permissions, network),
+                expected
+            );
+        }
     }
 }

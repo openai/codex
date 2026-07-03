@@ -806,6 +806,7 @@ async fn callback_without_explicit_decisions_is_one_shot() {
                     turn_context.as_ref(),
                     "command-item".to_string(),
                     Some("callback".to_string()),
+                    /*approval_purpose*/ None,
                     /*environment_id*/ None,
                     vec!["echo".to_string(), "hi".to_string()],
                     test_path_buf("/tmp").abs(),
@@ -846,6 +847,7 @@ async fn callback_without_explicit_decisions_is_one_shot() {
                     turn_context.as_ref(),
                     "command-item".to_string(),
                     Some("explicit-callback".to_string()),
+                    /*approval_purpose*/ None,
                     /*environment_id*/ None,
                     vec!["echo".to_string(), "hi".to_string()],
                     test_path_buf("/tmp").abs(),
@@ -878,6 +880,84 @@ async fn callback_without_explicit_decisions_is_one_shot() {
     );
 }
 
+#[tokio::test]
+async fn default_command_decisions_respect_explicit_callback_purpose() {
+    use codex_protocol::protocol::ExecApprovalPurpose as Purpose;
+    let (session, turn_context, rx_events) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+    for (index, approval_id, purpose, expected) in [
+        (
+            0,
+            None,
+            Purpose::Initial,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::Abort,
+            ],
+        ),
+        (
+            1,
+            Some("callback-initial"),
+            Purpose::Initial,
+            vec![ReviewDecision::Approved, ReviewDecision::Abort],
+        ),
+        (
+            2,
+            None,
+            Purpose::Execve,
+            vec![ReviewDecision::Approved, ReviewDecision::Abort],
+        ),
+        (
+            3,
+            None,
+            Purpose::SandboxRetry,
+            vec![ReviewDecision::Approved, ReviewDecision::Abort],
+        ),
+    ] {
+        let call_id = format!("purpose-{index}");
+        let response_id = approval_id
+            .map(str::to_string)
+            .unwrap_or_else(|| call_id.clone());
+        let request = tokio::spawn({
+            let session = Arc::clone(&session);
+            let turn_context = Arc::clone(&turn_context);
+            let call_id = call_id.clone();
+            async move {
+                session
+                    .request_command_approval(
+                        turn_context.as_ref(),
+                        call_id,
+                        approval_id.map(str::to_string),
+                        Some(purpose),
+                        /*environment_id*/ None,
+                        vec!["true".to_string()],
+                        test_path_buf("/tmp").abs(),
+                        /*reason*/ None,
+                        /*network_approval_context*/ None,
+                        /*proposed_execpolicy_amendment*/ None,
+                        /*additional_permissions*/ None,
+                        /*available_decisions*/ None,
+                    )
+                    .await
+            }
+        });
+        let event = rx_events.recv().await.expect("exec approval event");
+        let EventMsg::ExecApprovalRequest(event) = event.msg else {
+            panic!("expected exec approval request");
+        };
+        assert_eq!(event.available_decisions, Some(expected));
+        session
+            .notify_exec_approval(&response_id, ReviewDecision::Approved)
+            .await;
+        assert_eq!(
+            request.await.expect("approval task"),
+            ReviewDecision::Approved
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DuplicateApprovalRequestKind {
     Exec,
@@ -906,6 +986,7 @@ async fn duplicate_same_kind_approval_request_aborts_without_replacing_or_emitti
                                 turn_context.as_ref(),
                                 approval_id,
                                 /*approval_id*/ None,
+                                Some(codex_protocol::protocol::ExecApprovalPurpose::Initial),
                                 /*environment_id*/ None,
                                 vec!["first".to_string()],
                                 test_path_buf("/tmp").abs(),
@@ -934,6 +1015,7 @@ async fn duplicate_same_kind_approval_request_aborts_without_replacing_or_emitti
                         turn_context.as_ref(),
                         approval_id.clone(),
                         /*approval_id*/ None,
+                        Some(codex_protocol::protocol::ExecApprovalPurpose::Initial),
                         /*environment_id*/ None,
                         vec!["second".to_string()],
                         test_path_buf("/tmp").abs(),

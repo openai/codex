@@ -2371,6 +2371,14 @@
         }
       ]
     },
+    "CommandExecutionApprovalPurpose": {
+      "enum": [
+        "initial",
+        "execve",
+        "sandboxRetry"
+      ],
+      "type": "string"
+    },
     "CommandExecutionRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2380,6 +2388,17 @@
             "string",
             "null"
           ]
+        },
+        "approvalPurpose": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecutionApprovalPurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Semantic purpose of this approval request. Compatibility events may omit it."
         },
         "command": {
           "description": "The command to be executed.",

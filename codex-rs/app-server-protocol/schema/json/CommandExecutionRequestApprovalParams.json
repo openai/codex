@@ -273,6 +273,14 @@
         }
       ]
     },
+    "CommandExecutionApprovalPurpose": {
+      "enum": [
+        "initial",
+        "execve",
+        "sandboxRetry"
+      ],
+      "type": "string"
+    },
     "FileSystemAccessMode": {
       "enum": [
         "read",
@@ -526,6 +534,17 @@
         "string",
         "null"
       ]
+    },
+    "approvalPurpose": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandExecutionApprovalPurpose"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Semantic purpose of this approval request. Compatibility events may omit it."
     },
     "command": {
       "description": "The command to be executed.",

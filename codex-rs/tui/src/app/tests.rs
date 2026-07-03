@@ -2525,34 +2525,56 @@ async fn inactive_thread_exec_approval_preserves_context() {
 }
 
 #[tokio::test]
-async fn callback_exec_approval_falls_back_to_one_shot_decisions() -> std::io::Result<()> {
+async fn exec_approval_fallback_is_callback_scope_aware() -> std::io::Result<()> {
     use codex_app_server_protocol::CommandExecutionApprovalDecision as Decision;
+    use codex_app_server_protocol::CommandExecutionApprovalPurpose as Purpose;
     let app = make_test_app().await;
     let thread_id = ThreadId::new();
-    let request = exec_approval_request(
+    for (approval_id, purpose, callback_scoped) in [
+        (None, None, false),
+        (None, Some(Purpose::Initial), false),
+        (Some("callback"), None, true),
+        (Some("callback"), Some(Purpose::Initial), true),
+        (None, Some(Purpose::Execve), true),
+        (None, Some(Purpose::SandboxRetry), true),
+    ] {
+        let mut request =
+            exec_approval_request(thread_id, "turn-approval", "call-approval", approval_id);
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+            unreachable!();
+        };
+        params.approval_purpose = purpose;
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+            available_decisions,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await?
+        else {
+            panic!("expected exec approval request");
+        };
+        let expected = if callback_scoped {
+            vec![Decision::Accept, Decision::Cancel]
+        } else {
+            vec![
+                Decision::Accept,
+                Decision::AcceptForSession,
+                Decision::Cancel,
+            ]
+        };
+        assert_eq!(available_decisions, expected);
+    }
+
+    let mut request = exec_approval_request(
         thread_id,
         "turn-approval",
         "call-approval",
         Some("callback"),
     );
-    let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
-        available_decisions,
-        ..
-    })) = app
-        .interactive_request_for_thread_request(thread_id, &request)
-        .await?
-    else {
-        panic!("expected exec approval request");
-    };
-    assert_eq!(
-        available_decisions,
-        vec![Decision::Accept, Decision::Cancel]
-    );
-
-    let mut request = request;
     let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
         unreachable!();
     };
+    params.approval_purpose = Some(Purpose::Execve);
     params.available_decisions = Some(vec![Decision::AcceptForSession]);
     let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
         available_decisions,
@@ -2564,6 +2586,7 @@ async fn callback_exec_approval_falls_back_to_one_shot_decisions() -> std::io::R
         panic!("expected exec approval request");
     };
     assert_eq!(available_decisions, vec![Decision::AcceptForSession]);
+
     Ok(())
 }
 
@@ -4746,6 +4769,7 @@ fn exec_approval_request(
             item_id: item_id.to_string(),
             started_at_ms: 0,
             approval_id: approval_id.map(str::to_string),
+            approval_purpose: None,
             environment_id: None,
             reason: Some("needs approval".to_string()),
             network_approval_context: None,
