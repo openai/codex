@@ -844,7 +844,7 @@ async fn list_all_tools_polls_required_clients_concurrently() {
             cancel_token: CancellationToken::new(),
         },
     );
-    let list_task = tokio::spawn(async move { manager.list_all_tools().await });
+    let list_task = tokio::spawn(async move { manager.list_all_tools_for_turn().await });
 
     let (first_started, second_started) =
         tokio::time::timeout(Duration::from_secs(1), async move {
@@ -966,7 +966,7 @@ async fn list_all_tools_applies_legacy_mcp_prefix_by_default() {
 }
 
 #[tokio::test]
-async fn list_all_tools_skips_optional_client_pending_without_cached_tools() {
+async fn list_all_tools_for_turn_skips_optional_client_pending_without_cached_tools() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
         .shared();
@@ -992,10 +992,42 @@ async fn list_all_tools_skips_optional_client_pending_without_cached_tools() {
         },
     );
 
-    let tools = tokio::time::timeout(Duration::from_secs(1), manager.list_all_tools())
+    let tools = tokio::time::timeout(Duration::from_secs(1), manager.list_all_tools_for_turn())
         .await
-        .expect("optional client tool listing should not block on startup");
+        .expect("optional client tool listing should not block a turn on startup");
     assert!(tools.is_empty());
+}
+
+#[tokio::test]
+async fn list_all_tools_waits_for_optional_client_pending_without_cached_tools() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            is_codex_apps_mcp_server: true,
+            cached_server_info: None,
+            codex_apps_tools_cache_context: None,
+            tool_filter: ToolFilter::default(),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_reconnect: None,
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+
+    let timeout_result =
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+    assert!(timeout_result.is_err());
 }
 
 #[tokio::test]
@@ -1029,7 +1061,7 @@ async fn list_all_tools_blocks_while_required_client_is_pending_without_cached_t
     );
 
     let timeout_result =
-        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools_for_turn()).await;
     assert!(timeout_result.is_err());
 }
 
@@ -1074,7 +1106,7 @@ async fn list_all_tools_blocks_while_required_client_is_pending_with_cached_tool
     );
 
     let timeout_result =
-        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
+        tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools_for_turn()).await;
     assert!(timeout_result.is_err());
 }
 

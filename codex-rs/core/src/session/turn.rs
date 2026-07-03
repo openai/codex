@@ -552,7 +552,7 @@ async fn build_skills_and_plugins(
         match step_context
             .mcp
             .manager_arc()
-            .list_all_tools()
+            .list_all_tools_for_turn()
             .or_cancel(cancellation_token)
             .await
         {
@@ -1183,7 +1183,7 @@ pub(crate) async fn built_tools(
     let mcp_connection_manager = step_context.mcp.manager();
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager
-        .list_all_tools()
+        .list_all_tools_for_turn()
         .or_cancel(cancellation_token)
         .await?;
     let loaded_plugins = sess

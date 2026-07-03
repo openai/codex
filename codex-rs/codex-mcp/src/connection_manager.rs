@@ -85,6 +85,12 @@ const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingOptionalToolListing {
+    WaitForStartup,
+    SkipWithoutCache,
+}
+
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
 /// Tools without visibility metadata remain visible.
@@ -480,8 +486,22 @@ impl McpConnectionManager {
     }
 
     /// Returns all tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::WaitForStartup)
+            .await
+    }
+
+    /// Returns tools available to a turn without waiting for uncached optional servers to start.
+    pub async fn list_all_tools_for_turn(&self) -> Vec<ToolInfo> {
+        self.list_all_tools_with_pending_optional(PendingOptionalToolListing::SkipWithoutCache)
+            .await
+    }
+
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
+    async fn list_all_tools_with_pending_optional(
+        &self,
+        pending_optional: PendingOptionalToolListing,
+    ) -> Vec<ToolInfo> {
         let tools: Vec<ToolInfo> =
             futures::future::join_all(self.clients.iter().map(|(server_name, managed_client)| {
                 let required = self.required_servers.binary_search(server_name).is_ok();
@@ -496,7 +516,11 @@ impl McpConnectionManager {
                         startup_complete,
                         "listing MCP server tools while building tool list"
                     );
-                    if !required && !startup_complete && !has_cached_tools {
+                    if pending_optional == PendingOptionalToolListing::SkipWithoutCache
+                        && !required
+                        && !startup_complete
+                        && !has_cached_tools
+                    {
                         trace!(
                             server_name = %server_name,
                             "skipping pending optional MCP server without cached tools"
