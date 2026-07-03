@@ -772,7 +772,9 @@ mod tests {
     #[test]
     fn thread_event_snapshot_keeps_retry_callback_after_initial_item_approval() {
         let mut store = ThreadEventStore::new(/*capacity*/ 8);
-        store.push_request(exec_approval_request("call-1", None, "turn-1"));
+        store.push_request(exec_approval_request(
+            "call-1", /*approval_id*/ None, "turn-1",
+        ));
         store.note_outbound_op(&Op::ExecApproval {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),

@@ -2874,17 +2874,27 @@ mod tests {
             command_execution_review_trigger(
                 Some("retry-id"),
                 Some("sandbox denied"),
-                false,
-                false
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
             ),
             ReviewTrigger::SandboxDenial
         ));
         assert!(matches!(
-            command_execution_review_trigger(Some("execve-id"), None, false, false),
+            command_execution_review_trigger(
+                Some("execve-id"),
+                /*reason*/ None,
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
             ReviewTrigger::ExecveIntercept
         ));
         assert!(matches!(
-            command_execution_review_trigger(None, Some("initial justification"), false, false),
+            command_execution_review_trigger(
+                /*approval_id*/ None,
+                Some("initial justification"),
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
             ReviewTrigger::Initial
         ));
     }
@@ -2895,21 +2905,34 @@ mod tests {
             command_execution_review_trigger(
                 Some("network-id"),
                 Some("network denied"),
-                true,
-                true,
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ true,
             ),
             ReviewTrigger::NetworkPolicyDenial
         ));
         assert!(matches!(
-            command_execution_review_trigger(Some("permissions-id"), None, true, false),
+            command_execution_review_trigger(
+                Some("permissions-id"),
+                /*reason*/ None,
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ false,
+            ),
             ReviewTrigger::ExecveIntercept
         ));
         assert!(matches!(
-            command_execution_review_trigger(None, None, true, false),
+            command_execution_review_trigger(
+                /*approval_id*/ None, /*reason*/ None,
+                /*requested_additional_permissions*/ true,
+                /*requested_network_access*/ false,
+            ),
             ReviewTrigger::SandboxDenial
         ));
         assert!(matches!(
-            command_execution_review_trigger(None, None, false, false),
+            command_execution_review_trigger(
+                /*approval_id*/ None, /*reason*/ None,
+                /*requested_additional_permissions*/ false,
+                /*requested_network_access*/ false,
+            ),
             ReviewTrigger::Initial
         ));
     }
