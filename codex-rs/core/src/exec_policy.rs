@@ -40,6 +40,10 @@ use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
+#[cfg(windows)]
+#[path = "exec_policy_powershell.rs"]
+mod powershell_policy;
+
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
 const REJECT_SANDBOX_APPROVAL_REASON: &str =
@@ -279,11 +283,31 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
+        #[cfg(windows)]
+        let parsed_powershell = match powershell_policy::prepare(command) {
+            Some(powershell_policy::PreparedPowerShell::Terminal(requirement)) => {
+                return requirement;
+            }
+            Some(powershell_policy::PreparedPowerShell::Parsed(parsed)) => Some(parsed),
+            None => None,
+        };
+        #[cfg(windows)]
+        let exec_policy_commands = if let Some(parsed) = parsed_powershell.as_ref() {
+            ExecPolicyCommands {
+                commands: parsed.commands().to_vec(),
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::PowerShell,
+            }
+        } else {
+            commands_for_exec_policy(command)
+        };
+        #[cfg(not(windows))]
+        let exec_policy_commands = commands_for_exec_policy(command);
         let ExecPolicyCommands {
             commands,
             used_complex_parsing,
             command_origin,
-        } = commands_for_exec_policy(command);
+        } = exec_policy_commands;
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
@@ -765,20 +789,6 @@ fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
             used_complex_parsing: false,
             command_origin: ExecPolicyCommandOrigin::Generic,
         };
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(commands) =
-            codex_shell_command::powershell::parse_powershell_command_into_plain_commands(command)
-            && !commands.is_empty()
-        {
-            return ExecPolicyCommands {
-                commands,
-                used_complex_parsing: false,
-                command_origin: ExecPolicyCommandOrigin::PowerShell,
-            };
-        }
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {

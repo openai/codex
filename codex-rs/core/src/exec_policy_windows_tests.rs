@@ -59,25 +59,6 @@ async fn evaluates_powershell_inner_commands_against_allow_rules() {
 }
 
 #[test]
-fn commands_for_exec_policy_parses_powershell_shell_wrapper() {
-    let command = vec![
-        TRUSTED_WINDOWS_POWERSHELL_EXE.to_string(),
-        "-NoProfile".to_string(),
-        "-Command".to_string(),
-        "echo blocked".to_string(),
-    ];
-
-    assert_eq!(
-        commands_for_exec_policy(&command),
-        ExecPolicyCommands {
-            commands: vec![vec!["echo".to_string(), "blocked".to_string()]],
-            used_complex_parsing: false,
-            command_origin: ExecPolicyCommandOrigin::PowerShell,
-        }
-    );
-}
-
-#[test]
 fn commands_for_exec_policy_keeps_bare_powershell_alias_opaque() {
     let command = vec![
         "powershell.exe".to_string(),

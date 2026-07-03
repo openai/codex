@@ -120,6 +120,10 @@ fn trusted_powershell_parser_executable(executable: &str) -> Option<PathBuf> {
     }
 }
 
+pub(crate) fn is_trusted_powershell_parser_executable(executable: &str) -> bool {
+    trusted_powershell_parser_executable(executable).is_some()
+}
+
 /// Returns the authoritative Windows PowerShell invocation path only when the production trust
 /// resolver accepts that exact known-folder-derived path.
 #[cfg(all(test, windows))]
