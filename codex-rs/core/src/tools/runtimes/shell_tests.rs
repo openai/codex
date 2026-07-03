@@ -3,8 +3,12 @@ use crate::state::ActiveTurn;
 use codex_exec_server::Environment;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalPurpose;
+use codex_protocol::protocol::NetworkApprovalContext;
+use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_utils_path_uri::PathUri;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::timeout;
 
 fn one_shot_request() -> ShellRequest {
     let cwd = AbsolutePathBuf::try_from(std::env::current_dir().expect("read current dir"))
@@ -124,5 +128,75 @@ async fn one_shot_approval_routes_by_callback_id() {
     };
 
     let (decision, ()) = tokio::join!(approval, respond);
+    assert_eq!(decision, ReviewDecision::Approved);
+}
+
+#[tokio::test]
+async fn callback_scoped_retry_ignores_session_cache() {
+    let (session, turn, events) = crate::session::tests::make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let mut runtime = ShellRuntime::for_shell_command(ShellRuntimeBackend::ShellCommandClassic);
+    let mut request = one_shot_request();
+    request.exec_approval_requirement = ExecApprovalRequirement::NeedsApproval {
+        reason: Some("initial approval".to_string()),
+        proposed_execpolicy_amendment: None,
+    };
+    let keys = runtime.approval_keys(&request);
+    assert_eq!(keys.len(), 1);
+    {
+        let mut store = session.services.tool_approvals.lock().await;
+        for key in keys {
+            store.put(key, ReviewDecision::ApprovedForSession);
+        }
+    }
+
+    let call_id = "cached-command-item";
+    let approval_id = "network-retry-callback";
+    let network_approval_context = NetworkApprovalContext {
+        host: "new-authority.example".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+    };
+    let approval = runtime.start_approval_async(
+        &request,
+        ApprovalCtx {
+            session: &session,
+            turn: &turn,
+            call_id,
+            approval_id: Some(approval_id.to_string()),
+            approval_purpose: ExecApprovalPurpose::SandboxRetry,
+            guardian_review_id: None,
+            retry_reason: Some("network denied".to_string()),
+            network_approval_context: Some(network_approval_context.clone()),
+        },
+    );
+    let respond = async {
+        let event = events.recv().await.expect("approval event");
+        let EventMsg::ExecApprovalRequest(event) = event.msg else {
+            panic!("expected exec approval");
+        };
+        assert_eq!(event.call_id, call_id);
+        assert_eq!(event.approval_id.as_deref(), Some(approval_id));
+        assert_eq!(
+            event.approval_purpose,
+            Some(ExecApprovalPurpose::SandboxRetry)
+        );
+        assert_eq!(
+            event.network_approval_context,
+            Some(network_approval_context)
+        );
+        assert_eq!(
+            event.effective_available_decisions(),
+            vec![ReviewDecision::Approved, ReviewDecision::Abort]
+        );
+        session
+            .notify_exec_approval(approval_id, ReviewDecision::Approved)
+            .await;
+    };
+
+    let (decision, ()) = timeout(Duration::from_secs(1), async {
+        tokio::join!(approval, respond)
+    })
+    .await
+    .expect("cached command authority must not skip the retry callback");
     assert_eq!(decision, ReviewDecision::Approved);
 }

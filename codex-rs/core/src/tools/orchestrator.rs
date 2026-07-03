@@ -434,7 +434,14 @@ impl ToolOrchestrator {
                         &permission_request_run_id,
                         approval_ctx,
                         tool_ctx,
-                        permission_request_hook_mode(strict_auto_review, &requirement),
+                        if strict_auto_review {
+                            PermissionRequestHookMode::Skip
+                        } else {
+                            // A retry asks for new phase-specific authority.
+                            // Hooks may deny it, but a command-only Allow must
+                            // still fall through to the callback.
+                            PermissionRequestHookMode::DenyOnly
+                        },
                         &otel,
                     )
                     .await?;

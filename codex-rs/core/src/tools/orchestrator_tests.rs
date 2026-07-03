@@ -18,18 +18,34 @@ use tokio::time::timeout;
 #[derive(Default)]
 struct OneShotProbe {
     attempts: usize,
+    cacheable: bool,
 }
 
 impl Approvable<()> for OneShotProbe {
     type ApprovalKey = String;
 
     fn approval_keys(&self, _req: &()) -> Vec<Self::ApprovalKey> {
-        Vec::new()
+        if self.cacheable {
+            vec!["probe".to_string()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn should_bypass_approval(&self, _policy: AskForApproval, _already_approved: bool) -> bool {
+        false
     }
 
     fn exec_approval_requirement(&self, _req: &()) -> Option<ExecApprovalRequirement> {
-        Some(ExecApprovalRequirement::NeedsOneShotApproval {
-            reason: Some("one run only".to_string()),
+        Some(if self.cacheable {
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some("cacheable command".to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            ExecApprovalRequirement::NeedsOneShotApproval {
+                reason: Some("one run only".to_string()),
+            }
         })
     }
 
@@ -318,6 +334,71 @@ async fn one_shot_hooks_allow_falls_through_and_deny_blocks_each_phase() {
             .expect("hook scenario task failed");
         assert_eq!(result.is_ok(), should_succeed, "hook modes: {modes:?}");
         assert_eq!(attempts, expected_attempts, "hook modes: {modes:?}");
+        assert_eq!(
+            std::fs::read_to_string(log_path)
+                .expect("read permission hook log")
+                .lines()
+                .count(),
+            modes.len(),
+        );
+    }
+}
+
+#[tokio::test]
+async fn cacheable_retry_hooks_cannot_allow_new_retry_authority() {
+    for (retry_mode, expected_approvals, expected_attempts, should_succeed) in
+        [("allow", 1, 2, true), ("deny", 0, 1, false)]
+    {
+        let (session, turn, events) =
+            crate::session::tests::make_session_and_context_with_rx().await;
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let modes = ["allow", retry_mode];
+        let log_path = install_sequenced_permission_hook(&session, &turn, &modes);
+        let tool_ctx = ToolCtx {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn),
+            call_id: format!("cacheable-hook-probe-{retry_mode}"),
+            tool_name: codex_tools::ToolName::plain("probe"),
+        };
+        let run = tokio::spawn(async move {
+            let mut probe = OneShotProbe {
+                cacheable: true,
+                ..Default::default()
+            };
+            let result = ToolOrchestrator::new()
+                .run(
+                    &mut probe,
+                    &(),
+                    &tool_ctx,
+                    turn.as_ref(),
+                    AskForApproval::UnlessTrusted,
+                )
+                .await;
+            (result, probe.attempts)
+        });
+
+        for _ in 0..expected_approvals {
+            let approval = next_exec_approval(&events).await;
+            assert_eq!(
+                approval.approval_purpose,
+                Some(ExecApprovalPurpose::SandboxRetry)
+            );
+            assert!(approval.approval_id.is_some());
+            assert_eq!(
+                approval.effective_available_decisions(),
+                vec![ReviewDecision::Approved, ReviewDecision::Abort]
+            );
+            session
+                .notify_exec_approval(&approval.effective_approval_id(), ReviewDecision::Approved)
+                .await;
+        }
+
+        let (result, attempts) = timeout(Duration::from_secs(5), run)
+            .await
+            .expect("hook scenario timed out")
+            .expect("hook scenario task failed");
+        assert_eq!(result.is_ok(), should_succeed, "retry mode: {retry_mode}");
+        assert_eq!(attempts, expected_attempts, "retry mode: {retry_mode}");
         assert_eq!(
             std::fs::read_to_string(log_path)
                 .expect("read permission hook log")
