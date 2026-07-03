@@ -210,10 +210,10 @@ fn append_default_and_driver_config(root: &Path, driver: &str, command: &str) {
 
 #[derive(Clone, Copy, Debug)]
 enum DriverNamespaceRace {
-    EmptyKnownKey,
-    SelectedMissingKey,
-    BrandNewAttributeAndKey,
-    BrandNewDefaultAndKey,
+    KnownEmpty,
+    SelectedMissing,
+    BrandNewAttribute,
+    BrandNewDefault,
 }
 
 #[test]
@@ -415,22 +415,23 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
     }
 
     for race in [
-        DriverNamespaceRace::EmptyKnownKey,
-        DriverNamespaceRace::SelectedMissingKey,
-        DriverNamespaceRace::BrandNewAttributeAndKey,
-        DriverNamespaceRace::BrandNewDefaultAndKey,
+        DriverNamespaceRace::KnownEmpty,
+        DriverNamespaceRace::SelectedMissing,
+        DriverNamespaceRace::BrandNewAttribute,
+        DriverNamespaceRace::BrandNewDefault,
     ] {
         let repo = init_repo();
         let root = repo.path();
         let attributes = match race {
-            DriverNamespaceRace::EmptyKnownKey | DriverNamespaceRace::SelectedMissingKey => {
+            DriverNamespaceRace::KnownEmpty | DriverNamespaceRace::SelectedMissing => {
                 "target.txt merge=demo\n"
             }
-            DriverNamespaceRace::BrandNewAttributeAndKey
-            | DriverNamespaceRace::BrandNewDefaultAndKey => "# initially safe\n",
+            DriverNamespaceRace::BrandNewAttribute | DriverNamespaceRace::BrandNewDefault => {
+                "# initially safe\n"
+            }
         };
         let patch = build_conflicting_patch(root, attributes);
-        if matches!(race, DriverNamespaceRace::EmptyKnownKey) {
+        if matches!(race, DriverNamespaceRace::KnownEmpty) {
             configure_driver(root, "demo", "");
         }
         let trace = trace_path();
@@ -441,11 +442,10 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
             let observed = wait_for_merge_attribute_probe(&watcher_trace);
             if observed {
                 match race {
-                    DriverNamespaceRace::EmptyKnownKey
-                    | DriverNamespaceRace::SelectedMissingKey => {
+                    DriverNamespaceRace::KnownEmpty | DriverNamespaceRace::SelectedMissing => {
                         append_driver_config(&watcher_root, "demo", NEW_DRIVER_COMMAND);
                     }
-                    DriverNamespaceRace::BrandNewAttributeAndKey => {
+                    DriverNamespaceRace::BrandNewAttribute => {
                         append_driver_config(&watcher_root, "brandnew", NEW_DRIVER_COMMAND);
                         std::fs::write(
                             watcher_root.join(".gitattributes"),
@@ -453,7 +453,7 @@ fn isolated_three_way_config_blocks_driver_namespace_introduction_races() {
                         )
                         .expect("select brand-new merge driver");
                     }
-                    DriverNamespaceRace::BrandNewDefaultAndKey => {
+                    DriverNamespaceRace::BrandNewDefault => {
                         append_default_and_driver_config(
                             &watcher_root,
                             "brandnew",
