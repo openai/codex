@@ -28,6 +28,9 @@ jobs:
       - name: Test Codex package builder
         run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
 
+      - name: Test standalone installer
+        run: python3 -m unittest discover -s scripts/install -p 'test_*.py'
+
       - name: Setup pnpm
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
