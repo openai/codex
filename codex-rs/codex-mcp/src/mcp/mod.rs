@@ -43,6 +43,7 @@ use rmcp::model::ReadResourceResult;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::McpServerSource;
 use crate::ResolvedMcpCatalog;
 use crate::codex_apps_cache::CodexAppsToolsCache;
 use crate::codex_apps_cache::codex_apps_tools_cache_key;
@@ -238,8 +239,22 @@ impl ToolPluginProvenance {
     }
 }
 
+pub fn extension_managed_codex_apps_enabled(config: &McpConfig) -> bool {
+    // Trusted host extensions may replace the ChatGPT-backed server with one
+    // that supplies its own request authentication.
+    config.apps_enabled
+        && config
+            .mcp_server_catalog
+            .server(CODEX_APPS_MCP_SERVER_NAME)
+            .is_some_and(|server| {
+                matches!(server.source(), McpServerSource::Extension { .. })
+                    && matches!(&server.config().auth, &McpServerAuth::OAuth)
+            })
+}
+
 pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
-    config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
+    extension_managed_codex_apps_enabled(config)
+        || (config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend))
 }
 
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {

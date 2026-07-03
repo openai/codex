@@ -105,6 +105,7 @@ pub struct TurnContext {
     pub(crate) realtime_active: bool,
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
+    pub(crate) extension_managed_apps_enabled: bool,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
@@ -201,7 +202,7 @@ impl TurnContext {
             .is_some_and(AuthManager::current_auth_uses_codex_backend);
         self.config
             .features
-            .apps_enabled_for_auth(uses_codex_backend)
+            .apps_enabled_for_auth(uses_codex_backend || self.extension_managed_apps_enabled)
             && self.config.orchestrator_mcp_enabled
     }
 
@@ -253,6 +254,7 @@ impl TurnContext {
             realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
+            extension_managed_apps_enabled: self.extension_managed_apps_enabled,
             model_info: model_info.clone(),
             session_telemetry: self
                 .session_telemetry
@@ -534,6 +536,7 @@ impl Session {
             realtime_active: false,
             config: per_turn_config,
             auth_manager: auth_manager_for_context,
+            extension_managed_apps_enabled: false,
             model_info,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
@@ -763,6 +766,10 @@ impl Session {
             sub_id,
             skills_snapshot,
         );
+        turn_context.extension_managed_apps_enabled =
+            codex_mcp::extension_managed_codex_apps_enabled(
+                self.services.latest_mcp_runtime().config(),
+            );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         if let Some(final_schema) = final_output_json_schema {

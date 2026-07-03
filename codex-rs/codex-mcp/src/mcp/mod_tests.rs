@@ -285,6 +285,88 @@ fn codex_apps_server_config_forwards_configured_product_sku_header() {
     }
 }
 
+#[test]
+fn effective_mcp_servers_preserve_extension_owned_oauth_codex_apps_without_chatgpt_auth() {
+    let mut config = test_mcp_config(PathBuf::new());
+    config.apps_enabled = true;
+
+    let compatibility_config =
+        codex_apps_mcp_server_config(&config.chatgpt_base_url, /*apps_mcp_product_sku*/ None);
+    let mut extension_config = compatibility_config.clone();
+    extension_config.auth = McpServerAuth::OAuth;
+    let McpServerTransportConfig::StreamableHttp { http_headers, .. } =
+        &mut extension_config.transport
+    else {
+        panic!("expected streamable http transport for codex apps");
+    };
+    *http_headers = Some(HashMap::from([(
+        "X-OpenAI-Actor-Authorization".to_string(),
+        "actor-biscuit".to_string(),
+    )]));
+    let expected = extension_config.clone();
+
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_compatibility(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        "legacy_codex_apps".to_string(),
+        compatibility_config,
+    ));
+    catalog.register(McpServerRegistration::from_extension(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        "host_managed_apps".to_string(),
+        /*contribution_order*/ 0,
+        extension_config,
+    ));
+    config.mcp_server_catalog = catalog.build();
+
+    let effective = effective_mcp_servers(&config, /*auth*/ None);
+
+    assert_eq!(
+        effective
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .and_then(EffectiveMcpServer::configured_config),
+        Some(&expected)
+    );
+}
+
+#[test]
+fn effective_mcp_servers_hide_chatgpt_codex_apps_without_chatgpt_auth() {
+    let mut config = test_mcp_config(PathBuf::new());
+    config.apps_enabled = true;
+
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_compatibility(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        "legacy_codex_apps".to_string(),
+        codex_apps_mcp_server_config(&config.chatgpt_base_url, /*apps_mcp_product_sku*/ None),
+    ));
+    config.mcp_server_catalog = catalog.build();
+
+    let effective = effective_mcp_servers(&config, /*auth*/ None);
+
+    assert!(!effective.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+}
+
+#[test]
+fn effective_mcp_servers_hide_config_owned_oauth_codex_apps_without_chatgpt_auth() {
+    let mut config = test_mcp_config(PathBuf::new());
+    config.apps_enabled = true;
+    let mut server_config =
+        codex_apps_mcp_server_config(&config.chatgpt_base_url, /*apps_mcp_product_sku*/ None);
+    server_config.auth = McpServerAuth::OAuth;
+
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_config(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server_config,
+    ));
+    config.mcp_server_catalog = catalog.build();
+
+    let effective = effective_mcp_servers(&config, /*auth*/ None);
+
+    assert!(!effective.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+}
+
 #[tokio::test]
 async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_home = tempfile::tempdir().expect("tempdir");
