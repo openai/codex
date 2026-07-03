@@ -250,14 +250,19 @@ async fn remote_test_env_exposes_target_shell_to_model() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compatible_remote_path_hint_uses_environment_shell_in_remote_cwd() -> Result<()> {
     const CALL_ID: &str = "remote-explicit-shell";
+    const CWD_MARKER: &str = "remote-shell-cwd.txt";
 
     skip_if_no_remote_env!(Ok(()));
 
     let (shell, command, expected_cwd_prefix) = match test_target_os() {
-        TestTargetOs::Linux => ("/attacker/bash", "pwd", "/tmp/codex-core-test-cwd-"),
+        TestTargetOs::Linux => (
+            "/attacker/bash",
+            format!("pwd > {CWD_MARKER}"),
+            "/tmp/codex-core-test-cwd-",
+        ),
         TestTargetOs::Windows => (
             r"C:\attacker\PowerShell.ExE",
-            "Write-Output (Get-Location).Path",
+            format!("[System.IO.File]::WriteAllText('{CWD_MARKER}', (Get-Location).Path)"),
             r"C:\codex-core-test-cwd-",
         ),
         TestTargetOs::MacOs => unreachable!("remote test targets do not run macOS"),
@@ -316,10 +321,27 @@ async fn compatible_remote_path_hint_uses_environment_shell_in_remote_cwd() -> R
         output.contains("Process exited with code 0"),
         "remote shell command should exit successfully: {output}",
     );
+    let marker_path = test
+        .executor_environment()
+        .selection()
+        .cwd
+        .join(CWD_MARKER)?;
+    let cwd_bytes = test.fs().read_file(&marker_path, /*sandbox*/ None).await?;
+    let actual_cwd = String::from_utf8(cwd_bytes).context("remote cwd marker should be UTF-8")?;
     assert!(
-        output.contains(expected_cwd_prefix),
-        "remote shell command should run in the remote cwd: {output}",
+        actual_cwd.starts_with(expected_cwd_prefix),
+        "remote shell command should run in the remote cwd: {actual_cwd:?}",
     );
+    test.fs()
+        .remove(
+            &marker_path,
+            RemoveOptions {
+                recursive: false,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
 
     Ok(())
 }

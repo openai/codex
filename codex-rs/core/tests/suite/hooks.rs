@@ -22,7 +22,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use core_test_support::TestTargetOs;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::hooks::trust_hooks;
 use core_test_support::managed_network_requirements_loader;
@@ -39,12 +38,11 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_target_windows;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
-use core_test_support::test_target_os;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -4014,19 +4012,15 @@ async fn post_tool_use_spills_large_feedback_message() -> Result<()> {
 #[tokio::test]
 async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_host_windows!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "uses a POSIX delayed-output command to exercise session completion"
+    );
 
     let server = start_mock_server().await;
     let start_call_id = "posttooluse-exec-session-start";
     let poll_call_id = "posttooluse-exec-session-poll";
-    let command = match test_target_os() {
-        TestTargetOs::Linux | TestTargetOs::MacOs => {
-            "sleep 1; printf session-post-hook-output".to_string()
-        }
-        TestTargetOs::Windows => {
-            "Start-Sleep -Seconds 1; [Console]::Write('session-post-hook-output')".to_string()
-        }
-    };
+    let command = "sleep 1; printf session-post-hook-output".to_string();
     let start_args = serde_json::json!({
         "cmd": command,
         "login": false,
