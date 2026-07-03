@@ -30,6 +30,8 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -104,6 +106,39 @@ fn spawn_agent_call(call_id: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         internal_chat_message_metadata_passthrough: None,
     }
+}
+
+fn test_mcp_invocation() -> McpInvocation {
+    McpInvocation {
+        server: "parent-server".to_string(),
+        tool: "parent-tool".to_string(),
+        arguments: Some(serde_json::json!({"input": "parent-only"})),
+    }
+}
+
+fn test_mcp_tool_call_end_event() -> McpToolCallEndEvent {
+    McpToolCallEndEvent {
+        call_id: "parent-mcp-call".to_string(),
+        invocation: test_mcp_invocation(),
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        link_id: None,
+        app_name: None,
+        template_id: None,
+        action_name: None,
+        plugin_id: None,
+        duration: Duration::from_millis(1),
+        result: Err("parent-only result".to_string()),
+    }
+}
+
+fn contains_mcp_tool_call_lifecycle_event(items: &[RolloutItem]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_))
+        )
+    })
 }
 
 struct AgentControlHarness {
@@ -987,9 +1022,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .codex
         .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(
-            parent_reference_context_item.clone(),
-        )])
+        .persist_rollout_items(&[
+            RolloutItem::TurnContext(parent_reference_context_item.clone()),
+            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(test_mcp_tool_call_end_event())),
+        ])
         .await;
     parent_thread
         .codex
@@ -1002,6 +1038,21 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .flush_rollout()
         .await
         .expect("parent rollout should flush");
+    let persisted_parent = parent_thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await
+        .expect("parent thread should be readable");
+    assert!(
+        contains_mcp_tool_call_lifecycle_event(
+            &persisted_parent
+                .history
+                .expect("parent history should be loaded")
+                .items,
+        ),
+        "parent rollout should persist the MCP tool result fixture"
+    );
     let child_thread_id = harness
         .control
         .spawn_agent_with_metadata(
@@ -1051,6 +1102,26 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         history.raw_items(),
         &expected_history,
         "full-history forked child history should replace parent usage hints with the child subagent hint while filtering non-final assistant/tool chatter"
+    );
+    child_thread.ensure_rollout_materialized().await;
+    child_thread
+        .flush_rollout()
+        .await
+        .expect("child rollout should flush");
+    let persisted_child = child_thread
+        .read_thread(
+            /*include_archived*/ true, /*include_history*/ true,
+        )
+        .await
+        .expect("child thread should be readable");
+    assert!(
+        !contains_mcp_tool_call_lifecycle_event(
+            &persisted_child
+                .history
+                .expect("child history should be loaded")
+                .items,
+        ),
+        "full-history forked child rollout should not copy parent MCP tool lifecycle events"
     );
     assert_eq!(
         serde_json::to_value(child_thread.codex.session.reference_context_item().await)

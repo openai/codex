@@ -1,6 +1,7 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
 use codex_extension_api::ExtensionDataInit;
+use codex_protocol::protocol::EventMsg;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -70,6 +71,9 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
         ) => false,
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => false,
+        // MCP lifecycle events are parent-only UI state, and tool results can be arbitrarily
+        // large. Drop both halves so legacy rollouts cannot leave an unmatched in-progress call.
+        RolloutItem::EventMsg(EventMsg::McpToolCallBegin(_) | EventMsg::McpToolCallEnd(_)) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
@@ -764,5 +768,66 @@ impl AgentControl {
         .await;
 
         Ok((resumed_thread.thread_id, multi_agent_version))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::McpInvocation;
+    use codex_protocol::protocol::McpToolCallBeginEvent;
+    use codex_protocol::protocol::McpToolCallEndEvent;
+    use std::time::Duration;
+
+    fn test_mcp_invocation() -> McpInvocation {
+        McpInvocation {
+            server: "parent-server".to_string(),
+            tool: "parent-tool".to_string(),
+            arguments: Some(serde_json::json!({"input": "parent-only"})),
+        }
+    }
+
+    fn test_mcp_tool_call_begin_event() -> McpToolCallBeginEvent {
+        McpToolCallBeginEvent {
+            call_id: "parent-mcp-call".to_string(),
+            invocation: test_mcp_invocation(),
+            connector_id: None,
+            mcp_app_resource_uri: None,
+            link_id: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+            plugin_id: None,
+        }
+    }
+
+    fn test_mcp_tool_call_end_event() -> McpToolCallEndEvent {
+        McpToolCallEndEvent {
+            call_id: "parent-mcp-call".to_string(),
+            invocation: test_mcp_invocation(),
+            connector_id: None,
+            mcp_app_resource_uri: None,
+            link_id: None,
+            app_name: None,
+            template_id: None,
+            action_name: None,
+            plugin_id: None,
+            duration: Duration::from_millis(1),
+            result: Err("parent-only result".to_string()),
+        }
+    }
+
+    #[test]
+    fn forked_rollout_item_filter_drops_mcp_tool_call_lifecycle() {
+        let items = [
+            RolloutItem::EventMsg(EventMsg::McpToolCallBegin(test_mcp_tool_call_begin_event())),
+            RolloutItem::EventMsg(EventMsg::McpToolCallEnd(test_mcp_tool_call_end_event())),
+        ];
+
+        for item in &items {
+            assert!(!keep_forked_rollout_item(
+                item, /*preserve_reference_context_item*/ true,
+            ));
+        }
     }
 }
