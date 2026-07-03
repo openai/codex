@@ -272,6 +272,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    caller_manages_http_request_retries: bool,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -480,6 +481,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            caller_manages_http_request_retries: false,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -1118,6 +1120,10 @@ impl ModelClientSession {
         Arc::clone(&self.turn_state)
     }
 
+    pub(crate) fn use_caller_managed_http_request_retries(&mut self) {
+        self.caller_manages_http_request_retries = true;
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -1453,12 +1459,15 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
-            let client = ApiResponsesClient::new(
-                transport,
-                client_setup.api_provider,
-                client_setup.api_auth,
-            )
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            let mut responses_api_provider = client_setup.api_provider;
+            if self.caller_manages_http_request_retries {
+                // Keep ordinary HTTP open failures in one outer request loop.
+                responses_api_provider.retry.retry_5xx = false;
+                responses_api_provider.retry.retry_transport = false;
+            }
+            let client =
+                ApiResponsesClient::new(transport, responses_api_provider, client_setup.api_auth)
+                    .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {

@@ -26,8 +26,14 @@ pub(crate) enum ResponsesStreamRequest {
     RemoteCompactionV2,
 }
 
-/// Handles a retryable stream error and returns `Ok(())` when the caller should
-/// retry the request loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponsesRetryOutcome {
+    Retrying,
+    TransportFallback,
+}
+
+/// Handles a retryable stream error and reports whether the retry stays on the
+/// current transport or falls back to another one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_retryable_response_stream_error(
     retries: &mut u64,
@@ -38,7 +44,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
     turn_context: &TurnContext,
     request: ResponsesStreamRequest,
     cancellation_token: CancellationToken,
-) -> Result<(), CodexErr> {
+) -> Result<ResponsesRetryOutcome, CodexErr> {
     let is_server_overloaded = matches!(&err, CodexErr::ServerOverloaded);
     let max_retries = if is_server_overloaded {
         SERVER_OVERLOADED_MAX_RETRIES
@@ -60,7 +66,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
         )
         .await;
         *retries = 0;
-        return Ok(());
+        return Ok(ResponsesRetryOutcome::TransportFallback);
     }
 
     if *retries < max_retries {
@@ -94,7 +100,7 @@ pub(crate) async fn handle_retryable_response_stream_error(
             .await;
         }
         return tokio::select! {
-            () = tokio::time::sleep(delay) => Ok(()),
+            () = tokio::time::sleep(delay) => Ok(ResponsesRetryOutcome::Retrying),
             () = cancellation_token.cancelled() => Err(CodexErr::TurnAborted),
         };
     }

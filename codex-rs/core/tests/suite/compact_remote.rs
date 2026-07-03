@@ -1030,7 +1030,7 @@ async fn remote_compact_v2_retries_capacity_after_stream_retry_budget() -> Resul
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
-                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.request_max_retries = Some(1);
                 config.model_provider.stream_max_retries = Some(2);
             }),
     )

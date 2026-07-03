@@ -63,11 +63,13 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
@@ -3527,41 +3529,38 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
 async fn server_overload_retries_use_a_separate_budget_on_the_same_turn() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
-    let responses = mount_sse_sequence(
+    let overloaded = || {
+        ResponseTemplate::new(503).set_body_json(json!({
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "selected model is at capacity"
+            }
+        }))
+    };
+    let responses = mount_response_sequence(
         &server,
         vec![
-            sse_failed(
+            sse_response(sse_failed(
                 "resp_stream_error",
                 "server_error",
                 "temporary stream failure",
-            ),
-            sse_failed(
-                "resp_overloaded_1",
-                "server_is_overloaded",
-                "selected model is at capacity",
-            ),
-            sse_failed(
-                "resp_overloaded_2",
-                "server_is_overloaded",
-                "selected model is at capacity",
-            ),
-            sse_failed(
-                "resp_overloaded_3",
-                "server_is_overloaded",
-                "selected model is at capacity",
-            ),
-            sse(vec![
+            )),
+            ResponseTemplate::new(500).set_body_string("temporary gateway failure"),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+            sse_response(sse(vec![
                 ev_response_created("resp_retried"),
                 ev_completed("resp_retried"),
-            ]),
+            ])),
         ],
     )
     .await;
 
     let test = test_codex()
         .with_config(|config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(5);
+            config.model_provider.request_max_retries = Some(4);
+            config.model_provider.stream_max_retries = Some(1);
         })
         .build(&server)
         .await?;
@@ -3604,7 +3603,7 @@ async fn server_overload_retries_use_a_separate_budget_on_the_same_turn() -> any
             "Reconnecting... 3/3",
         ]
     );
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 6);
     let turn_id = requests[0].body_json()["client_metadata"]["turn_id"].clone();
     assert!(
         requests
@@ -3612,6 +3611,127 @@ async fn server_overload_retries_use_a_separate_budget_on_the_same_turn() -> any
             .all(|request| request.body_json()["client_metadata"]["turn_id"] == turn_id)
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_5xx_retries_respect_request_retry_budget() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(503).set_body_string("temporary gateway failure"),
+            ResponseTemplate::new(503).set_body_string("temporary gateway failure"),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(1);
+            config.model_provider.stream_max_retries = Some(5);
+        })
+        .build(&server)
+        .await?;
+    tokio::time::pause();
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "respect request retry budget".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut saw_terminal_error = false;
+    loop {
+        match test.codex.next_event().await?.msg {
+            EventMsg::StreamError(_) => tokio::time::advance(Duration::from_secs(1)).await,
+            EventMsg::Error(_) => saw_terminal_error = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_terminal_error);
+    assert_eq!(responses.requests().len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_network_and_5xx_respect_single_request_retry_budget() -> anyhow::Result<()> {
+    fn connection_reset(_: &wiremock::Request) -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "synthetic connection reset",
+        )
+    }
+
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with_err(connection_reset)
+        .up_to_n_times(1)
+        .expect(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("temporary gateway failure"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(1);
+            config.model_provider.stream_max_retries = Some(5);
+        })
+        .build(&server)
+        .await?;
+    tokio::time::pause();
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "respect one shared request retry budget".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut saw_terminal_error = false;
+    loop {
+        match test.codex.next_event().await?.msg {
+            EventMsg::StreamError(_) => tokio::time::advance(Duration::from_secs(1)).await,
+            EventMsg::Error(_) => saw_terminal_error = true,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_terminal_error);
+    let response_requests = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.method == wiremock::http::Method::POST)
+        .filter(|request| request.url.path() == "/v1/responses")
+        .count();
+    assert_eq!(response_requests, 2);
     Ok(())
 }
 
