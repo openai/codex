@@ -317,12 +317,12 @@ fn untrusted_outer_and_every_inner_command_compose_with_strictest_wins() {
             "later statement prompt participates",
             format!("{full_outer_allow}\n{echo_allow}\n{later_prompt}"),
             vec![echo.clone(), later.clone()],
-            one_shot(policy_prompt_reason.clone()),
+            one_shot(policy_prompt_reason),
         ),
         (
             "later statement forbidden participates",
             format!("{full_outer_allow}\n{echo_allow}\n{later_forbidden}"),
-            vec![echo.clone(), later.clone()],
+            vec![echo, later],
             ExecApprovalRequirement::Forbidden {
                 reason: format!(
                     "`{rendered}` rejected: policy forbids commands starting with `madeup-later`"
