@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use super::bytes_to_path;
 use super::read_bounded_file;
+use crate::git_config::parse_git_boolean;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CommonConfigAuthority {
@@ -50,7 +51,7 @@ pub(crate) fn inspect_plain_common_config_authority(
         return Ok(CommonConfigAuthority::Unproven);
     }
     let bare = match unique_explicit_value(&config, "core", "bare") {
-        Ok(Some(value)) => match explicit_boolean(value.as_ref()) {
+        Ok(Some(value)) => match parse_git_boolean(value.as_ref()) {
             Some(value) => Some(value),
             None => return Ok(CommonConfigAuthority::Unproven),
         },
@@ -58,7 +59,7 @@ pub(crate) fn inspect_plain_common_config_authority(
         Err(()) => return Ok(CommonConfigAuthority::Unproven),
     };
     match unique_explicit_value(&config, "extensions", "worktreeConfig") {
-        Ok(Some(value)) if explicit_boolean(value.as_ref()) == Some(false) => {}
+        Ok(Some(value)) if parse_git_boolean(value.as_ref()) == Some(false) => {}
         Ok(None) => {}
         Ok(Some(_)) | Err(()) => return Ok(CommonConfigAuthority::Unproven),
     }
@@ -99,39 +100,29 @@ fn unique_explicit_value(
     let Some(sections) = config.sections_by_name(section_name) else {
         return Ok(None);
     };
-    let mut occurrences = 0usize;
-    let mut explicit_values = Vec::new();
+    let mut occurrence = None;
     for section in sections {
         if section.header().subsection_name().is_some() {
             return Err(());
         }
-        occurrences += section
-            .value_names()
-            .filter(|name| {
-                let name: &str = name.as_ref();
-                name.eq_ignore_ascii_case(value_name)
-            })
-            .count();
-        explicit_values.extend(
-            section
-                .values(value_name)
-                .into_iter()
-                .map(|value| value.as_ref().to_vec()),
-        );
+        for name in section.value_names() {
+            let name: &str = name.as_ref();
+            if !name.eq_ignore_ascii_case(value_name) {
+                continue;
+            }
+            if occurrence.is_some() {
+                return Err(());
+            }
+            let value = section
+                .value_implicit(name)
+                .ok_or(())?
+                .map(|value| value.as_ref().to_vec());
+            occurrence = Some(value);
+        }
     }
-    match (occurrences, explicit_values.len()) {
-        (0, 0) => Ok(None),
-        (1, 1) => Ok(explicit_values.pop()),
-        _ => Err(()),
-    }
-}
-
-fn explicit_boolean(value: &[u8]) -> Option<bool> {
-    if value.eq_ignore_ascii_case(b"true") {
-        Some(true)
-    } else if value.eq_ignore_ascii_case(b"false") {
-        Some(false)
-    } else {
-        None
+    match occurrence {
+        None => Ok(None),
+        Some(Some(value)) => Ok(Some(value)),
+        Some(None) => Err(()),
     }
 }
