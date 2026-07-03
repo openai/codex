@@ -2333,7 +2333,7 @@ async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() 
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = test_codex().with_windows_cmd_shell().with_config(|config| {
         config
             .features
             .enable(Feature::UnifiedExec)
@@ -2345,7 +2345,6 @@ async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() 
     let interrupt_call_id = "uexec-windows-interrupt";
 
     let start_args = serde_json::json!({
-        "shell": "cmd",
         "cmd": "echo READY && ping -n 30 127.0.0.1 >NUL",
         "yield_time_ms": 250,
         "tty": false,

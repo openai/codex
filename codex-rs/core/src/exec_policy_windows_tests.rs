@@ -180,31 +180,41 @@ async fn full_outer_allow_does_not_bypass_extended_unsupported_wrapper() {
     let mut extended = command.clone();
     extended.push("trailing-runtime-argument".to_string());
 
-    for (profile, level, permissions, prompts) in [
+    for (profile, level, permissions, prompts, offers_amendment) in [
         (
             PermissionProfile::read_only(),
             RestrictedToken,
             UseDefault,
             false,
+            true,
         ),
         (
             PermissionProfile::read_only(),
             RestrictedToken,
             RequireEscalated,
             true,
+            false,
         ),
         (
             PermissionProfile::read_only(),
             RestrictedToken,
             WithAdditionalPermissions,
             true,
+            false,
         ),
-        (PermissionProfile::read_only(), Disabled, UseDefault, true),
+        (
+            PermissionProfile::read_only(),
+            Disabled,
+            UseDefault,
+            true,
+            true,
+        ),
         (
             PermissionProfile::Disabled,
             RestrictedToken,
             UseDefault,
             false,
+            true,
         ),
     ] {
         assert_eq!(
@@ -218,9 +228,21 @@ async fn full_outer_allow_does_not_bypass_extended_unsupported_wrapper() {
             )
             .await,
             if prompts {
-                prompt_outer(&extended)
-            } else {
+                if offers_amendment {
+                    prompt_outer(&extended)
+                } else {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: None,
+                        proposed_execpolicy_amendment: None,
+                    }
+                }
+            } else if offers_amendment {
                 skip_outer(&extended, false)
+            } else {
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                }
             },
         );
     }
@@ -296,45 +318,63 @@ async fn outer_authority_tracks_permission_deltas_and_missing_managed_sandbox() 
         NetworkSandboxPolicy::Restricted,
     );
 
-    for (profile, level, permissions, prompts) in [
+    for (profile, level, permissions, prompts, offers_amendment) in [
         (
             PermissionProfile::read_only(),
             RestrictedToken,
             RequireEscalated,
             true,
+            false,
         ),
-        (PermissionProfile::read_only(), Disabled, UseDefault, true),
+        (
+            PermissionProfile::read_only(),
+            Disabled,
+            UseDefault,
+            true,
+            true,
+        ),
         (
             denied_read_profile,
             RestrictedToken,
             RequireEscalated,
             false,
+            false,
         ),
         (
             PermissionProfile::read_only(),
             RestrictedToken,
             WithAdditionalPermissions,
             true,
+            false,
         ),
         (
             PermissionProfile::Disabled,
             RestrictedToken,
             RequireEscalated,
             false,
+            false,
         ),
         (
             PermissionProfile::Disabled,
             RestrictedToken,
             WithAdditionalPermissions,
             false,
+            false,
         ),
-        (external_profile(), RestrictedToken, UseDefault, false),
-        (external_profile(), RestrictedToken, RequireEscalated, true),
+        (external_profile(), RestrictedToken, UseDefault, false, true),
+        (
+            external_profile(),
+            RestrictedToken,
+            RequireEscalated,
+            true,
+            false,
+        ),
         (
             external_profile(),
             RestrictedToken,
             WithAdditionalPermissions,
             true,
+            false,
         ),
     ] {
         assert_eq!(
@@ -348,9 +388,21 @@ async fn outer_authority_tracks_permission_deltas_and_missing_managed_sandbox() 
             )
             .await,
             if prompts {
-                prompt_outer(&command)
-            } else {
+                if offers_amendment {
+                    prompt_outer(&command)
+                } else {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: None,
+                        proposed_execpolicy_amendment: None,
+                    }
+                }
+            } else if offers_amendment {
                 skip_outer(&command, false)
+            } else {
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                }
             },
         );
     }

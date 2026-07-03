@@ -27,6 +27,14 @@ fn untrusted_powershell_command(script: &str) -> Vec<String> {
     ]
 }
 
+fn absolute_untrusted_powershell_command(script: &str) -> Vec<String> {
+    vec![
+        r"C:\workspace\powershell.exe".to_string(),
+        "-Command".to_string(),
+        script.to_string(),
+    ]
+}
+
 fn prefix_rule_for(command: &[String], decision: &str) -> String {
     let pattern = command
         .iter()
@@ -479,7 +487,7 @@ fn untrusted_permission_and_windows_backend_gates_require_composed_authority() {
     use SandboxPermissions as SP;
     use WindowsSandboxLevel as WSL;
 
-    let outer = untrusted_powershell_command("Get-Content Cargo.toml");
+    let outer = absolute_untrusted_powershell_command("Get-Content Cargo.toml");
     let inner = vec_str(&["Get-Content", "Cargo.toml"]);
     let partial_policy = format!(
         "{}\n{}",
@@ -686,7 +694,7 @@ fn untrusted_wrapper_identity_uses_exact_outer_and_restrictive_basename_rules() 
 
 #[tokio::test]
 async fn untrusted_parsed_results_ignore_requested_amendments() {
-    let command = untrusted_powershell_command("echo allowed");
+    let command = absolute_untrusted_powershell_command("echo allowed");
     let inner_allow = prefix_rule_for(&vec_str(&["echo"]), "allow");
     let requested_prefix = Some(vec_str(&["echo"]));
 
@@ -837,7 +845,7 @@ async fn dangerous_trusted_unsupported_scripts_keep_generic_policy_protections()
 }
 
 #[tokio::test]
-async fn sandbox_override_on_trusted_unsupported_script_uses_outer_argv() {
+async fn sandbox_override_on_trusted_unsupported_script_does_not_offer_amendment() {
     let command = powershell_command("Write-Output 'confusing but inert'");
 
     for (approval_policy, permits_prompt) in [
@@ -855,7 +863,10 @@ async fn sandbox_override_on_trusted_unsupported_script_uses_outer_argv() {
             )
             .await,
             if permits_prompt {
-                outer_result(&command, true)
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    proposed_execpolicy_amendment: None,
+                }
             } else {
                 ExecApprovalRequirement::Forbidden {
                     reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),

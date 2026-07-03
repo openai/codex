@@ -79,6 +79,10 @@ fn host_program_path(name: &str) -> String {
     host_absolute_path(&["usr", "bin", &executable_name])
 }
 
+fn posix_script_program_path(name: &str) -> String {
+    host_program_path(name).replace('\\', "/")
+}
+
 fn starlark_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -1712,7 +1716,10 @@ async fn configured_delegators_without_rules_preserve_legacy_sandboxed_behavior(
 
 #[tokio::test]
 async fn configured_exact_allow_can_authorize_an_opaque_nested_shell_only() {
-    let inner = vec![host_program_path("sh"), "/tmp/approved-script".to_string()];
+    let inner = vec![
+        posix_script_program_path("sh"),
+        "/tmp/approved-script".to_string(),
+    ];
     let command = vec![
         host_program_path("zsh"),
         "-lc".to_string(),
@@ -1849,7 +1856,7 @@ async fn bare_nested_shell_allow_never_establishes_wrapper_authority() {
     );
 
     let absolute_wrapper = vec![
-        host_program_path("bash"),
+        posix_script_program_path("bash"),
         "-lc".to_string(),
         "echo hello".to_string(),
     ];
