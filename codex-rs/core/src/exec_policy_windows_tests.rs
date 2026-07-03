@@ -146,7 +146,11 @@ async fn only_exact_outer_rules_can_bypass_runtime_resolution() {
                 "host_executable(name = \"powershell\", paths = [\"{executable}\"])\n\
              prefix_rule(pattern=[\"powershell\", {rest}], decision=\"allow\")"
             ),
-            Some(true),
+            Some(false),
+        ),
+        (
+            format!("prefix_rule(pattern=[\"powershell\", {rest}], decision=\"allow\")"),
+            Some(false),
         ),
         (
             format!(
