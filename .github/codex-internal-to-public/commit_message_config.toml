@@ -1,0 +1,28 @@
+[features]
+network_proxy = true
+
+[permissions.public-commit-message]
+description = "Inspect a writable public repository and verify public GitHub references."
+
+[permissions.public-commit-message.filesystem]
+":minimal" = "read"
+
+[permissions.public-commit-message.filesystem.":workspace_roots"]
+"." = "read"
+"message-input/scratch" = "write"
+"message-workspace" = "write"
+
+[permissions.public-commit-message.network]
+enabled = true
+
+[permissions.public-commit-message.network.domains]
+"github.com" = "allow"
+"api.github.com" = "allow"
+"codeload.github.com" = "allow"
+"objects.githubusercontent.com" = "allow"
+"raw.githubusercontent.com" = "allow"
+"release-assets.githubusercontent.com" = "allow"
+"crates.io" = "allow"
+"index.crates.io" = "allow"
+"static.crates.io" = "allow"
+"static.rust-lang.org" = "allow"

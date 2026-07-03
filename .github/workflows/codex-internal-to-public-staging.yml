@@ -1,0 +1,238 @@
+name: Codex Internal To Public Staging
+
+on:
+  push:
+    branches:
+      - copybara-no-internal-code
+  workflow_dispatch:
+    inputs:
+      use_public_message_override:
+        description: Use the reviewed subject and body instead of invoking Codex
+        required: false
+        default: false
+        type: boolean
+      expected_candidate_revision:
+        description: Full SHA of the next candidate; required for a message override
+        required: false
+        type: string
+      public_subject:
+        description: Public commit subject; required for a message override
+        required: false
+        type: string
+      public_body:
+        description: Optional public commit body
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-internal-to-public-staging
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'openai/codex-internal' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      has_change: ${{ steps.prepare.outputs.has_change }}
+      message_override: ${{ steps.prepare.outputs.message_override }}
+    steps:
+      - name: Checkout internal pipeline implementation
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Prepare one public candidate
+        id: prepare
+        env:
+          USE_PUBLIC_MESSAGE_OVERRIDE: ${{ inputs.use_public_message_override || false }}
+          EXPECTED_CANDIDATE_REVISION: ${{ inputs.expected_candidate_revision || '' }}
+          PUBLIC_SUBJECT: ${{ inputs.public_subject || '' }}
+          PUBLIC_BODY: ${{ inputs.public_body || '' }}
+        run: python3 .github/codex-internal-to-public/pipeline.py prepare
+
+      - name: Stage Codex permission profile
+        if: >-
+          ${{
+            steps.prepare.outputs.has_change == 'true' &&
+            steps.prepare.outputs.message_override != 'true'
+          }}
+        run: |
+          install -m 0600 \
+            .github/codex-internal-to-public/commit_message_config.toml \
+            "$RUNNER_TEMP/message-input/codex-config.toml"
+
+      - name: Upload public-only message inputs
+        if: >-
+          ${{
+            steps.prepare.outputs.has_change == 'true' &&
+            steps.prepare.outputs.message_override != 'true'
+          }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: public-message-input
+          path: ${{ runner.temp }}/message-input
+          if-no-files-found: error
+
+      - name: Upload publication inputs
+        if: ${{ steps.prepare.outputs.has_change == 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: publication-input
+          path: |
+            ${{ runner.temp }}/public-projection.tgz
+            ${{ runner.temp }}/publish-metadata.json
+          if-no-files-found: error
+
+  message:
+    needs: prepare
+    if: >-
+      ${{
+        needs.prepare.outputs.has_change == 'true' &&
+        needs.prepare.outputs.message_override != 'true'
+      }}
+    environment: public-commit-message
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      codex_output: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Checkout public message workspace
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openai/codex
+          fetch-depth: 0
+          persist-credentials: false
+          path: message-workspace
+
+      - name: Download public-only message inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: public-message-input
+          path: message-input
+
+      - name: Check out exact public target commit
+        run: |
+          git -C message-workspace fetch \
+            "$GITHUB_WORKSPACE/message-input/message-workspace.bundle" \
+            refs/heads/public-message-workspace:refs/heads/public-message-workspace
+          git -C message-workspace checkout --force public-message-workspace
+          test "$(git -C message-workspace rev-parse HEAD)" = \
+            "$(tr -d '\n' < message-input/target-commit.txt)"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Install Codex permission profile
+        run: |
+          install -D -m 0600 \
+            message-input/codex-config.toml \
+            "$RUNNER_TEMP/codex-home/config.toml"
+          install -d -m 0700 message-input/scratch/tmp
+
+      # Keep Codex last in this job. A fresh runner validates its output and a
+      # different fresh runner receives the write-capable token.
+      - name: Generate public commit message
+        id: codex
+        uses: openai/codex-action@6b771854be52d8637d060e4b15120b9d746282ab # v1.10
+        env:
+          CARGO_HOME: ${{ github.workspace }}/message-input/scratch/cargo-home
+          CARGO_TARGET_DIR: ${{ github.workspace }}/message-input/scratch/cargo-target
+          TMPDIR: ${{ github.workspace }}/message-input/scratch/tmp
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-bot-users: github-actions[bot],copyberry
+          codex-home: ${{ runner.temp }}/codex-home
+          permission-profile: public-commit-message
+          safety-strategy: drop-sudo
+          prompt-file: message-input/prompt.md
+
+  validate-message:
+    needs:
+      - prepare
+      - message
+    if: >-
+      ${{
+        always() &&
+        needs.prepare.result == 'success' &&
+        needs.prepare.outputs.has_change == 'true' &&
+        (needs.prepare.outputs.message_override == 'true' || needs.message.result == 'success')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout internal validator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Checkout public history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: openai/codex
+          fetch-depth: 0
+          persist-credentials: false
+          path: public-history
+
+      - name: Validate public message and references
+        env:
+          CODEX_OUTPUT: ${{ needs.message.outputs.codex_output }}
+          USE_PUBLIC_MESSAGE_OVERRIDE: ${{ inputs.use_public_message_override || false }}
+          EXPECTED_CANDIDATE_REVISION: ${{ inputs.expected_candidate_revision || '' }}
+          PUBLIC_SUBJECT: ${{ inputs.public_subject || '' }}
+          PUBLIC_BODY: ${{ inputs.public_body || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/codex-internal-to-public/pipeline.py validate-message
+
+      - name: Upload validated message
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: validated-public-message
+          path: ${{ runner.temp }}/public-commit-message.md
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - prepare
+      - validate-message
+    if: ${{ needs.validate-message.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Checkout internal pipeline implementation
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download publication inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: publication-input
+          path: ${{ runner.temp }}
+
+      - name: Download validated message
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: validated-public-message
+          path: ${{ runner.temp }}
+
+      - name: Publish one ready commit
+        id: publish
+        run: python3 .github/codex-internal-to-public/pipeline.py publish
+
+      - name: Continue draining the candidate backlog
+        if: ${{ steps.publish.outputs.published == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run codex-internal-to-public-staging.yml --ref copybara-no-internal-code
