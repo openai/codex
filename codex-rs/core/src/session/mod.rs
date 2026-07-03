@@ -980,6 +980,28 @@ fn push_prompt_fragment(
     }
 }
 
+fn accepted_command_approval_decisions(
+    mut available_decisions: Vec<ReviewDecision>,
+    proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
+) -> Vec<ReviewDecision> {
+    // Preserve the existing API path for a client to persist a restrictive
+    // network deny without advertising that hidden choice in normal UX.
+    // Only the exact server-proposed deny payload is accepted.
+    available_decisions.extend(
+        proposed_network_policy_amendments
+            .into_iter()
+            .flatten()
+            .filter(|amendment| amendment.action == NetworkPolicyRuleAction::Deny)
+            .cloned()
+            .map(
+                |network_policy_amendment| ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment,
+                },
+            ),
+    );
+    available_decisions
+}
+
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -2137,23 +2159,6 @@ impl Session {
         //  command-level approvals use `call_id`.
         // `approval_id` is only present for subcommand callbacks (execve intercept)
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-        // Add the tx_approve callback to the map before sending the request.
-        let (tx_approve, rx_approve) = oneshot::channel();
-        let prev_entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
-                }
-                None => None,
-            }
-        };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
-        }
-
-        let parsed_cmd = parse_command(&command);
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
                 NetworkPolicyAmendment {
@@ -2174,6 +2179,34 @@ impl Session {
                 additional_permissions.as_ref(),
             )
         });
+        let accepted_decisions = accepted_command_approval_decisions(
+            available_decisions.clone(),
+            proposed_network_policy_amendments.as_deref(),
+        );
+        // Add the tx_approve callback to the map before sending the request.
+        let (tx_approve, rx_approve) = oneshot::channel();
+        let insert_result = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        tx_approve,
+                        crate::state::PendingApprovalKind::Exec,
+                        accepted_decisions,
+                    )
+                }
+                None => return ReviewDecision::Abort,
+            }
+        };
+        if let Err(duplicate_approval) = insert_result {
+            warn!("Rejecting duplicate pending exec approval for call_id: {effective_approval_id}");
+            duplicate_approval.send(ReviewDecision::Abort);
+            return rx_approve.await.unwrap_or(ReviewDecision::Abort);
+        }
+
+        let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             approval_id,
@@ -2209,18 +2242,28 @@ impl Session {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
-        let prev_entry = {
+        let insert_result = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        approval_id.clone(),
+                        tx_approve,
+                        crate::state::PendingApprovalKind::Patch,
+                        vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession],
+                    )
                 }
-                None => None,
+                None => {
+                    tx_approve.send(ReviewDecision::Abort).ok();
+                    return rx_approve;
+                }
             }
         };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {approval_id}");
+        if let Err(duplicate_approval) = insert_result {
+            warn!("Rejecting duplicate pending patch approval for call_id: {approval_id}");
+            duplicate_approval.send(ReviewDecision::Abort);
+            return rx_approve;
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -2691,23 +2734,59 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
     )]
-    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
-        let entry = {
+    async fn take_pending_approval(
+        &self,
+        approval_id: &str,
+        kind: crate::state::PendingApprovalKind,
+    ) -> Option<crate::state::PendingApproval> {
+        {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(approval_id)
+                    ts.remove_pending_approval(approval_id, kind)
                 }
                 None => None,
             }
-        };
+        }
+    }
+
+    pub(crate) async fn take_pending_exec_approval(
+        &self,
+        approval_id: &str,
+    ) -> Option<crate::state::PendingApproval> {
+        self.take_pending_approval(approval_id, crate::state::PendingApprovalKind::Exec)
+            .await
+    }
+
+    pub(crate) async fn take_pending_patch_approval(
+        &self,
+        approval_id: &str,
+    ) -> Option<crate::state::PendingApproval> {
+        self.take_pending_approval(approval_id, crate::state::PendingApprovalKind::Patch)
+            .await
+    }
+
+    pub async fn notify_exec_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let entry = self.take_pending_exec_approval(approval_id).await;
         match entry {
-            Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+            Some(pending_approval) => {
+                pending_approval.send(decision);
             }
             None => {
-                warn!("No pending approval found for call_id: {approval_id}");
+                warn!("No pending exec approval found for call_id: {approval_id}");
+            }
+        }
+    }
+
+    pub async fn notify_patch_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        let entry = self.take_pending_patch_approval(approval_id).await;
+        match entry {
+            Some(pending_approval) => {
+                pending_approval.send(decision);
+            }
+            None => {
+                warn!("No pending patch approval found for call_id: {approval_id}");
             }
         }
     }

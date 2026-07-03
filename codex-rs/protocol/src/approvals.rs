@@ -320,7 +320,7 @@ impl ExecApprovalRequestEvent {
             return vec![ReviewDecision::Approved, ReviewDecision::Abort];
         }
 
-        let mut decisions = vec![ReviewDecision::Approved];
+        let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: prefix.clone(),
@@ -416,6 +416,61 @@ mod tests {
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn cacheable_command_defaults_offer_session_and_exact_execpolicy_amendment() {
+        let amendment = ExecPolicyAmendment::new(vec!["cargo".to_string(), "test".to_string()]);
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                /*network_approval_context*/ None,
+                Some(&amendment),
+                /*proposed_network_policy_amendments*/ None,
+                /*additional_permissions*/ None,
+            ),
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedExecpolicyAmendment {
+                    proposed_execpolicy_amendment: amendment,
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[test]
+    fn network_defaults_keep_exact_deny_amendment_hidden() {
+        let context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+        let allow = NetworkPolicyAmendment {
+            host: context.host.clone(),
+            action: NetworkPolicyRuleAction::Allow,
+        };
+        let deny = NetworkPolicyAmendment {
+            host: context.host.clone(),
+            action: NetworkPolicyRuleAction::Deny,
+        };
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                Some(&context),
+                /*proposed_execpolicy_amendment*/ None,
+                Some(&[allow.clone(), deny]),
+                /*additional_permissions*/ None,
+            ),
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: allow,
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
 
     #[test]
     fn guardian_assessment_action_deserializes_command_shape() {

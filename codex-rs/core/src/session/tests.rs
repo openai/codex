@@ -755,6 +755,163 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
     assert!(message.contains("does not match approved host"));
 }
 
+#[test]
+fn accepted_command_decisions_add_only_exact_proposed_network_denials() {
+    let offered_allow = NetworkPolicyAmendment {
+        host: "example.com".to_string(),
+        action: NetworkPolicyRuleAction::Allow,
+    };
+    let proposed_deny = NetworkPolicyAmendment {
+        host: "example.com".to_string(),
+        action: NetworkPolicyRuleAction::Deny,
+    };
+    let available = vec![
+        ReviewDecision::Approved,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: offered_allow.clone(),
+        },
+        ReviewDecision::Abort,
+    ];
+
+    let accepted = accepted_command_approval_decisions(
+        available.clone(),
+        Some(&[offered_allow, proposed_deny.clone()]),
+    );
+
+    assert_eq!(&accepted[..available.len()], available.as_slice());
+    assert_eq!(
+        accepted.last(),
+        Some(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: proposed_deny,
+        })
+    );
+    assert!(!accepted.contains(&ReviewDecision::NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment {
+            host: "other.example.com".to_string(),
+            action: NetworkPolicyRuleAction::Deny,
+        },
+    }));
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DuplicateApprovalRequestKind {
+    Exec,
+    Patch,
+}
+
+#[tokio::test]
+async fn duplicate_same_kind_approval_request_aborts_without_replacing_or_emitting() {
+    for kind in [
+        DuplicateApprovalRequestKind::Exec,
+        DuplicateApprovalRequestKind::Patch,
+    ] {
+        let (session, turn_context, rx_events) = make_session_and_context_with_rx().await;
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        let approval_id = format!("duplicate-{kind:?}");
+
+        match kind {
+            DuplicateApprovalRequestKind::Exec => {
+                let initial_request = tokio::spawn({
+                    let session = Arc::clone(&session);
+                    let turn_context = Arc::clone(&turn_context);
+                    let approval_id = approval_id.clone();
+                    async move {
+                        session
+                            .request_command_approval(
+                                turn_context.as_ref(),
+                                approval_id,
+                                /*approval_id*/ None,
+                                /*environment_id*/ None,
+                                vec!["first".to_string()],
+                                test_path_buf("/tmp").abs(),
+                                /*reason*/ None,
+                                /*network_approval_context*/ None,
+                                /*proposed_execpolicy_amendment*/ None,
+                                /*additional_permissions*/ None,
+                                Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+                            )
+                            .await
+                    }
+                });
+                let first_event =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), rx_events.recv())
+                        .await
+                        .expect("initial exec approval event timed out")
+                        .expect("initial exec approval event missing");
+                assert!(matches!(
+                    first_event.msg,
+                    EventMsg::ExecApprovalRequest(request)
+                        if request.effective_approval_id() == approval_id
+                ));
+
+                let duplicate_decision = session
+                    .request_command_approval(
+                        turn_context.as_ref(),
+                        approval_id.clone(),
+                        /*approval_id*/ None,
+                        /*environment_id*/ None,
+                        vec!["second".to_string()],
+                        test_path_buf("/tmp").abs(),
+                        /*reason*/ None,
+                        /*network_approval_context*/ None,
+                        /*proposed_execpolicy_amendment*/ None,
+                        /*additional_permissions*/ None,
+                        Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+                    )
+                    .await;
+                assert_eq!(duplicate_decision, ReviewDecision::Abort);
+                assert!(rx_events.try_recv().is_err());
+
+                session
+                    .notify_exec_approval(&approval_id, ReviewDecision::Approved)
+                    .await;
+                assert_eq!(
+                    initial_request.await.expect("initial exec request task"),
+                    ReviewDecision::Approved
+                );
+            }
+            DuplicateApprovalRequestKind::Patch => {
+                let initial_rx = session
+                    .request_patch_approval(
+                        turn_context.as_ref(),
+                        approval_id.clone(),
+                        HashMap::new(),
+                        /*reason*/ None,
+                        /*grant_root*/ None,
+                    )
+                    .await;
+                let first_event =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), rx_events.recv())
+                        .await
+                        .expect("initial patch approval event timed out")
+                        .expect("initial patch approval event missing");
+                assert!(matches!(
+                    first_event.msg,
+                    EventMsg::ApplyPatchApprovalRequest(request)
+                        if request.call_id == approval_id
+                ));
+
+                let duplicate_rx = session
+                    .request_patch_approval(
+                        turn_context.as_ref(),
+                        approval_id.clone(),
+                        HashMap::new(),
+                        /*reason*/ None,
+                        /*grant_root*/ None,
+                    )
+                    .await;
+                assert_eq!(duplicate_rx.await, Ok(ReviewDecision::Abort));
+                assert!(rx_events.try_recv().is_err());
+
+                session
+                    .notify_patch_approval(&approval_id, ReviewDecision::Approved)
+                    .await;
+                assert_eq!(initial_rx.await, Ok(ReviewDecision::Approved));
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
     let permission_profile = PermissionProfile::workspace_write();

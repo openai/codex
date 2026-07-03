@@ -1411,6 +1411,11 @@ async fn handle_shell_command_user_approved_for_session_records_tool_decision() 
     let EventMsg::ExecApprovalRequest(approval) = approval_event else {
         panic!("expected ExecApprovalRequest event");
     };
+    assert!(
+        approval
+            .effective_available_decisions()
+            .contains(&ReviewDecision::ApprovedForSession)
+    );
 
     codex
         .submit(Op::ExecApproval {
@@ -1621,6 +1626,11 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     let EventMsg::ExecApprovalRequest(approval) = approval_event else {
         panic!("expected ExecApprovalRequest event");
     };
+    assert!(
+        approval
+            .effective_available_decisions()
+            .contains(&ReviewDecision::ApprovedForSession)
+    );
 
     codex
         .submit(Op::ExecApproval {
