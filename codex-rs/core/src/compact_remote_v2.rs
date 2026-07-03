@@ -26,6 +26,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_async_utils::OrCancelExt;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -42,6 +43,7 @@ use codex_rollout_trace::InferenceTraceContext;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 #[path = "compact_remote_v2_attempt.rs"]
 mod attempt;
@@ -63,6 +65,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<()> {
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
@@ -77,6 +80,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         Some(client_session),
         initial_context_injection,
         compaction_metadata,
+        cancellation_token,
     )
     .await
 }
@@ -84,6 +88,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<()> {
     // Standalone compaction is its own request boundary, so it captures a fresh step.
     let step_context = sess.capture_step_context(Arc::clone(&turn_context)).await;
@@ -109,10 +114,12 @@ pub(crate) async fn run_remote_compact_task(
         /*client_session*/ None,
         InitialContextInjection::DoNotInject,
         compaction_metadata,
+        cancellation_token,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
@@ -120,6 +127,7 @@ async fn run_remote_compact_task_inner(
     client_session: Option<&mut ModelClientSession>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let trigger = compaction_metadata.trigger();
@@ -163,6 +171,7 @@ async fn run_remote_compact_task_inner(
         initial_context_injection,
         compaction_metadata,
         &mut analytics_details,
+        &cancellation_token,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -201,6 +210,7 @@ async fn run_remote_compact_task_inner_impl(
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
     analytics_details: &mut CompactionAnalyticsDetails,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
     let context_compaction_item = ContextCompactionItem::new();
@@ -222,6 +232,7 @@ async fn run_remote_compact_task_inner_impl(
         &compaction_trace,
         compaction_metadata,
         analytics_details,
+        cancellation_token,
     )
     .await;
     let (attempt, compaction_turn_context) = match attempt {
@@ -248,6 +259,7 @@ async fn run_remote_compact_task_inner_impl(
                 &fallback_compaction_trace,
                 compaction_metadata,
                 analytics_details,
+                cancellation_token,
             )
             .await;
             record_model_fallback(
@@ -333,6 +345,7 @@ async fn run_remote_compaction_request_v2(
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let max_retries = turn_context
         .provider
@@ -340,36 +353,49 @@ async fn run_remote_compaction_request_v2(
         .stream_max_retries()
         .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);
     let mut retries = 0;
+    let mut server_overloaded_retries = 0;
     loop {
-        let result = match client_session
-            .stream(
-                prompt,
-                &turn_context.model_info,
-                &turn_context.session_telemetry,
-                turn_context.reasoning_effort.clone(),
-                turn_context.reasoning_summary,
-                turn_context.config.service_tier.clone(),
-                responses_metadata,
-                &InferenceTraceContext::disabled(),
-            )
-            .await
-        {
-            Ok(stream) => collect_compaction_output(stream).await,
-            Err(err) => Err(err),
-        };
+        let result = async {
+            let stream = client_session
+                .stream(
+                    prompt,
+                    &turn_context.model_info,
+                    &turn_context.session_telemetry,
+                    turn_context.reasoning_effort.clone(),
+                    turn_context.reasoning_summary,
+                    turn_context.config.service_tier.clone(),
+                    responses_metadata,
+                    &InferenceTraceContext::disabled(),
+                )
+                .await?;
+            collect_compaction_output(stream).await
+        }
+        .or_cancel(cancellation_token)
+        .await
+        .map_err(|_| CodexErr::TurnAborted)?;
 
         match result {
             Ok(compaction_output) => return Ok(compaction_output),
-            Err(err) if !err.is_retryable() => return Err(err),
             Err(err) => {
+                let should_retry_server_overload = matches!(&err, CodexErr::ServerOverloaded)
+                    && !crate::guardian::is_guardian_reviewer_source(&turn_context.session_source);
+                if !err.is_retryable() && !should_retry_server_overload {
+                    return Err(err);
+                }
+                let retry_counter = if should_retry_server_overload {
+                    &mut server_overloaded_retries
+                } else {
+                    &mut retries
+                };
                 handle_retryable_response_stream_error(
-                    &mut retries,
+                    retry_counter,
                     max_retries,
                     err,
                     client_session,
                     sess,
                     turn_context,
                     ResponsesStreamRequest::RemoteCompactionV2,
+                    cancellation_token.child_token(),
                 )
                 .await?;
             }

@@ -3853,8 +3853,11 @@ impl Session {
         codex_error: CodexErr,
     ) {
         let additional_details = codex_error.to_string();
-        let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
-            http_status_code: codex_error.http_status_code_value(),
+        let codex_error_info = match &codex_error {
+            CodexErr::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
+            _ => CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: codex_error.http_status_code_value(),
+            },
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),

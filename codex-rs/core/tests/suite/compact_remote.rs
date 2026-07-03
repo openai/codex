@@ -16,6 +16,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -26,6 +27,8 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::configure_search_capable_model;
@@ -1018,8 +1021,8 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
+#[tokio::test]
+async fn remote_compact_v2_retries_capacity_after_stream_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1049,6 +1052,21 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
                     "encrypted_content": "FAILED_COMPACT_SUMMARY",
                 }
             })])),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-1",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-2",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-3",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
             responses::sse_response(responses::sse(vec![
                 serde_json::json!({
                     "type": "response.output_item.done",
@@ -1080,9 +1098,32 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
         })
         .await?;
     wait_for_turn_complete(&codex).await;
+    tokio::time::pause();
 
     codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&codex).await;
+    let mut server_overload_retry_messages = Vec::new();
+    loop {
+        match codex.next_event().await?.msg {
+            EventMsg::StreamError(event) => {
+                if event.codex_error_info == Some(CodexErrorInfo::ServerOverloaded) {
+                    server_overload_retry_messages.push(event.message);
+                }
+                tokio::time::advance(Duration::from_secs(360)).await;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        server_overload_retry_messages,
+        vec![
+            "Reconnecting... 1/3",
+            "Reconnecting... 2/3",
+            "Reconnecting... 3/3",
+        ]
+    );
+    tokio::time::resume();
 
     codex
         .submit(Op::UserInput {
@@ -1100,12 +1141,12 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
 
     let response_requests = responses_mock.requests();
     assert_eq!(
-        5,
+        8,
         response_requests.len(),
-        "expected initial turn, failed open, failed stream, compact retry, and follow-up turn"
+        "expected initial turn, two stream failures, three capacity failures, compact retry, and follow-up turn"
     );
 
-    for compact_request in &response_requests[1..=3] {
+    for compact_request in &response_requests[1..=6] {
         assert_eq!("/v1/responses", compact_request.path());
         assert!(
             compact_request
@@ -1127,6 +1168,136 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
         "expected failed compaction attempt output to be discarded"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_compact_v2_leaves_guardian_capacity_retries_to_guardian() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_session_source(SessionSource::SubAgent(SubAgentSource::Other(
+                "guardian".to_string(),
+            )))
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.stream_max_retries = Some(5);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse_failed(
+                "resp-overloaded",
+                "server_is_overloaded",
+                "temporary reviewer overload",
+            ),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello guardian compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+    tokio::time::pause();
+
+    codex.submit(Op::Compact).await?;
+    let mut terminal_error_info = None;
+    loop {
+        match codex.next_event().await?.msg {
+            EventMsg::Error(event) => terminal_error_info = event.codex_error_info,
+            EventMsg::StreamError(_) => tokio::time::advance(Duration::from_secs(360)).await,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    tokio::time::resume();
+
+    assert_eq!(terminal_error_info, Some(CodexErrorInfo::ServerOverloaded));
+    assert_eq!(responses_mock.requests().len(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_interrupts_pending_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "DELAYED_COMPACT_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact"),
+            ]))
+            .set_delay(Duration::from_secs(30)),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello interruptible compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    codex.submit(Op::Compact).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while responses_mock.requests().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    codex.submit(Op::Interrupt).await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnAborted(_))).await;
+
+    assert_eq!(responses_mock.requests().len(), 2);
     Ok(())
 }
 
