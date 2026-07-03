@@ -183,7 +183,7 @@ fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
         .install_three_way_merge_policy()
         .expect("zero-driver merge policy");
     assert!(config.merge_policy_installed);
-    assert!(config.merge.is_none());
+    assert!(config.merge.is_some());
 
     let error = config
         .install_three_way_merge_policy()
@@ -192,10 +192,10 @@ fn zero_driver_merge_policy_still_occupies_the_single_install_slot() {
 }
 
 #[test]
-fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
+fn isolated_merge_config_is_not_attached_to_preparatory_commands() {
     if std::env::var_os("CODEX_GIT_UTILS_GUARDED_CONFIG_ENV_CHILD").is_none() {
         run_isolated_config_test(
-            "guarded_config::tests::command_order_is_apply_filter_then_merge_then_git_add_filter",
+            "guarded_config::tests::isolated_merge_config_is_not_attached_to_preparatory_commands",
         );
         return;
     }
@@ -226,26 +226,24 @@ fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
         .expect("apply filter overlay")
         .include_arg
         .clone();
-    let merge_include = config
-        .merge_include_arg()
-        .expect("merge overlay")
-        .to_string();
+    let merge_config = config
+        .merge_common_config_path()
+        .expect("isolated merge config");
     let git_add_include = config.filters[1]
         .neutralizer()
         .expect("Git-add filter overlay")
         .include_arg
         .clone();
-    let overlay_paths = [&apply_include, &merge_include, &git_add_include]
+    let overlay_paths = [&apply_include, &git_add_include]
         .map(|include| PathBuf::from(include.strip_prefix("include.path=").expect("include path")));
 
     let rendered = config
         .render_command_for_log(&["ls-files".to_string()])
         .expect("render command");
     let apply_offset = rendered.find(&apply_include).expect("apply include");
-    let merge_offset = rendered.find(&merge_include).expect("merge include");
     let git_add_offset = rendered.find(&git_add_include).expect("Git-add include");
-    assert!(apply_offset < merge_offset && merge_offset < git_add_offset);
-    assert_eq!(rendered.matches(&merge_include).count(), 1);
+    assert!(apply_offset < git_add_offset);
+    assert!(!rendered.contains(&merge_config.display().to_string()));
 
     let output = config
         .ls_files_command()
@@ -254,9 +252,11 @@ fn command_order_is_apply_filter_then_merge_then_git_add_filter() {
         .expect("execute bound command");
     assert!(output.status.success());
     assert!(overlay_paths.iter().all(|path| path.is_file()));
+    assert!(merge_config.is_file());
 
     drop(config);
     assert!(overlay_paths.iter().all(|path| !path.exists()));
+    assert!(!merge_config.exists());
 }
 
 #[test]

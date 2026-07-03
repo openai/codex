@@ -158,6 +158,8 @@ fn assert_refused_without_mutation(root: &Path, patch: &str) {
     let before_leaves = [
         leaf_snapshot(root, "old.txt"),
         leaf_snapshot(root, "new.txt"),
+        leaf_snapshot(root, "file.txt"),
+        leaf_snapshot(root, "other.txt"),
     ];
     let error = apply_git_patch(&request(root, patch)).expect_err("unsafe reverse must fail");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
@@ -165,7 +167,9 @@ fn assert_refused_without_mutation(root: &Path, patch: &str) {
     assert_eq!(
         [
             leaf_snapshot(root, "old.txt"),
-            leaf_snapshot(root, "new.txt")
+            leaf_snapshot(root, "new.txt"),
+            leaf_snapshot(root, "file.txt"),
+            leaf_snapshot(root, "other.txt")
         ],
         before_leaves
     );
@@ -193,6 +197,65 @@ fn reverse_delete_and_rename_preserve_divergent_staged_blobs() {
         }
         assert_refused_without_mutation(root, &patch);
     }
+}
+
+#[test]
+fn reverse_three_way_refuses_staged_content_change_matching_the_worktree() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), b"top\nbase\nbottom\n").expect("base file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    let base = String::from_utf8(run_success(root, &["rev-parse", "HEAD"])).expect("base OID");
+    std::fs::write(root.join("file.txt"), b"top\ntheirs\nbottom\n").expect("theirs file");
+    run_success(root, &["add", "file.txt"]);
+    run_success(root, &["commit", "-qm", "theirs"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &[
+            "diff",
+            "--full-index",
+            base.trim(),
+            "HEAD",
+            "--",
+            "file.txt",
+        ],
+    ))
+    .expect("patch");
+    std::fs::write(root.join("file.txt"), b"top\nuser-staged\nbottom\n").expect("user staged file");
+    run_success(root, &["add", "file.txt"]);
+
+    assert_refused_without_mutation(root, &patch);
+}
+
+#[test]
+fn reverse_three_way_refuses_staged_non_candidate_before_staging_another_path() {
+    let repo = init_repo();
+    let root = repo.path();
+    for path in ["file.txt", "other.txt"] {
+        std::fs::write(root.join(path), b"top\nbase\nbottom\n").expect("base file");
+    }
+    run_success(root, &["add", "."]);
+    run_success(root, &["commit", "-qm", "base"]);
+    let base = String::from_utf8(run_success(root, &["rev-parse", "HEAD"])).expect("base OID");
+    for path in ["file.txt", "other.txt"] {
+        std::fs::write(root.join(path), b"top\ntheirs\nbottom\n").expect("theirs file");
+    }
+    run_success(root, &["add", "."]);
+    run_success(root, &["commit", "-qm", "theirs"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &["diff", "--full-index", base.trim(), "HEAD"],
+    ))
+    .expect("patch");
+
+    std::fs::write(root.join("file.txt"), b"top\nuser-staged\nbottom\n")
+        .expect("staged non-candidate");
+    run_success(root, &["add", "file.txt"]);
+    std::fs::write(root.join("other.txt"), b"top\nunstaged\nbottom\n")
+        .expect("unstaged staging candidate");
+
+    assert_refused_without_mutation(root, &patch);
 }
 
 #[test]

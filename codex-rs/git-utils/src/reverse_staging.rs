@@ -10,9 +10,16 @@ use crate::patch_paths::confine_patch_paths_guarded;
 use crate::patch_paths::leaf_is_traversable_directory;
 use crate::patch_paths::leaf_may_run_git_content_filter;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReverseApplyMode {
+    Direct,
+    ThreeWay,
+}
+
 pub(crate) fn stage_effective_paths_for_reverse(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],
+    mode: ReverseApplyMode,
 ) -> io::Result<()> {
     let confined = confine_patch_paths_guarded(config, paths)?;
     let mut worktree_paths = BTreeMap::new();
@@ -80,6 +87,15 @@ pub(crate) fn stage_effective_paths_for_reverse(
             .ok_or_else(|| invalid_reverse_index_output("missing intent-to-add path"))?;
         return Err(reverse_staging_error(format!(
             "refusing to stage reverse patch path {path:?} because it has intent-to-add index state"
+        )));
+    }
+    if mode == ReverseApplyMode::ThreeWay
+        && let Some(path) = exact_paths
+            .iter()
+            .find(|path| cached_visible_status.contains_key(*path))
+    {
+        return Err(reverse_staging_error(format!(
+            "refusing a three-way reverse patch because it would replace existing staged data for {path:?}"
         )));
     }
     let worktree_changed_paths = read_changed_paths(config, &exact_paths)?;

@@ -7,10 +7,11 @@ use std::sync::Arc;
 use super::BoundSubcommand;
 use super::CapabilityIdentity;
 use super::GuardedGitConfig;
-use crate::git_command::GitCommand;
+use crate::git_command::IsolatedGitCommonDir;
 use crate::git_config::GitConfigEntry;
 
 const MERGE_CONFIG_PATTERN: &str = r"^(merge\.default|merge\..*\.driver)$";
+const SANITIZED_CONFIG_PATTERN: &str = r"^(core\.(repositoryformatversion|filemode|symlinks|ignorecase|precomposeunicode|protecthfs|protectntfs|trustctime|checkstat|longpaths|fscache|splitindex|sparsecheckout|sparsecheckoutcone|autocrlf|eol|safecrlf|checkroundtripencoding|bigfilethreshold|whitespace)|extensions\.(objectformat|compatobjectformat)|index\.(sparse|version)|apply\.(whitespace|ignorewhitespace)|merge\.conflictstyle)$";
 
 /// A complete, fresh merge-config read bound to one authorized operation.
 ///
@@ -36,60 +37,37 @@ impl MergeConfigSnapshot {
         Ok(())
     }
 
-    fn nonempty_driver_keys(&self) -> io::Result<Vec<&str>> {
-        let mut keys = Vec::new();
-        for entry in self.entries.values() {
-            if entry.key == "merge.default" {
-                continue;
-            }
-            let _driver = entry
-                .key
-                .strip_prefix("merge.")
-                .and_then(|key| key.strip_suffix(".driver"))
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "malformed effective Git merge-driver key",
-                    )
-                })?;
-            if !entry.value.is_empty() {
-                keys.push(entry.key.as_str());
-            }
+    fn sanitized_default_driver(&self) -> &str {
+        match self
+            .entries
+            .get("merge.default")
+            .map(|entry| entry.value.as_str())
+        {
+            Some("binary") => "binary",
+            Some("union") => "union",
+            _ => "text",
         }
-        Ok(keys)
     }
 }
 
-/// A sealed merge-driver-only include bound to one operation.
+/// A sealed, helper-free common repository view bound to one operation.
 ///
-/// Construction accepts only a complete `MergeConfigSnapshot`, and the type
-/// exposes neither raw keys nor its include argument outside this module.
+/// The real Git directory, index, worktree, and object store remain selected;
+/// only common config and attributes are replaced for the final three-way
+/// child. Construction accepts a complete merge snapshot so a caller cannot
+/// attach an unreviewed or partial view.
 pub(super) struct SealedMergeConfigOverride {
     owner: Arc<CapabilityIdentity>,
-    include_arg: String,
-    _config_dir: tempfile::TempDir,
+    common_dir: IsolatedGitCommonDir,
 }
 
 impl SealedMergeConfigOverride {
-    pub(super) fn append_to(
+    pub(super) fn common_dir(
         &self,
         owner: &Arc<CapabilityIdentity>,
-        command: &mut GitCommand,
-    ) -> io::Result<()> {
+    ) -> io::Result<&IsolatedGitCommonDir> {
         self.ensure_owner(owner)?;
-        command.args(["-c", &self.include_arg]);
-        Ok(())
-    }
-
-    pub(super) fn append_rendered_args(
-        &self,
-        owner: &Arc<CapabilityIdentity>,
-        args: &mut Vec<String>,
-    ) -> io::Result<()> {
-        self.ensure_owner(owner)?;
-        args.push("-c".to_string());
-        args.push(self.include_arg.clone());
-        Ok(())
+        Ok(&self.common_dir)
     }
 
     fn ensure_owner(&self, owner: &Arc<CapabilityIdentity>) -> io::Result<()> {
@@ -100,11 +78,6 @@ impl SealedMergeConfigOverride {
             ));
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn include_arg(&self) -> &str {
-        &self.include_arg
     }
 }
 
@@ -135,8 +108,8 @@ impl<'git> GuardedGitConfig<'git> {
                 ),
             ));
         }
-        let neutralizer = self.build_merge_override(&snapshot)?;
-        self.attach_merge_override(neutralizer)
+        let isolated = self.build_merge_override(&snapshot)?;
+        self.attach_merge_override(isolated)
     }
 
     /// Read merge-driver policy from the frozen, authorized base invocation.
@@ -188,48 +161,43 @@ impl<'git> GuardedGitConfig<'git> {
     fn build_merge_override(
         &self,
         snapshot: &MergeConfigSnapshot,
-    ) -> io::Result<Option<SealedMergeConfigOverride>> {
+    ) -> io::Result<SealedMergeConfigOverride> {
         snapshot.ensure_owner(&self.identity)?;
         if self.merge_policy_installed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "a merge neutralizer is already attached",
+                "an isolated three-way config is already attached",
             ));
         }
-        let driver_keys = snapshot.nonempty_driver_keys()?;
-        if driver_keys.is_empty() {
-            return Ok(None);
-        }
 
-        let config_dir = tempfile::tempdir()?;
-        let config_path = config_dir
-            .path()
-            .join("merge-driver-neutralization.gitconfig");
-        self.ensure_owned_config_path(&config_path, "owned Git merge-driver neutralization")?;
-        std::fs::write(&config_path, [])?;
-        for key in driver_keys {
-            self.write_merge_override_value(&config_path, key)?;
+        let common_dir = self.sources.git.create_isolated_common_dir()?;
+        let config_path = common_dir.config_path();
+        self.ensure_owned_config_path(&config_path, "owned isolated Git common config")?;
+        let entries = self
+            .sources
+            .read_effective(SANITIZED_CONFIG_PATTERN, "three-way allowlist")?;
+        for entry in entries.values() {
+            self.write_sanitized_config_value(&config_path, &entry.key, &entry.value)?;
         }
-        let config_path = config_path.to_str().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 merge guard path")
-        })?;
+        self.write_sanitized_config_value(&config_path, "core.bare", "false")?;
+        self.write_sanitized_config_value(
+            &config_path,
+            "merge.default",
+            snapshot.sanitized_default_driver(),
+        )?;
         #[cfg(test)]
         MERGE_OVERLAY_COUNT.with(|count| count.set(count.get() + 1));
-        Ok(Some(SealedMergeConfigOverride {
+        Ok(SealedMergeConfigOverride {
             owner: Arc::clone(&self.identity),
-            include_arg: format!("include.path={config_path}"),
-            _config_dir: config_dir,
-        }))
+            common_dir,
+        })
     }
 
-    fn attach_merge_override(
-        &mut self,
-        neutralizer: Option<SealedMergeConfigOverride>,
-    ) -> io::Result<()> {
+    fn attach_merge_override(&mut self, isolated: SealedMergeConfigOverride) -> io::Result<()> {
         if self.merge_policy_installed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "a second merge neutralizer is not permitted",
+                "a second isolated three-way config is not permitted",
             ));
         }
         let [apply] = self.filters.as_slice() else {
@@ -244,28 +212,30 @@ impl<'git> GuardedGitConfig<'git> {
                 "merge policy requires an apply filter snapshot",
             ));
         }
-        if let Some(neutralizer) = &neutralizer {
-            neutralizer.ensure_owner(&self.identity)?;
-        }
-        self.merge = neutralizer;
+        isolated.ensure_owner(&self.identity)?;
+        self.merge = Some(isolated);
         self.merge_policy_installed = true;
         Ok(())
     }
 
-    fn write_merge_override_value(&self, config_path: &Path, key: &str) -> io::Result<()> {
+    fn write_sanitized_config_value(
+        &self,
+        config_path: &Path,
+        key: &str,
+        value: &str,
+    ) -> io::Result<()> {
         let mut command = self
             .sources
             .git
             .command_for_cwd(&self.sources.canonical_root)?;
         command
-            .args(&self.sources.base_config_args)
             .args(["config", "--file"])
             .arg(config_path)
-            .args(["--add", key, ""]);
+            .args(["--add", key, value]);
         let output = self.sources.git.output(command)?;
         if !output.status.success() {
             return Err(io::Error::other(format!(
-                "failed to write Git merge-driver neutralization for {key:?} (status {}): {}",
+                "failed to write isolated Git config value {key:?} (status {}): {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
             )));

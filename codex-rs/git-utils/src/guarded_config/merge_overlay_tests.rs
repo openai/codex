@@ -35,10 +35,9 @@ fn sealed_merge_override_rejects_another_operation_identity() {
     let snapshot = first.read_merge_config_snapshot().expect("merge snapshot");
     let neutralizer = first
         .build_merge_override(&snapshot)
-        .expect("build merge override")
-        .expect("physical merge override");
+        .expect("build isolated merge config");
     let error = second
-        .attach_merge_override(Some(neutralizer))
+        .attach_merge_override(neutralizer)
         .expect_err("cross-operation override must refuse");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }

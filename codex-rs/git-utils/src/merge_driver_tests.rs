@@ -23,7 +23,7 @@ fn apply_allows_unused_global_merge_driver() {
         let system_config = config_dir.path().join("system.gitconfig");
         std::fs::write(
             &global_config,
-            "[merge \"unused\"]\n\tdriver = git config codex.mergeran true && false\n",
+            "[merge \"unused\"]\n\tdriver = git config --file .git/config codex.mergeran true && false\n",
         )
         .expect("write global config");
         std::fs::write(&system_config, "").expect("write system config");
@@ -71,7 +71,7 @@ fn apply_rejects_global_merge_driver_before_three_way() {
         let system_config = config_dir.path().join("system.gitconfig");
         std::fs::write(
             &global_config,
-            "[merge \"codex-test\"]\n\tdriver = git config codex.mergeran true && false\n",
+            "[merge \"codex-test\"]\n\tdriver = git config --file .git/config codex.mergeran true && false\n",
         )
         .expect("write global config");
         std::fs::write(&system_config, "").expect("write system config");
@@ -173,7 +173,7 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
             "git",
             "config",
             "merge.unused.driver",
-            "git config codex.mergeran true && false",
+            "git config --file .git/config codex.mergeran true && false",
         ],
     );
     assert_eq!(
@@ -207,6 +207,139 @@ fn three_way_apply_allows_unrelated_local_merge_driver() {
 }
 
 #[test]
+fn isolated_three_way_config_preserves_builtin_union_default() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("file.txt"), "top\nbase\nbottom\n").expect("write base");
+    let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+    assert_eq!(add_code, 0, "add base: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "base"]);
+    assert_eq!(commit_code, 0, "commit base: {commit_err}");
+    let (base_code, base, base_err) = run(root, &["git", "rev-parse", "HEAD"]);
+    assert_eq!(base_code, 0, "resolve base: {base_err}");
+
+    std::fs::write(root.join("file.txt"), "top\ntheirs\nbottom\n").expect("write theirs");
+    let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
+    assert_eq!(add_code, 0, "add theirs: {add_err}");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "theirs"]);
+    assert_eq!(commit_code, 0, "commit theirs: {commit_err}");
+    let (diff_code, diff, diff_err) = run(
+        root,
+        &[
+            "git",
+            "diff",
+            "--full-index",
+            base.trim(),
+            "HEAD",
+            "--",
+            "file.txt",
+        ],
+    );
+    assert_eq!(diff_code, 0, "create full-index patch: {diff_err}");
+
+    let (checkout_code, _, checkout_err) =
+        run(root, &["git", "checkout", "-b", "ours", base.trim()]);
+    assert_eq!(checkout_code, 0, "checkout base: {checkout_err}");
+    std::fs::write(root.join("file.txt"), "top\nours\nbottom\n").expect("write ours");
+    let (commit_code, _, commit_err) = run(root, &["git", "commit", "-am", "ours"]);
+    assert_eq!(commit_code, 0, "commit ours: {commit_err}");
+    let (config_code, _, config_err) = run(root, &["git", "config", "merge.default", "union"]);
+    assert_eq!(config_code, 0, "configure union default: {config_err}");
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("apply with builtin union default");
+
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+    let contents = std::fs::read_to_string(root.join("file.txt"))
+        .expect("read union merge")
+        .replace("\r\n", "\n");
+    assert!(contents.contains("ours\n"), "{contents}");
+    assert!(contents.contains("theirs\n"), "{contents}");
+    assert!(!contents.contains("<<<<<<<"), "{contents}");
+}
+
+#[test]
+fn isolated_three_way_config_preserves_core_whitespace_error_classification() {
+    let repo = init_repo();
+    let root = repo.path();
+    let diff = build_clean_three_way_addition(root, "patched \n");
+    assert_eq!(
+        run(root, &["git", "config", "apply.whitespace", "error"]).0,
+        0
+    );
+    assert_eq!(
+        run(
+            root,
+            &["git", "config", "core.whitespace", "-trailing-space"]
+        )
+        .0,
+        0
+    );
+    configure_unused_marker_driver(root);
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff,
+        revert: false,
+        preflight: false,
+    })
+    .expect("run forced three-way apply with whitespace error policy");
+
+    assert_eq!(result.exit_code, 0, "{result:?}");
+    assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+    let contents = std::fs::read_to_string(root.join("file.txt"))
+        .expect("read whitespace result")
+        .replace("\r\n", "\n");
+    assert_eq!(contents, "current\nbase\npatched \n");
+    let marker = run(root, &["git", "config", "--get", "codex.mergeran"]);
+    assert_ne!(marker.0, 0, "unused merge driver ran");
+}
+
+#[test]
+fn isolated_three_way_config_preserves_core_whitespace_fix_output() {
+    for (classifier, expected_line) in [
+        ("-indent-with-non-tab", "        patched\n"),
+        ("indent-with-non-tab", "\tpatched\n"),
+    ] {
+        let repo = init_repo();
+        let root = repo.path();
+        let diff = build_clean_three_way_addition(root, "        patched\n");
+        assert_eq!(
+            run(root, &["git", "config", "apply.whitespace", "fix"]).0,
+            0
+        );
+        assert_eq!(
+            run(root, &["git", "config", "core.whitespace", classifier]).0,
+            0
+        );
+        configure_unused_marker_driver(root);
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff,
+            revert: false,
+            preflight: false,
+        })
+        .expect("run forced three-way apply with whitespace fix policy");
+
+        assert_eq!(result.exit_code, 0, "{classifier}: {result:?}");
+        assert!(result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>"));
+        let contents = std::fs::read_to_string(root.join("file.txt"))
+            .expect("read fixed whitespace result")
+            .replace("\r\n", "\n");
+        assert_eq!(contents, format!("current\nbase\n{expected_line}"));
+        let marker = run(root, &["git", "config", "--get", "codex.mergeran"]);
+        assert_ne!(marker.0, 0, "unused merge driver ran for {classifier}");
+    }
+}
+
+#[test]
 fn apply_allows_clean_patch_with_selected_merge_driver() {
     let repo = init_repo();
     let root = repo.path();
@@ -223,7 +356,7 @@ fn apply_allows_clean_patch_with_selected_merge_driver() {
             "git",
             "config",
             "merge.codex-test.driver",
-            "git config codex.mergeran true && false",
+            "git config --file .git/config codex.mergeran true && false",
         ],
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
@@ -275,7 +408,7 @@ fn reverse_apply_allows_clean_patch_with_selected_merge_driver() {
             "git",
             "config",
             "merge.codex-test.driver",
-            "git config codex.mergeran true && false",
+            "git config --file .git/config codex.mergeran true && false",
         ],
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
@@ -336,7 +469,7 @@ fn preflight_does_not_probe_or_run_selected_merge_driver() {
             "git",
             "config",
             "merge.codex-test.driver",
-            "git config codex.mergeran true && false",
+            "git config --file .git/config codex.mergeran true && false",
         ],
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
@@ -397,7 +530,7 @@ fn merge_override_rejects_process_temp_directory_inside_worktree() {
             "git",
             "config",
             "merge.unused.driver",
-            "git config codex.mergeran true && false",
+            "git config --file .git/config codex.mergeran true && false",
         ],
     );
     assert_eq!(config_code, 0, "configure merge driver: {config_err}");
@@ -640,6 +773,32 @@ fn build_three_way_fixture(root: &Path) -> String {
     std::fs::write(root.join("file.txt"), "ours\n").expect("write ours");
     assert_eq!(run(root, &["git", "commit", "-am", "ours"]).0, 0);
     patch.1
+}
+
+fn build_clean_three_way_addition(root: &Path, added_line: &str) -> String {
+    std::fs::write(root.join("file.txt"), "base\n").expect("write base");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    std::fs::write(root.join("file.txt"), format!("base\n{added_line}")).expect("write patch side");
+    let patch = run(root, &["git", "diff", "--full-index", "--", "file.txt"]);
+    assert_eq!(patch.0, 0, "create patch: {}", patch.2);
+    assert_eq!(run(root, &["git", "checkout", "--", "file.txt"]).0, 0);
+    std::fs::write(root.join("file.txt"), "current\nbase\n").expect("write current side");
+    assert_eq!(run(root, &["git", "add", "file.txt"]).0, 0);
+    patch.1
+}
+
+fn configure_unused_marker_driver(root: &Path) {
+    let configured = run(
+        root,
+        &[
+            "git",
+            "config",
+            "merge.unused.driver",
+            "git config --file .git/config codex.mergeran true && false",
+        ],
+    );
+    assert_eq!(configured.0, 0, "configure unused driver: {}", configured.2);
 }
 
 fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {

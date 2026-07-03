@@ -16,6 +16,7 @@ use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::guarded_config::GuardedGitConfig;
 use crate::patch_paths::extract_patch_path_inventory_guarded;
+use crate::reverse_staging::ReverseApplyMode;
 use crate::reverse_staging::stage_effective_paths_for_reverse;
 #[cfg(test)]
 use crate::safe_git::DISABLED_HOOKS_PATH;
@@ -41,6 +42,21 @@ pub struct ApplyGitResult {
     pub stdout: String,
     pub stderr: String,
     pub cmd_for_log: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApplyStrategy {
+    Direct,
+    ThreeWay,
+}
+
+impl ApplyStrategy {
+    fn reverse_mode(self) -> ReverseApplyMode {
+        match self {
+            Self::Direct => ReverseApplyMode::Direct,
+            Self::ThreeWay => ReverseApplyMode::ThreeWay,
+        }
+    }
 }
 
 /// Apply a unified diff to the target repository by shelling out to `git apply`.
@@ -111,25 +127,43 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     plain_check_args.push(patch_arg.clone());
     let (plain_check_code, _, _) = run_guarded_apply(&config, &plain_check_args)?;
 
-    let mut args = vec!["apply".to_string()];
-    if plain_check_code != 0 {
+    let strategy = if plain_check_code != 0 {
         config.install_three_way_merge_policy()?;
-        args.push("--3way".to_string());
+        ApplyStrategy::ThreeWay
     } else {
-        args.push("--index".to_string());
-    }
+        ApplyStrategy::Direct
+    };
     if req.revert {
         // Stage only after the worktree-only applicability decision. The
         // guarded config is shared with the final Git command.
-        stage_effective_paths_for_reverse(&mut config, patch_paths)?;
+        stage_effective_paths_for_reverse(&mut config, patch_paths, strategy.reverse_mode())?;
     }
-    if req.revert {
-        args.push("-R".to_string());
-    }
-    args.push(patch_arg);
 
-    let cmd_for_log = config.render_command_for_log(&args)?;
-    let (code, stdout, stderr) = run_guarded_apply(&config, &args)?;
+    let (cmd_for_log, output) = match strategy {
+        ApplyStrategy::Direct => {
+            let mut args = vec!["apply".to_string(), "--index".to_string()];
+            if req.revert {
+                args.push("-R".to_string());
+            }
+            args.push(patch_arg);
+            let rendered = config.render_command_for_log(&args)?;
+            let (code, stdout, stderr) = run_guarded_apply(&config, &args)?;
+            (rendered, (code, stdout, stderr))
+        }
+        ApplyStrategy::ThreeWay => {
+            let rendered = config.render_three_way_apply_for_log(req.revert, &patch_arg)?;
+            let output = config.run_three_way_apply(req.revert, &patch_arg)?;
+            (
+                rendered,
+                (
+                    output.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                    String::from_utf8_lossy(&output.stderr).into_owned(),
+                ),
+            )
+        }
+    };
+    let (code, stdout, stderr) = output;
 
     let (mut applied_paths, mut skipped_paths, mut conflicted_paths) = if code == 0 {
         (patch_path_inventory.primary_paths, Vec::new(), Vec::new())

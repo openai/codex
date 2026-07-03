@@ -364,9 +364,6 @@ impl<'git> GuardedGitConfig<'git> {
         if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_to(&self.identity, &mut command)?;
         }
-        if let Some(merge) = &self.merge {
-            merge.append_to(&self.identity, &mut command)?;
-        }
         if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_to(&self.identity, &mut command)?;
         }
@@ -550,11 +547,82 @@ impl<'git> GuardedGitConfig<'git> {
         Ok(apply.checked_paths())
     }
 
+    pub(crate) fn run_three_way_apply(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<std::process::Output> {
+        let (apply, _git_add) = self.ordered_filter_snapshots()?;
+        if apply.is_none() || !self.merge_policy_installed {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "three-way apply policy is not installed",
+            ));
+        }
+        let merge = self.merge.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated three-way config is unavailable",
+            )
+        })?;
+        let isolated = merge.common_dir(&self.identity)?;
+        let mut command = self
+            .sources
+            .git
+            .command_for_cwd(&self.sources.canonical_root)?;
+        append_safe_scalar_overrides(&mut command);
+        BoundSubcommand::Apply.append_to(&mut command);
+        command.arg("--3way");
+        if revert {
+            command.arg("-R");
+        }
+        command.arg(patch_path);
+        self.sources
+            .git
+            .output_in_isolated_common_dir(command, isolated)
+    }
+
+    pub(crate) fn render_three_way_apply_for_log(
+        &self,
+        revert: bool,
+        patch_path: &str,
+    ) -> io::Result<String> {
+        let merge = self.merge.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "isolated three-way config is unavailable",
+            )
+        })?;
+        let _ = merge.common_dir(&self.identity)?;
+        let mut parts = vec![
+            "env".to_string(),
+            "GIT_COMMON_DIR=<isolated>".to_string(),
+            "git".to_string(),
+        ];
+        parts.extend(safe_scalar_override_args());
+        parts.push("apply".to_string());
+        parts.push("--3way".to_string());
+        if revert {
+            parts.push("-R".to_string());
+        }
+        parts.push(patch_path.to_string());
+        Ok(format!(
+            "(cd {} && {})",
+            quote_shell(&self.sources.canonical_root.display().to_string()),
+            parts
+                .into_iter()
+                .map(|part| quote_shell(&part))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ))
+    }
+
     #[cfg(test)]
-    pub(crate) fn merge_include_arg(&self) -> Option<&str> {
+    pub(crate) fn merge_common_config_path(&self) -> Option<PathBuf> {
         self.merge
             .as_ref()
-            .map(SealedMergeConfigOverride::include_arg)
+            .and_then(|merge| merge.common_dir(&self.identity).ok())
+            .map(crate::git_command::IsolatedGitCommonDir::config_path)
     }
 
     pub(crate) fn authorize_git_add_filter_paths(&mut self, paths: &[String]) -> io::Result<()> {
@@ -580,9 +648,6 @@ impl<'git> GuardedGitConfig<'git> {
         let (apply, git_add) = self.ordered_filter_snapshots()?;
         if let Some(neutralizer) = apply.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_rendered_args(&self.identity, &mut parts)?;
-        }
-        if let Some(merge) = &self.merge {
-            merge.append_rendered_args(&self.identity, &mut parts)?;
         }
         if let Some(neutralizer) = git_add.and_then(FilterPolicySnapshot::neutralizer) {
             neutralizer.append_rendered_args(&self.identity, &mut parts)?;
