@@ -755,6 +755,44 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
     assert!(message.contains("does not match approved host"));
 }
 
+#[test]
+fn accepted_command_decisions_add_only_exact_proposed_network_denials() {
+    let offered_allow = NetworkPolicyAmendment {
+        host: "example.com".to_string(),
+        action: NetworkPolicyRuleAction::Allow,
+    };
+    let proposed_deny = NetworkPolicyAmendment {
+        host: "example.com".to_string(),
+        action: NetworkPolicyRuleAction::Deny,
+    };
+    let available = vec![
+        ReviewDecision::Approved,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: offered_allow.clone(),
+        },
+        ReviewDecision::Abort,
+    ];
+
+    let accepted = accepted_command_approval_decisions(
+        available.clone(),
+        Some(&[offered_allow, proposed_deny.clone()]),
+    );
+
+    assert_eq!(&accepted[..available.len()], available.as_slice());
+    assert_eq!(
+        accepted.last(),
+        Some(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: proposed_deny,
+        })
+    );
+    assert!(!accepted.contains(&ReviewDecision::NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment {
+            host: "other.example.com".to_string(),
+            action: NetworkPolicyRuleAction::Deny,
+        },
+    }));
+}
+
 #[tokio::test]
 async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
     let permission_profile = PermissionProfile::workspace_write();

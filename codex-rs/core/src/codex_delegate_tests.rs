@@ -397,6 +397,155 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 }
 
 #[tokio::test]
+async fn cancelling_delegated_exec_removes_retry_waiter_and_late_response_is_inert() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    parent_ctx.config = Arc::new(config);
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let cancel_token = cancel_token.clone();
+        async move {
+            handle_exec_approval(
+                codex.as_ref(),
+                "child-turn-1".to_string(),
+                &parent_session,
+                &parent_ctx,
+                delegated_retry_exec_approval_event(),
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request_event = timeout(Duration::from_secs(1), rx_events.recv())
+        .await
+        .expect("exec approval event timed out")
+        .expect("exec approval event missing");
+    let EventMsg::ExecApprovalRequest(request) = request_event.msg else {
+        panic!("expected ExecApprovalRequest event");
+    };
+    assert_eq!(request.call_id, "command-item-1");
+    assert_eq!(request.approval_id.as_deref(), Some("retry-id"));
+
+    cancel_token.cancel();
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("handle_exec_approval hung")
+        .expect("handle_exec_approval join error");
+
+    let submission = timeout(Duration::from_secs(1), rx_sub.recv())
+        .await
+        .expect("exec cancellation response timed out")
+        .expect("exec cancellation response missing");
+    assert_eq!(
+        submission.op,
+        Op::ExecApproval {
+            id: "retry-id".to_string(),
+            turn_id: Some("child-turn-1".to_string()),
+            decision: ReviewDecision::Abort,
+        }
+    );
+    assert!(
+        parent_session
+            .take_pending_exec_approval("retry-id")
+            .await
+            .is_none(),
+        "exec cancellation must remove the matching retry waiter"
+    );
+
+    parent_session
+        .notify_exec_approval("retry-id", ReviewDecision::Approved)
+        .await;
+    assert!(
+        parent_session
+            .take_pending_exec_approval("retry-id")
+            .await
+            .is_none(),
+        "a late response must not recreate or resolve a cancelled retry waiter"
+    );
+    assert!(
+        rx_sub.try_recv().is_err(),
+        "a late response must not produce another child approval response"
+    );
+}
+
+fn delegated_retry_exec_approval_event() -> ExecApprovalRequestEvent {
+    ExecApprovalRequestEvent {
+        call_id: "command-item-1".to_string(),
+        approval_id: Some("retry-id".to_string()),
+        turn_id: "child-turn-1".to_string(),
+        environment_id: Some("remote".to_string()),
+        started_at_ms: 0,
+        command: vec!["rm".to_string(), "-rf".to_string(), "tmp".to_string()],
+        cwd: test_path_buf("/tmp").abs(),
+        reason: Some("unsafe subcommand".to_string()),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: None,
+        available_decisions: Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+        parsed_cmd: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn cancelling_delegated_patch_removes_the_patch_waiter() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let approval_id = "delegated-patch-cancel";
+    let decision_rx = parent_session
+        .request_patch_approval(
+            &parent_ctx,
+            approval_id.to_string(),
+            HashMap::new(),
+            /*reason*/ None,
+            /*grant_root*/ None,
+        )
+        .await;
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let decision = await_approval_with_cancel(
+        async move { decision_rx.await.unwrap_or(ReviewDecision::Abort) },
+        &parent_session,
+        approval_id,
+        &cancel_token,
+        /*review_cancel_token*/ None,
+        Some(PendingApprovalToCancel::Patch),
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Abort);
+    assert!(
+        parent_session
+            .take_pending_patch_approval(approval_id)
+            .await
+            .is_none(),
+        "patch cancellation must remove the matching pending waiter"
+    );
+}
+
+#[tokio::test]
 async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;

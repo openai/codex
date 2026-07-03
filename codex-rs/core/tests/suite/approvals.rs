@@ -2126,6 +2126,149 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
+async fn exec_approval_cannot_resolve_patch_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config
+                .set_legacy_sandbox_policy(sandbox_policy_for_config)
+                .expect("set sandbox policy");
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        });
+    let test = builder.build(&server).await?;
+
+    let target = TargetPath::OutsideWorkspace("apply_patch_reject_exec_response.txt");
+    let (path, patch_path) = target.resolve_for_patch(&test);
+    let _path_cleanup = tempfile::TempPath::try_from_path(path.clone())?;
+    let _ = fs::remove_file(&path);
+    let patch = build_add_file_patch(&patch_path, "approved by patch response");
+    let call_id = "apply_patch_reject_exec_response";
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_apply_patch_custom_tool_call(call_id, &patch),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "apply patch with typed approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    let approval = expect_patch_approval(&test, call_id).await;
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.call_id.clone(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.call_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+    assert_eq!(fs::read_to_string(&path)?, "approved by patch response\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn patch_approval_cannot_resolve_exec_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+    let call_id = "exec_reject_patch_response";
+    let target = test.config.cwd.join("exec_reject_patch_response.txt");
+    let _target_cleanup = tempfile::TempPath::try_from_path(target.clone())?;
+    let command = "touch exec_reject_patch_response.txt";
+
+    let event = shell_event(
+        call_id,
+        command,
+        /*timeout_ms*/ 1_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            event,
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "run command with typed approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    let approval = expect_exec_approval(&test, command).await;
+
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.effective_approval_id(),
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+    assert!(target.exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
 async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;

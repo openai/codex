@@ -366,6 +366,19 @@ pub async fn exec_approval(
     turn_id: Option<String>,
     decision: ReviewDecision,
 ) {
+    let Some(pending_approval) = sess.take_pending_exec_approval(&approval_id).await else {
+        warn!("No pending exec approval found for call_id: {approval_id}");
+        return;
+    };
+    let decision = if pending_approval.accepts(&decision) {
+        decision
+    } else {
+        warn!(
+            approval_id,
+            "rejecting decision that was not offered for approval request"
+        );
+        ReviewDecision::Denied
+    };
     let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
     if let ReviewDecision::ApprovedExecpolicyAmendment {
         proposed_execpolicy_amendment,
@@ -398,16 +411,29 @@ pub async fn exec_approval(
         ReviewDecision::Abort => {
             sess.interrupt_task().await;
         }
-        other => sess.notify_approval(&approval_id, other).await,
+        other => pending_approval.send(other),
     }
 }
 
 pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    let Some(pending_approval) = sess.take_pending_patch_approval(&id).await else {
+        warn!("No pending patch approval found for call_id: {id}");
+        return;
+    };
+    let decision = if pending_approval.accepts(&decision) {
+        decision
+    } else {
+        warn!(
+            approval_id = id,
+            "rejecting decision that was not offered for patch approval request"
+        );
+        ReviewDecision::Denied
+    };
     match decision {
         ReviewDecision::Abort => {
             sess.interrupt_task().await;
         }
-        other => sess.notify_approval(&id, other).await,
+        other => pending_approval.send(other),
     }
 }
 
