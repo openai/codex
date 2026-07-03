@@ -13,6 +13,8 @@ use codex_protocol::protocol::ExecApprovalPurpose;
 use codex_protocol::protocol::Op;
 #[cfg(windows)]
 use codex_protocol::protocol::ReviewDecision;
+#[cfg(windows)]
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -178,6 +180,7 @@ async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_befor
                 EventMsg::ExecApprovalRequest(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::ExecCommandEnd(_)
+                    | EventMsg::TurnAborted(_)
                     | EventMsg::TurnComplete(_)
             )
         })
@@ -187,13 +190,15 @@ async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_befor
             "the requested workspace PowerShell must not start before approval"
         );
         match event {
-            EventMsg::ExecCommandBegin(begin) => {
-                assert_eq!(begin.call_id, call_id);
-                assert_eq!(begin.command, expected_command);
-            }
             EventMsg::ExecApprovalRequest(approval) => break approval,
+            EventMsg::ExecCommandBegin(begin) => {
+                panic!("workspace PowerShell began before approval: {begin:?}")
+            }
             EventMsg::ExecCommandEnd(end) => {
                 panic!("workspace PowerShell completed before approval: {end:?}")
+            }
+            EventMsg::TurnAborted(aborted) => {
+                panic!("turn aborted before one-shot approval: {aborted:?}")
             }
             EventMsg::TurnComplete(_) => panic!("expected one-shot approval before completion"),
             _ => unreachable!(),
@@ -222,46 +227,45 @@ async fn unified_exec_workspace_powershell_path_requires_one_shot_approval_befor
     assert_eq!(approval.proposed_execpolicy_amendment, None);
     assert!(!sentinel.exists());
 
+    let approval_turn_id = approval.turn_id.clone();
     test.codex
         .submit(Op::ExecApproval {
             id: approval_id,
-            turn_id: Some(approval.turn_id),
+            turn_id: Some(approval_turn_id.clone()),
             decision: ReviewDecision::Abort,
         })
         .await?;
 
-    let mut command_end = None;
-    loop {
-        match wait_for_event(&test.codex, |event| {
-            matches!(
-                event,
-                EventMsg::ExecCommandEnd(_) | EventMsg::TurnComplete(_)
-            )
-        })
-        .await
-        {
-            EventMsg::ExecCommandEnd(end) => command_end = Some(end),
-            EventMsg::TurnComplete(_) => break,
-            _ => unreachable!(),
+    let aborted = match wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecCommandBegin(_)
+                | EventMsg::ExecCommandEnd(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::TurnComplete(_)
+        )
+    })
+    .await
+    {
+        EventMsg::TurnAborted(aborted) => aborted,
+        EventMsg::ExecCommandBegin(begin) => {
+            panic!("workspace PowerShell began after abort: {begin:?}")
         }
-    }
+        EventMsg::ExecCommandEnd(end) => {
+            panic!("workspace PowerShell completed after abort: {end:?}")
+        }
+        EventMsg::TurnComplete(_) => panic!("aborted approval unexpectedly completed the turn"),
+        _ => unreachable!(),
+    };
+    assert_eq!(aborted.turn_id.as_deref(), Some(approval_turn_id.as_str()));
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
     assert!(
         !sentinel.exists(),
         "aborting the one-shot approval must never start the requested workspace PowerShell"
     );
-    if let Some(end) = command_end {
-        assert_ne!(end.exit_code, 0, "aborted command must not report success");
-        assert!(!end.aggregated_output.contains(marker));
-    }
-
-    let output_item = results_mock.single_request().function_call_output(call_id);
-    let output = output_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("function call output should include a string output payload");
     assert!(
-        !output.contains(marker),
-        "unexpected successful output: {output}"
+        results_mock.requests().is_empty(),
+        "aborting the one-shot approval must not continue the turn"
     );
 
     Ok(())
