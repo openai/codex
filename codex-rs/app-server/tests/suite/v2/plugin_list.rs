@@ -2502,16 +2502,25 @@ plugin_sharing = true
         marketplace
             .plugins
             .iter()
-            .map(|plugin| (plugin.id.clone(), plugin.installed, plugin.enabled))
+            .map(|plugin| {
+                (
+                    plugin.id.clone(),
+                    plugin.version.clone(),
+                    plugin.installed,
+                    plugin.enabled,
+                )
+            })
             .collect::<Vec<_>>(),
         vec![
             (
                 "shared-linear@workspace-shared-with-me".to_string(),
+                Some("1.2.3".to_string()),
                 true,
                 true
             ),
             (
                 "unlisted-linear@workspace-shared-with-me".to_string(),
+                Some("1.2.3".to_string()),
                 true,
                 false
             )
