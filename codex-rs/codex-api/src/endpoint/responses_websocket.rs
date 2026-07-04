@@ -3,6 +3,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::SafetyBufferingTreatment;
+use crate::common::WireRetryModel;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -636,6 +637,7 @@ async fn run_websocket_response_stream(
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let mut safety_buffering_treatment: Option<SafetyBufferingTreatment> = None;
+    let mut wire_retry_model: Option<String> = None;
     send_websocket_request(
         ws_stream,
         request_text,
@@ -691,8 +693,11 @@ async fn run_websocket_response_stream(
                 }
                 let model_verifications = event.model_verifications();
                 let turn_moderation_metadata = event.turn_moderation_metadata();
-                let safety_buffering =
-                    safety_buffering_for_event(&event, &mut safety_buffering_treatment);
+                let safety_buffering = safety_buffering_for_event(
+                    &event,
+                    &mut safety_buffering_treatment,
+                    &mut wire_retry_model,
+                );
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -770,6 +775,7 @@ async fn run_websocket_response_stream(
 fn safety_buffering_for_event(
     event: &ResponsesStreamEvent,
     treatment: &mut Option<SafetyBufferingTreatment>,
+    wire_retry_model: &mut Option<String>,
 ) -> Option<crate::common::SafetyBuffering> {
     if let Some(headers) = event.headers.as_ref().and_then(Value::as_object)
         && let Some(updated_treatment) =
@@ -777,9 +783,19 @@ fn safety_buffering_for_event(
     {
         *treatment = Some(updated_treatment);
     }
-    event
-        .safety_buffering()
-        .map(|buffering| buffering.with_treatment(treatment.as_ref()))
+    event.safety_buffering().map(|mut buffering| {
+        if treatment.is_none() {
+            match &buffering.wire_retry_model {
+                WireRetryModel::Value(retry_model) => {
+                    wire_retry_model.clone_from(retry_model);
+                }
+                WireRetryModel::Missing => {
+                    buffering.wire_retry_model = WireRetryModel::Value(wire_retry_model.clone());
+                }
+            }
+        }
+        buffering.with_treatment(treatment.as_ref())
+    })
 }
 
 async fn send_websocket_request(
@@ -1049,19 +1065,20 @@ mod tests {
     }
 
     #[test]
-    fn direct_websocket_safety_buffering_uses_wire_faster_model() {
+    fn direct_websocket_safety_buffering_uses_wire_retry_model() {
         let event: ResponsesStreamEvent = serde_json::from_value(json!({
             "type": "response.output_text.delta",
             "safety_buffering": {
                 "use_cases": ["cyber"],
                 "reasons": ["user_risk"],
-                "faster_model": "gpt-fast-wire"
+                "retry_model": "gpt-fast-wire"
             }
         }))
         .expect("deserialize safety buffering event");
         let mut treatment = None;
+        let mut wire_retry_model = None;
 
-        let buffering = safety_buffering_for_event(&event, &mut treatment)
+        let buffering = safety_buffering_for_event(&event, &mut treatment, &mut wire_retry_model)
             .expect("expected safety buffering payload");
 
         assert!(buffering.show_buffering_ui);
@@ -1083,14 +1100,17 @@ mod tests {
             "safety_buffering": {
                 "use_cases": ["cyber"],
                 "reasons": ["user_risk"],
-                "faster_model": "gpt-fast-wire"
+                "retry_model": "gpt-fast-wire"
             }
         }))
         .expect("deserialize safety buffering event");
         let mut treatment = None;
+        let mut wire_retry_model = None;
 
-        assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
-        let buffering = safety_buffering_for_event(&event, &mut treatment)
+        assert!(
+            safety_buffering_for_event(&metadata, &mut treatment, &mut wire_retry_model).is_none()
+        );
+        let buffering = safety_buffering_for_event(&event, &mut treatment, &mut wire_retry_model)
             .expect("expected safety buffering payload");
 
         assert!(buffering.show_buffering_ui);
@@ -1119,15 +1139,20 @@ mod tests {
                 "safety_buffering": {
                     "use_cases": ["cyber"],
                     "reasons": ["user_risk"],
-                    "faster_model": "gpt-fast-wire"
+                    "retry_model": "gpt-fast-wire"
                 }
             }))
             .expect("deserialize safety buffering event");
             let mut treatment = None;
+            let mut wire_retry_model = None;
 
-            assert!(safety_buffering_for_event(&metadata, &mut treatment).is_none());
-            let buffering = safety_buffering_for_event(&event, &mut treatment)
-                .expect("expected safety buffering payload");
+            assert!(
+                safety_buffering_for_event(&metadata, &mut treatment, &mut wire_retry_model)
+                    .is_none()
+            );
+            let buffering =
+                safety_buffering_for_event(&event, &mut treatment, &mut wire_retry_model)
+                    .expect("expected safety buffering payload");
 
             assert_eq!(buffering.show_buffering_ui, expected_show_buffering_ui);
             assert_eq!(buffering.faster_model, None);
@@ -1135,8 +1160,8 @@ mod tests {
     }
 
     #[test]
-    fn direct_websocket_safety_buffering_accepts_missing_and_null_faster_model() {
-        for faster_model in [None, Some(Value::Null)] {
+    fn direct_websocket_safety_buffering_accepts_missing_and_null_retry_model() {
+        for retry_model in [None, Some(Value::Null)] {
             let mut payload = json!({
                 "type": "response.output_text.delta",
                 "safety_buffering": {
@@ -1144,18 +1169,91 @@ mod tests {
                     "reasons": ["user_risk"]
                 }
             });
-            if let Some(faster_model) = faster_model {
-                payload["safety_buffering"]["faster_model"] = faster_model;
+            if let Some(retry_model) = retry_model {
+                payload["safety_buffering"]["retry_model"] = retry_model;
             }
             let event: ResponsesStreamEvent =
                 serde_json::from_value(payload).expect("deserialize safety buffering event");
             let mut treatment = None;
+            let mut wire_retry_model = None;
 
-            let buffering = safety_buffering_for_event(&event, &mut treatment)
-                .expect("expected safety buffering payload");
+            let buffering =
+                safety_buffering_for_event(&event, &mut treatment, &mut wire_retry_model)
+                    .expect("expected safety buffering payload");
 
             assert!(buffering.show_buffering_ui);
             assert_eq!(buffering.faster_model, None);
         }
+    }
+
+    #[test]
+    fn direct_websocket_safety_buffering_preserves_wire_retry_model() {
+        let event_with_retry: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "retry_model": "gpt-fast-wire"
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let event_without_retry: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"]
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = None;
+        let mut wire_retry_model = None;
+
+        let first =
+            safety_buffering_for_event(&event_with_retry, &mut treatment, &mut wire_retry_model)
+                .expect("expected first safety buffering payload");
+        let second =
+            safety_buffering_for_event(&event_without_retry, &mut treatment, &mut wire_retry_model)
+                .expect("expected second safety buffering payload");
+
+        assert_eq!(first.faster_model.as_deref(), Some("gpt-fast-wire"));
+        assert_eq!(second.faster_model.as_deref(), Some("gpt-fast-wire"));
+    }
+
+    #[test]
+    fn direct_websocket_safety_buffering_null_clears_wire_retry_model() {
+        let event_with_retry: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "retry_model": "gpt-fast-wire"
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let event_with_null_retry: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.output_text.delta",
+            "safety_buffering": {
+                "use_cases": ["cyber"],
+                "reasons": ["user_risk"],
+                "retry_model": null
+            }
+        }))
+        .expect("deserialize safety buffering event");
+        let mut treatment = None;
+        let mut wire_retry_model = None;
+
+        let first =
+            safety_buffering_for_event(&event_with_retry, &mut treatment, &mut wire_retry_model)
+                .expect("expected first safety buffering payload");
+        let second = safety_buffering_for_event(
+            &event_with_null_retry,
+            &mut treatment,
+            &mut wire_retry_model,
+        )
+        .expect("expected second safety buffering payload");
+
+        assert_eq!(first.faster_model.as_deref(), Some("gpt-fast-wire"));
+        assert_eq!(second.faster_model, None);
+        assert_eq!(wire_retry_model, None);
     }
 }

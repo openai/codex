@@ -1355,7 +1355,7 @@ mod tests {
                 "safety_buffering": {
                     "use_cases": ["cyber"],
                     "reasons": ["user_risk"],
-                    "faster_model": "unexpected-wire-model"
+                    "retry_model": "unexpected-wire-model"
                 }
             }),
             json!({

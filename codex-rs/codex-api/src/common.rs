@@ -10,6 +10,7 @@ use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -121,6 +122,9 @@ pub struct SafetyBuffering {
     pub reasons: Vec<String>,
     #[serde(skip)]
     pub show_buffering_ui: bool,
+    #[serde(rename = "retry_model", default)]
+    pub(crate) wire_retry_model: WireRetryModel,
+    #[serde(skip)]
     pub faster_model: Option<String>,
 }
 
@@ -131,8 +135,27 @@ impl SafetyBuffering {
             self.faster_model.clone_from(&treatment.faster_model);
         } else {
             self.show_buffering_ui = true;
+            if let WireRetryModel::Value(retry_model) = &self.wire_retry_model {
+                self.faster_model.clone_from(retry_model);
+            }
         }
         self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum WireRetryModel {
+    #[default]
+    Missing,
+    Value(Option<String>),
+}
+
+impl<'de> Deserialize<'de> for WireRetryModel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(Self::Value)
     }
 }
 

@@ -29,7 +29,7 @@ async fn direct_websocket_safety_buffering_reaches_app_server_notification() -> 
     buffering_event["safety_buffering"] = json!({
         "use_cases": ["cyber"],
         "reasons": ["user_risk"],
-        "faster_model": FASTER_MODEL,
+        "retry_model": FASTER_MODEL,
     });
     let websocket_server = responses::start_websocket_server(vec![vec![
         vec![
