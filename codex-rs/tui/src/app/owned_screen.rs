@@ -4,6 +4,9 @@
 //! bottom of every frame for the composer. Inline mode continues to use terminal scrollback.
 
 use crossterm::cursor::SetCursorStyle;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Clear;
@@ -14,6 +17,8 @@ use crate::AltScreenBehavior;
 
 pub(super) struct OwnedScreen {
     viewport: ConversationViewport,
+    replay_in_progress: bool,
+    last_conversation_area: Rect,
 }
 
 struct RenderedOwnedScreen {
@@ -29,6 +34,8 @@ impl OwnedScreen {
                 chat_widget.history_render_mode(),
                 keymap,
             ),
+            replay_in_progress: false,
+            last_conversation_area: Rect::default(),
         }
     }
 
@@ -55,6 +62,7 @@ impl OwnedScreen {
             area.width,
             bottom_height,
         );
+        self.last_conversation_area = conversation_area;
 
         self.viewport
             .set_render_mode(chat_widget.history_render_mode());
@@ -70,6 +78,19 @@ impl OwnedScreen {
             cursor: bottom_pane.cursor_pos(bottom_area),
             cursor_style: bottom_pane.cursor_style(bottom_area),
         }
+    }
+
+    fn handle_navigation_key(&mut self, key_event: KeyEvent) -> bool {
+        // Alternate-scroll wheel events are indistinguishable from physical arrow keys. Keep
+        // arrows, Home/End, and printable pager bindings available to the composer until the TUI
+        // has direct mouse events or an explicit viewport-focus mode.
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            || !matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown)
+        {
+            return false;
+        }
+        self.viewport
+            .handle_navigation_key(self.last_conversation_area, key_event)
     }
 }
 
@@ -93,6 +114,43 @@ impl App {
         if let Some(screen) = &mut self.owned_screen {
             screen.viewport.push_cell(cell);
         }
+    }
+
+    pub(super) fn begin_owned_screen_replay(&mut self) {
+        if let Some(screen) = &mut self.owned_screen {
+            screen.replay_in_progress = true;
+        }
+    }
+
+    pub(super) fn finish_owned_screen_replay(&mut self) {
+        if let Some(screen) = &mut self.owned_screen {
+            screen.replay_in_progress = false;
+        }
+    }
+
+    pub(super) fn owned_screen_replay_in_progress(&self) -> bool {
+        self.owned_screen
+            .as_ref()
+            .is_some_and(|screen| screen.replay_in_progress)
+    }
+
+    pub(super) fn handle_owned_screen_navigation_key(
+        &mut self,
+        tui: &mut tui::Tui,
+        key_event: KeyEvent,
+    ) -> bool {
+        if !self.chat_widget.composer_is_empty() || !self.chat_widget.no_modal_or_popup_active() {
+            return false;
+        }
+        let handled = self
+            .owned_screen
+            .as_mut()
+            .is_some_and(|screen| screen.handle_navigation_key(key_event));
+        if handled {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        }
+        handled
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {

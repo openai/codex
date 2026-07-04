@@ -1,3 +1,6 @@
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
@@ -220,6 +223,55 @@ fn narrower_resize_stays_pinned_to_the_latest_cell() {
 
     assert!(viewport.is_following_bottom());
     assert!(buffer_text(&buffer, narrow).contains("SENTINEL"));
+}
+
+#[test]
+fn page_navigation_leaves_and_restores_bottom_follow() {
+    let mut viewport = viewport(vec![cell("oldest"), cell("middle"), cell("LATEST")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 2,
+    );
+    let mut bottom = Buffer::empty(area);
+    viewport.render(area, &mut bottom);
+    assert!(buffer_text(&bottom, area).contains("LATEST"));
+
+    assert!(
+        viewport.handle_navigation_key(area, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),)
+    );
+    let mut scrolled = Buffer::empty(area);
+    viewport.render(area, &mut scrolled);
+    assert!(!viewport.is_following_bottom());
+    assert!(buffer_text(&scrolled, area).contains("middle"));
+
+    assert!(
+        viewport.handle_navigation_key(area, KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),)
+    );
+    let mut restored = Buffer::empty(area);
+    viewport.render(area, &mut restored);
+    assert!(viewport.is_following_bottom());
+    let trim_rows = |buffer: &Buffer| {
+        buffer_text(buffer, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_snapshot!(format!(
+        "bottom:\n{}\nscrolled:\n{}\nrestored:\n{}",
+        trim_rows(&bottom),
+        trim_rows(&scrolled),
+        trim_rows(&restored),
+    ), @r###"
+bottom:
+
+LATEST
+scrolled:
+
+middle
+restored:
+
+LATEST
+"###);
 }
 
 fn buffer_text(buffer: &Buffer, area: Rect) -> String {

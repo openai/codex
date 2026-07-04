@@ -119,6 +119,7 @@ impl App {
     /// overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
         if self.has_owned_screen() {
+            self.begin_owned_screen_replay();
             return;
         }
         if self.overlay.is_none() {
@@ -133,6 +134,7 @@ impl App {
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
         if self.has_owned_screen() {
+            self.begin_owned_screen_replay();
             return;
         }
         if self.resize_reflow_max_rows().is_some() && self.overlay.is_none() {
@@ -150,7 +152,8 @@ impl App {
     /// expensive than a later resize rebuild of the same transcript.
     pub(super) fn finish_initial_history_replay_buffer(&mut self, tui: &mut tui::Tui) {
         if self.has_owned_screen() {
-            self.initial_history_replay_buffer = None;
+            self.finish_owned_screen_replay();
+            tui.frame_requester().schedule_frame();
             return;
         }
         let Some(buffer) = self.initial_history_replay_buffer.take() else {

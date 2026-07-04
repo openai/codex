@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
@@ -59,6 +60,10 @@ impl ConversationViewport {
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.content.render(area, buf);
+    }
+
+    pub(crate) fn handle_navigation_key(&mut self, area: Rect, key_event: KeyEvent) -> bool {
+        self.content.handle_navigation_key(area, key_event)
     }
 
     pub(crate) fn push_cell(&mut self, cell: Arc<dyn HistoryCell>) {

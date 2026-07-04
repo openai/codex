@@ -211,6 +211,14 @@ impl App {
             return;
         }
 
+        if app_keymap_shortcuts_available && self.handle_owned_screen_navigation_key(tui, key_event)
+        {
+            if self.backtrack.primed {
+                self.reset_backtrack_state();
+            }
+            return;
+        }
+
         match key_event {
             _ if app_keymap_shortcuts_available
                 && self.keymap.app.clear_terminal.is_pressed(key_event) =>

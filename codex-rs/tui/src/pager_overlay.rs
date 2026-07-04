@@ -254,6 +254,14 @@ impl PagerView {
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        if self.apply_key_event(tui.terminal.viewport_area, key_event) {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        }
+        Ok(())
+    }
+
+    fn apply_key_event(&mut self, viewport_area: Rect, key_event: KeyEvent) -> bool {
         match key_event {
             e if self.keymap.scroll_up.is_pressed(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
@@ -262,20 +270,20 @@ impl PagerView {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
             e if self.keymap.page_up.is_pressed(e) => {
-                let page_height = self.page_height(tui.terminal.viewport_area);
+                let page_height = self.page_height(viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(page_height);
             }
             e if self.keymap.page_down.is_pressed(e) => {
-                let page_height = self.page_height(tui.terminal.viewport_area);
+                let page_height = self.page_height(viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(page_height);
             }
             e if self.keymap.half_page_down.is_pressed(e) => {
-                let area = self.content_area(tui.terminal.viewport_area);
+                let area = self.content_area(viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_add(half_page);
             }
             e if self.keymap.half_page_up.is_pressed(e) => {
-                let area = self.content_area(tui.terminal.viewport_area);
+                let area = self.content_area(viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
                 self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
             }
@@ -286,12 +294,10 @@ impl PagerView {
                 self.scroll_offset = usize::MAX;
             }
             _ => {
-                return Ok(());
+                return false;
             }
         }
-        tui.frame_requester()
-            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-        Ok(())
+        true
     }
 
     /// Returns the height of one page in content rows.
@@ -428,6 +434,14 @@ impl PagerContent {
 
     pub(crate) fn scroll_to_bottom(&mut self) {
         self.view.scroll_offset = usize::MAX;
+    }
+
+    pub(crate) fn handle_navigation_key(
+        &mut self,
+        viewport_area: Rect,
+        key_event: KeyEvent,
+    ) -> bool {
+        self.view.apply_key_event(viewport_area, key_event)
     }
 }
 

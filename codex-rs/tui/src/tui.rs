@@ -618,6 +618,11 @@ impl Tui {
         self.frame_requester.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn subscribe_draws_for_test(&self) -> broadcast::Receiver<()> {
+        self.draw_tx.subscribe()
+    }
+
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
     }
