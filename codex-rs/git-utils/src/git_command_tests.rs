@@ -1514,7 +1514,7 @@ fn active_commondir_route_is_revalidated_before_every_child() {
     );
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 #[test]
 fn active_worktree_identity_is_revalidated_before_every_child() {
     let fixture = tempfile::tempdir().expect("fixture");
@@ -1552,6 +1552,28 @@ fn active_worktree_identity_is_revalidated_before_every_child() {
         !sentinel.exists(),
         "Git child executed after same-path repository replacement"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn active_worktree_identity_pins_repository_for_runner_lifetime() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    let moved_root = fixture.path().join("repo-moved");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let runner = GitRunner::for_cwd(&root).expect("runner for original repository");
+
+    let error = std::fs::rename(&root, &moved_root)
+        .expect_err("live repository identity handle must block replacement");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(root.join(".git").is_dir());
+    assert!(!moved_root.exists());
+
+    drop(runner);
+    std::fs::rename(&root, &moved_root).expect("released identity handle must allow move");
+    assert!(!root.exists());
+    assert!(moved_root.join(".git").is_dir());
 }
 
 #[cfg(unix)]
