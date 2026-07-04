@@ -3,6 +3,7 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::conversation_events::normalize_conversation_event;
 use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::config_update::format_config_error;
@@ -19,7 +20,37 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        let Some((conversation_origin, event)) =
+            normalize_conversation_event(event, self.chat_widget.conversation_origin())
+        else {
+            tracing::debug!("dropping event from retired conversation");
+            return Ok(AppRunControl::Continue);
+        };
+
+        let previous_sender = if let Some(origin) = conversation_origin {
+            let sender = self.chat_widget.conversation_event_sender();
+            debug_assert_eq!(sender.conversation_origin(), Some(origin));
+            Some(std::mem::replace(&mut self.app_event_tx, sender))
+        } else {
+            None
+        };
+        let result = self.handle_event_inner(tui, app_server, event).await;
+        if let Some(previous_sender) = previous_sender {
+            self.app_event_tx = previous_sender;
+        }
+        result
+    }
+
+    async fn handle_event_inner(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        event: AppEvent,
+    ) -> Result<AppRunControl> {
         match event {
+            AppEvent::FromConversation { .. } => {
+                unreachable!("conversation event envelope should be normalized before dispatch")
+            }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
@@ -787,7 +818,8 @@ impl App {
                 );
             }
             AppEvent::StartFileSearch(query) => {
-                self.file_search.on_user_query(query);
+                self.file_search
+                    .on_user_query(query, self.app_event_tx.clone());
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);

@@ -12,6 +12,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ConversationOrigin;
+use crate::app_event::PaneSlot;
 
 static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
@@ -119,7 +121,7 @@ pub(crate) fn maybe_init(config: &Config) {
     LOGGER.write_json_line(header);
 }
 
-pub(crate) fn log_inbound_app_event(event: &AppEvent) {
+pub(crate) fn log_inbound_app_event(event: &AppEvent, origin: Option<ConversationOrigin>) {
     // Log only if enabled
     if !LOGGER.is_enabled() {
         return;
@@ -132,7 +134,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "dir": "to_tui",
                 "kind": "new_session",
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::ClearUi => {
             let value = json!({
@@ -140,7 +142,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "dir": "to_tui",
                 "kind": "clear_ui",
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::InsertHistoryCell(cell) => {
             let value = json!({
@@ -149,7 +151,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "kind": "insert_history_cell",
                 "lines": cell.transcript_lines(u16::MAX).len(),
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::StartFileSearch(query) => {
             let value = json!({
@@ -158,7 +160,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "kind": "file_search_start",
                 "query": query,
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::FileSearchResult { query, matches } => {
             let value = json!({
@@ -168,7 +170,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "query": query,
                 "matches": matches.len(),
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::PetPreviewLoaded { request_id, result } => {
             let value = json!({
@@ -179,7 +181,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "request_id": request_id,
                 "ok": result.is_ok(),
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         AppEvent::PetSelectionLoaded {
             request_id,
@@ -195,7 +197,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "pet_id": pet_id,
                 "ok": result.is_ok(),
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
         // Noise or control flow – record variant only
         other => {
@@ -205,9 +207,26 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "kind": "app_event",
                 "variant": format!("{other:?}").split('(').next().unwrap_or("app_event"),
             });
-            LOGGER.write_json_line(value);
+            write_inbound_app_event(value, origin);
         }
     }
+}
+
+fn write_inbound_app_event(mut value: serde_json::Value, origin: Option<ConversationOrigin>) {
+    if let Some(origin) = origin
+        && let Some(fields) = value.as_object_mut()
+    {
+        let pane = match origin.pane {
+            PaneSlot::Parent => "parent",
+            PaneSlot::Side => "side",
+        };
+        fields.insert("conversation_pane".to_string(), json!(pane));
+        fields.insert(
+            "conversation_generation".to_string(),
+            json!(origin.generation.get()),
+        );
+    }
+    LOGGER.write_json_line(value);
 }
 
 pub(crate) fn log_outbound_op(op: &AppCommand) {

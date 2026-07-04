@@ -50,9 +50,17 @@ impl FileSearchManager {
     }
 
     /// Call whenever the user edits the `@` token.
-    pub fn on_user_query(&self, query: String) {
+    pub fn on_user_query(&mut self, query: String, app_tx: AppEventSender) {
+        let sender_changed = self.app_tx.conversation_origin() != app_tx.conversation_origin();
+        if sender_changed {
+            self.app_tx = app_tx;
+        }
         #[expect(clippy::unwrap_used)]
         let mut st = self.state.lock().unwrap();
+        if sender_changed {
+            st.session.take();
+            st.latest_query.clear();
+        }
         if query == st.latest_query {
             return;
         }

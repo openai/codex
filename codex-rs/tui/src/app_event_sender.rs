@@ -19,74 +19,115 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ConversationOrigin;
 use crate::app_event::ConversationTarget;
+use crate::app_event::PaneGeneration;
+use crate::app_event::PaneSlot;
 use crate::session_log;
+
+#[derive(Clone, Debug)]
+struct ConversationScope {
+    origin: ConversationOrigin,
+    thread_id: Arc<RwLock<Option<ThreadId>>>,
+}
+
+fn has_explicit_conversation_delivery(event: &AppEvent) -> bool {
+    matches!(
+        event,
+        AppEvent::ConversationOp { .. }
+            | AppEvent::FromConversation { .. }
+            | AppEvent::SubmitThreadOp { .. }
+    )
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
-    conversation_target: Option<Arc<RwLock<Option<ConversationTarget>>>>,
+    conversation_scope: Option<ConversationScope>,
 }
 
 impl AppEventSender {
     pub(crate) fn new(app_event_tx: UnboundedSender<AppEvent>) -> Self {
         Self {
             app_event_tx,
-            conversation_target: None,
+            conversation_scope: None,
         }
     }
 
     /// Returns a sender scope shared by one chat widget and all of its child views.
-    pub(crate) fn scoped_to_conversation(&self) -> Self {
+    pub(crate) fn scoped_to_conversation(&self, pane: PaneSlot) -> Self {
         Self {
             app_event_tx: self.app_event_tx.clone(),
-            conversation_target: Some(Arc::new(RwLock::default())),
+            conversation_scope: Some(ConversationScope {
+                origin: ConversationOrigin {
+                    pane,
+                    generation: PaneGeneration::fresh(),
+                },
+                thread_id: Arc::new(RwLock::default()),
+            }),
         }
     }
 
     /// Binds this widget scope to the thread supplied by its session configuration.
     pub(crate) fn bind_conversation_thread(&self, thread_id: ThreadId) {
-        let Some(target) = &self.conversation_target else {
+        let Some(scope) = &self.conversation_scope else {
             tracing::warn!(%thread_id, "cannot bind an unscoped app event sender");
             return;
         };
-        let mut target = match target.write() {
-            Ok(target) => target,
+        let mut bound_thread_id = match scope.thread_id.write() {
+            Ok(thread_id) => thread_id,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *target = Some(ConversationTarget { thread_id });
+        *bound_thread_id = Some(thread_id);
+    }
+
+    pub(crate) fn conversation_origin(&self) -> Option<ConversationOrigin> {
+        self.conversation_scope.as_ref().map(|scope| scope.origin)
     }
 
     fn conversation_target(&self) -> Option<ConversationTarget> {
-        let target = self.conversation_target.as_ref()?;
-        let target = match target.read() {
-            Ok(target) => target,
+        let scope = self.conversation_scope.as_ref()?;
+        let thread_id = match scope.thread_id.read() {
+            Ok(thread_id) => thread_id,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *target
+        Some(ConversationTarget {
+            pane: scope.origin.pane,
+            generation: scope.origin.generation,
+            thread_id: (*thread_id)?,
+        })
     }
 
     /// Send an event to the app event channel. If it fails, we swallow the
     /// error and log it.
     pub(crate) fn send(&self, event: AppEvent) {
-        let event = match event {
-            AppEvent::CodexOp(op) if self.conversation_target.is_some() => {
+        // Record inbound events for high-fidelity session replay before adding the conversation
+        // envelope, so existing event-specific logging remains intact.
+        // Avoid double-logging Ops; those are logged at the point of submission.
+        if !matches!(
+            event,
+            AppEvent::CodexOp(_)
+                | AppEvent::ConversationOp { .. }
+                | AppEvent::FromConversation { .. }
+        ) {
+            session_log::log_inbound_app_event(&event, self.conversation_origin());
+        }
+
+        let event = match (self.conversation_scope.as_ref(), event) {
+            (Some(_), AppEvent::CodexOp(op)) => {
                 let Some(target) = self.conversation_target() else {
                     tracing::warn!("dropping op from an unbound conversation sender");
                     return;
                 };
                 AppEvent::ConversationOp { target, op }
             }
-            event => event,
+            (_, event) if has_explicit_conversation_delivery(&event) => event,
+            (Some(scope), event) => AppEvent::FromConversation {
+                target: scope.origin,
+                event: Box::new(event),
+            },
+            (None, event) => event,
         };
-        // Record inbound events for high-fidelity session replay.
-        // Avoid double-logging Ops; those are logged at the point of submission.
-        if !matches!(
-            event,
-            AppEvent::CodexOp(_) | AppEvent::ConversationOp { .. }
-        ) {
-            session_log::log_inbound_app_event(&event);
-        }
         if let Err(e) = self.app_event_tx.send(event) {
             tracing::error!("failed to send event: {e}");
         }

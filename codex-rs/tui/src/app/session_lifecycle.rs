@@ -325,6 +325,13 @@ impl App {
     /// This helper copies every known nickname/role from `AgentNavigationState` into the
     /// replacement widget so that replayed collab items render agent names immediately.
     pub(super) fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
+        // A ticker belongs to the widget generation that started it. Stop it before installing a
+        // replacement so a stale StopCommitAnimation event cannot leave the shared latch stuck.
+        let retired_commit_anim_running = std::mem::replace(
+            &mut self.commit_anim_running,
+            Arc::new(AtomicBool::new(/*v*/ false)),
+        );
+        retired_commit_anim_running.store(/*val*/ false, Ordering::Release);
         // Transfer the last-written terminal title to the replacement widget
         // so it knows what OSC title is currently displayed. Without this, the
         // new widget would redundantly clear and rewrite the same title, causing

@@ -9,6 +9,8 @@
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
@@ -141,13 +143,53 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
-/// Identifies the conversation surface that originated an asynchronous app event.
-///
-/// Keeping this as a distinct type lets the multi-pane UI extend the target with a pane
-/// generation without changing every conversation-scoped event again.
+/// Fixed conversation surfaces supported by the owned-screen layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaneSlot {
+    Parent,
+    #[allow(dead_code)]
+    Side,
+}
+
+/// Distinguishes successive widgets installed in the same [`PaneSlot`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PaneGeneration(u64);
+
+impl PaneGeneration {
+    pub(crate) fn fresh() -> Self {
+        static NEXT_PANE_GENERATION: AtomicU64 = AtomicU64::new(/*v*/ 1);
+
+        Self(NEXT_PANE_GENERATION.fetch_add(/*val*/ 1, Ordering::Relaxed))
+    }
+
+    pub(crate) fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Immutable identity of the widget that originated an asynchronous app event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConversationOrigin {
+    pub(crate) pane: PaneSlot,
+    pub(crate) generation: PaneGeneration,
+}
+
+/// Identifies both a conversation widget generation and its bound thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConversationTarget {
+    pub(crate) pane: PaneSlot,
+    pub(crate) generation: PaneGeneration,
     pub(crate) thread_id: ThreadId,
+}
+
+impl ConversationTarget {
+    #[allow(dead_code)]
+    pub(crate) fn origin(self) -> ConversationOrigin {
+        ConversationOrigin {
+            pane: self.pane,
+            generation: self.generation,
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -174,6 +216,12 @@ pub(crate) enum AppEvent {
     ConversationOp {
         target: ConversationTarget,
         op: AppCommand,
+    },
+
+    /// Deliver a non-operation event to the conversation widget generation that emitted it.
+    FromConversation {
+        target: ConversationOrigin,
+        event: Box<AppEvent>,
     },
 
     /// Interrupt, roll back, and retry a safety-buffered turn with the server-selected model.

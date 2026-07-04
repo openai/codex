@@ -451,6 +451,10 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         .await
         .unwrap()
         .unwrap();
+    let event = match event {
+        AppEvent::FromConversation { event, .. } => *event,
+        event => event,
+    };
     assert_matches!(
         event,
         AppEvent::ConfiguredPetLoaded { pet_id, result } => {

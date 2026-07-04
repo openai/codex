@@ -4,8 +4,16 @@ use super::*;
 
 impl ChatWidget {
     pub(crate) fn new_with_app_event(mut common: ChatWidgetInit) -> Self {
-        common.app_event_tx = common.app_event_tx.scoped_to_conversation();
+        common.app_event_tx = common.app_event_tx.scoped_to_conversation(PaneSlot::Parent);
         Self::new_with_op_target(common, CodexOpTarget::AppEvent)
+    }
+
+    pub(crate) fn conversation_origin(&self) -> Option<ConversationOrigin> {
+        self.app_event_tx.conversation_origin()
+    }
+
+    pub(crate) fn conversation_event_sender(&self) -> AppEventSender {
+        self.app_event_tx.clone()
     }
 
     pub(super) fn new_with_op_target(
