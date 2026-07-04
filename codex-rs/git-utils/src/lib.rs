@@ -6,6 +6,7 @@ mod errors;
 mod fsmonitor;
 mod git_command;
 mod git_config;
+mod git_config_environment;
 mod git_executable;
 mod info;
 mod local_only;
