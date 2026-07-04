@@ -141,6 +141,15 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+/// Identifies the conversation surface that originated an asynchronous app event.
+///
+/// Keeping this as a distinct type lets the multi-pane UI extend the target with a pane
+/// generation without changing every conversation-scoped event again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConversationTarget {
+    pub(crate) thread_id: ThreadId,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -158,6 +167,12 @@ pub(crate) enum AppEvent {
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,
+        op: AppCommand,
+    },
+
+    /// Submit an op to the conversation that originated it, even if focus has moved since then.
+    ConversationOp {
+        target: ConversationTarget,
         op: AppCommand,
     },
 

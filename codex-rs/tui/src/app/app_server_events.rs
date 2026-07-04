@@ -14,6 +14,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_protocol::ThreadId;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -65,11 +66,22 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
-                if let Some(request) = self
-                    .pending_app_server_requests
-                    .resolve_notification(&notification.request_id)
-                {
-                    self.chat_widget.dismiss_app_server_request(&request);
+                match ThreadId::from_string(&notification.thread_id) {
+                    Ok(thread_id) => {
+                        if let Some(request) = self
+                            .pending_app_server_requests
+                            .resolve_notification(thread_id, &notification.request_id)
+                            && self.active_thread_id == Some(thread_id)
+                        {
+                            self.chat_widget.dismiss_app_server_request(&request);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            thread_id = notification.thread_id,
+                            "ignoring resolved app-server request with invalid thread ID: {err}"
+                        );
+                    }
                 }
             }
             ServerNotification::McpServerStatusUpdated(_) => {

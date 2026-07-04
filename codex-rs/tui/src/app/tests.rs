@@ -272,7 +272,7 @@ async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> 
 
     let resolved = app
         .pending_app_server_requests
-        .resolve_notification(&AppServerRequestId::Integer(1))
+        .resolve_notification(thread_id, &AppServerRequestId::Integer(1))
         .expect("matching app-server request should resolve");
     app.chat_widget.dismiss_app_server_request(&resolved);
     while app_event_rx.try_recv().is_ok() {}
@@ -6260,6 +6260,54 @@ async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
         rendered
     );
 }
+
+#[tokio::test]
+async fn chat_widget_op_keeps_its_origin_thread_after_focus_moves() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let config = app.config.clone();
+    let model = get_model_offline_for_tests(config.model.as_deref());
+    app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+        config,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        app_event_tx: app.app_event_tx.clone(),
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        has_codex_backend_auth: false,
+        model_catalog: app.model_catalog.clone(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: false,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+        terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
+        session_telemetry: app.session_telemetry.clone(),
+    });
+    let origin_thread_id = ThreadId::new();
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(
+            origin_thread_id,
+            test_path_buf("/tmp/project"),
+        ));
+    while app_event_rx.try_recv().is_ok() {}
+
+    app.chat_widget.submit_op(Op::compact());
+    app.active_thread_id = Some(ThreadId::new());
+
+    let event = app_event_rx
+        .try_recv()
+        .expect("conversation op should be sent");
+    let AppEvent::ConversationOp { target, op } = event else {
+        panic!("expected conversation-scoped op");
+    };
+    assert_eq!(target.thread_id, origin_thread_id);
+    assert!(matches!(op, Op::Compact { .. }));
+}
+
 async fn start_config_write_test_app_server(app: &App) -> Result<AppServerSession> {
     Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await
 }

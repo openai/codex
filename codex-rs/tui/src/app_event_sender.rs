@@ -4,6 +4,8 @@
 //! without duplicating event construction or session logging behavior.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::app_command::AppCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -17,24 +19,72 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ConversationTarget;
 use crate::session_log;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
+    conversation_target: Option<Arc<RwLock<Option<ConversationTarget>>>>,
 }
 
 impl AppEventSender {
     pub(crate) fn new(app_event_tx: UnboundedSender<AppEvent>) -> Self {
-        Self { app_event_tx }
+        Self {
+            app_event_tx,
+            conversation_target: None,
+        }
+    }
+
+    /// Returns a sender scope shared by one chat widget and all of its child views.
+    pub(crate) fn scoped_to_conversation(&self) -> Self {
+        Self {
+            app_event_tx: self.app_event_tx.clone(),
+            conversation_target: Some(Arc::new(RwLock::default())),
+        }
+    }
+
+    /// Binds this widget scope to the thread supplied by its session configuration.
+    pub(crate) fn bind_conversation_thread(&self, thread_id: ThreadId) {
+        let Some(target) = &self.conversation_target else {
+            tracing::warn!(%thread_id, "cannot bind an unscoped app event sender");
+            return;
+        };
+        let mut target = match target.write() {
+            Ok(target) => target,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *target = Some(ConversationTarget { thread_id });
+    }
+
+    fn conversation_target(&self) -> Option<ConversationTarget> {
+        let target = self.conversation_target.as_ref()?;
+        let target = match target.read() {
+            Ok(target) => target,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *target
     }
 
     /// Send an event to the app event channel. If it fails, we swallow the
     /// error and log it.
     pub(crate) fn send(&self, event: AppEvent) {
+        let event = match event {
+            AppEvent::CodexOp(op) if self.conversation_target.is_some() => {
+                let Some(target) = self.conversation_target() else {
+                    tracing::warn!("dropping op from an unbound conversation sender");
+                    return;
+                };
+                AppEvent::ConversationOp { target, op }
+            }
+            event => event,
+        };
         // Record inbound events for high-fidelity session replay.
         // Avoid double-logging Ops; those are logged at the point of submission.
-        if !matches!(event, AppEvent::CodexOp(_)) {
+        if !matches!(
+            event,
+            AppEvent::CodexOp(_) | AppEvent::ConversationOp { .. }
+        ) {
             session_log::log_inbound_app_event(&event);
         }
         if let Err(e) = self.app_event_tx.send(event) {
@@ -128,3 +178,7 @@ impl AppEventSender {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "app_event_sender_tests.rs"]
+mod tests;

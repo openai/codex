@@ -801,7 +801,7 @@ impl App {
     ) -> Result<bool> {
         let Some(resolution) = self
             .pending_app_server_requests
-            .take_resolution(op)
+            .take_resolution(thread_id, op)
             .map_err(|err| color_eyre::eyre::eyre!(err))?
         else {
             return Ok(false);

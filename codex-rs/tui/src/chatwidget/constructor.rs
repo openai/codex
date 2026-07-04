@@ -3,7 +3,8 @@
 use super::*;
 
 impl ChatWidget {
-    pub(crate) fn new_with_app_event(common: ChatWidgetInit) -> Self {
+    pub(crate) fn new_with_app_event(mut common: ChatWidgetInit) -> Self {
+        common.app_event_tx = common.app_event_tx.scoped_to_conversation();
         Self::new_with_op_target(common, CodexOpTarget::AppEvent)
     }
 

@@ -339,6 +339,10 @@ impl App {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::ConversationOp { target, op } => {
+                self.submit_thread_op(app_server, target.thread_id, op)
+                    .await?;
+            }
             AppEvent::RetrySafetyBufferedTurn {
                 thread_id,
                 turn_id,
