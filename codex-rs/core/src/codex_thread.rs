@@ -3,8 +3,7 @@ use crate::config::ConstraintResult;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
-use crate::state::PersistedHistoryCursor;
-use crate::state::PersistedHistoryCursorUncertainty;
+use crate::state::PersistedHistoryCursorState;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -104,9 +103,7 @@ pub struct ThreadHistoryReconciliationSnapshot {
     pub(crate) history: Vec<ResponseItem>,
     pub(crate) history_version: u64,
     pub(crate) known_persisted_incomplete_tail: Option<String>,
-    pub(crate) known_persisted_history_cursor: Option<PersistedHistoryCursor>,
-    pub(crate) persisted_history_cursor_uncertainty: Option<PersistedHistoryCursorUncertainty>,
-    pub(crate) uncertain_expected_persisted_history_cursor: Option<PersistedHistoryCursor>,
+    pub(crate) persisted_history_cursor: PersistedHistoryCursorState,
 }
 
 /// Result of reconciling a loaded thread with its persisted rollout history.

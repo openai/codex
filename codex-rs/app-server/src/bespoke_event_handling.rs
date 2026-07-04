@@ -136,33 +136,6 @@ struct CommandExecutionCompletionItem {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn apply_bespoke_event_handling(
-    event: Event,
-    conversation_id: ThreadId,
-    conversation: Arc<CodexThread>,
-    thread_manager: Arc<ThreadManager>,
-    outgoing: ThreadScopedOutgoingMessageSender,
-    thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
-    thread_watch_manager: ThreadWatchManager,
-    thread_list_state_permit: Arc<tokio::sync::Semaphore>,
-    fallback_model_provider: String,
-) {
-    apply_bespoke_event_handling_with_item_lifecycle_outgoing(
-        event,
-        conversation_id,
-        conversation,
-        thread_manager,
-        outgoing,
-        thread_state,
-        thread_watch_manager,
-        thread_list_state_permit,
-        fallback_model_provider,
-        /*item_lifecycle_outgoing*/ None,
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling_with_item_lifecycle_outgoing(
     event: Event,
     conversation_id: ThreadId,
@@ -2458,7 +2431,7 @@ mod tests {
     impl GuardianAssessmentTestContext {
         async fn apply_guardian_assessment_event(&self, assessment: GuardianAssessmentEvent) {
             let event_turn_id = assessment.turn_id.clone();
-            apply_bespoke_event_handling(
+            apply_bespoke_event_handling_with_item_lifecycle_outgoing(
                 Event {
                     id: event_turn_id,
                     msg: EventMsg::GuardianAssessment(assessment),
@@ -2471,6 +2444,7 @@ mod tests {
                 self.thread_watch_manager.clone(),
                 Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
                 "test-provider".to_string(),
+                /*item_lifecycle_outgoing*/ None,
             )
             .await;
         }
@@ -3411,7 +3385,7 @@ mod tests {
             conversation_id,
         );
 
-        apply_bespoke_event_handling(
+        apply_bespoke_event_handling_with_item_lifecycle_outgoing(
             Event {
                 id: "turn-1".to_string(),
                 msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
@@ -3430,6 +3404,7 @@ mod tests {
             thread_watch_manager,
             Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
             "test-provider".to_string(),
+            /*item_lifecycle_outgoing*/ None,
         )
         .await;
 
@@ -3480,7 +3455,7 @@ mod tests {
             conversation_id,
         );
 
-        apply_bespoke_event_handling(
+        apply_bespoke_event_handling_with_item_lifecycle_outgoing(
             Event {
                 id: "turn-1".to_string(),
                 msg: EventMsg::SubAgentActivity(SubAgentActivityEvent {
@@ -3500,6 +3475,7 @@ mod tests {
             thread_watch_manager.clone(),
             Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
             "test-provider".to_string(),
+            /*item_lifecycle_outgoing*/ None,
         )
         .await;
 

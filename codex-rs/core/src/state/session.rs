@@ -39,6 +39,17 @@ pub(crate) enum PersistedHistoryCursorUncertainty {
     HistoryRewrite,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PersistedHistoryCursorState {
+    #[default]
+    Unknown,
+    Known(PersistedHistoryCursor),
+    Uncertain {
+        uncertainty: PersistedHistoryCursorUncertainty,
+        expected: Option<PersistedHistoryCursor>,
+    },
+}
+
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
@@ -61,9 +72,7 @@ pub(crate) struct SessionState {
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
     known_persisted_incomplete_tail: Option<String>,
-    known_persisted_history_cursor: Option<PersistedHistoryCursor>,
-    persisted_history_cursor_uncertainty: Option<PersistedHistoryCursorUncertainty>,
-    uncertain_expected_persisted_history_cursor: Option<PersistedHistoryCursor>,
+    pub(crate) persisted_history_cursor: PersistedHistoryCursorState,
 }
 
 impl SessionState {
@@ -97,9 +106,7 @@ impl SessionState {
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
             known_persisted_incomplete_tail: None,
-            known_persisted_history_cursor: None,
-            persisted_history_cursor_uncertainty: None,
-            uncertain_expected_persisted_history_cursor: None,
+            persisted_history_cursor: PersistedHistoryCursorState::Unknown,
         }
     }
 
@@ -140,53 +147,13 @@ impl SessionState {
         self.known_persisted_incomplete_tail = tail;
     }
 
-    pub(crate) fn known_persisted_history_cursor(&self) -> Option<PersistedHistoryCursor> {
-        self.known_persisted_history_cursor
-    }
-
     pub(crate) fn set_known_persisted_history_cursor(
         &mut self,
         cursor: Option<PersistedHistoryCursor>,
     ) {
-        self.known_persisted_history_cursor = cursor;
-        self.persisted_history_cursor_uncertainty = None;
-        self.uncertain_expected_persisted_history_cursor = None;
-    }
-
-    pub(crate) fn persisted_history_cursor_uncertainty(
-        &self,
-    ) -> Option<PersistedHistoryCursorUncertainty> {
-        self.persisted_history_cursor_uncertainty
-    }
-
-    pub(crate) fn uncertain_expected_persisted_history_cursor(
-        &self,
-    ) -> Option<PersistedHistoryCursor> {
-        self.uncertain_expected_persisted_history_cursor
-    }
-
-    pub(crate) fn set_uncertain_expected_persisted_history_cursor(
-        &mut self,
-        cursor: Option<PersistedHistoryCursor>,
-    ) {
-        self.uncertain_expected_persisted_history_cursor = cursor;
-    }
-
-    pub(crate) fn invalidate_persisted_item_cursor(
-        &mut self,
-        uncertainty: PersistedHistoryCursorUncertainty,
-        expected_cursor: Option<PersistedHistoryCursor>,
-    ) {
-        self.known_persisted_history_cursor = None;
-        self.uncertain_expected_persisted_history_cursor = expected_cursor;
-        self.persisted_history_cursor_uncertainty = Some(
-            match (self.persisted_history_cursor_uncertainty, uncertainty) {
-                (Some(PersistedHistoryCursorUncertainty::HistoryRewrite), _)
-                | (_, PersistedHistoryCursorUncertainty::HistoryRewrite) => {
-                    PersistedHistoryCursorUncertainty::HistoryRewrite
-                }
-                _ => PersistedHistoryCursorUncertainty::AppendOnly,
-            },
+        self.persisted_history_cursor = cursor.map_or(
+            PersistedHistoryCursorState::Unknown,
+            PersistedHistoryCursorState::Known,
         );
     }
 

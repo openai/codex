@@ -47,7 +47,6 @@ fn persisted_cursor_canonicalizes_nested_map_order_and_round_trip() {
 async fn persisted_cursor_does_not_advance_for_session_metadata_append() {
     let (session, _turn_context) = make_session_and_context().await;
     let prefix = completed_turn("turn-1", "first user", "first assistant");
-    let cursor = persisted_history_cursor(&prefix);
     set_known_persisted_history(&session, &prefix).await;
     let rollout_guard = session.acquire_rollout_persistence_lock().await;
 
@@ -56,35 +55,26 @@ async fn persisted_cursor_does_not_advance_for_session_metadata_append() {
         .await;
 
     assert_eq!(
-        session.state.lock().await.known_persisted_history_cursor(),
-        cursor
+        session.state.lock().await.persisted_history_cursor,
+        persisted_cursor_state(&prefix)
     );
 }
 
 #[tokio::test]
 async fn failed_persisted_append_invalidates_cursor() {
     let (session, _turn_context) = make_session_and_context().await;
-    let prefix = completed_turn("turn-1", "first user", "first assistant");
-    set_known_persisted_history(&session, &prefix).await;
-    invalidate_persisted_history_cursor(
-        &session,
-        &[RolloutItem::ResponseItem(assistant_message(
-            "ambiguous append",
-        ))],
-    )
-    .await;
+    let mut expected_rollout = completed_turn("turn-1", "first user", "first assistant");
+    set_known_persisted_history(&session, &expected_rollout).await;
+    let append = RolloutItem::ResponseItem(assistant_message("ambiguous append"));
+    invalidate_persisted_history_cursor(&session, std::slice::from_ref(&append)).await;
+    expected_rollout.push(append);
 
     assert_eq!(
-        session.state.lock().await.known_persisted_history_cursor(),
-        None
-    );
-    assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .persisted_history_cursor_uncertainty(),
-        Some(PersistedHistoryCursorUncertainty::AppendOnly)
+        session.state.lock().await.persisted_history_cursor,
+        PersistedHistoryCursorState::Uncertain {
+            uncertainty: PersistedHistoryCursorUncertainty::AppendOnly,
+            expected: persisted_history_cursor(&expected_rollout),
+        }
     );
 }
 
@@ -96,9 +86,7 @@ async fn persisted_cursor_uncertainty_only_upgrades_to_history_rewrite() {
     let rollout_guard = session.acquire_rollout_persistence_lock().await;
     let append = RolloutItem::ResponseItem(assistant_message("ambiguous append"));
     let successful_append = RolloutItem::ResponseItem(assistant_message("successful append"));
-    let rollback = RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
-        num_turns: 1,
-    }));
+    let rollback = rollback(/*num_turns*/ 1);
 
     session
         .invalidate_persisted_item_cursor(&rollout_guard, std::slice::from_ref(&append))
@@ -112,23 +100,14 @@ async fn persisted_cursor_uncertainty_only_upgrades_to_history_rewrite() {
     session
         .invalidate_persisted_item_cursor(&rollout_guard, std::slice::from_ref(&append))
         .await;
+    expected_rollout.extend([append.clone(), successful_append, rollback, append]);
 
     assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .persisted_history_cursor_uncertainty(),
-        Some(PersistedHistoryCursorUncertainty::HistoryRewrite)
-    );
-    expected_rollout.extend([append.clone(), successful_append, rollback, append]);
-    assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .uncertain_expected_persisted_history_cursor(),
-        persisted_history_cursor(&expected_rollout)
+        session.state.lock().await.persisted_history_cursor,
+        PersistedHistoryCursorState::Uncertain {
+            uncertainty: PersistedHistoryCursorUncertainty::HistoryRewrite,
+            expected: persisted_history_cursor(&expected_rollout),
+        }
     );
 }
 
@@ -141,20 +120,21 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     local_history.push(local_tail.clone());
     session.replace_history(local_history.clone(), None).await;
     set_known_persisted_history(&session, &persisted_prefix).await;
-    invalidate_persisted_history_cursor(&session, &[RolloutItem::ResponseItem(local_tail.clone())])
-        .await;
+    let append = RolloutItem::ResponseItem(local_tail.clone());
+    invalidate_persisted_history_cursor(&session, std::slice::from_ref(&append)).await;
+    let mut expected_uncertain_rollout = persisted_prefix.clone();
+    expected_uncertain_rollout.push(append);
 
     let outcome = reconcile_idle(&session, &persisted_prefix).await;
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert_eq!(session.clone_history().await.raw_items(), local_history);
     assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .persisted_history_cursor_uncertainty(),
-        Some(PersistedHistoryCursorUncertainty::AppendOnly)
+        session.state.lock().await.persisted_history_cursor,
+        PersistedHistoryCursorState::Uncertain {
+            uncertainty: PersistedHistoryCursorUncertainty::AppendOnly,
+            expected: persisted_history_cursor(&expected_uncertain_rollout),
+        }
     );
 
     // If a later read proves the exact ambiguous append reached storage, reconciliation can
@@ -162,14 +142,10 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     persisted_prefix.push(RolloutItem::ResponseItem(local_tail));
     let retry_outcome = reconcile_idle(&session, &persisted_prefix).await;
     assert_eq!(retry_outcome, ThreadHistoryReconciliationOutcome::Unchanged);
-    {
-        let state = session.state.lock().await;
-        assert_eq!(
-            state.known_persisted_history_cursor(),
-            persisted_history_cursor(&persisted_prefix)
-        );
-        assert_eq!(state.persisted_history_cursor_uncertainty(), None);
-    }
+    assert_eq!(
+        session.state.lock().await.persisted_history_cursor,
+        persisted_cursor_state(&persisted_prefix)
+    );
 
     let second_ambiguous_append = assistant_message("second ambiguous append");
     let mut local_history_with_second_append = local_history.clone();
@@ -201,10 +177,9 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     assert_eq!(session.clone_history().await.raw_items(), expected);
     let state = session.state.lock().await;
     assert_eq!(
-        state.known_persisted_history_cursor(),
-        persisted_history_cursor(&persisted_prefix)
+        state.persisted_history_cursor,
+        persisted_cursor_state(&persisted_prefix)
     );
-    assert_eq!(state.persisted_history_cursor_uncertainty(), None);
 }
 
 #[tokio::test]
@@ -228,10 +203,9 @@ async fn uncertain_append_proven_by_cursor_allows_persisted_rollback_suffix() {
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Refreshed);
     assert_eq!(session.clone_history().await.raw_items(), first_history);
     let state = session.state.lock().await;
-    assert_eq!(state.persisted_history_cursor_uncertainty(), None);
     assert_eq!(
-        state.known_persisted_history_cursor(),
-        persisted_history_cursor(&landed_rollout)
+        state.persisted_history_cursor,
+        persisted_cursor_state(&landed_rollout)
     );
 }
 
@@ -247,23 +221,22 @@ async fn uncertain_history_rewrite_never_restores_pre_rollback_disk_history() {
     set_known_persisted_history(&session, &pre_rollback_rollout).await;
     let rollback = rollback(/*num_turns*/ 1);
     invalidate_persisted_history_cursor(&session, std::slice::from_ref(&rollback)).await;
+    let mut expected_landed_rollout = pre_rollback_rollout.clone();
+    expected_landed_rollout.push(rollback.clone());
 
     let stale_outcome = reconcile_idle(&session, &pre_rollback_rollout).await;
 
     assert_eq!(stale_outcome, ThreadHistoryReconciliationOutcome::Conflict);
     assert_eq!(session.clone_history().await.raw_items(), first_history);
     assert_eq!(
-        session
-            .state
-            .lock()
-            .await
-            .persisted_history_cursor_uncertainty(),
-        Some(PersistedHistoryCursorUncertainty::HistoryRewrite)
+        session.state.lock().await.persisted_history_cursor,
+        PersistedHistoryCursorState::Uncertain {
+            uncertainty: PersistedHistoryCursorUncertainty::HistoryRewrite,
+            expected: persisted_history_cursor(&expected_landed_rollout),
+        }
     );
 
-    let mut landed_rollout = pre_rollback_rollout;
-    landed_rollout.push(rollback);
-    let landed_outcome = reconcile_idle(&session, &landed_rollout).await;
+    let landed_outcome = reconcile_idle(&session, &expected_landed_rollout).await;
 
     assert_eq!(
         landed_outcome,
@@ -271,10 +244,9 @@ async fn uncertain_history_rewrite_never_restores_pre_rollback_disk_history() {
     );
     assert_eq!(session.clone_history().await.raw_items(), first_history);
     let state = session.state.lock().await;
-    assert_eq!(state.persisted_history_cursor_uncertainty(), None);
     assert_eq!(
-        state.known_persisted_history_cursor(),
-        persisted_history_cursor(&landed_rollout)
+        state.persisted_history_cursor,
+        persisted_cursor_state(&expected_landed_rollout)
     );
 }
 
@@ -297,12 +269,11 @@ async fn uncertain_event_only_rollback_requires_the_durable_marker() {
     {
         let state = session.state.lock().await;
         assert_eq!(
-            state.persisted_history_cursor_uncertainty(),
-            Some(PersistedHistoryCursorUncertainty::HistoryRewrite)
-        );
-        assert_eq!(
-            state.uncertain_expected_persisted_history_cursor(),
-            persisted_history_cursor(&expected_landed_rollout)
+            state.persisted_history_cursor,
+            PersistedHistoryCursorState::Uncertain {
+                uncertainty: PersistedHistoryCursorUncertainty::HistoryRewrite,
+                expected: persisted_history_cursor(&expected_landed_rollout),
+            }
         );
     }
 
@@ -314,9 +285,8 @@ async fn uncertain_event_only_rollback_requires_the_durable_marker() {
     );
     assert!(session.clone_history().await.raw_items().is_empty());
     let state = session.state.lock().await;
-    assert_eq!(state.persisted_history_cursor_uncertainty(), None);
     assert_eq!(
-        state.known_persisted_history_cursor(),
-        persisted_history_cursor(&expected_landed_rollout)
+        state.persisted_history_cursor,
+        persisted_cursor_state(&expected_landed_rollout)
     );
 }

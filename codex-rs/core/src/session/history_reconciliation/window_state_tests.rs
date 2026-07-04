@@ -62,9 +62,9 @@ async fn reconcile_persisted_history_resets_runtime_state_for_new_compaction_win
 
     assert_eq!(outcome, ThreadHistoryReconciliationOutcome::Unchanged);
     let mut state = session.state.lock().await;
-    assert_ne!(
+    assert_eq!(
         state.auto_compact_window_snapshot().prefill_input_tokens,
-        Some(777)
+        None
     );
     assert!(!state.take_new_context_window_request());
     assert!(state.claim_token_budget_reminder());
@@ -108,20 +108,10 @@ async fn reconcile_persisted_history_queues_only_unconsumed_imported_compaction_
             .lock()
             .await
             .take_pending_session_start_source();
-        if followed_by_turn {
-            assert!(
-                pending_source.is_none(),
-                "a later turn already consumed the imported compact lifecycle hook"
-            );
-        } else {
-            assert!(
-                matches!(
-                    pending_source,
-                    Some(codex_hooks::SessionStartSource::Compact)
-                ),
-                "an imported compaction must queue its next-turn lifecycle hook"
-            );
-        }
+        assert_eq!(
+            pending_source.map(codex_hooks::SessionStartSource::as_str),
+            (!followed_by_turn).then_some("compact")
+        );
     }
 }
 
@@ -394,8 +384,8 @@ async fn reconcile_persisted_history_preserves_loaded_prefix_truncation() {
         "suffix reconciliation must preserve the prefill after restoring the loaded prefix"
     );
     assert_eq!(
-        session.state.lock().await.known_persisted_history_cursor(),
-        persisted_history_cursor(&rollout)
+        session.state.lock().await.persisted_history_cursor,
+        persisted_cursor_state(&rollout)
     );
     assert_eq!(
         session
@@ -464,8 +454,8 @@ async fn reconcile_persisted_history_ignores_interleaved_session_metadata_in_cur
     ));
     assert_eq!(session.clone_history().await.raw_items(), expected);
     assert_eq!(
-        session.state.lock().await.known_persisted_history_cursor(),
-        persisted_history_cursor(&rollout)
+        session.state.lock().await.persisted_history_cursor,
+        persisted_cursor_state(&rollout)
     );
 }
 
@@ -501,7 +491,7 @@ async fn reconcile_persisted_history_rebuilds_after_external_append_interleaves_
     expected.push(local_item);
     assert_eq!(session.clone_history().await.raw_items(), expected);
     assert_eq!(
-        session.state.lock().await.known_persisted_history_cursor(),
-        persisted_history_cursor(&actual_rollout)
+        session.state.lock().await.persisted_history_cursor,
+        persisted_cursor_state(&actual_rollout)
     );
 }

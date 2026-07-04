@@ -9,6 +9,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::TokenBudgetReminder;
 use crate::state::ActiveTurn;
 use crate::state::AutoCompactWindowIds;
+use crate::state::PersistedHistoryCursorState;
 use crate::state::PersistedHistoryCursorUncertainty;
 use codex_features::Feature;
 use codex_protocol::models::ContentItem;
@@ -128,21 +129,14 @@ fn local_shell_call(env: HashMap<String, String>) -> RolloutItem {
 }
 
 fn token_usage_info(total_tokens: i64) -> TokenUsageInfo {
+    let usage = TokenUsage {
+        input_tokens: total_tokens,
+        total_tokens,
+        ..Default::default()
+    };
     TokenUsageInfo {
-        total_token_usage: TokenUsage {
-            input_tokens: total_tokens,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens,
-        },
-        last_token_usage: TokenUsage {
-            input_tokens: total_tokens,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens,
-        },
+        total_token_usage: usage.clone(),
+        last_token_usage: usage,
         model_context_window: Some(258_400),
     }
 }
@@ -164,6 +158,13 @@ async fn set_known_persisted_history(session: &Session, rollout: &[RolloutItem])
         .lock()
         .await
         .set_known_persisted_history_cursor(persisted_history_cursor(rollout));
+}
+
+fn persisted_cursor_state(rollout: &[RolloutItem]) -> PersistedHistoryCursorState {
+    persisted_history_cursor(rollout).map_or(
+        PersistedHistoryCursorState::Unknown,
+        PersistedHistoryCursorState::Known,
+    )
 }
 
 async fn invalidate_persisted_history_cursor(session: &Session, items: &[RolloutItem]) {

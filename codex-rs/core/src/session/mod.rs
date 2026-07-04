@@ -1376,13 +1376,6 @@ impl Session {
                     .await;
                 }
 
-                // Seed usage info from the recorded rollout so UIs can show token counts
-                // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
-                    let mut state = self.state.lock().await;
-                    state.set_token_info(Some(info));
-                }
-
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
                 if !is_subagent {
@@ -1400,13 +1393,6 @@ impl Session {
                 }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
-
-                // Seed usage info from the recorded rollout so UIs can show token counts
-                // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
-                    let mut state = self.state.lock().await;
-                    state.set_token_info(Some(info));
-                }
 
                 // If persisting, persist all rollout items as-is (the store filters).
                 if !rollout_items.is_empty() {
@@ -1455,7 +1441,7 @@ impl Session {
                 turn_context.config.model_auto_compact_token_limit_scope,
                 reconstruction,
                 history_reconciliation::RolloutReconstructionInstallOptions {
-                    token_info: None,
+                    token_info: Self::last_token_info_from_rollout(rollout_items),
                     history: history_reconciliation::RolloutHistoryInstallMode::Replace,
                     auto_compact_window:
                         history_reconciliation::AutoCompactWindowInstallMode::Restore,

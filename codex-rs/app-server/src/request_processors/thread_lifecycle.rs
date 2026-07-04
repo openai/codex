@@ -311,18 +311,6 @@ pub(super) async fn ensure_listener_task_running(
             listener_generation,
         )
     };
-    let ListenerTaskContext {
-        outgoing,
-        thread_manager,
-        thread_state_manager,
-        pending_thread_unloads,
-        thread_watch_manager,
-        thread_list_state_permit,
-        fallback_model_provider,
-        codex_home,
-        ..
-    } = listener_task_context;
-    let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
         let resume_worker_cancel = CancellationToken::new();
         let _resume_worker_cancel_guard = resume_worker_cancel.clone().drop_guard();
@@ -336,15 +324,8 @@ pub(super) async fn ensure_listener_task_running(
                     let transition = handle_thread_listener_command(
                         conversation_id,
                         &conversation,
-                        codex_home.as_path(),
-                        &thread_manager,
-                        &thread_state_manager,
+                        &listener_task_context,
                         &thread_state,
-                        &thread_watch_manager,
-                        &thread_list_state_permit,
-                        &fallback_model_provider,
-                        &outgoing_for_task,
-                        &pending_thread_unloads,
                         &listener_command_tx,
                         &resume_worker_cancel,
                         &mut buffered_resume_events,
@@ -375,15 +356,8 @@ pub(super) async fn ensure_listener_task_running(
                     let transition = handle_thread_listener_command(
                         conversation_id,
                         &conversation,
-                        codex_home.as_path(),
-                        &thread_manager,
-                        &thread_state_manager,
+                        &listener_task_context,
                         &thread_state,
-                        &thread_watch_manager,
-                        &thread_list_state_permit,
-                        &fallback_model_provider,
-                        &outgoing_for_task,
-                        &pending_thread_unloads,
                         &listener_command_tx,
                         &resume_worker_cancel,
                         &mut buffered_resume_events,
@@ -422,19 +396,16 @@ pub(super) async fn ensure_listener_task_running(
 
                     let raw_events_enabled =
                         track_thread_event(&thread_state, &event).await;
-                    let subscribed_connection_ids = thread_state_manager
+                    let subscribed_connection_ids = listener_task_context
+                        .thread_state_manager
                         .subscribed_connection_ids(conversation_id)
                         .await;
                     dispatch_thread_event(
                         event,
                         conversation_id,
                         &conversation,
-                        &thread_manager,
+                        &listener_task_context,
                         &thread_state,
-                        &thread_watch_manager,
-                        &thread_list_state_permit,
-                        &fallback_model_provider,
-                        &outgoing_for_task,
                         subscribed_connection_ids,
                         /*item_lifecycle_connection_ids*/ None,
                         raw_events_enabled,
@@ -453,7 +424,10 @@ pub(super) async fn ensure_listener_task_running(
                         continue;
                     }
                     {
-                        let mut pending_thread_unloads = pending_thread_unloads.lock().await;
+                        let mut pending_thread_unloads = listener_task_context
+                            .pending_thread_unloads
+                            .lock()
+                            .await;
                         if pending_thread_unloads.contains(&conversation_id) {
                             continue;
                         }
@@ -463,11 +437,11 @@ pub(super) async fn ensure_listener_task_running(
                         pending_thread_unloads.insert(conversation_id);
                     }
                     unload_thread_without_subscribers(
-                        thread_manager.clone(),
-                        outgoing_for_task.clone(),
-                        pending_thread_unloads.clone(),
-                        thread_state_manager.clone(),
-                        thread_watch_manager.clone(),
+                        Arc::clone(&listener_task_context.thread_manager),
+                        Arc::clone(&listener_task_context.outgoing),
+                        Arc::clone(&listener_task_context.pending_thread_unloads),
+                        listener_task_context.thread_state_manager.clone(),
+                        listener_task_context.thread_watch_manager.clone(),
                         conversation_id,
                         conversation.clone(),
                     )
@@ -481,7 +455,9 @@ pub(super) async fn ensure_listener_task_running(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
+            listener_task_context
+                .thread_state_manager
+                .unregister_listener_command_tx(conversation_id);
             thread_state.clear_listener();
         }
     });
@@ -501,16 +477,20 @@ async fn dispatch_thread_event(
     event: Event,
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    thread_manager: &Arc<ThreadManager>,
+    listener_task_context: &ListenerTaskContext,
     thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    thread_list_state_permit: &Arc<Semaphore>,
-    fallback_model_provider: &str,
-    outgoing: &Arc<OutgoingMessageSender>,
     subscribed_connection_ids: Vec<ConnectionId>,
     item_lifecycle_connection_ids: Option<Vec<ConnectionId>>,
     raw_events_enabled: bool,
 ) {
+    let ListenerTaskContext {
+        outgoing,
+        thread_manager,
+        thread_watch_manager,
+        thread_list_state_permit,
+        fallback_model_provider,
+        ..
+    } = listener_task_context;
     let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
         Arc::clone(outgoing),
         subscribed_connection_ids,
@@ -537,34 +517,19 @@ async fn dispatch_thread_event(
             conversation_id,
         )
     });
-    if let Some(item_lifecycle_outgoing) = item_lifecycle_outgoing {
-        apply_bespoke_event_handling_with_item_lifecycle_outgoing(
-            event,
-            conversation_id,
-            Arc::clone(conversation),
-            Arc::clone(thread_manager),
-            thread_outgoing,
-            Arc::clone(thread_state),
-            thread_watch_manager.clone(),
-            Arc::clone(thread_list_state_permit),
-            fallback_model_provider.to_string(),
-            Some(item_lifecycle_outgoing),
-        )
-        .await;
-    } else {
-        apply_bespoke_event_handling(
-            event,
-            conversation_id,
-            Arc::clone(conversation),
-            Arc::clone(thread_manager),
-            thread_outgoing,
-            Arc::clone(thread_state),
-            thread_watch_manager.clone(),
-            Arc::clone(thread_list_state_permit),
-            fallback_model_provider.to_string(),
-        )
-        .await;
-    }
+    apply_bespoke_event_handling_with_item_lifecycle_outgoing(
+        event,
+        conversation_id,
+        Arc::clone(conversation),
+        Arc::clone(thread_manager),
+        thread_outgoing,
+        Arc::clone(thread_state),
+        thread_watch_manager.clone(),
+        Arc::clone(thread_list_state_permit),
+        fallback_model_provider.to_string(),
+        item_lifecycle_outgoing,
+    )
+    .await;
 }
 
 #[path = "thread_lifecycle/resume_event_coverage.rs"]

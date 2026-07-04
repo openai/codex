@@ -151,15 +151,8 @@ pub(super) fn classify_busy_history_read(
 pub(super) async fn handle_thread_listener_command(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    codex_home: &Path,
-    thread_manager: &Arc<ThreadManager>,
-    thread_state_manager: &ThreadStateManager,
+    listener_task_context: &ListenerTaskContext,
     thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    thread_list_state_permit: &Arc<Semaphore>,
-    fallback_model_provider: &str,
-    outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     listener_command_tx: &mpsc::UnboundedSender<ThreadListenerCommand>,
     resume_worker_cancel: &CancellationToken,
     buffered_resume_events: &mut Vec<BufferedThreadEvent>,
@@ -177,7 +170,7 @@ pub(super) async fn handle_thread_listener_command(
                 conversation_id,
                 conversation,
                 thread_state,
-                outgoing,
+                &listener_task_context.outgoing,
                 listener_command_tx,
                 resume_worker_cancel,
                 resume_request,
@@ -199,15 +192,8 @@ pub(super) async fn handle_thread_listener_command(
             handle_pending_thread_resume_request(
                 conversation_id,
                 conversation,
-                codex_home,
-                thread_manager,
-                thread_state_manager,
+                listener_task_context,
                 thread_state,
-                thread_watch_manager,
-                thread_list_state_permit,
-                fallback_model_provider,
-                outgoing,
-                pending_thread_unloads,
                 *resume_request,
                 *history_result,
                 std::mem::take(buffered_resume_events),
@@ -219,7 +205,8 @@ pub(super) async fn handle_thread_listener_command(
             ListenerCommandTransition::ResumeFinished
         }
         ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, goal } => {
-            outgoing
+            listener_task_context
+                .outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(
                     ThreadGoalUpdatedNotification {
                         thread_id: conversation_id.to_string(),
@@ -231,7 +218,8 @@ pub(super) async fn handle_thread_listener_command(
             ListenerCommandTransition::None
         }
         ThreadListenerCommand::EmitThreadGoalCleared => {
-            outgoing
+            listener_task_context
+                .outgoing
                 .send_server_notification(ServerNotification::ThreadGoalCleared(
                     ThreadGoalClearedNotification {
                         thread_id: conversation_id.to_string(),
@@ -241,7 +229,12 @@ pub(super) async fn handle_thread_listener_command(
             ListenerCommandTransition::None
         }
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
-            send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
+            send_thread_goal_snapshot_notification(
+                &listener_task_context.outgoing,
+                conversation_id,
+                &state_db,
+            )
+            .await;
             ListenerCommandTransition::None
         }
         ThreadListenerCommand::ResolveServerRequest {
@@ -250,8 +243,8 @@ pub(super) async fn handle_thread_listener_command(
         } => {
             resolve_pending_server_request(
                 conversation_id,
-                thread_state_manager,
-                outgoing,
+                &listener_task_context.thread_state_manager,
+                &listener_task_context.outgoing,
                 request_id,
             )
             .await;
@@ -321,20 +314,21 @@ pub(super) async fn read_pending_thread_resume_history(
 ) -> Result<crate::thread_state::PreparedThreadResumeHistory, JSONRPCErrorError> {
     let mut attempt = 0;
     let (history_items, reconciliation_outcome) = loop {
-        let Some(snapshot) = conversation.history_reconciliation_snapshot().await else {
-            // The event cut blocks new persisted event delivery, and the rollout guard blocks
-            // every other append. Flush even while active so any queued event classified as
-            // snapshot-represented is guaranteed to be present in this read.
-            conversation.flush_rollout().await.map_err(|err| {
-                internal_error(format!(
-                    "failed to flush thread {conversation_id} before resuming: {err}"
-                ))
-            })?;
-            let history_items = conversation
-                .load_history(/*include_archived*/ true)
-                .await
-                .map_err(super::thread_processor::thread_store_resume_read_error)?
-                .items;
+        let snapshot = conversation.history_reconciliation_snapshot().await;
+        // The event cut blocks new persisted event delivery, and the rollout guard blocks every
+        // other append. Flush even while active so any queued event classified as
+        // snapshot-represented is guaranteed to be present in this read.
+        conversation.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to flush thread {conversation_id} before resuming: {err}"
+            ))
+        })?;
+        let history_items = conversation
+            .load_history(/*include_archived*/ true)
+            .await
+            .map_err(super::thread_processor::thread_store_resume_read_error)?
+            .items;
+        let Some(snapshot) = snapshot else {
             let thread_became_idle = conversation
                 .history_reconciliation_snapshot()
                 .await
@@ -353,16 +347,6 @@ pub(super) async fn read_pending_thread_resume_history(
             }
             break (history_items, ThreadHistoryReconciliationOutcome::Busy);
         };
-        conversation.flush_rollout().await.map_err(|err| {
-            internal_error(format!(
-                "failed to flush thread {conversation_id} before resuming: {err}"
-            ))
-        })?;
-        let history_items = conversation
-            .load_history(/*include_archived*/ true)
-            .await
-            .map_err(super::thread_processor::thread_store_resume_read_error)?
-            .items;
         let outcome = conversation
             .reconcile_persisted_history(snapshot, &history_items)
             .await;

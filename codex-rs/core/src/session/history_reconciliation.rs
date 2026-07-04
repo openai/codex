@@ -19,6 +19,7 @@ use crate::codex_thread::ThreadHistoryReconciliationOutcome;
 use crate::codex_thread::ThreadHistoryReconciliationSnapshot;
 use crate::context_manager::ContextManager;
 use crate::image_preparation::prepare_response_items;
+use crate::state::PersistedHistoryCursorState;
 use crate::state::PersistedHistoryCursorUncertainty;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
@@ -76,16 +77,23 @@ impl Session {
         items: &[RolloutItem],
     ) {
         let mut state = self.state.lock().await;
-        if let Some(cursor) = state.known_persisted_history_cursor() {
-            state.set_known_persisted_history_cursor(advance_persisted_history_cursor(
-                cursor, items,
-            ));
-        } else if state.persisted_history_cursor_uncertainty().is_some() {
-            let expected_cursor = state
-                .uncertain_expected_persisted_history_cursor()
-                .and_then(|cursor| advance_persisted_history_cursor(cursor, items));
-            state.set_uncertain_expected_persisted_history_cursor(expected_cursor);
-        }
+        state.persisted_history_cursor = match state.persisted_history_cursor {
+            PersistedHistoryCursorState::Known(cursor) => {
+                advance_persisted_history_cursor(cursor, items).map_or(
+                    PersistedHistoryCursorState::Unknown,
+                    PersistedHistoryCursorState::Known,
+                )
+            }
+            PersistedHistoryCursorState::Uncertain {
+                uncertainty,
+                expected,
+            } => PersistedHistoryCursorState::Uncertain {
+                uncertainty,
+                expected: expected
+                    .and_then(|cursor| advance_persisted_history_cursor(cursor, items)),
+            },
+            PersistedHistoryCursorState::Unknown => PersistedHistoryCursorState::Unknown,
+        };
     }
 
     pub(crate) async fn invalidate_persisted_item_cursor(
@@ -93,17 +101,29 @@ impl Session {
         _rollout_guard: &tokio::sync::OwnedMutexGuard<()>,
         items: &[RolloutItem],
     ) {
-        let uncertainty = if items.iter().any(is_persisted_history_rewrite_item) {
+        let mut state = self.state.lock().await;
+        let expected = match state.persisted_history_cursor {
+            PersistedHistoryCursorState::Known(cursor) => Some(cursor),
+            PersistedHistoryCursorState::Uncertain { expected, .. } => expected,
+            PersistedHistoryCursorState::Unknown => None,
+        }
+        .and_then(|cursor| advance_persisted_history_cursor(cursor, items));
+        let uncertainty = if items.iter().any(is_persisted_history_rewrite_item)
+            || matches!(
+                state.persisted_history_cursor,
+                PersistedHistoryCursorState::Uncertain {
+                    uncertainty: PersistedHistoryCursorUncertainty::HistoryRewrite,
+                    ..
+                }
+            ) {
             PersistedHistoryCursorUncertainty::HistoryRewrite
         } else {
             PersistedHistoryCursorUncertainty::AppendOnly
         };
-        let mut state = self.state.lock().await;
-        let expected_cursor = state
-            .known_persisted_history_cursor()
-            .or_else(|| state.uncertain_expected_persisted_history_cursor())
-            .and_then(|cursor| advance_persisted_history_cursor(cursor, items));
-        state.invalidate_persisted_item_cursor(uncertainty, expected_cursor);
+        state.persisted_history_cursor = PersistedHistoryCursorState::Uncertain {
+            uncertainty,
+            expected,
+        };
     }
 
     #[expect(
@@ -122,10 +142,7 @@ impl Session {
             history: state.history.raw_items().to_vec(),
             history_version: state.history.history_version(),
             known_persisted_incomplete_tail: state.known_persisted_incomplete_tail(),
-            known_persisted_history_cursor: state.known_persisted_history_cursor(),
-            persisted_history_cursor_uncertainty: state.persisted_history_cursor_uncertainty(),
-            uncertain_expected_persisted_history_cursor: state
-                .uncertain_expected_persisted_history_cursor(),
+            persisted_history_cursor: state.persisted_history_cursor,
         })
     }
 
@@ -148,31 +165,28 @@ impl Session {
         // Incremental replay is safe only when the loaded rollout still has the exact known
         // non-metadata prefix. A mismatch means another writer interleaved before a local append,
         // so fall back to canonical reconstruction instead of duplicating already-applied items.
-        let requires_uncertain_cursor_proof = snapshot.known_persisted_history_cursor.is_none()
-            && snapshot.persisted_history_cursor_uncertainty.is_some()
-            && snapshot
-                .uncertain_expected_persisted_history_cursor
-                .is_some();
-        let reconciliation_cursor = match snapshot.known_persisted_history_cursor {
-            Some(cursor) => Some(cursor),
-            None if snapshot.persisted_history_cursor_uncertainty.is_some() => {
-                if let Some(expected_cursor) = snapshot.uncertain_expected_persisted_history_cursor
-                {
-                    Some(expected_cursor)
-                } else if matches!(
-                    snapshot.persisted_history_cursor_uncertainty,
-                    Some(PersistedHistoryCursorUncertainty::HistoryRewrite)
-                ) {
+        let (reconciliation_cursor, requires_uncertain_cursor_proof) =
+            match snapshot.persisted_history_cursor {
+                PersistedHistoryCursorState::Known(cursor) => (Some(cursor), false),
+                PersistedHistoryCursorState::Uncertain {
+                    expected: Some(expected),
+                    ..
+                } => (Some(expected), true),
+                PersistedHistoryCursorState::Uncertain {
+                    uncertainty: PersistedHistoryCursorUncertainty::HistoryRewrite,
+                    expected: None,
+                } => {
                     // Without a pre-failure cursor, model-history equality cannot prove that an
                     // event-only rollback or compaction marker became durable. Restart is the
                     // recovery boundary for this deliberately fail-closed state.
                     return ThreadHistoryReconciliationOutcome::Conflict;
-                } else {
-                    None
                 }
-            }
-            None => None,
-        };
+                PersistedHistoryCursorState::Uncertain {
+                    uncertainty: PersistedHistoryCursorUncertainty::AppendOnly,
+                    expected: None,
+                }
+                | PersistedHistoryCursorState::Unknown => (None, false),
+            };
         let persisted_suffix = match reconciliation_cursor {
             Some(cursor) => match persisted_suffix_after_cursor(rollout_items, cursor) {
                 PersistedCursorComparison::Matched(suffix) => Some(suffix),
@@ -195,15 +209,12 @@ impl Session {
                 .iter()
                 .any(|item| matches!(item, RolloutItem::Compacted(_)))
         });
-        let imports_history_rewrite = persisted_suffix.is_some_and(|suffix| {
-            suffix.iter().any(|item| {
-                matches!(
-                    item,
-                    RolloutItem::Compacted(_)
-                        | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))
-                )
-            })
+        let imports_rollback = persisted_suffix.is_some_and(|suffix| {
+            suffix
+                .iter()
+                .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
         });
+        let imports_history_rewrite = imports_compaction || imports_rollback;
 
         let reconciliation_config = self.history_reconciliation_config().await;
         let mut reconstruction = self
@@ -223,29 +234,28 @@ impl Session {
             reconstruction.history = history;
         }
         let final_history_extends_snapshot = reconstruction.history.starts_with(&snapshot.history);
-        match snapshot.persisted_history_cursor_uncertainty {
-            Some(PersistedHistoryCursorUncertainty::AppendOnly)
-                if !uncertainty_proven_by_cursor && !final_history_extends_snapshot =>
-            {
-                // An append error does not reveal whether storage accepted the item. Never let an
-                // older or divergent read replace authoritative in-memory history in that state.
-                // Exact cursor agreement proves that the ambiguous append landed; without it,
-                // only exact model-history matches and strict extensions provide that proof.
-                return ThreadHistoryReconciliationOutcome::Conflict;
+        if matches!(
+            snapshot.persisted_history_cursor,
+            PersistedHistoryCursorState::Uncertain {
+                uncertainty: PersistedHistoryCursorUncertainty::AppendOnly,
+                ..
             }
-            _ => {}
+        ) && !uncertainty_proven_by_cursor
+            && !final_history_extends_snapshot
+        {
+            // An append error does not reveal whether storage accepted the item. Never let an
+            // older or divergent read replace authoritative in-memory history in that state.
+            // Exact cursor agreement proves that the ambiguous append landed; without it,
+            // only exact model-history matches and strict extensions provide that proof.
+            return ThreadHistoryReconciliationOutcome::Conflict;
         }
         let imports_effective_rollback = persisted_suffix.map_or_else(
             || {
                 rollout_items.iter().any(|item| {
                     matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)))
-                }) && !reconstruction.history.starts_with(&snapshot.history)
+                }) && !final_history_extends_snapshot
             },
-            |suffix| {
-                suffix.iter().any(|item| {
-                    matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)))
-                })
-            },
+            |_| imports_rollback,
         );
         let token_info = Self::last_token_info_from_rollout(rollout_items);
         let token_budget_reminder_delivered =
@@ -260,11 +270,7 @@ impl Session {
             || state.history.raw_items() != snapshot.history
             || state.known_persisted_incomplete_tail().as_ref()
                 != snapshot.known_persisted_incomplete_tail.as_ref()
-            || state.known_persisted_history_cursor() != snapshot.known_persisted_history_cursor
-            || state.persisted_history_cursor_uncertainty()
-                != snapshot.persisted_history_cursor_uncertainty
-            || state.uncertain_expected_persisted_history_cursor()
-                != snapshot.uncertain_expected_persisted_history_cursor
+            || state.persisted_history_cursor != snapshot.persisted_history_cursor
         {
             return ThreadHistoryReconciliationOutcome::Conflict;
         }
@@ -305,7 +311,10 @@ impl Session {
         let preserves_append_only_prefill = final_history_extends_snapshot
             && !imports_history_rewrite
             && (persisted_suffix.is_some()
-                || snapshot.persisted_history_cursor_uncertainty.is_some());
+                || matches!(
+                    snapshot.persisted_history_cursor,
+                    PersistedHistoryCursorState::Uncertain { .. }
+                ));
         let preserves_rollback_prefill =
             imports_effective_rollback && !imports_compaction && preserves_auto_compact_window;
         let preserve_auto_compact_prefill =
@@ -342,9 +351,10 @@ impl Session {
         {
             state.reset_additional_context();
         }
-        if snapshot.known_persisted_history_cursor.is_some()
-            || snapshot.persisted_history_cursor_uncertainty.is_some()
-            || self.live_thread().is_some()
+        if !matches!(
+            snapshot.persisted_history_cursor,
+            PersistedHistoryCursorState::Unknown
+        ) || self.live_thread().is_some()
         {
             state.set_known_persisted_history_cursor(persisted_history_cursor(rollout_items));
         }

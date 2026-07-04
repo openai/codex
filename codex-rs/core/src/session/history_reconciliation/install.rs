@@ -77,23 +77,17 @@ impl Session {
                     history,
                     reference_context_item,
                 );
-                state
-                    .history
-                    .replace_world_state_baseline(world_state_baseline);
             }
             RolloutHistoryInstallMode::Replace => {
                 state.replace_history(history, reference_context_item);
-                state
-                    .history
-                    .replace_world_state_baseline(world_state_baseline);
             }
             RolloutHistoryInstallMode::KeepExisting => {
                 state.set_reference_context_item(reference_context_item);
-                state
-                    .history
-                    .replace_world_state_baseline(world_state_baseline);
             }
         }
+        state
+            .history
+            .replace_world_state_baseline(world_state_baseline);
         let ids = Self::rollout_reconstruction_window_ids(
             first_window_id,
             previous_window_id,

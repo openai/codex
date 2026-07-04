@@ -10,21 +10,21 @@ use super::*;
 pub(super) async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    _codex_home: &Path,
-    thread_manager: &Arc<ThreadManager>,
-    thread_state_manager: &ThreadStateManager,
+    listener_task_context: &ListenerTaskContext,
     thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    thread_list_state_permit: &Arc<Semaphore>,
-    fallback_model_provider: &str,
-    outgoing: &Arc<OutgoingMessageSender>,
-    pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     pending: crate::thread_state::PendingThreadResumeRequest,
     history_result: Result<crate::thread_state::PreparedThreadResumeHistory, JSONRPCErrorError>,
     mut buffered_events: Vec<BufferedThreadEvent>,
     mut exec_delta_replay: ResumeExecDeltaReplay,
     release_event_cut_tx: oneshot::Sender<()>,
 ) {
+    let ListenerTaskContext {
+        thread_state_manager,
+        outgoing,
+        pending_thread_unloads,
+        thread_watch_manager,
+        ..
+    } = listener_task_context;
     let pre_cut_connection_ids = thread_state_manager
         .subscribed_connection_ids(conversation_id)
         .await;
@@ -52,13 +52,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                     None,
                     conversation_id,
                     conversation,
-                    thread_manager,
+                    listener_task_context,
                     thread_state,
-                    thread_watch_manager,
-                    thread_list_state_permit,
-                    fallback_model_provider,
                     ResumePayloadMode::Full,
-                    outgoing,
                 )
                 .await;
                 return;
@@ -75,12 +71,8 @@ pub(super) async fn handle_pending_thread_resume_request(
                     event,
                     conversation_id,
                     conversation,
-                    thread_manager,
+                    listener_task_context,
                     thread_state,
-                    thread_watch_manager,
-                    thread_list_state_permit,
-                    fallback_model_provider,
-                    outgoing,
                     pre_cut_connection_ids.clone(),
                     /*item_lifecycle_connection_ids*/ None,
                     raw_events_enabled,
@@ -105,13 +97,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                 None,
                 conversation_id,
                 conversation,
-                thread_manager,
+                listener_task_context,
                 thread_state,
-                thread_watch_manager,
-                thread_list_state_permit,
-                fallback_model_provider,
                 ResumePayloadMode::Full,
-                outgoing,
             )
             .await;
             return;
@@ -199,13 +187,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                     None,
                     conversation_id,
                     conversation,
-                    thread_manager,
+                    listener_task_context,
                     thread_state,
-                    thread_watch_manager,
-                    thread_list_state_permit,
-                    fallback_model_provider,
                     ResumePayloadMode::Full,
-                    outgoing,
                 )
                 .await;
                 return;
@@ -277,13 +261,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                 None,
                 conversation_id,
                 conversation,
-                thread_manager,
+                listener_task_context,
                 thread_state,
-                thread_watch_manager,
-                thread_list_state_permit,
-                fallback_model_provider,
                 ResumePayloadMode::Full,
-                outgoing,
             )
             .await;
             return;
@@ -305,13 +285,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                 None,
                 conversation_id,
                 conversation,
-                thread_manager,
+                listener_task_context,
                 thread_state,
-                thread_watch_manager,
-                thread_list_state_permit,
-                fallback_model_provider,
                 ResumePayloadMode::Full,
-                outgoing,
             )
             .await;
             return;
@@ -340,13 +316,9 @@ pub(super) async fn handle_pending_thread_resume_request(
                 None,
                 conversation_id,
                 conversation,
-                thread_manager,
+                listener_task_context,
                 thread_state,
-                thread_watch_manager,
-                thread_list_state_permit,
-                fallback_model_provider,
                 ResumePayloadMode::Full,
-                outgoing,
             )
             .await;
             return;
@@ -418,13 +390,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         Some(connection_id),
         conversation_id,
         conversation,
-        thread_manager,
+        listener_task_context,
         thread_state,
-        thread_watch_manager,
-        thread_list_state_permit,
-        fallback_model_provider,
         resume_payload_mode,
-        outgoing,
     )
     .await;
     // Match cold resume: metadata-only resume should attach the listener without

@@ -121,13 +121,9 @@ pub(super) async fn dispatch_buffered_thread_events(
     resumed_connection_id: Option<ConnectionId>,
     conversation_id: ThreadId,
     conversation: &Arc<CodexThread>,
-    thread_manager: &Arc<ThreadManager>,
+    listener_task_context: &ListenerTaskContext,
     thread_state: &Arc<Mutex<ThreadState>>,
-    thread_watch_manager: &ThreadWatchManager,
-    thread_list_state_permit: &Arc<Semaphore>,
-    fallback_model_provider: &str,
     resume_payload_mode: ResumePayloadMode,
-    outgoing: &Arc<OutgoingMessageSender>,
 ) {
     for buffered in buffered_events {
         // Preserve normal listener semantics: every event mutates the live tracker immediately
@@ -149,7 +145,7 @@ pub(super) async fn dispatch_buffered_thread_events(
             );
             if !typed_hook_recipients.is_empty() {
                 let typed_outgoing = ThreadScopedOutgoingMessageSender::new(
-                    Arc::clone(outgoing),
+                    Arc::clone(&listener_task_context.outgoing),
                     typed_hook_recipients,
                     conversation_id,
                 );
@@ -163,7 +159,7 @@ pub(super) async fn dispatch_buffered_thread_events(
             }
             if !raw_recipients.is_empty() {
                 let raw_outgoing = ThreadScopedOutgoingMessageSender::new(
-                    Arc::clone(outgoing),
+                    Arc::clone(&listener_task_context.outgoing),
                     raw_recipients,
                     conversation_id,
                 );
@@ -193,12 +189,8 @@ pub(super) async fn dispatch_buffered_thread_events(
             buffered.event,
             conversation_id,
             conversation,
-            thread_manager,
+            listener_task_context,
             thread_state,
-            thread_watch_manager,
-            thread_list_state_permit,
-            fallback_model_provider,
-            outgoing,
             recipients,
             item_lifecycle_recipients,
             raw_events_enabled,

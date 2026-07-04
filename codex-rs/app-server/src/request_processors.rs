@@ -1,4 +1,3 @@
-use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::bespoke_event_handling::apply_bespoke_event_handling_with_item_lifecycle_outgoing;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;

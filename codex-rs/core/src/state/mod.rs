@@ -9,6 +9,7 @@ pub(crate) use auto_compact_window::AutoCompactWindowIds;
 pub(crate) use auto_compact_window::AutoCompactWindowSnapshot;
 pub(crate) use service::SessionServices;
 pub(crate) use session::PersistedHistoryCursor;
+pub(crate) use session::PersistedHistoryCursorState;
 pub(crate) use session::PersistedHistoryCursorUncertainty;
 pub(crate) use session::SessionState;
 pub(crate) use turn::ActiveTurn;
