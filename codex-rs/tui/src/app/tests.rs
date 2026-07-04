@@ -6845,6 +6845,44 @@ async fn chat_widget_op_keeps_its_origin_thread_after_focus_moves() {
     assert!(matches!(op, Op::Compact { .. }));
 }
 
+#[tokio::test]
+async fn owned_screen_up_key_reaches_composer_history() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
+        crate::AltScreenBehavior::Owned,
+        &app.chat_widget,
+        app.keymap.pager.clone(),
+    );
+    let thread_id = ThreadId::new();
+    let mut session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    session.message_history = Some(crate::session_state::MessageHistoryMetadata {
+        log_id: 7,
+        entry_count: 1,
+    });
+    app.chat_widget.handle_thread_session_quiet(session);
+    while app_event_rx.try_recv().is_ok() {}
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_key_event(
+        &mut tui,
+        &mut app_server,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .await;
+
+    assert_matches!(
+        conversation_event_payload(app_event_rx.try_recv().expect("history lookup event")),
+        AppEvent::LookupMessageHistoryEntry {
+            thread_id: event_thread_id,
+            offset: 0,
+            log_id: 7,
+        } if event_thread_id == thread_id
+    );
+    app_server.shutdown().await?;
+    Ok(())
+}
+
 async fn start_config_write_test_app_server(app: &App) -> Result<AppServerSession> {
     Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await
 }

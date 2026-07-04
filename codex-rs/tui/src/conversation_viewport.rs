@@ -67,6 +67,10 @@ impl ConversationViewport {
         self.content.handle_navigation_key(area, key_event)
     }
 
+    pub(crate) fn set_keymap(&mut self, keymap: PagerKeymap) {
+        self.content.set_keymap(keymap);
+    }
+
     pub(crate) fn handle_mouse_scroll(&mut self, direction: MouseScrollDirection) {
         self.content.handle_mouse_scroll(direction);
     }

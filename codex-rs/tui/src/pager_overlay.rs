@@ -492,6 +492,10 @@ impl PagerContent {
         self.view.apply_key_event(viewport_area, key_event)
     }
 
+    pub(crate) fn set_keymap(&mut self, keymap: PagerKeymap) {
+        self.view.keymap = keymap;
+    }
+
     pub(crate) fn handle_mouse_scroll(&mut self, direction: MouseScrollDirection) {
         self.view.apply_mouse_scroll(direction);
     }

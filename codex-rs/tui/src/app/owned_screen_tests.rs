@@ -592,7 +592,7 @@ async fn replay_retains_cells_while_draw_scheduling_is_deferred() {
 }
 
 #[tokio::test]
-async fn navigation_does_not_steal_printable_or_draft_input() {
+async fn navigation_preserves_composer_keys_and_draft_input() {
     let mut app = super::super::test_support::make_test_app().await;
     app.chat_widget.owned_screen = App::owned_screen_for_behavior(
         AltScreenBehavior::Owned,
@@ -626,6 +626,26 @@ async fn navigation_does_not_steal_printable_or_draft_input() {
         &mut tui,
         KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
     ));
+}
+
+#[tokio::test]
+async fn updated_pager_keymap_reaches_both_owned_panes() {
+    let mut app = app_with_owned_side().await;
+    app.keymap.pager.page_up = vec![crate::key_hint::ctrl(KeyCode::Char('g'))];
+    app.sync_owned_screen_keymap();
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        assert!(app.chat_widget.focus(slot));
+        assert!(app.handle_owned_screen_navigation_key(
+            &mut tui,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        ));
+        assert!(!app.handle_owned_screen_navigation_key(
+            &mut tui,
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+        ));
+    }
 }
 
 #[tokio::test]

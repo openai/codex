@@ -20,6 +20,7 @@ use ratatui::widgets::Widget;
 
 use super::*;
 use crate::AltScreenBehavior;
+use crate::key_hint::is_plain_text_key_event;
 use crate::tui::MouseScrollEvent;
 
 const MIN_SPLIT_PANE_WIDTH: u16 = 41;
@@ -146,16 +147,23 @@ impl OwnedScreen {
     }
 
     fn handle_navigation_key(&mut self, key_event: KeyEvent) -> bool {
-        // Alternate-scroll wheel events are indistinguishable from physical arrow keys. Keep
-        // arrows, Home/End, and printable pager bindings available to the composer until the TUI
-        // has direct mouse events or an explicit viewport-focus mode.
+        // Composer history and cursor movement own arrows and Home/End. The transcript handles
+        // paging keys and non-conflicting custom pager bindings while the composer is empty.
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            || !matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown)
+            || is_plain_text_key_event(key_event)
+            || matches!(
+                key_event.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
+            )
         {
             return false;
         }
         self.viewport
             .handle_navigation_key(self.last_conversation_area, key_event)
+    }
+
+    fn set_keymap(&mut self, keymap: crate::keymap::PagerKeymap) {
+        self.viewport.set_keymap(keymap);
     }
 
     fn handle_mouse_scroll(&mut self, event: MouseScrollEvent) -> bool {
@@ -396,6 +404,15 @@ impl App {
             let render_mode = pane.chat_widget.history_render_mode();
             if let Some(screen) = &mut pane.owned_screen {
                 screen.viewport.set_render_mode(render_mode);
+            }
+        });
+    }
+
+    pub(super) fn sync_owned_screen_keymap(&mut self) {
+        let pager_keymap = self.keymap.pager.clone();
+        self.chat_widget.for_each_installed_mut(|pane| {
+            if let Some(screen) = &mut pane.owned_screen {
+                screen.set_keymap(pager_keymap.clone());
             }
         });
     }

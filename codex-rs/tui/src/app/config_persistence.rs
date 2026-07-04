@@ -697,10 +697,7 @@ impl App {
             .collect();
 
         for thread_id in thread_ids {
-            if let Err(err) = app_server
-                .thread_memory_mode_set(thread_id, mode.clone())
-                .await
-            {
+            if let Err(err) = app_server.thread_memory_mode_set(thread_id, mode).await {
                 tracing::error!(error = %err, %thread_id, "failed to update thread memory mode");
                 self.chat_widget.add_error_message(format!(
                     "Saved memory settings, but failed to update thread {thread_id}: {err}"
