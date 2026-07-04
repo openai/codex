@@ -1357,6 +1357,155 @@ fn command_for_cwd_executes_from_a_canonical_windows_path() {
 }
 
 #[test]
+fn windows_verbatim_git_path_conversion_is_narrow_and_non_lossy() {
+    fn units(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
+    }
+
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\C:\Users\alice\repo")),
+        WindowsGitPathUnits::Converted(units(r"C:\Users\alice\repo"))
+    );
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\UNC\server\share\repo")),
+        WindowsGitPathUnits::Converted(units(r"\\server\share\repo"))
+    );
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\unc\server\share")),
+        WindowsGitPathUnits::Converted(units(r"\\server\share"))
+    );
+
+    for unchanged in [r"C:\Users\alice\repo", r"\\server\share\repo"] {
+        assert_eq!(
+            classify_windows_git_path_units(&units(unchanged)),
+            WindowsGitPathUnits::Unchanged,
+            "unexpected conversion for {unchanged:?}"
+        );
+    }
+
+    for rejected in [
+        r"\\.\C:\device-path",
+        r"\??\C:\nt-path",
+        r"//?/C:/forward-verbatim",
+        r"//./C:/forward-device",
+        r"\\?\C:relative",
+        r"\\?\C:/forward-tail",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1",
+        r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\repo",
+        r"\\?\UNC\\share",
+        r"\\?\UNC\server\",
+    ] {
+        assert_eq!(
+            classify_windows_git_path_units(&units(rejected)),
+            WindowsGitPathUnits::Rejected,
+            "unexpected acceptance for {rejected:?}"
+        );
+    }
+
+    let mut unpaired_surrogate = units(r"\\?\C:\repo\");
+    unpaired_surrogate.push(0xD800);
+    let mut expected = units(r"C:\repo\");
+    expected.push(0xD800);
+    assert_eq!(
+        classify_windows_git_path_units(&unpaired_surrogate),
+        WindowsGitPathUnits::Converted(expected)
+    );
+
+    assert_eq!(
+        classify_windows_git_path_units(&units(r"\\?\C:\repo\😀")),
+        WindowsGitPathUnits::Converted(units(r"C:\repo\😀"))
+    );
+    let mut unpaired_low_surrogate = units(r"\\?\C:\repo\");
+    unpaired_low_surrogate.push(0xDC00);
+    let mut expected = units(r"C:\repo\");
+    expected.push(0xDC00);
+    assert_eq!(
+        classify_windows_git_path_units(&unpaired_low_surrogate),
+        WindowsGitPathUnits::Converted(expected)
+    );
+
+    let mut nul = units(r"\\?\C:\repo\");
+    nul.push(0);
+    assert_eq!(
+        classify_windows_git_path_units(&nul),
+        WindowsGitPathUnits::Rejected
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn git_child_directory_simplifies_canonical_path_without_changing_identity() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let directory = tempfile::tempdir().expect("fixture");
+    let canonical = std::fs::canonicalize(directory.path()).expect("canonical fixture");
+    let child = git_child_directory(&canonical, "test directory").expect("child spelling");
+    assert_eq!(
+        same_file::Handle::from_path(&canonical).expect("canonical identity"),
+        same_file::Handle::from_path(child.as_path()).expect("child identity")
+    );
+    child.revalidate().expect("revalidate child spelling");
+    let child_units = child
+        .as_path()
+        .as_os_str()
+        .encode_wide()
+        .collect::<Vec<_>>();
+    assert!(!child_units.starts_with(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16,]));
+}
+
+#[cfg(windows)]
+#[test]
+fn isolated_child_final_validation_rejects_retargeted_spelling_before_spawn() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let repo = fixture.path().join("repo");
+    let original = fixture.path().join("original");
+    let attacker = fixture.path().join("attacker");
+    let child_spelling = fixture.path().join("child-spelling");
+    for directory in [&repo, &original, &attacker] {
+        std::fs::create_dir_all(directory).expect("create directory");
+    }
+    run_git(&repo, &["init", "-q"]);
+    create_junction(&child_spelling, &original);
+
+    let canonical = std::fs::canonicalize(&original).expect("canonical original");
+    let child = GitChildDirectory::new(
+        canonical,
+        child_spelling.clone(),
+        "test Git child directory",
+    )
+    .expect("initial child identity");
+    let runner = GitRunner::for_cwd(&repo).expect("runner");
+    let isolated = runner
+        .create_isolated_common_dir()
+        .expect("isolated common dir");
+    let marker = fixture.path().join("child-ran.gitconfig");
+    let mut command = runner.command_for_cwd(&repo).expect("marker command");
+    command
+        .args(["config", "--file"])
+        .arg(&marker)
+        .args(["codex.child-ran", "true"]);
+
+    std::fs::remove_dir(&child_spelling).expect("remove original junction");
+    create_junction(&child_spelling, &attacker);
+
+    let error = runner
+        .output_after_isolated_child_validation(
+            &mut command.inner,
+            &isolated,
+            [&child, &child, &child, &child],
+        )
+        .expect_err("retargeted child spelling must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("no longer identifies the original"),
+        "{error}"
+    );
+    assert!(!marker.exists(), "child command ran despite stale identity");
+}
+
+#[test]
 fn gitdir_terminal_worktree_root_is_never_promoted_to_metadata() {
     let fixture = tempfile::tempdir().expect("fixture");
     let root = fixture.path().join("repo");

@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
+#[cfg(windows)]
+use same_file::Handle;
+
 use crate::errors::GitReadError;
 use crate::git_config_environment::GitConfigEnvironmentSnapshot;
 #[cfg(test)]
@@ -247,43 +250,83 @@ impl GitRunner {
         isolate_git_command_environment(&mut command.inner);
         scrub_repository_and_config_environment(&mut command.inner);
 
-        let git_dir = self.authority.active_git_dir().ok_or_else(|| {
+        let canonical_git_dir = self.authority.active_git_dir().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "active Git directory is unavailable for isolated three-way apply",
             )
         })?;
-        let common_dir = self.authority.active_common_dir().ok_or_else(|| {
+        let canonical_common_dir = self.authority.active_common_dir().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "active Git common directory is unavailable for isolated three-way apply",
             )
         })?;
-        let worktree = self.authority.active_worktree_root();
+        let canonical_worktree = self.authority.active_worktree_root();
+
+        // Repository authority retains canonical paths for identity and route
+        // validation. Git for Windows does not recognize the verbatim
+        // `\\?\` spellings returned by `std::fs::canonicalize` in these
+        // environment variables, so simplify only the child-facing spelling
+        // after proving that it names the same existing directory.
+        let git_dir = git_child_directory(canonical_git_dir, "active Git directory")?;
+        let common_dir = git_child_directory(canonical_common_dir, "active Git common directory")?;
+        let worktree = git_child_directory(canonical_worktree, "active Git worktree")?;
+        #[cfg(windows)]
+        let isolated_root_base = std::fs::canonicalize(isolated.root.path())?;
+        #[cfg(not(windows))]
+        let isolated_root_base = isolated.root.path().to_path_buf();
+        let isolated_root =
+            git_child_directory(&isolated_root_base, "owned isolated Git common directory")?;
+        let index_file = git_dir.join("index");
+        let object_directory = common_dir.join("objects");
+        let system_config = isolated_root.join("system.gitconfig");
+        let global_config = isolated_root.join("global.gitconfig");
+        let home = isolated_root.join("home");
+        let xdg_config_home = isolated_root.join("xdg");
         command
             .inner
-            .env("GIT_DIR", git_dir)
-            .env("GIT_COMMON_DIR", isolated.root.path())
-            .env("GIT_WORK_TREE", worktree)
-            .env("GIT_INDEX_FILE", git_dir.join("index"))
-            .env("GIT_OBJECT_DIRECTORY", common_dir.join("objects"))
+            .env("GIT_DIR", git_dir.as_path())
+            .env("GIT_COMMON_DIR", isolated_root.as_path())
+            .env("GIT_WORK_TREE", worktree.as_path())
+            .env("GIT_INDEX_FILE", index_file)
+            .env("GIT_OBJECT_DIRECTORY", object_directory)
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_SYSTEM", isolated.system_config_path())
-            .env("GIT_CONFIG_GLOBAL", isolated.global_config_path())
+            .env("GIT_CONFIG_SYSTEM", system_config)
+            .env("GIT_CONFIG_GLOBAL", global_config)
             .env("GIT_CONFIG_COUNT", "0")
             .env("GIT_ATTR_NOSYSTEM", "1")
             .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .env("HOME", isolated.home_path())
-            .env("XDG_CONFIG_HOME", isolated.xdg_config_home());
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &xdg_config_home);
         #[cfg(windows)]
         command
             .inner
-            .env("APPDATA", isolated.home_path())
-            .env("PROGRAMDATA", isolated.home_path())
-            .env("USERPROFILE", isolated.home_path());
+            .env("APPDATA", &home)
+            .env("PROGRAMDATA", &home)
+            .env("USERPROFILE", &home);
         command.inner.envs(crate::local_only_git_env());
         harden_git_launch_environment(&mut command.inner, &self.safe_path);
-        command.inner.output()
+        self.output_after_isolated_child_validation(
+            &mut command.inner,
+            isolated,
+            [&git_dir, &common_dir, &worktree, &isolated_root],
+        )
+    }
+
+    fn output_after_isolated_child_validation(
+        &self,
+        command: &mut Command,
+        isolated: &IsolatedGitCommonDir,
+        child_directories: [&GitChildDirectory; 4],
+    ) -> io::Result<std::process::Output> {
+        self.revalidate_active_repository_metadata()?;
+        isolated.validate()?;
+        let _child_directory_validations = child_directories
+            .into_iter()
+            .map(GitChildDirectory::revalidate)
+            .collect::<io::Result<Vec<_>>>()?;
+        command.output()
     }
 
     fn revalidate_active_repository_metadata(&self) -> io::Result<()> {
@@ -310,6 +353,212 @@ impl GitRunner {
             config_environment,
         })
     }
+}
+
+struct GitChildDirectory {
+    child_path: PathBuf,
+    #[cfg(windows)]
+    canonical_path: PathBuf,
+    #[cfg(windows)]
+    canonical_identity: Handle,
+    #[cfg(windows)]
+    child_identity: Handle,
+    #[cfg(windows)]
+    description: &'static str,
+}
+
+struct GitChildDirectoryValidation {
+    #[cfg(windows)]
+    _canonical_identity: Handle,
+    #[cfg(windows)]
+    _child_identity: Handle,
+}
+
+impl GitChildDirectory {
+    fn as_path(&self) -> &Path {
+        &self.child_path
+    }
+
+    fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.child_path.join(path)
+    }
+
+    #[cfg(windows)]
+    fn new(
+        canonical_path: PathBuf,
+        child_path: PathBuf,
+        description: &'static str,
+    ) -> io::Result<Self> {
+        let canonical_metadata = std::fs::metadata(&canonical_path)?;
+        let child_metadata = std::fs::metadata(&child_path)?;
+        if !canonical_metadata.is_dir() || !child_metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("{description} is not an existing directory"),
+            ));
+        }
+        let canonical_identity = Handle::from_path(&canonical_path)?;
+        let child_identity = Handle::from_path(&child_path)?;
+        if canonical_identity != child_identity {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("Git-compatible spelling changed the identity of {description}"),
+            ));
+        }
+        Ok(Self {
+            child_path,
+            canonical_path,
+            canonical_identity,
+            child_identity,
+            description,
+        })
+    }
+
+    #[cfg(windows)]
+    fn revalidate(&self) -> io::Result<GitChildDirectoryValidation> {
+        let canonical_metadata = std::fs::metadata(&self.canonical_path)?;
+        let child_metadata = std::fs::metadata(&self.child_path)?;
+        if !canonical_metadata.is_dir() || !child_metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("{} is no longer an existing directory", self.description),
+            ));
+        }
+        let canonical_identity = Handle::from_path(&self.canonical_path)?;
+        let child_identity = Handle::from_path(&self.child_path)?;
+        if canonical_identity != self.canonical_identity
+            || child_identity != self.child_identity
+            || canonical_identity != child_identity
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "Git-compatible spelling no longer identifies the original {}",
+                    self.description
+                ),
+            ));
+        }
+        Ok(GitChildDirectoryValidation {
+            _canonical_identity: canonical_identity,
+            _child_identity: child_identity,
+        })
+    }
+
+    #[cfg(not(windows))]
+    fn revalidate(&self) -> io::Result<GitChildDirectoryValidation> {
+        Ok(GitChildDirectoryValidation {})
+    }
+}
+
+#[cfg(windows)]
+fn git_child_directory(path: &Path, description: &'static str) -> io::Result<GitChildDirectory> {
+    let child_path = git_compatible_windows_path(path, description)?;
+    GitChildDirectory::new(path.to_path_buf(), child_path, description)
+}
+
+#[cfg(not(windows))]
+fn git_child_directory(path: &Path, _description: &'static str) -> io::Result<GitChildDirectory> {
+    Ok(GitChildDirectory {
+        child_path: path.to_path_buf(),
+    })
+}
+
+#[cfg(windows)]
+fn git_compatible_windows_path(path: &Path, description: &'static str) -> io::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
+
+    let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    match classify_windows_git_path_units(&units) {
+        WindowsGitPathUnits::Unchanged => Ok(path.to_path_buf()),
+        WindowsGitPathUnits::Converted(simplified) => {
+            Ok(PathBuf::from(OsString::from_wide(&simplified)))
+        }
+        WindowsGitPathUnits::Rejected => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("refusing unsupported Windows namespace for {description}"),
+        )),
+    }
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Eq, PartialEq)]
+enum WindowsGitPathUnits {
+    Unchanged,
+    Converted(Vec<u16>),
+    Rejected,
+}
+
+#[cfg(any(windows, test))]
+fn classify_windows_git_path_units(path: &[u16]) -> WindowsGitPathUnits {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const VERBATIM_PREFIX: [u16; 4] = [BACKSLASH, BACKSLASH, b'?' as u16, BACKSLASH];
+    const DEVICE_PREFIX: [u16; 4] = [BACKSLASH, BACKSLASH, b'.' as u16, BACKSLASH];
+    const NT_PREFIX: [u16; 4] = [BACKSLASH, b'?' as u16, b'?' as u16, BACKSLASH];
+    const FORWARD_VERBATIM_PREFIX: [u16; 4] = [b'/' as u16, b'/' as u16, b'?' as u16, b'/' as u16];
+    const FORWARD_DEVICE_PREFIX: [u16; 4] = [b'/' as u16, b'/' as u16, b'.' as u16, b'/' as u16];
+
+    if path.contains(&0) {
+        return WindowsGitPathUnits::Rejected;
+    }
+    if path.starts_with(&DEVICE_PREFIX)
+        || path.starts_with(&NT_PREFIX)
+        || path.starts_with(&FORWARD_VERBATIM_PREFIX)
+        || path.starts_with(&FORWARD_DEVICE_PREFIX)
+    {
+        return WindowsGitPathUnits::Rejected;
+    }
+    let Some(path) = path.strip_prefix(&VERBATIM_PREFIX) else {
+        return WindowsGitPathUnits::Unchanged;
+    };
+
+    if path.len() >= 3
+        && ascii_u16_is_alphabetic(path[0])
+        && path[1] == b':' as u16
+        && path[2] == BACKSLASH
+    {
+        return WindowsGitPathUnits::Converted(path.to_vec());
+    }
+
+    if path.len() < 4
+        || !ascii_u16_eq_ignore_case(path[0], b'U')
+        || !ascii_u16_eq_ignore_case(path[1], b'N')
+        || !ascii_u16_eq_ignore_case(path[2], b'C')
+        || path[3] != BACKSLASH
+    {
+        return WindowsGitPathUnits::Rejected;
+    }
+    let unc_path = &path[4..];
+    let Some(server_end) = unc_path.iter().position(|unit| *unit == BACKSLASH) else {
+        return WindowsGitPathUnits::Rejected;
+    };
+    if server_end == 0 {
+        return WindowsGitPathUnits::Rejected;
+    }
+    let share = &unc_path[server_end + 1..];
+    let share_end = share
+        .iter()
+        .position(|unit| *unit == BACKSLASH)
+        .unwrap_or(share.len());
+    if share_end == 0 {
+        return WindowsGitPathUnits::Rejected;
+    }
+
+    let mut simplified = Vec::with_capacity(unc_path.len() + 2);
+    simplified.extend([BACKSLASH, BACKSLASH]);
+    simplified.extend_from_slice(unc_path);
+    WindowsGitPathUnits::Converted(simplified)
+}
+
+#[cfg(any(windows, test))]
+fn ascii_u16_is_alphabetic(unit: u16) -> bool {
+    (b'A' as u16..=b'Z' as u16).contains(&unit) || (b'a' as u16..=b'z' as u16).contains(&unit)
+}
+
+#[cfg(any(windows, test))]
+fn ascii_u16_eq_ignore_case(unit: u16, ascii: u8) -> bool {
+    unit == ascii.to_ascii_lowercase() as u16 || unit == ascii.to_ascii_uppercase() as u16
 }
 
 fn scrub_repository_and_config_environment(command: &mut Command) {

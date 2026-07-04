@@ -265,6 +265,59 @@ fn isolated_three_way_config_preserves_builtin_union_default() {
 }
 
 #[test]
+fn isolated_three_way_add_add_conflict_preserves_markers_and_index_stages() {
+    let repo = init_repo();
+    let root = repo.path();
+    let target = root.join("conflict.txt");
+    std::fs::write(&target, "existing\n").expect("write existing file");
+    assert_eq!(run(root, &["git", "add", "conflict.txt"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "existing"]).0, 0);
+
+    let incoming = root.join("incoming.txt");
+    std::fs::write(&incoming, "incoming\n").expect("write incoming file");
+    let (hash_code, object_id, hash_error) =
+        run(root, &["git", "hash-object", "-w", "incoming.txt"]);
+    assert_eq!(hash_code, 0, "hash incoming blob: {hash_error}");
+    std::fs::remove_file(incoming).expect("remove incoming fixture");
+    let object_id = object_id.trim();
+    let null_object_id = "0".repeat(object_id.len());
+    let patch = format!(
+        "diff --git a/conflict.txt b/conflict.txt\nnew file mode 100644\nindex {null_object_id}..{object_id}\n--- /dev/null\n+++ b/conflict.txt\n@@ -0,0 +1 @@\n+incoming\n"
+    );
+
+    let result = apply_git_patch(&ApplyGitRequest {
+        cwd: root.to_path_buf(),
+        diff: patch,
+        revert: false,
+        preflight: false,
+    })
+    .expect("run isolated add/add three-way apply");
+
+    assert_ne!(result.exit_code, 0, "add/add apply unexpectedly succeeded");
+    assert!(
+        result.cmd_for_log.contains("GIT_COMMON_DIR=<isolated>")
+            && result.cmd_for_log.contains("--3way"),
+        "unexpected final command: {}",
+        result.cmd_for_log
+    );
+    let contents = std::fs::read_to_string(&target).expect("read conflicted file");
+    assert!(
+        contents.contains("<<<<<<<")
+            && contents.contains("=======")
+            && contents.contains(">>>>>>>"),
+        "three-way add/add apply did not leave conflict markers:\nresult: {result:#?}\ncontents:\n{contents}"
+    );
+    let (stage_code, stages, stage_error) =
+        run(root, &["git", "ls-files", "--stage", "--", "conflict.txt"]);
+    assert_eq!(stage_code, 0, "read conflict stages: {stage_error}");
+    let actual_stages = stages
+        .lines()
+        .filter_map(|line| line.split_ascii_whitespace().nth(2))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_stages, vec!["2", "3"], "{result:#?}");
+}
+
+#[test]
 fn isolated_three_way_config_preserves_core_whitespace_error_classification() {
     let repo = init_repo();
     let root = repo.path();
