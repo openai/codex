@@ -46,6 +46,9 @@ impl ChatWidget {
             terminal_title_invalid_items_warned,
             session_telemetry,
         } = common;
+        let terminal_title_output_enabled = app_event_tx
+            .conversation_origin()
+            .is_none_or(|origin| origin.pane == PaneSlot::Parent);
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
@@ -233,6 +236,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            terminal_title_output_enabled,
             last_terminal_title_requires_action: false,
             terminal_title_setup_original_items: None,
             terminal_title_animation_origin: Instant::now(),

@@ -224,6 +224,9 @@ impl ChatWidget {
     /// When the `activity` item is present in an animated running state, this also
     /// schedules the next frame so the title animation keeps advancing.
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
+        if !self.terminal_title_output_enabled {
+            return;
+        }
         self.last_terminal_title_requires_action =
             self.terminal_title_shows_action_required_with_selections(selections);
         if selections.terminal_title_items.is_empty() {
@@ -289,6 +292,20 @@ impl ChatWidget {
         self.warn_invalid_terminal_title_items_once(&selections.invalid_terminal_title_items);
         self.sync_status_surface_shared_state(&selections);
         self.refresh_terminal_title_from_selections(&selections);
+    }
+
+    pub(crate) fn set_terminal_title_output_enabled(&mut self, enabled: bool) {
+        if self.terminal_title_output_enabled == enabled {
+            return;
+        }
+        self.terminal_title_output_enabled = enabled;
+        if !enabled {
+            if let Err(err) = self.clear_managed_terminal_title() {
+                tracing::debug!(error = %err, "failed to clear terminal title while transferring ownership");
+            }
+            self.last_terminal_title = None;
+            self.last_terminal_title_requires_action = false;
+        }
     }
 
     fn terminal_title_requires_action(&self) -> bool {

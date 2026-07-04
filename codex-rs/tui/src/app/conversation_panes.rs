@@ -152,6 +152,13 @@ impl ConversationPanes {
             return false;
         }
         self.focused = slot;
+        self.for_each_installed_mut(|pane| {
+            pane.chat_widget
+                .set_terminal_title_output_enabled(pane.slot == slot);
+        });
+        if let Some(pane) = self.by_slot_mut(slot) {
+            pane.chat_widget.refresh_terminal_title();
+        }
         true
     }
 
@@ -159,13 +166,15 @@ impl ConversationPanes {
         &mut self,
         init: ConversationPaneInit,
     ) -> Result<Option<ConversationPane>, ConversationPaneInit> {
-        let pane = ConversationPane::new(init, PaneSlot::Side)?;
+        let mut pane = ConversationPane::new(init, PaneSlot::Side)?;
+        pane.chat_widget
+            .set_terminal_title_output_enabled(self.focused == PaneSlot::Side);
         Ok(self.side.replace(pane))
     }
 
     pub(super) fn take_side(&mut self) -> Option<ConversationPane> {
         if self.focused == PaneSlot::Side {
-            self.focused = PaneSlot::Parent;
+            self.focus(PaneSlot::Parent);
         }
         if self.dispatch == Some(PaneSlot::Side) {
             self.dispatch = None;

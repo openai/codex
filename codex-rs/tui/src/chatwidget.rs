@@ -702,6 +702,8 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     pub(crate) last_terminal_title: Option<String>,
+    // Only the focused conversation may write the process-global terminal title.
+    terminal_title_output_enabled: bool,
     // Last visible "action required" state observed by the terminal-title renderer.
     last_terminal_title_requires_action: bool,
     // Original terminal-title config captured when the setup UI opens.

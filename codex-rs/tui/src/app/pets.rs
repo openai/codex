@@ -4,7 +4,9 @@ use super::*;
 
 impl App {
     pub(super) fn disable_ambient_pet_before_shutdown(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.chat_widget.disable_ambient_pet_for_session();
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.disable_ambient_pet_for_session();
+        });
         if let Err(clear_err) = tui.clear_ambient_pet_image() {
             match clear_err {
                 crate::pets::PetImageRenderError::Terminal(err) => return Err(err.into()),
@@ -31,7 +33,9 @@ impl App {
                     error = %err,
                     "failed to render ambient pet image; disabling pet for session"
                 );
-                self.chat_widget.disable_ambient_pet_for_session();
+                self.chat_widget.for_each_installed_mut(|pane| {
+                    pane.chat_widget.disable_ambient_pet_for_session();
+                });
                 if let Err(clear_err) = tui.clear_ambient_pet_image() {
                     match clear_err {
                         crate::pets::PetImageRenderError::Terminal(err) => return Err(err.into()),
@@ -154,8 +158,18 @@ impl App {
                 {
                     Ok(()) => {
                         self.config.tui_pet = Some(pet_id.clone());
-                        self.chat_widget
-                            .set_tui_pet_loaded(Some(pet_id), ambient_pet);
+                        let selected_origin = self.chat_widget.origin();
+                        let mut selected_ambient_pet = Some(ambient_pet);
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            if pane.origin() == selected_origin {
+                                pane.chat_widget.set_tui_pet_loaded(
+                                    Some(pet_id.clone()),
+                                    selected_ambient_pet.take().flatten(),
+                                );
+                            } else {
+                                pane.chat_widget.set_tui_pet(Some(pet_id.clone()));
+                            }
+                        });
                     }
                     Err(err) => {
                         self.chat_widget
@@ -195,3 +209,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pets_tests.rs"]
+mod tests;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_event::HistoryLookupResponse;
+use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
 use pretty_assertions::assert_eq;
 
@@ -93,6 +94,104 @@ async fn taking_focused_side_restores_parent_selection() {
     assert_eq!(
         panes.conversation_origin().map(|origin| origin.pane),
         Some(PaneSlot::Parent)
+    );
+}
+
+#[tokio::test]
+async fn only_focused_pane_owns_terminal_title_output() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let (side, _side_rx) = pane_init(PaneSlot::Side).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    assert!(panes.install_side(side).is_ok());
+
+    panes
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .setup_terminal_title(vec![TerminalTitleItem::Project]);
+    panes
+        .by_slot_mut(PaneSlot::Side)
+        .expect("side pane")
+        .setup_terminal_title(vec![TerminalTitleItem::Project]);
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .last_terminal_title
+            .as_deref(),
+        Some("project")
+    );
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Side)
+            .expect("side pane")
+            .last_terminal_title,
+        None
+    );
+
+    assert!(panes.focus(PaneSlot::Side));
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .last_terminal_title,
+        None
+    );
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Side)
+            .expect("side pane")
+            .last_terminal_title
+            .as_deref(),
+        Some("project")
+    );
+
+    let removed = panes.take_side().expect("side pane");
+    assert_eq!(removed.last_terminal_title, None);
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .last_terminal_title
+            .as_deref(),
+        Some("project")
+    );
+}
+
+#[tokio::test]
+async fn focus_clears_previous_terminal_title_when_new_owner_has_none() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let (side, _side_rx) = pane_init(PaneSlot::Side).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    assert!(panes.install_side(side).is_ok());
+    panes
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .setup_terminal_title(Vec::new());
+    assert!(panes.focus(PaneSlot::Side));
+    panes
+        .by_slot_mut(PaneSlot::Side)
+        .expect("side pane")
+        .last_terminal_title = Some("side-only title".to_string());
+
+    assert!(panes.focus(PaneSlot::Parent));
+
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Side)
+            .expect("side pane")
+            .last_terminal_title,
+        None
+    );
+    assert_eq!(
+        panes
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .last_terminal_title,
+        None
     );
 }
 

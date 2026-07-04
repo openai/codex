@@ -2252,7 +2252,9 @@ impl App {
                 match apply_result {
                     Ok(()) => {
                         self.config.tui_terminal_title = Some(ids.clone());
-                        self.chat_widget.setup_terminal_title(items);
+                        self.chat_widget.for_each_installed_mut(|pane| {
+                            pane.chat_widget.setup_terminal_title(items.clone());
+                        });
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist terminal title items; keeping previous selection");
