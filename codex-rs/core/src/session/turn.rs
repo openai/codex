@@ -2002,7 +2002,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             responses_metadata,
-            true,
+            /*defer_server_overloaded_retries*/ true,
             &inference_trace,
         )
         .instrument(trace_span!("stream_request"))

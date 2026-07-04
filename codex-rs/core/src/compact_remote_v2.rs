@@ -365,7 +365,7 @@ async fn run_remote_compaction_request_v2(
                     turn_context.reasoning_summary,
                     turn_context.config.service_tier.clone(),
                     responses_metadata,
-                    true,
+                    /*defer_server_overloaded_retries*/ true,
                     &InferenceTraceContext::disabled(),
                 )
                 .await?;

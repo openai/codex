@@ -1794,7 +1794,7 @@ impl ModelClientSession {
             summary,
             service_tier,
             responses_metadata,
-            false,
+            /*defer_server_overloaded_retries*/ false,
             inference_trace,
         )
         .await
