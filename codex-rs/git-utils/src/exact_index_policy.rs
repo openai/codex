@@ -14,6 +14,12 @@ pub(crate) enum ExactIndexPolicy {
         paths: Vec<String>,
         content_filter_paths: Vec<String>,
     },
+    Flagged {
+        paths: Vec<String>,
+        content_filter_paths: Vec<String>,
+        skip_worktree: BTreeSet<String>,
+        assume_unchanged: BTreeSet<String>,
+    },
     Refuse {
         stderr: String,
     },
@@ -154,18 +160,11 @@ pub(crate) fn resolve_exact_index_policy(
         });
     }
 
-    let mut reasons = Vec::new();
-    if !skipped.is_empty() {
-        reasons.push(format!("skip-worktree path(s): {}", quote_paths(&skipped)));
-    }
-    if !assumed_unchanged.is_empty() {
-        reasons.push(format!(
-            "assume-unchanged path(s): {}",
-            quote_paths(&assumed_unchanged)
-        ));
-    }
-    Ok(ExactIndexPolicy::Refuse {
-        stderr: format!("refusing to stage {}", reasons.join("; ")),
+    Ok(ExactIndexPolicy::Flagged {
+        paths,
+        content_filter_paths,
+        skip_worktree: skipped,
+        assume_unchanged: assumed_unchanged,
     })
 }
 

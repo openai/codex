@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::exact_staging::update_index_exact_paths_from_apply;
+use crate::exact_staging::update_index_exact_paths_for_reverse_apply;
 use crate::guarded_config::GuardedGitConfig;
 use crate::patch_paths::confine_patch_paths_guarded;
 use crate::patch_paths::leaf_is_traversable_directory;
@@ -138,8 +138,11 @@ pub(crate) fn stage_effective_paths_for_reverse(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let result =
-        update_index_exact_paths_from_apply(config, &staging_candidates, &content_filter_paths)?;
+    let result = update_index_exact_paths_for_reverse_apply(
+        config,
+        &staging_candidates,
+        &content_filter_paths,
+    )?;
     if result.exit_code == 0 {
         Ok(())
     } else {

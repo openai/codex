@@ -18,9 +18,15 @@ pub(crate) struct StagePathsResult {
 }
 
 #[derive(Clone, Copy)]
-enum StagingProvenance {
-    FromApply,
+enum StagingMode {
+    ComposedApply,
+    ReverseApply,
     Standalone,
+}
+
+enum SparseCheckoutPolicy {
+    Verified { excluded: BTreeSet<String> },
+    Refuse { result: StagePathsResult },
 }
 
 /// Stage only the literal paths supplied by a caller that has already applied
@@ -45,11 +51,11 @@ pub(crate) fn update_index_exact_paths_from_apply(
         config,
         paths,
         content_filter_paths,
-        StagingProvenance::FromApply,
+        StagingMode::ComposedApply,
     )
 }
 
-pub(crate) fn update_index_exact_paths_standalone(
+pub(crate) fn update_index_exact_paths_for_reverse_apply(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],
     content_filter_paths: &[String],
@@ -58,15 +64,23 @@ pub(crate) fn update_index_exact_paths_standalone(
         config,
         paths,
         content_filter_paths,
-        StagingProvenance::Standalone,
+        StagingMode::ReverseApply,
     )
+}
+
+pub(crate) fn update_index_exact_paths_standalone(
+    config: &mut GuardedGitConfig<'_>,
+    paths: &[String],
+    content_filter_paths: &[String],
+) -> io::Result<StagePathsResult> {
+    update_index_exact_paths_common(config, paths, content_filter_paths, StagingMode::Standalone)
 }
 
 fn update_index_exact_paths_common(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],
     content_filter_paths: &[String],
-    provenance: StagingProvenance,
+    mode: StagingMode,
 ) -> io::Result<StagePathsResult> {
     for path in paths {
         if path.as_bytes().contains(&0) {
@@ -87,7 +101,7 @@ fn update_index_exact_paths_common(
             "content-filter staging path is not in the exact staging set",
         ));
     }
-    if matches!(provenance, StagingProvenance::FromApply) {
+    if !matches!(mode, StagingMode::Standalone) {
         config.ensure_apply_filter_path_subset(content_filter_paths)?;
     }
     if paths.is_empty() {
@@ -97,12 +111,23 @@ fn update_index_exact_paths_common(
         });
     }
 
-    let (paths, content_filter_paths) =
+    let (paths, content_filter_paths, skip_worktree, assume_unchanged) =
         match resolve_exact_index_policy(config, paths, content_filter_paths)? {
             ExactIndexPolicy::Proceed {
                 paths,
                 content_filter_paths,
-            } => (paths, content_filter_paths),
+            } => (
+                paths,
+                content_filter_paths,
+                BTreeSet::new(),
+                BTreeSet::new(),
+            ),
+            ExactIndexPolicy::Flagged {
+                paths,
+                content_filter_paths,
+                skip_worktree,
+                assume_unchanged,
+            } => (paths, content_filter_paths, skip_worktree, assume_unchanged),
             ExactIndexPolicy::Refuse { stderr } => {
                 return Ok(StagePathsResult {
                     exit_code: 1,
@@ -110,35 +135,109 @@ fn update_index_exact_paths_common(
                 });
             }
         };
-    if matches!(provenance, StagingProvenance::FromApply) {
+    if !matches!(mode, StagingMode::Standalone) {
         config.ensure_apply_filter_path_subset(&content_filter_paths)?;
     }
 
+    if (matches!(mode, StagingMode::Standalone) && !skip_worktree.is_empty())
+        || !assume_unchanged.is_empty()
+    {
+        let mut reasons = Vec::new();
+        if !skip_worktree.is_empty() {
+            reasons.push(format!(
+                "skip-worktree path(s): {}",
+                quote_paths(&skip_worktree)
+            ));
+        }
+        if !assume_unchanged.is_empty() {
+            reasons.push(format!(
+                "assume-unchanged path(s): {}",
+                quote_paths(&assume_unchanged)
+            ));
+        }
+        return Ok(StagePathsResult {
+            exit_code: 1,
+            stderr: format!("refusing to stage {}", reasons.join("; ")),
+        });
+    }
+
     let ignored = ignored_untracked_paths(config, &paths)?;
-    if !ignored.is_empty() {
+    let sparse_excluded = match sparse_checkout_policy(config, &paths)? {
+        SparseCheckoutPolicy::Verified { excluded } => excluded,
+        SparseCheckoutPolicy::Refuse { result } => return Ok(result),
+    };
+    let non_sparse_skip_worktree = skip_worktree
+        .difference(&sparse_excluded)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !non_sparse_skip_worktree.is_empty() {
         return Ok(StagePathsResult {
             exit_code: 1,
             stderr: format!(
-                "refusing to stage ignored untracked path(s): {}",
-                quote_paths(&ignored)
+                "refusing to stage skip-worktree path(s): {}",
+                quote_paths(&non_sparse_skip_worktree)
             ),
         });
     }
-    if let Some(result) = sparse_checkout_policy(config, &paths)? {
-        return Ok(result);
+    let mut exclusions = ignored.clone();
+    exclusions.extend(sparse_excluded.iter().cloned());
+    let mut exclusion_reasons = Vec::new();
+    if !ignored.is_empty() {
+        exclusion_reasons.push(format!(
+            "refusing to stage ignored untracked path(s): {}",
+            quote_paths(&ignored)
+        ));
     }
+    if !sparse_excluded.is_empty() {
+        exclusion_reasons.push(format!(
+            "refusing to stage path(s) outside the sparse-checkout definition: {}",
+            quote_paths(&sparse_excluded)
+        ));
+    }
+    let exclusion_stderr = exclusion_reasons.join("; ");
+    if !exclusions.is_empty() && !matches!(mode, StagingMode::ComposedApply) {
+        return Ok(StagePathsResult {
+            exit_code: 1,
+            stderr: exclusion_stderr,
+        });
+    }
+    // Composed staging is intentionally best effort for ignored and sparse
+    // paths. Treat those expected omissions as successful after every fallible
+    // probe has completed, so its caller cannot report an error after the
+    // eligible subset has already changed the index. Reverse application uses
+    // the all-or-nothing mode above because every staging candidate is needed
+    // to align the index before the final patch command.
+    let paths = paths
+        .into_iter()
+        .filter(|path| !exclusions.contains(path))
+        .collect::<Vec<_>>();
+    let content_filter_paths = content_filter_paths
+        .into_iter()
+        .filter(|path| !exclusions.contains(path))
+        .collect::<Vec<_>>();
 
     config.authorize_git_add_filter_paths(&content_filter_paths)?;
+    if paths.is_empty() {
+        return Ok(StagePathsResult {
+            exit_code: 0,
+            stderr: exclusion_stderr,
+        });
+    }
     let mut command = config.update_index_literal_pathspecs_command()?;
     command
         .disable_optional_locks()
         .args(["--add", "--remove", "--"])
         .args(&paths);
     let output = command.output()?;
-    Ok(StagePathsResult {
-        exit_code: output.status.code().unwrap_or(-1),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
+    let exit_code = output.status.code().unwrap_or(-1);
+    let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !exclusions.is_empty() {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(&exclusion_stderr);
+    }
+    Ok(StagePathsResult { exit_code, stderr })
 }
 
 fn ignored_untracked_paths(
@@ -191,9 +290,11 @@ fn ignored_untracked_paths(
 fn sparse_checkout_policy(
     config: &GuardedGitConfig<'_>,
     paths: &[String],
-) -> io::Result<Option<StagePathsResult>> {
+) -> io::Result<SparseCheckoutPolicy> {
     if !config.read_bool("core.sparseCheckout")?.unwrap_or(false) {
-        return Ok(None);
+        return Ok(SparseCheckoutPolicy::Verified {
+            excluded: BTreeSet::new(),
+        });
     }
 
     // Do not let an older Git fall back to a PATH-resolved
@@ -205,11 +306,14 @@ fn sparse_checkout_policy(
         && std::str::from_utf8(&builtins.stdout)
             .is_ok_and(|output| output.lines().any(|command| command == "sparse-checkout"));
     if !sparse_checkout_is_builtin {
-        return Ok(Some(StagePathsResult {
-            exit_code: builtins.status.code().unwrap_or(-1).max(1),
-            stderr: "unable to verify sparse-checkout staging policy with a built-in Git command"
-                .to_string(),
-        }));
+        return Ok(SparseCheckoutPolicy::Refuse {
+            result: StagePathsResult {
+                exit_code: builtins.status.code().unwrap_or(-1).max(1),
+                stderr:
+                    "unable to verify sparse-checkout staging policy with a built-in Git command"
+                        .to_string(),
+            },
+        });
     }
 
     let input = nul_path_input(paths)?;
@@ -220,13 +324,15 @@ fn sparse_checkout_policy(
         .stdin(Stdio::from(input));
     let output = command.output()?;
     if !output.status.success() {
-        return Ok(Some(StagePathsResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stderr: format!(
-                "unable to verify sparse-checkout staging policy: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        }));
+        return Ok(SparseCheckoutPolicy::Refuse {
+            result: StagePathsResult {
+                exit_code: output.status.code().unwrap_or(-1),
+                stderr: format!(
+                    "unable to verify sparse-checkout staging policy: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            },
+        });
     }
     let included = parse_reported_paths(&output.stdout, paths, "sparse-checkout")?;
     let excluded = paths
@@ -234,17 +340,7 @@ fn sparse_checkout_policy(
         .filter(|path| !included.contains(path.as_str()))
         .cloned()
         .collect::<BTreeSet<_>>();
-    if excluded.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(StagePathsResult {
-            exit_code: 1,
-            stderr: format!(
-                "refusing to stage path(s) outside the sparse-checkout definition: {}",
-                quote_paths(&excluded)
-            ),
-        }))
-    }
+    Ok(SparseCheckoutPolicy::Verified { excluded })
 }
 
 fn nul_path_input(paths: &[String]) -> io::Result<std::fs::File> {

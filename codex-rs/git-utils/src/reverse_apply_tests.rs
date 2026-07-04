@@ -534,6 +534,47 @@ fn reverse_refuses_ignored_untracked_rename_endpoint_without_mutation() {
 }
 
 #[test]
+fn reverse_refuses_ignored_endpoint_before_staging_eligible_peer() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("old.txt"), b"old\n").unwrap();
+    std::fs::write(root.join("other.txt"), b"old\n").unwrap();
+    run_success(root, &["add", "old.txt", "other.txt"]);
+    run_success(root, &["commit", "-qm", "base"]);
+    run_success(root, &["mv", "old.txt", "new.txt"]);
+    std::fs::write(root.join("other.txt"), b"new\n").unwrap();
+    run_success(root, &["add", "other.txt"]);
+    let patch = String::from_utf8(run_success(
+        root,
+        &["diff", "--cached", "--full-index", "--binary", "-M"],
+    ))
+    .unwrap();
+    run_success(root, &["reset", "--hard", "-q", "HEAD"]);
+
+    std::fs::write(root.join(".gitignore"), b"new.txt\n").unwrap();
+    std::fs::rename(root.join("old.txt"), root.join("new.txt")).unwrap();
+    std::fs::write(root.join("other.txt"), b"new\n").unwrap();
+
+    let before_index = index_snapshot(root);
+    let before_leaves = [
+        leaf_snapshot(root, "old.txt"),
+        leaf_snapshot(root, "new.txt"),
+        leaf_snapshot(root, "other.txt"),
+    ];
+    let error = apply_git_patch(&request(root, &patch)).expect_err("ignored endpoint");
+    assert!(error.to_string().contains("ignored"), "{error}");
+    assert_eq!(index_snapshot(root), before_index);
+    assert_eq!(
+        [
+            leaf_snapshot(root, "old.txt"),
+            leaf_snapshot(root, "new.txt"),
+            leaf_snapshot(root, "other.txt")
+        ],
+        before_leaves
+    );
+}
+
+#[test]
 fn reverse_handles_unborn_empty_index_and_refuses_unborn_index_state() {
     const DELETE_PATCH: &str = "diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
 
