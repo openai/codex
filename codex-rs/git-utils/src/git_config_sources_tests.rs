@@ -40,6 +40,7 @@ fn init_repo_at(root: &Path) {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn create_junction(path: &Path, target: &Path) {
     // Bazel's GNU Windows runner can surface temporary paths with `/`
     // separators. `mklink` treats those separators as option prefixes, so
