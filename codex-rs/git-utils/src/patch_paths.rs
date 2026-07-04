@@ -350,6 +350,7 @@ pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     stage_effective_paths_standalone(&mut config, &paths)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn stage_effective_paths_from_apply(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],

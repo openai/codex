@@ -522,9 +522,9 @@ fn classify_windows_git_path_units(path: &[u16]) -> WindowsGitPathUnits {
     }
 
     if path.len() < 4
-        || !ascii_u16_eq_ignore_case(path[0], b'U')
-        || !ascii_u16_eq_ignore_case(path[1], b'N')
-        || !ascii_u16_eq_ignore_case(path[2], b'C')
+        || !ascii_u16_eq_ignore_case(path[0], /*ascii*/ b'U')
+        || !ascii_u16_eq_ignore_case(path[1], /*ascii*/ b'N')
+        || !ascii_u16_eq_ignore_case(path[2], /*ascii*/ b'C')
         || path[3] != BACKSLASH
     {
         return WindowsGitPathUnits::Rejected;

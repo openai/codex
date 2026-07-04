@@ -18,6 +18,7 @@ pub(crate) struct StagePathsResult {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum StagingMode {
     ComposedApply,
     ReverseApply,
@@ -42,6 +43,7 @@ enum SparseCheckoutPolicy {
 /// bytes read for an already-confined index pathname. It cannot make this
 /// exact command recurse into, or create index entries for, descendant paths;
 /// the filter neutralizer also remains in force for the entire command.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_index_exact_paths_from_apply(
     config: &mut GuardedGitConfig<'_>,
     paths: &[String],
