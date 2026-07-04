@@ -43,7 +43,6 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::instrument;
-use tracing::trace;
 use tungstenite::extensions::ExtensionsConfig;
 use tungstenite::extensions::compression::deflate::DeflateConfig;
 use tungstenite::protocol::WebSocketConfig;
@@ -782,8 +781,6 @@ async fn send_websocket_request(
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
-    trace!("websocket request: {request_text}");
-
     let request_start = Instant::now();
     let result = tokio::time::timeout(
         idle_timeout,

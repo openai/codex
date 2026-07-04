@@ -71,6 +71,7 @@ fn test_model_info(
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -218,8 +219,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         "expected explicit authorization rule in spawn_agent description: {description:?}"
     );
     assert!(
-        !description.contains("### When to delegate vs. do the subtask yourself"),
-        "spawn_agent description should not include extra when-to-use delegation guidance: {description:?}"
+        description.contains(
+            "Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn."
+        ) && description.contains("### When to delegate vs. do the subtask yourself"),
+        "expected delegation decision guidance in spawn_agent description: {description:?}"
     );
     assert!(
         description.contains(

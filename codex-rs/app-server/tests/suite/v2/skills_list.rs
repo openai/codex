@@ -79,23 +79,6 @@ plugins = true
     )
 }
 
-fn write_remote_plugins_enabled_config_with_base_url(
-    codex_home: &std::path::Path,
-    base_url: &str,
-) -> std::io::Result<()> {
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"chatgpt_base_url = "{base_url}"
-
-[features]
-plugins = true
-remote_plugin = true
-"#,
-        ),
-    )
-}
-
 fn write_plugin_with_skill(
     repo_root: &std::path::Path,
     plugin_name: &str,
@@ -175,7 +158,7 @@ fn write_cached_local_curated_plugin_with_skill(codex_home: &std::path::Path) ->
 }
 
 #[tokio::test]
-async fn runtime_remote_plugin_enablement_excludes_local_curated_plugin_skills() -> Result<()> {
+async fn runtime_remote_plugin_toggle_updates_local_curated_plugin_skills() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let server = MockServer::start().await;
@@ -205,6 +188,18 @@ enabled = true
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let disablement_request_id = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("remote_plugin".to_string(), false)]),
+        })
+        .await?;
+    let disablement_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(disablement_request_id)),
+    )
+    .await??;
+    let _: ExperimentalFeatureEnablementSetResponse = to_response(disablement_response)?;
 
     let initial_skills_list_request_id = mcp
         .send_skills_list_request(SkillsListParams {
@@ -266,7 +261,7 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
     let server = MockServer::start().await;
     let expected_skill_path =
         std::fs::canonicalize(write_cached_remote_plugin_with_skill(codex_home.path())?)?;
-    write_remote_plugins_enabled_config_with_base_url(
+    write_plugins_enabled_config_with_base_url(
         codex_home.path(),
         &format!("{}/backend-api/", server.uri()),
     )?;
