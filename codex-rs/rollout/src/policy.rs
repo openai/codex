@@ -6,12 +6,14 @@ use codex_protocol::models::ResponseItem;
 pub fn is_persisted_rollout_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
-        RolloutItem::InterAgentCommunication(_) => true,
+        RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
-        RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
-            true
-        }
+        RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::WorldState(_)
+        | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -55,7 +57,8 @@ pub fn should_persist_response_item(item: &ResponseItem) -> bool {
 pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => role != "developer",
-        ResponseItem::LocalShellCall { .. }
+        ResponseItem::AgentMessage { .. }
+        | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
@@ -64,7 +67,6 @@ pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
         ResponseItem::AdditionalTools { .. }
-        | ResponseItem::AgentMessage { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }

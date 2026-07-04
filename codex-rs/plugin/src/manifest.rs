@@ -90,7 +90,8 @@ impl<Resource> PluginManifest<Resource> {
             .unwrap_or(&self.name)
     }
 
-    pub(crate) fn try_map_resources<Mapped, Error>(
+    /// Maps every path-bearing resource in the manifest.
+    pub fn try_map_resources<Mapped, Error>(
         self,
         mut map: impl FnMut(Resource) -> Result<Mapped, Error>,
     ) -> Result<PluginManifest<Mapped>, Error> {

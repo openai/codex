@@ -43,7 +43,7 @@ fn configured_plugins_from_stack_merges_user_layers() {
     )
     .expect("valid config layer stack");
 
-    let plugins = configured_plugins_from_stack(&stack);
+    let plugins = configured_plugins_from_stack(&stack, temp_dir.path());
 
     assert_eq!(
         plugins,
@@ -162,14 +162,14 @@ enabled = true
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
         &stack,
         HashMap::new(),
         &store,
-        /*prefer_remote_curated_conflicts*/ false,
+        /*remote_global_catalog_active*/ false,
         PluginLoadScope::HooksOnly,
     )
     .await;

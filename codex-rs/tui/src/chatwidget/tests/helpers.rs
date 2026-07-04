@@ -679,7 +679,7 @@ pub(super) fn handle_patch_apply_end(
 pub(super) fn handle_view_image_tool_call(
     chat: &mut ChatWidget,
     call_id: impl Into<String>,
-    path: AbsolutePathBuf,
+    path: impl Into<LegacyAppPathString>,
 ) {
     chat.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -688,7 +688,7 @@ pub(super) fn handle_view_image_tool_call(
             completed_at_ms: 0,
             item: AppServerThreadItem::ImageView {
                 id: call_id.into(),
-                path,
+                path: path.into(),
             },
         }),
         /*replay_kind*/ None,
@@ -1331,6 +1331,7 @@ pub(super) fn plugins_test_summary(
     PluginSummary {
         id: id.to_string(),
         remote_plugin_id: None,
+        version: None,
         local_version: None,
         name: name.to_string(),
         share_context: None,
@@ -1361,6 +1362,7 @@ pub(super) fn plugins_test_remote_summary(
     PluginSummary {
         id: remote_plugin_id.to_string(),
         remote_plugin_id: Some(remote_plugin_id.to_string()),
+        version: None,
         local_version: None,
         name: name.to_string(),
         share_context: None,

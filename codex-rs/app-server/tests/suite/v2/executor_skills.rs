@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -90,7 +91,7 @@ stream_max_retries = 0
                 id: "demo-plugin@1".to_string(),
                 location: CapabilityRootLocation::Environment {
                     environment_id: "local".to_string(),
-                    path: plugin_dir.path().to_string_lossy().into_owned(),
+                    path: PathUri::from_host_native_path(plugin_dir.path())?,
                 },
             }]),
             ..Default::default()

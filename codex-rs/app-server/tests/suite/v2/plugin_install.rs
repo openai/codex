@@ -538,12 +538,10 @@ async fn plugin_install_tracks_analytics_when_remote_detail_fetch_fails() -> Res
         payload["events"][0]["event_type"],
         "codex_plugin_install_failed"
     );
-    assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
-    assert_eq!(event_params["plugin_name"], "unknown");
-    assert_eq!(
-        event_params["marketplace_name"],
-        "caller-marketplace-is-ignored"
-    );
+    assert_eq!(event_params["plugin_id"], json!(null));
+    assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(event_params["plugin_name"], json!(null));
+    assert_eq!(event_params["marketplace_name"], json!(null));
     assert_eq!(
         event_params["error_type"],
         "remote_catalog_unexpected_status"
@@ -883,6 +881,7 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
                 "event_type": "codex_plugin_installed",
                 "event_params": {
                     "plugin_id": "sample-plugin@debug",
+                    "remote_plugin_id": null,
                     "plugin_name": "sample-plugin",
                     "marketplace_name": "debug",
                     "has_skills": false,
@@ -946,6 +945,7 @@ async fn plugin_install_failure_tracks_analytics_event() -> Result<()> {
         "codex_plugin_install_failed"
     );
     assert_eq!(event_params["plugin_id"], "sample-plugin@debug");
+    assert_eq!(event_params["remote_plugin_id"], json!(null));
     assert_eq!(event_params["plugin_name"], "sample-plugin");
     assert_eq!(event_params["marketplace_name"], "debug");
     assert_eq!(event_params["has_skills"], json!(null));
@@ -995,7 +995,8 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
             "events": [{
                 "event_type": "codex_plugin_installed",
                 "event_params": {
-                    "plugin_id": REMOTE_PLUGIN_ID,
+                    "plugin_id": "linear@openai-curated-remote",
+                    "remote_plugin_id": REMOTE_PLUGIN_ID,
                     "plugin_name": "linear",
                     "marketplace_name": "openai-curated-remote",
                     "has_skills": true,
@@ -1072,7 +1073,8 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
         payload["events"][0]["event_type"],
         "codex_plugin_install_failed"
     );
-    assert_eq!(event_params["plugin_id"], REMOTE_PLUGIN_ID);
+    assert_eq!(event_params["plugin_id"], "linear@openai-curated-remote");
+    assert_eq!(event_params["remote_plugin_id"], REMOTE_PLUGIN_ID);
     assert_eq!(event_params["marketplace_name"], "openai-curated-remote");
     assert_eq!(event_params["error_type"], "remote_bundle_download_status");
     assert!(
@@ -1093,6 +1095,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: Some("featured".to_string()),
             branding: None,
             app_metadata: None,
@@ -1108,6 +1112,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
             description: Some("Beta connector".to_string()),
             logo_url: None,
             logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
             distribution_channel: None,
             branding: None,
             app_metadata: None,
@@ -1192,6 +1198,8 @@ async fn plugin_install_skips_mcp_oauth_for_chatgpt_dual_surface_plugin() -> Res
         description: Some("Sample MCP connector".to_string()),
         logo_url: Some("https://example.com/alpha.png".to_string()),
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: Some("featured".to_string()),
         branding: None,
         app_metadata: None,
@@ -1584,6 +1592,8 @@ async fn plugin_install_includes_formerly_disallowed_apps_needing_auth() -> Resu
         description: Some("Alpha connector".to_string()),
         logo_url: Some("https://example.com/alpha.png".to_string()),
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: Some("featured".to_string()),
         branding: None,
         app_metadata: None,
@@ -2017,7 +2027,6 @@ chatgpt_base_url = "{base_url}"
 
 [features]
 plugins = true
-remote_plugin = true
 "#
         ),
     )
@@ -2047,7 +2056,6 @@ chatgpt_base_url = "{}/backend-api/"
 
 [features]
 plugins = true
-remote_plugin = true
 connectors = true
 "#,
             server.uri()

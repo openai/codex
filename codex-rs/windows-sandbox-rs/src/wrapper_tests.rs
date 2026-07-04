@@ -15,6 +15,7 @@ use super::DENY_READ_PATHS_JSON_FLAG;
 use super::DENY_WRITE_PATHS_JSON_FLAG;
 use super::ENV_JSON_FLAG;
 use super::PERMISSION_PROFILE_FLAG;
+use super::PRESERVE_PROXY_SETTINGS_FLAG;
 use super::PRIVATE_DESKTOP_FLAG;
 use super::PROXY_ENFORCED_FLAG;
 use super::READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG;
@@ -61,6 +62,7 @@ fn windows_wrapper_args_round_trip() {
         WindowsSandboxLevel::Elevated,
         /*windows_sandbox_private_desktop*/ true,
         /*proxy_enforced*/ true,
+        crate::WindowsSandboxProxySettingsMode::Preserve,
         Some(read_roots_override.as_slice()),
         /*read_roots_include_platform_defaults*/ true,
         Some(write_roots_override.as_slice()),
@@ -78,6 +80,7 @@ fn windows_wrapper_args_round_trip() {
     assert!(args.contains(&SANDBOX_LEVEL_FLAG.to_string()));
     assert!(args.contains(&PRIVATE_DESKTOP_FLAG.to_string()));
     assert!(args.contains(&PROXY_ENFORCED_FLAG.to_string()));
+    assert!(args.contains(&PRESERVE_PROXY_SETTINGS_FLAG.to_string()));
     assert!(args.contains(&READ_ROOTS_JSON_FLAG.to_string()));
     assert!(args.contains(&READ_ROOTS_INCLUDE_PLATFORM_DEFAULTS_FLAG.to_string()));
     assert!(args.contains(&WRITE_ROOTS_JSON_FLAG.to_string()));
@@ -98,6 +101,10 @@ fn windows_wrapper_args_round_trip() {
     assert_eq!(parsed.windows_sandbox_level, WindowsSandboxLevel::Elevated);
     assert_eq!(parsed.windows_sandbox_private_desktop, true);
     assert_eq!(parsed.proxy_enforced, true);
+    assert_eq!(
+        parsed.proxy_settings_mode,
+        crate::WindowsSandboxProxySettingsMode::Preserve
+    );
     assert_eq!(parsed.read_roots_override, Some(read_roots_override));
     assert_eq!(parsed.read_roots_include_platform_defaults, true);
     assert_eq!(parsed.write_roots_override, Some(write_roots_override));

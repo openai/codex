@@ -134,7 +134,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         .context("image output should include model-visible path hint")?;
     assert!(
         output_hint.contains(&saved_path.display().to_string()),
-        "output hint should identify the path core saved"
+        "output hint should identify the path the extension saved"
     );
     assert!(
         !requests[1]

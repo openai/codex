@@ -126,10 +126,40 @@ pub struct McpServerOAuthConfig {
     pub client_id: Option<String>,
 }
 
+/// Authentication flow Codex attempts after resolving an HTTP MCP server's
+/// configured bearer token and authorization headers, which always take
+/// precedence. ChatGPT authentication falls back to stored OAuth credentials
+/// when its session provider is unavailable; both modes ultimately fall back
+/// to an unauthenticated connection.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerAuth {
+    /// Use stored MCP OAuth credentials when available. Starting an OAuth login
+    /// is a separate operation.
+    #[default]
+    #[serde(rename = "oauth")]
+    OAuth,
+    /// Use the current ChatGPT session for servers on the trusted first-party
+    /// ChatGPT origin. If no ChatGPT session provider is available, startup can
+    /// still fall back to stored OAuth credentials.
+    #[serde(rename = "chatgpt")]
+    ChatGpt,
+}
+
+impl McpServerAuth {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
+
+    /// Authentication flow to use when no configured authorization resolves.
+    #[serde(default, skip_serializing_if = "McpServerAuth::is_default")]
+    pub auth: McpServerAuth,
 
     /// Effective environment id for where Codex should start this MCP server.
     pub environment_id: String,
@@ -239,6 +269,8 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub environment_id: Option<String>,
     #[serde(default)]
+    pub auth: Option<McpServerAuth>,
+    #[serde(default)]
     pub startup_timeout_sec: Option<f64>,
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
@@ -286,6 +318,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             bearer_token,
             bearer_token_env_var,
             environment_id,
+            auth,
             startup_timeout_sec,
             startup_timeout_ms,
             tool_timeout_sec,
@@ -329,6 +362,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
             throw_if_set("stdio", "oauth", oauth.as_ref())?;
             throw_if_set("stdio", "oauth_resource", oauth_resource.as_ref())?;
+            throw_if_set("stdio", "auth", auth.as_ref())?;
             let env_vars = env_vars.unwrap_or_default();
             for env_var in &env_vars {
                 env_var.validate_source()?;
@@ -361,6 +395,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
 
         Ok(Self {
             transport,
+            auth: auth.unwrap_or_default(),
             environment_id,
             startup_timeout_sec,
             tool_timeout_sec,

@@ -1,6 +1,10 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use codex_app_server_protocol::AppInfo;
+use codex_analytics::PluginInstallRequestSource;
+use codex_analytics::PluginInstallRequested;
+use codex_analytics::PluginInstallRequestedPlugin;
+use codex_analytics::build_track_events_context;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -29,6 +33,7 @@ use tracing::warn;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::connectors;
+use crate::connectors::AppInfo;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -90,10 +95,12 @@ impl RequestPluginInstallHandler {
         let ToolInvocation {
             payload,
             session,
-            turn,
+            step_context,
             call_id,
             ..
         } = invocation;
+        let turn = Arc::clone(&step_context.turn);
+        let manager = step_context.mcp.manager();
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -172,16 +179,46 @@ impl RequestPluginInstallHandler {
             })?;
         let tool_type = tool.tool_type();
 
-        let request_id = RequestId::String(format!("request_plugin_install_{call_id}").into());
-        let params = build_request_plugin_install_elicitation_request(
-            CODEX_APPS_MCP_SERVER_NAME,
-            session.thread_id.to_string(),
-            turn.sub_id.clone(),
-            suggest_reason,
-            &tool,
-        );
+        let suggestion_id = format!("request_plugin_install_{call_id}");
+        if let DiscoverableTool::Plugin(plugin) = &tool {
+            let source = match self.presentation {
+                ToolSuggestPresentation::ListTool => PluginInstallRequestSource::LegacyDiscovery,
+                ToolSuggestPresentation::RecommendationContext => {
+                    PluginInstallRequestSource::EndpointRecommendation
+                }
+            };
+            session
+                .services
+                .analytics_events_client
+                .track_plugin_install_requested(
+                    build_track_events_context(
+                        turn.model_info.slug.clone(),
+                        session.thread_id.to_string(),
+                        turn.sub_id.clone(),
+                        turn.originator.clone(),
+                    ),
+                    PluginInstallRequested {
+                        suggestion_id: suggestion_id.clone(),
+                        plugins: vec![PluginInstallRequestedPlugin {
+                            plugin_id: plugin.id.clone(),
+                            remote_plugin_id: plugin.remote_plugin_id.clone(),
+                            plugin_name: plugin.name.clone(),
+                            connector_ids: plugin.app_connector_ids.clone(),
+                        }],
+                        source,
+                    },
+                );
+        }
+
+        let request_id = RequestId::String(suggestion_id.into());
+        let request = build_request_plugin_install_elicitation_request(suggest_reason, &tool);
         let elicitation = session
-            .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
+            .request_mcp_server_elicitation(
+                turn.as_ref(),
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                request_id,
+                request,
+            )
             .await;
         let response = elicitation.response;
         if let Some(response) = response.as_ref() {
@@ -193,7 +230,8 @@ impl RequestPluginInstallHandler {
 
         let auth = session.services.auth_manager.auth().await;
         let completed = if user_confirmed {
-            verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
+            verify_request_plugin_install_completed(&session, &turn, manager, &tool, auth.as_ref())
+                .await
         } else {
             false
         };
@@ -311,13 +349,14 @@ fn disabled_install_request(tool: &DiscoverableTool) -> ToolSuggestDisabledTool 
 async fn verify_request_plugin_install_completed(
     session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
+    manager: &codex_mcp::McpConnectionManager,
     tool: &DiscoverableTool,
     auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
     match tool {
         DiscoverableTool::Connector(connector) => refresh_missing_requested_connectors(
-            session,
             turn,
+            manager,
             auth,
             std::slice::from_ref(&connector.id),
             connector.id.as_str(),
@@ -336,8 +375,8 @@ async fn verify_request_plugin_install_completed(
                         plugin.id.as_str(),
                     ),
                     refresh_missing_requested_connectors(
-                        session,
                         turn,
+                        manager,
                         auth,
                         &plugin.app_connector_ids,
                         plugin.id.as_str(),
@@ -359,8 +398,8 @@ async fn verify_request_plugin_install_completed(
                 session.services.plugins_manager.as_ref(),
             );
             let _ = refresh_missing_requested_connectors(
-                session,
                 turn,
+                manager,
                 auth,
                 &plugin.app_connector_ids,
                 plugin.id.as_str(),
@@ -401,8 +440,8 @@ fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
 }
 
 async fn refresh_missing_requested_connectors(
-    session: &crate::session::session::Session,
     turn: &crate::session::turn_context::TurnContext,
+    manager: &codex_mcp::McpConnectionManager,
     auth: Option<&codex_login::CodexAuth>,
     expected_connector_ids: &[String],
     tool_id: &str,
@@ -411,7 +450,6 @@ async fn refresh_missing_requested_connectors(
         return Some(Vec::new());
     }
 
-    let manager = session.services.mcp_connection_manager.load_full();
     let mcp_tools = manager.list_all_tools().await;
     let accessible_connectors = connectors::with_app_enabled_state(
         connectors::accessible_connectors_from_mcp_tools(&mcp_tools),

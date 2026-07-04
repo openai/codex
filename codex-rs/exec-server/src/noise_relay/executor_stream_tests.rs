@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 

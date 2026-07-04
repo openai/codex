@@ -23,11 +23,9 @@ use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
 use crate::protocol::EnvironmentInfo;
-use crate::protocol::ShellInfo;
 use crate::remote::NoiseRendezvousEnvironmentConfig;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
-use codex_shell_command::shell_detect::DetectedShell;
 use tokio_util::task::AbortOnDropHandle;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
@@ -56,7 +54,7 @@ pub const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR: &str =
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: Option<String>,
-    environments: RwLock<HashMap<String, Arc<Environment>>>,
+    pub(super) environments: RwLock<HashMap<String, Arc<Environment>>>,
     local_environment: Option<Arc<Environment>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
@@ -576,6 +574,25 @@ impl Environment {
         }
     }
 
+    /// Starts the initial connection after an environment is actually selected for use.
+    pub(crate) fn start_connecting_for_use(environment: &Arc<Self>) {
+        if environment.remote_client.is_none() {
+            return;
+        }
+        let mut startup_task = environment
+            .startup_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if startup_task.is_none() {
+            let environment = Arc::clone(environment);
+            *startup_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+                if let Err(error) = environment.wait_until_ready().await {
+                    tracing::debug!(%error, "exec-server environment startup failed");
+                }
+            })));
+        }
+    }
+
     /// Returns whether initial startup has either succeeded or permanently failed.
     pub fn startup_finished(&self) -> bool {
         self.remote_client
@@ -601,23 +618,6 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
-    }
-}
-
-impl EnvironmentInfo {
-    pub(crate) fn local() -> Self {
-        Self {
-            shell: codex_shell_command::shell_detect::default_user_shell().into(),
-        }
-    }
-}
-
-impl From<DetectedShell> for ShellInfo {
-    fn from(shell: DetectedShell) -> Self {
-        Self {
-            name: shell.name().to_string(),
-            path: shell.shell_path.to_string_lossy().into_owned(),
-        }
     }
 }
 
@@ -653,6 +653,19 @@ mod tests {
 
     fn assert_local_environment_unavailable(manager: &EnvironmentManager) {
         assert!(manager.try_local_environment().is_none());
+    }
+
+    #[test]
+    fn local_environment_info_includes_current_directory() {
+        let info = super::EnvironmentInfo::local();
+
+        assert_eq!(
+            info.cwd,
+            Some(
+                PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                    .expect("cwd URI")
+            )
+        );
     }
 
     #[tokio::test]
@@ -1162,6 +1175,7 @@ mod tests {
                 arg0: None,
                 sandbox: None,
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await
             .expect("start process");
@@ -1201,6 +1215,7 @@ mod tests {
                 arg0: None,
                 sandbox: Some(sandbox),
                 enforce_managed_network: false,
+                managed_network: None,
             })
             .await;
         let Err(err) = result else {

@@ -67,6 +67,12 @@ pub type AuthProviderFuture<'a> =
 /// Shared auth handle passed through API clients.
 pub type SharedAuthProvider = Arc<dyn AuthProvider>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentIdentityTelemetry {
+    pub agent_id: String,
+    pub task_id: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuthHeaderTelemetry {
     pub attached: bool,

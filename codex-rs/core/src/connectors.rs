@@ -6,9 +6,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::unbounded;
-pub use codex_app_server_protocol::AppBranding;
-pub use codex_app_server_protocol::AppInfo;
-pub use codex_app_server_protocol::AppMetadata;
+pub use codex_connectors::AppBranding;
+pub use codex_connectors::AppInfo;
+pub use codex_connectors::AppMetadata;
 use codex_connectors::ConnectorDirectoryCacheContext;
 use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::app_is_enabled;
@@ -246,11 +246,14 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         });
     }
 
+    let runtime_context =
+        McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),
+        &runtime_context,
     )
     .await;
 
@@ -270,8 +273,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         PermissionProfile::default(),
         // Connector discovery is threadless. Use an actually configured env if
         // one exists, but do not reintroduce the old hidden-local fallback.
-        McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
+        runtime_context,
         config.codex_home.to_path_buf(),
+        mcp_manager.codex_apps_tools_cache(),
         codex_apps_tools_cache_key(auth.as_ref()),
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
@@ -279,6 +283,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         ToolPluginProvenance::default(),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
+        codex_mcp::ElicitationRequestRouter::default(),
     )
     .await;
 

@@ -1,8 +1,10 @@
 name: rust-ci-full
 on:
+  workflow_call:
   push:
     branches:
-      - main
+      # Main pushes enter through postmerge-ci. Keep this opt-in branch trigger
+      # for developers who want the full suite before merging.
       - "**full-ci**"
   workflow_dispatch:
 

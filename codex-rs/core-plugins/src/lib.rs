@@ -6,8 +6,10 @@ mod manager;
 pub mod manifest;
 pub mod marketplace;
 pub mod marketplace_add;
+mod marketplace_policy;
 pub mod marketplace_remove;
 pub mod marketplace_upgrade;
+mod npm_source;
 mod plugin_bundle_archive;
 mod provider;
 pub mod remote;
@@ -23,6 +25,8 @@ mod tool_suggest_metadata;
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 pub const OPENAI_API_CURATED_MARKETPLACE_NAME: &str = "openai-api-curated";
 pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
+pub(crate) const OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME: &str = "openai-bundled-alpha";
+pub(crate) const OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME: &str = "openai-primary-runtime";
 
 pub fn is_openai_curated_marketplace_name(marketplace_name: &str) -> bool {
     marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME
@@ -51,6 +55,7 @@ pub use manager::PluginUninstallError;
 pub use manager::PluginsConfigInput;
 pub use manager::PluginsManager;
 pub use manager::RecommendedPluginCandidatesInput;
+pub use marketplace_policy::allowed_configured_marketplace_names;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use provider::ExecutorPluginProvider;

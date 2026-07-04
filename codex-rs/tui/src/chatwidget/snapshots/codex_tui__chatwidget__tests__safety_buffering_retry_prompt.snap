@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: popup
+---
+  Additional safety checks
+  This request requires additional safety checks, which can take extra time.
+  Hang tight or retry with a faster model for a quicker response, though it
+  may be less capable of handling complex requests.
+
+› 1. Retry with a faster model
+  2. Keep waiting
+  3. Learn more
+
+  Press enter to confirm or esc to go back

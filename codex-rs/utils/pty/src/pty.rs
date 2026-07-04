@@ -217,7 +217,11 @@ async fn spawn_process_portable(
     let writer_handle: JoinHandle<()> = tokio::spawn({
         let writer = Arc::clone(&writer);
         async move {
+            #[cfg(windows)]
+            let mut windows_input = crate::WindowsTtyInputNormalizer::default();
             while let Some(bytes) = writer_rx.recv().await {
+                #[cfg(windows)]
+                let bytes = windows_input.normalize(&bytes);
                 let mut guard = writer.lock().await;
                 use std::io::Write;
                 let _ = guard.write_all(&bytes);

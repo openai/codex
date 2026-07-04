@@ -222,11 +222,13 @@ fn populate_merged_regular_fields_with_sources(
         hooks: _,
         mcp_servers,
         plugins,
+        marketplaces,
         apps,
         rules: _,
         enforce_residency,
         network,
         permissions,
+        models,
         guardian_policy_config,
     } = requirements;
 
@@ -250,10 +252,12 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(feature_requirements, &["features", "feature_requirements"]);
     set_sourced!(mcp_servers, &["mcp_servers"]);
     set_sourced!(plugins, &["plugins"]);
+    set_sourced!(marketplaces, &["marketplaces"]);
     set_sourced!(apps, &["apps"]);
     set_sourced!(enforce_residency, &["enforce_residency"]);
     set_sourced!(network, &["experimental_network"]);
     set_sourced!(permissions, &["permissions"]);
+    set_sourced!(models, &["models"]);
 
     if let Some(guardian_policy_config) =
         guardian_policy_config.filter(|value| !value.trim().is_empty())

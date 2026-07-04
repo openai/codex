@@ -39,13 +39,16 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
     ));
 
     plugins_manager
-        .install_plugin(PluginInstallRequest {
-            plugin_name: "sample".to_string(),
-            marketplace_path: AbsolutePathBuf::try_from(
-                curated_root.join(".agents/plugins/marketplace.json"),
-            )
-            .expect("marketplace path"),
-        })
+        .install_plugin(
+            &config.config_layer_stack,
+            PluginInstallRequest {
+                plugin_name: "sample".to_string(),
+                marketplace_path: AbsolutePathBuf::try_from(
+                    curated_root.join(".agents/plugins/marketplace.json"),
+                )
+                .expect("marketplace path"),
+            },
+        )
         .await
         .expect("plugin should install");
 
@@ -232,6 +235,8 @@ fn connector_tool(id: &str, name: &str) -> DiscoverableTool {
         description: None,
         logo_url: None,
         logo_url_dark: None,
+        icon_assets: None,
+        icon_dark_assets: None,
         distribution_channel: None,
         branding: None,
         app_metadata: None,

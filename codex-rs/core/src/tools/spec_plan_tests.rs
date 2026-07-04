@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -30,6 +31,8 @@ use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::config::CurrentTimeReminderConfig;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -180,8 +183,10 @@ async fn probe_with(
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
     configure_turn(&mut turn);
-    let router = ToolRouter::from_turn_context(
-        &turn,
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = ToolRouter::from_context(
+        step_context.as_ref(),
         ToolRouterParams {
             tool_suggest_candidates: inputs.tool_suggest_candidates,
             mcp_tools: inputs.mcp_tools,
@@ -268,6 +273,26 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_actor_authorized_provider(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.requires_openai_auth = false;
+    provider_info.http_headers = Some(HashMap::from([
+        (
+            "x-openai-actor-authorization".to_string(),
+            "test-actor-authorization".to_string(),
+        ),
+        (
+            "ChatGPT-Account-ID".to_string(),
+            "test-account-id".to_string(),
+        ),
+    ]));
+    turn.auth_manager = None;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
 struct WebRunExtensionTool;
@@ -604,6 +629,7 @@ async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
         turn.environments.turn_environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
@@ -612,22 +638,30 @@ async fn environment_count_controls_environment_backed_tools() {
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
     no_environment.assert_registered_lacks(&[
         "shell_command",
         "exec_command",
         "apply_patch",
         "view_image",
+        "request_permissions",
     ]);
 
     let multiple_environments = probe(|turn| {
         duplicate_primary_environment(turn);
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::UnifiedExec, /*enabled*/ true);
+        set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
     })
     .await;
-    multiple_environments.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
+    multiple_environments.assert_visible_contains(&[
+        "exec_command",
+        "apply_patch",
+        "view_image",
+        "request_permissions",
+    ]);
     assert!(has_parameter(
         multiple_environments.visible_spec("exec_command"),
         "environment_id"
@@ -639,6 +673,38 @@ async fn environment_count_controls_environment_backed_tools() {
         multiple_environments.visible_spec("view_image"),
         "environment_id"
     ));
+}
+
+#[tokio::test]
+async fn environment_tools_follow_the_step_context() {
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::UnifiedExec, /*enabled*/ true);
+    turn.model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+
+    let environments = turn.environments.clone();
+    turn.environments.turn_environments.clear();
+    let turn = Arc::new(turn);
+    let step_context = Arc::new(StepContext::new(
+        Arc::clone(&turn),
+        environments,
+        Vec::new(),
+        crate::session::McpRuntimeSnapshot::new_uninitialized_for_test(&turn.config),
+        /*loaded_agents_md*/ None,
+    ));
+
+    let plan = ToolPlanProbe::from_router(ToolRouter::from_context(
+        step_context.as_ref(),
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            tool_suggest_candidates: None,
+            extension_tool_executors: Vec::new(),
+            dynamic_tools: &[],
+        },
+        &Default::default(),
+    ));
+
+    plan.assert_visible_contains(&["exec_command", "apply_patch", "view_image"]);
 }
 
 #[tokio::test]
@@ -660,18 +726,27 @@ async fn host_context_gates_agent_job_tools() {
 }
 
 #[tokio::test]
-async fn sleep_tool_follows_feature_gate() {
+async fn sleep_tool_follows_current_time_config() {
     let disabled = probe(|turn| {
-        set_feature(turn, Feature::SleepTool, /*enabled*/ false);
+        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
     })
     .await;
-    disabled.assert_visible_lacks(&["sleep"]);
+    assert_eq!(disabled.namespace_function_names("clock"), ["curr_time"]);
 
     let enabled = probe(|turn| {
-        set_feature(turn, Feature::SleepTool, /*enabled*/ true);
+        set_feature(turn, Feature::CurrentTimeReminder, /*enabled*/ true);
+        let mut config = (*turn.config).clone();
+        config.current_time_reminder = Some(CurrentTimeReminderConfig {
+            sleep_tool: true,
+            ..CurrentTimeReminderConfig::default()
+        });
+        turn.config = Arc::new(config);
     })
     .await;
-    enabled.assert_visible_contains(&["sleep"]);
+    assert_eq!(
+        enabled.namespace_function_names("clock"),
+        ["curr_time", "sleep"]
+    );
 }
 
 #[tokio::test]
@@ -775,8 +850,10 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut first_turn) = make_session_and_context().await;
     first_turn.model_info.supports_search_tool = true;
-    let first_router = ToolRouter::from_turn_context(
-        &first_turn,
+    let first_turn = Arc::new(first_turn);
+    let first_step_context = StepContext::for_test(Arc::clone(&first_turn));
+    let first_router = ToolRouter::from_context(
+        first_step_context.as_ref(),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("first", "mcp__first", "lookup")]),
@@ -790,8 +867,10 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
 
     let (_session, mut second_turn) = make_session_and_context().await;
     second_turn.model_info.supports_search_tool = true;
-    let second_router = ToolRouter::from_turn_context(
-        &second_turn,
+    let second_turn = Arc::new(second_turn);
+    let second_step_context = StepContext::for_test(Arc::clone(&second_turn));
+    let second_router = ToolRouter::from_context(
+        second_step_context.as_ref(),
         ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: Some(vec![mcp_tool("second", "mcp__second", "lookup")]),
@@ -1454,6 +1533,54 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     })
     .await;
     api_key_auth.assert_visible_lacks(&["image_generation"]);
+
+    let unrelated_chatgpt_auth = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        let mut provider_info = turn.provider.info().clone();
+        provider_info.requires_openai_auth = false;
+        provider_info.http_headers = None;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unrelated_chatgpt_auth.assert_visible_lacks(&["image_generation"]);
+
+    let actor_authorized_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_actor_authorized_provider(turn);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    actor_authorized_provider.assert_visible_contains(&["image_generation"]);
+
+    let feature_disabled = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+        use_actor_authorized_provider(turn);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    feature_disabled.assert_visible_lacks(&["image_generation"]);
+
+    let text_only_model = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_actor_authorized_provider(turn);
+        turn.model_info.input_modalities = vec![];
+    })
+    .await;
+    text_only_model.assert_visible_lacks(&["image_generation"]);
+
+    let unsupported_image_generation_provider = probe(|turn| {
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        use_bedrock_provider(turn);
+        use_actor_authorized_provider(turn);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    unsupported_image_generation_provider.assert_visible_lacks(&["image_generation"]);
 
     let image_generation = probe(|turn| {
         use_chatgpt_auth(turn);

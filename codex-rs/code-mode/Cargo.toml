@@ -19,8 +19,9 @@ workspace = true
 codex-code-mode-protocol = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
+futures = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 v8 = { workspace = true }

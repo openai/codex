@@ -12,6 +12,7 @@ use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_model_provider::ModelProvider;
@@ -75,6 +76,38 @@ pub(crate) struct MemoryStartupContext {
     session_telemetry: SessionTelemetry,
 }
 
+fn build_session_telemetry(
+    auth_manager: &AuthManager,
+    thread_id: ThreadId,
+    config: &Config,
+    source: SessionSource,
+    model: &str,
+    originator: String,
+) -> SessionTelemetry {
+    let auth = auth_manager.auth_cached();
+    let auth = auth.as_ref();
+    let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
+    let account_id = auth.and_then(CodexAuth::get_account_id);
+    let account_email = auth.and_then(CodexAuth::get_account_email);
+    let auth_env_telemetry = collect_auth_env_telemetry(
+        &config.model_provider,
+        auth_manager.codex_api_key_env_enabled(),
+    );
+    SessionTelemetry::new(
+        thread_id,
+        model,
+        model,
+        account_id,
+        account_email,
+        auth_mode,
+        originator,
+        config.otel.log_user_prompt,
+        user_agent(),
+        source,
+    )
+    .with_auth_env(auth_env_telemetry.to_otel_metadata())
+}
+
 impl MemoryStartupContext {
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
@@ -129,29 +162,15 @@ impl MemoryStartupContext {
         source: SessionSource,
         provider: SharedModelProvider,
     ) -> Self {
-        let auth = auth_manager.auth_cached();
-        let auth = auth.as_ref();
-        let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
-        let account_id = auth.and_then(CodexAuth::get_account_id);
-        let account_email = auth.and_then(CodexAuth::get_account_email);
         let model = config.model.as_deref().unwrap_or("unknown");
-        let auth_env_telemetry = collect_auth_env_telemetry(
-            &config.model_provider,
-            auth_manager.codex_api_key_env_enabled(),
-        );
-        let session_telemetry = SessionTelemetry::new(
+        let session_telemetry = build_session_telemetry(
+            &auth_manager,
             thread_id,
-            model,
-            model,
-            account_id,
-            account_email,
-            auth_mode,
-            originator().value,
-            config.otel.log_user_prompt,
-            user_agent(),
+            config,
             source,
-        )
-        .with_auth_env(auth_env_telemetry.to_otel_metadata());
+            model,
+            originator().value,
+        );
 
         Self {
             thread_id,
@@ -205,10 +224,14 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             model_info,
-            session_telemetry: self
-                .session_telemetry
-                .clone()
-                .with_model(model_name, model_name),
+            session_telemetry: build_session_telemetry(
+                &self.auth_manager,
+                self.thread_id,
+                config,
+                config_snapshot.session_source,
+                model_name,
+                config_snapshot.originator,
+            ),
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
             service_tier: config_snapshot.service_tier,
@@ -228,9 +251,11 @@ impl MemoryStartupContext {
         let session_id_string = session_id.to_string();
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
+            AgentIdentityAuthPolicy::JwtOnly,
             self.thread_id,
             config.model_provider.clone(),
             session_source.clone(),
+            config_snapshot.originator,
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
@@ -304,14 +329,15 @@ impl MemoryStartupContext {
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
                 config,
+                allow_provider_model_fallback: false,
                 initial_history: InitialHistory::New,
+                history_mode: None,
                 session_source: Some(SessionSource::Internal(
                     InternalSessionSource::MemoryConsolidation,
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
                 metrics_service_name: None,
-                multi_agent_mode: None,
                 parent_trace: None,
                 environments,
                 thread_extension_init: Default::default(),

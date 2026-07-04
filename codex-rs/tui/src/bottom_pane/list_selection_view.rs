@@ -281,6 +281,63 @@ pub(crate) struct ListSelectionView {
     keymap: ListKeymap,
 }
 
+const SELECTION_TOGGLE_ON_PREFIX: &str = "[*] ";
+const SELECTION_TOGGLE_OFF_PREFIX: &str = "[ ] ";
+pub(crate) const SELECTION_TOGGLE_UNAVAILABLE_PREFIX: &str = "[-] ";
+pub(crate) const SELECTION_TOGGLE_BLOCKED_PREFIX: &str = "[!] ";
+
+fn selection_toggle_prefix(toggle: &SelectionToggle) -> &'static str {
+    if toggle.is_on {
+        SELECTION_TOGGLE_ON_PREFIX
+    } else {
+        SELECTION_TOGGLE_OFF_PREFIX
+    }
+}
+
+fn selection_item_toggle_prefix(item: &SelectionItem) -> Option<&'static str> {
+    item.toggle
+        .as_ref()
+        .map(selection_toggle_prefix)
+        .or(item.toggle_placeholder)
+}
+
+impl ListSelectionView {
+    fn selected_item_has_toggle(&self) -> bool {
+        self.selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .is_some_and(|item| item.toggle.is_some() && Self::item_is_enabled(item))
+    }
+
+    fn selected_item_has_toggle_placeholder(&self) -> bool {
+        self.selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .is_some_and(|item| {
+                item.toggle.is_none()
+                    && item.toggle_placeholder.is_some()
+                    && Self::item_is_enabled(item)
+            })
+    }
+
+    fn toggle_selected(&mut self) {
+        let Some(actual_idx) = self.selected_actual_idx() else {
+            return;
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        let Some(item) = self.active_items_mut().get_mut(actual_idx) else {
+            return;
+        };
+        if !Self::item_is_enabled(item) {
+            return;
+        }
+        let Some(toggle) = item.toggle.as_mut() else {
+            return;
+        };
+
+        toggle.is_on = !toggle.is_on;
+        (toggle.action)(toggle.is_on, &app_event_tx);
+    }
+}
+
 impl ListSelectionView {
     /// Create a selection popup view with filtering, scrolling, and callbacks wired.
     ///
@@ -533,10 +590,8 @@ impl ListSelectionView {
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let mut name_prefix_spans = Vec::new();
                     name_prefix_spans.push(wrap_prefix.into());
-                    if let Some(toggle) = &item.toggle {
-                        name_prefix_spans.push(if toggle.is_on { "[*] " } else { "[ ] " }.into());
-                    } else if let Some(placeholder) = item.toggle_placeholder {
-                        name_prefix_spans.push(placeholder.into());
+                    if let Some(toggle_prefix) = selection_item_toggle_prefix(item) {
+                        name_prefix_spans.push(toggle_prefix.into());
                     }
                     name_prefix_spans.extend(item.name_prefix_spans.clone());
                     let description = is_selected
@@ -611,22 +666,6 @@ impl ListSelectionView {
         item.disabled_reason.is_none() && !item.is_disabled
     }
 
-    fn selected_item_has_toggle(&self) -> bool {
-        self.selected_actual_idx()
-            .and_then(|actual_idx| self.active_items().get(actual_idx))
-            .is_some_and(|item| item.toggle.is_some() && Self::item_is_enabled(item))
-    }
-
-    fn selected_item_has_toggle_placeholder(&self) -> bool {
-        self.selected_actual_idx()
-            .and_then(|actual_idx| self.active_items().get(actual_idx))
-            .is_some_and(|item| {
-                item.toggle.is_none()
-                    && item.toggle_placeholder.is_some()
-                    && Self::item_is_enabled(item)
-            })
-    }
-
     fn actual_idx_for_enabled_number(&self, number: usize) -> Option<usize> {
         if number == 0 {
             return None;
@@ -638,25 +677,6 @@ impl ListSelectionView {
             .filter(|(_, item)| Self::item_is_enabled(item))
             .nth(number - 1)
             .map(|(idx, _)| idx)
-    }
-
-    fn toggle_selected(&mut self) {
-        let Some(actual_idx) = self.selected_actual_idx() else {
-            return;
-        };
-        let app_event_tx = self.app_event_tx.clone();
-        let Some(item) = self.active_items_mut().get_mut(actual_idx) else {
-            return;
-        };
-        if !Self::item_is_enabled(item) {
-            return;
-        }
-        let Some(toggle) = item.toggle.as_mut() else {
-            return;
-        };
-
-        toggle.is_on = !toggle.is_on;
-        (toggle.action)(toggle.is_on, &app_event_tx);
     }
 
     fn move_up(&mut self) {
