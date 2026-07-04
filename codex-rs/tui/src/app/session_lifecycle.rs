@@ -264,8 +264,14 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<bool> {
-        if self.thread_event_channels.contains_key(&thread_id) {
+        if self.thread_event_channels.contains_key(&thread_id)
+            && !self.is_thread_retired(&thread_id)
+        {
             return Ok(true);
+        }
+        if self.is_thread_retired(&thread_id) {
+            self.abort_thread_event_listener(thread_id);
+            self.thread_event_channels.remove(&thread_id);
         }
 
         let (session, turns, live_attached) = match app_server
@@ -309,6 +315,9 @@ impl App {
                 (session, turns, false)
             }
         };
+        if live_attached {
+            self.restore_thread(thread_id);
+        }
         let channel = self.ensure_thread_channel(thread_id);
         if !live_attached {
             channel.mark_replay_only();
@@ -358,45 +367,28 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        if self.chat_widget.active_thread_id == Some(thread_id) {
-            return Ok(());
-        }
-
-        if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+        let Some(selection) = self
+            .prepare_agent_thread_selection(app_server, thread_id)
             .await
-        {
-            self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+        else {
             return Ok(());
-        }
+        };
+        self.apply_prepared_agent_thread_selection(tui, app_server, selection)
+            .await
+    }
 
-        let mut is_replay_only = self
-            .agent_navigation
-            .get(&thread_id)
-            .is_some_and(|entry| entry.is_closed);
-        let mut attached_replay_only = false;
-        if self.should_attach_live_thread_for_selection(thread_id) {
-            match self
-                .attach_live_thread_for_selection(app_server, thread_id)
-                .await
-            {
-                Ok(live_attached) => {
-                    attached_replay_only = !live_attached;
-                    if attached_replay_only {
-                        is_replay_only = true;
-                    }
-                }
-                Err(err) => {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to attach to agent thread {thread_id}: {err}"
-                    ));
-                    return Ok(());
-                }
-            }
-        } else if !self.thread_event_channels.contains_key(&thread_id) && is_replay_only {
-            self.chat_widget
-                .add_error_message(format!("Agent thread {thread_id} is no longer available."));
+    pub(super) async fn apply_prepared_agent_thread_selection(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        selection: PreparedAgentSelection,
+    ) -> Result<()> {
+        let PreparedAgentSelection {
+            thread_id,
+            is_replay_only,
+            attached_replay_only,
+        } = selection;
+        if self.chat_widget.active_thread_id == Some(thread_id) {
             return Ok(());
         }
 
@@ -450,7 +442,7 @@ impl App {
     }
 
     pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
-        !self.thread_event_channels.contains_key(&thread_id)
+        (self.is_thread_retired(&thread_id) || !self.thread_event_channels.contains_key(&thread_id))
             && self
                 .agent_navigation
                 .get(&thread_id)

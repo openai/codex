@@ -367,9 +367,12 @@ impl App {
                         .by_slot(PaneSlot::Side)
                         .and_then(|pane| pane.active_thread_id.or(pane.chat_widget.thread_id()))
                 {
-                    if self.discard_side_thread(app_server, side_thread_id).await {
-                        self.surface_pending_inactive_thread_interactive_requests()
-                            .await?;
+                    if self.discard_side_thread(app_server, side_thread_id).await
+                        && let Err(err) = self
+                            .surface_pending_inactive_thread_interactive_requests()
+                            .await
+                    {
+                        tracing::warn!(%err, "failed to surface pending requests after closing side pane");
                     }
                     tui.frame_requester().schedule_frame();
                     return Ok(AppRunControl::Continue);
@@ -483,6 +486,10 @@ impl App {
                 self.append_message_history_entry(thread_id, text);
             }
             AppEvent::SyncThreadGitBranch { thread_id, branch } => {
+                if self.is_thread_retired(&thread_id) {
+                    tracing::debug!(%thread_id, "ignoring branch sync for retired conversation");
+                    return Ok(AppRunControl::Continue);
+                }
                 if let Err(err) = app_server
                     .thread_metadata_update_branch(thread_id, branch)
                     .await

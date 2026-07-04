@@ -88,6 +88,10 @@ impl PendingAppServerRequests {
         self.by_thread.clear();
     }
 
+    pub(super) fn discard_thread(&mut self, thread_id: ThreadId) {
+        self.by_thread.remove(&thread_id);
+    }
+
     pub(super) fn note_server_request(
         &mut self,
         request: &ServerRequest,

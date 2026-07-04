@@ -154,6 +154,10 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                if self.is_thread_retired(&thread_id) {
+                    tracing::debug!(%thread_id, "ignoring notification for retired conversation");
+                    return;
+                }
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -193,6 +197,24 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        let thread_id = server_request_thread_id(&request);
+        if thread_id.is_some_and(|thread_id| self.is_thread_retired(&thread_id)) {
+            let request_id = request.id().clone();
+            let reason = "Conversation closed before this request could be handled.".to_string();
+            tracing::debug!(
+                ?request_id,
+                ?thread_id,
+                "rejecting request for retired conversation"
+            );
+            if let Err(err) = self
+                .reject_app_server_request(app_server_client, request_id, reason)
+                .await
+            {
+                tracing::warn!("{err}");
+            }
+            return;
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)
@@ -217,7 +239,7 @@ impl App {
             return;
         }
 
-        let Some(thread_id) = server_request_thread_id(&request) else {
+        let Some(thread_id) = thread_id else {
             tracing::warn!("ignoring threadless app-server request");
             return;
         };

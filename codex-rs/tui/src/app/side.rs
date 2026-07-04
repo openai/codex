@@ -1,11 +1,7 @@
 //! Transient side-conversation threads.
 //!
-//! A side conversation is an ephemeral fork used for a quick /side question while keeping the
-//! primary thread focused. This module owns the app-level lifecycle for those forks: switching into
-//! them, returning to their parent, and discarding them when normal thread navigation moves
-//! elsewhere. The fork receives hidden developer instructions that make inherited history reference
-//! material only and steer the agent away from mutations unless the side conversation explicitly asks
-//! for them.
+//! A side conversation is an ephemeral fork for a quick `/side` question next to its parent. It
+//! makes inherited history reference-only unless the side conversation explicitly requests mutation.
 
 use super::conversation_panes::ConversationPaneInit;
 use super::*;
@@ -108,70 +104,8 @@ impl SideParentStatus {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn side_boundary_prompt_marks_inherited_history_reference_only() {
-        let item = App::side_boundary_prompt_item();
-        let ResponseItem::Message { role, content, .. } = item else {
-            panic!("expected hidden side boundary prompt to be a user message");
-        };
-        assert_eq!(role, "user");
-        let [ContentItem::InputText { text }] = content.as_slice() else {
-            panic!("expected hidden side boundary prompt text");
-        };
-        assert!(text.contains("Side conversation boundary."));
-        assert!(text.contains("Everything before this boundary is inherited history"));
-        assert!(text.contains("It is not your current task."));
-        assert!(text.contains("Only messages submitted after this boundary are active"));
-        assert!(text.contains("Do not continue, execute, or complete"));
-        assert!(text.contains("separate from the main thread"));
-        assert!(
-            text.contains("External tools may be available according to this thread's current")
-        );
-        assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
-        assert!(text.contains("Sub-agents are off-limits in this side conversation."));
-        assert!(text.contains("Do not modify files"));
-    }
-
-    #[test]
-    fn side_start_error_message_explains_missing_first_prompt() {
-        let err = color_eyre::eyre::eyre!(
-            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
-        );
-
-        assert_eq!(
-            App::side_start_error_message(&err),
-            "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
-        );
-    }
-
-    #[test]
-    fn side_start_error_message_uses_generic_start_wording() {
-        let err = color_eyre::eyre::eyre!("transport disconnected");
-
-        assert_eq!(
-            App::side_start_error_message(&err),
-            "Failed to start side conversation: transport disconnected"
-        );
-    }
-
-    #[test]
-    fn side_developer_instructions_appends_existing_policy() {
-        let developer_instructions =
-            App::side_developer_instructions(Some("Existing developer policy."));
-
-        assert!(developer_instructions.contains("Existing developer policy."));
-        assert!(
-            developer_instructions.contains("You are in a side conversation, not the main thread.")
-        );
-        assert!(
-            developer_instructions.contains("Sub-agents are off-limits in this side conversation.")
-        );
-    }
-}
+#[path = "side_tests.rs"]
+mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SideParentStatusChange {
@@ -318,7 +252,7 @@ impl App {
         let Some(side_origin) = self
             .chat_widget
             .by_slot(PaneSlot::Side)
-            .and_then(|pane| pane.origin())
+            .and_then(super::conversation_panes::ConversationPane::origin)
         else {
             return false;
         };
@@ -433,18 +367,6 @@ impl App {
         true
     }
 
-    pub(super) fn side_thread_to_discard_after_switch(
-        &self,
-        target_thread_id: ThreadId,
-    ) -> Option<ThreadId> {
-        let side_thread_id = self.installed_side_thread_id()?;
-        if target_thread_id == side_thread_id {
-            return None;
-        }
-
-        Some(side_thread_id)
-    }
-
     pub(super) async fn discard_side_thread(
         &mut self,
         app_server: &mut AppServerSession,
@@ -472,8 +394,12 @@ impl App {
 
     pub(super) async fn discard_thread_local_state(&mut self, thread_id: ThreadId) {
         let remove_side_pane = self.installed_side_thread_id() == Some(thread_id);
+        if remove_side_pane || self.side_threads.contains_key(&thread_id) {
+            self.retire_thread(thread_id);
+        }
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
+        self.pending_app_server_requests.discard_thread(thread_id);
         self.side_threads.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
         if remove_side_pane {
@@ -536,8 +462,12 @@ impl App {
         user_message: Option<crate::chatwidget::UserMessage>,
         message: String,
     ) {
-        self.discard_side_thread_or_keep_visible(tui, app_server, thread_id)
+        let cleaned = self
+            .discard_side_thread_or_keep_visible(tui, app_server, thread_id)
             .await;
+        if !cleaned && self.installed_side_thread_id() != Some(thread_id) {
+            self.discard_thread_local_state(thread_id).await;
+        }
         self.restore_side_user_message(user_message);
         self.add_side_thread_error(thread_id, message);
     }
@@ -635,14 +565,25 @@ impl App {
             return Ok(());
         }
 
-        if let Some(side_thread_id) = self.side_thread_to_discard_after_switch(thread_id) {
-            if !self.discard_side_thread(app_server, side_thread_id).await {
-                self.keep_side_thread_visible_after_cleanup_failure(tui, side_thread_id);
-                return Ok(());
-            }
+        let Some(selection) = self
+            .prepare_agent_thread_selection(app_server, thread_id)
+            .await
+        else {
+            self.chat_widget.focus(PaneSlot::Side);
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        };
+        if let Some(side_thread_id) = self
+            .installed_side_thread_id()
+            .filter(|side_thread_id| *side_thread_id != thread_id)
+            && !self.discard_side_thread(app_server, side_thread_id).await
+        {
+            self.keep_side_thread_visible_after_cleanup_failure(tui, side_thread_id);
+            return Ok(());
         }
         self.chat_widget.focus(PaneSlot::Parent);
-        self.select_agent_thread(tui, app_server, thread_id).await?;
+        self.apply_prepared_agent_thread_selection(tui, app_server, selection)
+            .await?;
         self.surface_pending_inactive_thread_interactive_requests()
             .await?;
         Ok(())
@@ -723,6 +664,11 @@ impl App {
                     .await;
                     return Ok(AppRunControl::Continue);
                 }
+
+                let Some(side) = self.chat_widget.by_slot_mut(PaneSlot::Side) else {
+                    unreachable!("side pane was installed above");
+                };
+                side.attach_thread(child_thread_id, /*receiver*/ None);
 
                 let Some((receiver, snapshot)) =
                     self.activate_thread_for_replay(child_thread_id).await

@@ -3843,20 +3843,63 @@ async fn start_side_installs_live_child_without_replacing_parent() -> Result<()>
 }
 
 #[tokio::test]
-async fn side_discard_selection_keeps_current_side_thread() {
+async fn failed_agent_selection_keeps_side_conversation() -> Result<()> {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
     install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    let unavailable_thread_id = ThreadId::new();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
 
-    assert_eq!(
-        app.side_thread_to_discard_after_switch(side_thread_id),
-        None
+    app.select_agent_thread_and_discard_side(&mut tui, &mut app_server, unavailable_thread_id)
+        .await?;
+
+    assert!(app.chat_widget.has_side());
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    assert_eq!(app.chat_widget.active_thread_id, Some(side_thread_id));
+    assert!(app.side_threads.contains_key(&side_thread_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_side_cleanup_does_not_switch_parent() -> Result<()> {
+    let mut app = make_test_app().await;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    let target_thread_id = ThreadId::new();
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    app.thread_event_channels.insert(
+        target_thread_id,
+        ThreadEventChannel::new_with_session(
+            /*capacity*/ 4,
+            test_thread_session(target_thread_id, test_path_buf("/tmp/target")),
+            Vec::new(),
+        ),
     );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+
+    app.select_agent_thread_and_discard_side(&mut tui, &mut app_server, target_thread_id)
+        .await?;
+
+    assert!(app.chat_widget.has_side());
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    assert_eq!(app.chat_widget.active_thread_id, Some(side_thread_id));
     assert_eq!(
-        app.side_thread_to_discard_after_switch(parent_thread_id),
-        Some(side_thread_id)
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.active_thread_id),
+        Some(parent_thread_id)
     );
+    assert!(
+        app.thread_event_channels
+            .get(&target_thread_id)
+            .is_some_and(|channel| channel.receiver.is_some())
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -3935,7 +3978,7 @@ async fn discard_side_thread_keeps_local_state_when_server_close_fails() -> Resu
 }
 
 #[tokio::test]
-async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
+async fn discard_closed_side_thread_ignores_late_server_events() -> Result<()> {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
@@ -3948,6 +3991,17 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
         Some("side".to_string()),
         /*is_closed*/ false,
     );
+    let pending_request = exec_approval_request(
+        side_thread_id,
+        "turn-pending",
+        "call-pending",
+        /*approval_id*/ None,
+    );
+    assert_eq!(
+        app.pending_app_server_requests
+            .note_server_request(&pending_request),
+        None
+    );
 
     app.discard_closed_side_thread(side_thread_id).await;
 
@@ -3956,6 +4010,92 @@ async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
     assert!(!app.side_threads.contains_key(&side_thread_id));
     assert!(!app.thread_event_channels.contains_key(&side_thread_id));
     assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+    assert!(
+        !app.pending_app_server_requests
+            .contains_server_request(&pending_request)
+    );
+
+    app.primary_thread_id = None;
+    let app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(thread_closed_notification(
+            side_thread_id,
+        )),
+    )
+    .await;
+    assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+    assert!(app.pending_primary_events.is_empty());
+
+    let late_request = exec_approval_request(
+        side_thread_id,
+        "turn-late",
+        "call-late",
+        /*approval_id*/ None,
+    );
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(late_request.clone()),
+    )
+    .await;
+    assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+    assert!(
+        !app.pending_app_server_requests
+            .contains_server_request(&late_request)
+    );
+
+    let unrelated_thread_id = ThreadId::new();
+    app.enqueue_thread_notification(
+        unrelated_thread_id,
+        thread_closed_notification(unrelated_thread_id),
+    )
+    .await
+    .expect("unrelated close should retain normal routing");
+    assert!(app.thread_event_channels.contains_key(&unrelated_thread_id));
+
+    app.enqueue_primary_thread_session(
+        test_thread_session(side_thread_id, test_path_buf("/tmp/side")),
+        Vec::new(),
+    )
+    .await?;
+    assert!(!app.is_thread_retired(&side_thread_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn retired_thread_ignores_late_git_branch_sync() -> Result<()> {
+    let mut app = make_test_app().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let thread_id = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await?
+        .session
+        .thread_id;
+    app.retire_thread(thread_id);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let control = app
+        .handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::SyncThreadGitBranch {
+                thread_id,
+                branch: "retired-branch-must-not-write".to_string(),
+            },
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    let thread = app_server
+        .thread_read(thread_id, /*include_turns*/ false)
+        .await?;
+    assert_ne!(
+        thread.git_info.and_then(|git_info| git_info.branch),
+        Some("retired-branch-must-not-write".to_string())
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -4287,6 +4427,7 @@ async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
+        retired_thread_ids: VecDeque::new(),
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
@@ -4352,6 +4493,7 @@ async fn make_test_app_with_channels() -> (
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            retired_thread_ids: VecDeque::new(),
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
