@@ -1,7 +1,6 @@
 use super::*;
 use crate::apply::ApplyGitRequest;
 use crate::apply::apply_git_patch;
-use crate::apply::safe_git_config_parts;
 use crate::exact_staging::StagePathsResult;
 use crate::exact_staging::update_index_exact_paths_from_apply;
 use crate::exact_staging::update_index_exact_paths_standalone;
@@ -1015,13 +1014,7 @@ fn exact_stage(root: &Path, paths: &[&str], content_filter_paths: &[&str]) -> St
     .expect("run exact staging primitive")
 }
 
-fn stage_effective_paths(
-    git: &GitRunner,
-    root: &Path,
-    paths: &[String],
-    legacy_config_args: &[String],
-) -> io::Result<()> {
-    let _ = legacy_config_args;
+fn stage_effective_paths(git: &GitRunner, root: &Path, paths: &[String]) -> io::Result<()> {
     let canonical_root = std::fs::canonicalize(root)?;
     let mut config = GuardedGitConfig::authorize(git, &canonical_root, Vec::new())?;
     stage_effective_paths_standalone(&mut config, paths)
@@ -1745,7 +1738,6 @@ fn ignored_untracked_path_returns_nonzero_without_partial_staging() {
         &git,
         root,
         &["ignored.txt".to_string(), "ordinary.txt".to_string()],
-        &safe_git_config_parts(),
     )
     .expect("public staging remains best effort for ignored paths");
     assert!(
@@ -1868,13 +1860,8 @@ fn exact_staging_refuses_skip_and_assume_unchanged_without_mutation() {
     assert_eq!(git_index_bytes(root), before);
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    stage_effective_paths(
-        &git,
-        root,
-        &["existing.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect("public staging remains best effort for skip-worktree paths");
+    stage_effective_paths(&git, root, &["existing.txt".to_string()])
+        .expect("public staging remains best effort for skip-worktree paths");
     assert_eq!(git_index_bytes(root), before);
 
     assert_eq!(
@@ -2606,13 +2593,8 @@ fn staging_rejects_global_lfs_filter_without_running_it() {
             std::env::var_os("CODEX_GIT_UTILS_TARGET_REPO").expect("target repository"),
         );
         let git = GitRunner::for_cwd_io(&root).expect("trusted Git");
-        let error = stage_effective_paths(
-            &git,
-            &root,
-            &["file.txt".to_string()],
-            &safe_git_config_parts(),
-        )
-        .expect_err("reject global Git LFS filter");
+        let error = stage_effective_paths(&git, &root, &["file.txt".to_string()])
+            .expect_err("reject global Git LFS filter");
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         return;
     }
@@ -2677,25 +2659,15 @@ fn staging_rejects_selected_process_but_allows_smudge_only_filter() {
     let process_repo = init_repo_with_selected_filter("filter.selected.process");
     let process_root = process_repo.path();
     let process_git = GitRunner::for_cwd_io(process_root).expect("trusted Git");
-    let error = stage_effective_paths(
-        &process_git,
-        process_root,
-        &["file.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect_err("reject selected process filter");
+    let error = stage_effective_paths(&process_git, process_root, &["file.txt".to_string()])
+        .expect_err("reject selected process filter");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 
     let smudge_repo = init_repo_with_selected_filter("filter.selected.smudge");
     let smudge_root = smudge_repo.path();
     let smudge_git = GitRunner::for_cwd_io(smudge_root).expect("trusted Git");
-    stage_effective_paths(
-        &smudge_git,
-        smudge_root,
-        &["file.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect("smudge-only filters do not run during staging");
+    stage_effective_paths(&smudge_git, smudge_root, &["file.txt".to_string()])
+        .expect("smudge-only filters do not run during staging");
     let (code, staged, stderr) = run(smudge_root, &["git", "diff", "--cached", "--name-only"]);
     assert_eq!(code, 0, "read staged paths: {stderr}");
     assert_eq!(staged, "file.txt\n");
@@ -2737,13 +2709,8 @@ fn staging_neutralizes_off_path_racy_filters_without_changing_their_index_entry(
         std::fs::write(guarded_root.join("target.txt"), "new target\n")
             .expect("modify guarded target");
         let git = GitRunner::for_cwd_io(guarded_root).expect("trusted Git");
-        stage_effective_paths(
-            &git,
-            guarded_root,
-            &["target.txt".to_string()],
-            &safe_git_config_parts(),
-        )
-        .expect("stage with off-path filters neutralized");
+        stage_effective_paths(&git, guarded_root, &["target.txt".to_string()])
+            .expect("stage with off-path filters neutralized");
 
         assert!(
             !guarded.marker.exists(),
@@ -2789,8 +2756,7 @@ fn staging_allows_selected_symlink_while_neutralizing_off_path_filters() {
         let outside_before = index_entry(root, "outside.txt");
 
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        stage_effective_paths(&git, root, &["link".to_string()], &safe_git_config_parts())
-            .expect("stage selected symlink");
+        stage_effective_paths(&git, root, &["link".to_string()]).expect("stage selected symlink");
 
         assert!(
             !fixture.marker.exists(),
@@ -2858,12 +2824,7 @@ fn staging_allows_optional_smudge_only_but_refuses_required_or_malformed_smudge(
             .expect("modify selected target");
         let before = git_index_bytes(root);
         let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-        let result = stage_effective_paths(
-            &git,
-            root,
-            &["selected.txt".to_string()],
-            &safe_git_config_parts(),
-        );
+        let result = stage_effective_paths(&git, root, &["selected.txt".to_string()]);
 
         assert!(
             !fixture.marker.exists(),
@@ -2930,13 +2891,8 @@ fn optional_smudge_target_does_not_mask_a_later_clean_target() {
     let before = git_index_bytes(root);
 
     let git = GitRunner::for_cwd_io(root).expect("trusted Git");
-    let error = stage_effective_paths(
-        &git,
-        root,
-        &["a.txt".to_string(), "z.txt".to_string()],
-        &safe_git_config_parts(),
-    )
-    .expect_err("reject the selected clean target after optional smudge");
+    let error = stage_effective_paths(&git, root, &["a.txt".to_string(), "z.txt".to_string()])
+        .expect_err("reject the selected clean target after optional smudge");
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     assert_eq!(git_index_bytes(root), before);
 }
@@ -2979,7 +2935,6 @@ fn staging_filter_probe_uses_only_existing_non_directory_leaves() {
             "deleted.txt".to_string(),
             "kept.txt".to_string(),
         ],
-        &safe_git_config_parts(),
     )
     .expect("probe only the surviving staging leaf");
 
@@ -3023,7 +2978,6 @@ fn staging_skips_filter_probe_when_no_leaf_will_be_staged() {
         &git,
         root,
         &["missing.txt".to_string(), "deleted.txt".to_string()],
-        &safe_git_config_parts(),
     )
     .expect("skip staging when every effective leaf is absent");
 

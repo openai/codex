@@ -98,6 +98,7 @@ impl GitConfigEnvironmentSnapshot {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn value(&self, name: &str) -> Option<&OsStr> {
         self.entries
             .iter()

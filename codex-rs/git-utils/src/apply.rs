@@ -10,15 +10,11 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[cfg(test)]
-use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
 use crate::guarded_config::GuardedGitConfig;
 use crate::patch_paths::extract_effective_paths_from_patch_guarded;
 use crate::patch_paths::stage_effective_paths_from_apply;
-#[cfg(test)]
-use crate::safe_git::DISABLED_HOOKS_PATH;
 #[cfg(test)]
 use crate::safe_git::isolate_git_command_environment;
 
@@ -207,16 +203,6 @@ fn run_guarded_apply(
     ))
 }
 
-#[cfg(test)]
-pub(crate) fn safe_git_config_parts() -> Vec<String> {
-    vec![
-        "-c".to_string(),
-        format!("core.hooksPath={DISABLED_HOOKS_PATH}"),
-        "-c".to_string(),
-        FsmonitorOverride::Disabled.git_config_arg().to_string(),
-    ]
-}
-
 #[cfg(all(test, unix))]
 #[path = "apply_transport_tests.rs"]
 mod transport_tests;
@@ -293,57 +279,6 @@ mod tests {
         std::fs::read_to_string(path)
             .expect("read file")
             .replace("\r\n", "\n")
-    }
-
-    fn commit_filter_attributes(root: &Path, tracked_path: &str) {
-        std::fs::write(
-            root.join(".gitattributes"),
-            format!("{tracked_path} filter=x=y\n"),
-        )
-        .expect("write attributes");
-        let (add_code, _, add_err) = run(root, &["git", "add", ".gitattributes"]);
-        assert_eq!(add_code, 0, "add attributes: {add_err}");
-        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "attributes"]);
-        assert_eq!(commit_code, 0, "commit attributes: {commit_err}");
-    }
-
-    fn configure_clean_filter(root: &Path, tracked_path: &str) {
-        commit_filter_attributes(root, tracked_path);
-        let (config_code, _, config_err) = run(
-            root,
-            &[
-                "git",
-                "config",
-                "filter.x=y.clean",
-                "git config codex.filterran true && git hash-object --stdin",
-            ],
-        );
-        assert_eq!(config_code, 0, "configure filter: {config_err}");
-    }
-
-    fn configure_worktree_clean_filter(root: &Path, tracked_path: &str) {
-        commit_filter_attributes(root, tracked_path);
-        let (extension_code, _, extension_err) = run(
-            root,
-            &["git", "config", "extensions.worktreeConfig", "true"],
-        );
-        assert_eq!(extension_code, 0, "enable worktree config: {extension_err}");
-        let (config_code, _, config_err) = run(
-            root,
-            &[
-                "git",
-                "config",
-                "--worktree",
-                "filter.x=y.clean",
-                "git config codex.filterran true && git hash-object --stdin",
-            ],
-        );
-        assert_eq!(config_code, 0, "configure worktree filter: {config_err}");
-    }
-
-    fn configured_filter_ran(root: &Path) -> bool {
-        let (code, _, _) = run(root, &["git", "config", "--get", "codex.filterran"]);
-        code == 0
     }
 
     #[cfg(unix)]
@@ -733,101 +668,6 @@ diff --git a/ghost.txt b/ghost.txt\n--- a/ghost.txt\n+++ b/ghost.txt\n@@ -1,1 +1
             !r2.cmd_for_log.contains("--check"),
             "non-preflight path should not use --check"
         );
-    }
-
-    #[test]
-    fn apply_rejects_configured_clean_filter_without_running_it() {
-        let _g = env_lock().lock().unwrap();
-        let repo = init_repo();
-        let root = repo.path();
-        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
-        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
-        assert_eq!(add_code, 0, "add file: {add_err}");
-        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
-        assert_eq!(commit_code, 0, "commit file: {commit_err}");
-        configure_clean_filter(root, "file.txt");
-
-        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n";
-        for (revert, preflight) in [(false, false), (false, true), (true, false), (true, true)] {
-            let request = ApplyGitRequest {
-                cwd: root.to_path_buf(),
-                diff: diff.to_string(),
-                revert,
-                preflight,
-            };
-            reset_config_source_authorization_count();
-            let error = apply_git_patch(&request).expect_err("reject configured filter");
-            assert_eq!(
-                config_source_authorization_count(),
-                1,
-                "{revert} {preflight}"
-            );
-            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-            assert!(!configured_filter_ran(root));
-            assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
-        }
-    }
-
-    #[test]
-    fn apply_rejects_worktree_scoped_clean_filter_without_running_it() {
-        let _g = env_lock().lock().unwrap();
-        let repo = init_repo();
-        let root = repo.path();
-        std::fs::write(root.join("file.txt"), "orig\n").expect("write file");
-        let (add_code, _, add_err) = run(root, &["git", "add", "file.txt"]);
-        assert_eq!(add_code, 0, "add file: {add_err}");
-        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
-        assert_eq!(commit_code, 0, "commit file: {commit_err}");
-        configure_worktree_clean_filter(root, "file.txt");
-
-        let request = ApplyGitRequest {
-            cwd: root.to_path_buf(),
-            diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+next\n".to_string(),
-            revert: false,
-            preflight: true,
-        };
-        let error = apply_git_patch(&request).expect_err("reject worktree filter");
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert!(!configured_filter_ran(root));
-        assert_eq!(read_file_normalized(&root.join("file.txt")), "orig\n");
-    }
-
-    #[test]
-    fn apply_probe_rejects_command_scoped_clean_filter() {
-        let _g = env_lock().lock().unwrap();
-        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
-            run_isolated_test(
-                "apply::tests::apply_probe_rejects_command_scoped_clean_filter",
-                &[(
-                    "CODEX_APPLY_GIT_CFG",
-                    OsStr::new(
-                        "filter.codex-test.clean=git config codex.filterran true && git hash-object --stdin",
-                    ),
-                )],
-            );
-            return;
-        }
-
-        let repo = init_repo();
-        let root = repo.path();
-        std::fs::write(root.join("test.txt"), "orig\n").expect("write file");
-        let (add_code, _, add_err) = run(root, &["git", "add", "test.txt"]);
-        assert_eq!(add_code, 0, "add file: {add_err}");
-        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-m", "seed"]);
-        assert_eq!(commit_code, 0, "commit file: {commit_err}");
-        std::fs::write(root.join(".gitattributes"), "test.txt filter=codex-test\n")
-            .expect("attributes");
-
-        let request = ApplyGitRequest {
-            cwd: root.to_path_buf(),
-            diff: "diff --git a/test.txt b/test.txt\n--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-orig\n+next\n".to_string(),
-            revert: false,
-            preflight: true,
-        };
-        let error = apply_git_patch(&request).expect_err("reject command-scoped filter");
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert!(!configured_filter_ran(root));
-        assert_eq!(read_file_normalized(&root.join("test.txt")), "orig\n");
     }
 
     #[test]

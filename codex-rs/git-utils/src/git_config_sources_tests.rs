@@ -40,6 +40,7 @@ fn init_repo_at(root: &Path) {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn create_junction(path: &Path, target: &Path) {
     // Bazel's GNU Windows runner can surface temporary paths with `/`
     // separators. `mklink` treats those separators as option prefixes, so
@@ -402,9 +403,8 @@ fn rejects_worktree_fifo_primary_source_without_opening_it() {
 }
 
 #[test]
-fn git_config_nosystem_accepts_cross_version_boolean_values() {
-    const TEST_NAME: &str =
-        "git_config_sources::tests::git_config_nosystem_accepts_cross_version_boolean_values";
+fn git_config_nosystem_uses_the_shared_parser_with_a_cross_version_numeric_subset() {
+    const TEST_NAME: &str = "git_config_sources::tests::git_config_nosystem_uses_the_shared_parser_with_a_cross_version_numeric_subset";
     if std::env::var_os("CODEX_GIT_CONFIG_SOURCE_CHILD").is_none() {
         let repo = init_repo();
         let unsafe_system = repo.path().join("system.gitconfig");
@@ -415,6 +415,11 @@ fn git_config_nosystem_accepts_cross_version_boolean_values() {
             ("-1", "ignored"),
             ("01", "ignored"),
             ("+1", "ignored"),
+            ("0x1", "ignored"),
+            ("010", "ignored"),
+            ("1k", "ignored"),
+            ("-1g", "ignored"),
+            (" 1", "ignored"),
             ("2147483647", "ignored"),
             ("-2147483647", "ignored"),
             ("true", "ignored"),
@@ -427,9 +432,17 @@ fn git_config_nosystem_accepts_cross_version_boolean_values() {
             ("no", "rejected"),
             ("off", "rejected"),
             ("not-a-bool", "invalid"),
+            ("08", "invalid"),
             ("2147483648", "invalid"),
             ("-2147483648", "invalid"),
+            ("-0x80000000", "invalid"),
+            ("-020000000000", "invalid"),
+            ("-2097152k", "invalid"),
+            ("-2048m", "invalid"),
+            ("-2g", "invalid"),
+            (" -2G", "invalid"),
             ("-2147483649", "invalid"),
+            ("2g", "invalid"),
         ] {
             run_isolated_source_test(
                 TEST_NAME,

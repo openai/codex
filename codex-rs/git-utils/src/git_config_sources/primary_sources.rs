@@ -7,6 +7,7 @@ use super::path_safety::CONFIG_PATH_KEY;
 use super::path_safety::git_var_path_from_bytes;
 use super::path_safety::invalid_config_source;
 use crate::git_command::GitRunner;
+use crate::git_config::parse_git_boolean_symmetric_i32;
 
 pub(super) fn default_system_config_source_candidates(
     git: &GitRunner,
@@ -259,19 +260,8 @@ fn git_env_bool(git: &GitRunner, name: &str) -> io::Result<bool> {
     let value = value
         .to_str()
         .ok_or_else(|| invalid_config_source("non-UTF-8 Git boolean environment value"))?;
-    match value.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "" | "0" | "false" | "no" | "off" => Ok(false),
-        value => value
-            .parse::<i64>()
-            .ok()
-            // Supported Git releases disagree on whether INT_MIN is a valid
-            // numeric boolean. Accept only their shared symmetric range so a
-            // value approved here cannot make the selected Git fail later.
-            .filter(|value| (-i64::from(i32::MAX)..=i64::from(i32::MAX)).contains(value))
-            .map(|value| value != 0)
-            .ok_or_else(|| invalid_config_source("invalid Git boolean environment value")),
-    }
+    parse_git_boolean_symmetric_i32(value.as_bytes())
+        .ok_or_else(|| invalid_config_source("invalid Git boolean environment value"))
 }
 
 #[cfg(windows)]
