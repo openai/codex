@@ -3,23 +3,19 @@ use std::io::stdout;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::event::KeyCode;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 
 use crate::key_hint;
 
-use super::DisableAlternateScroll;
-use super::EnableAlternateScroll;
 use super::Terminal;
+use super::screen_session::ScreenSession;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
 
@@ -60,11 +56,11 @@ impl SuspendContext {
     ///   otherwise record `RealignInline`.
     /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
     /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
-    pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
-        if alt_screen_active.load(Ordering::Relaxed) {
-            // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = execute!(stdout(), DisableAlternateScroll);
-            let _ = execute!(stdout(), LeaveAlternateScreen);
+    pub(crate) fn suspend(&self, screen_session: &ScreenSession) -> Result<()> {
+        let mut first_error = None;
+        if screen_session.is_active() {
+            let mut terminal_stdout = stdout();
+            first_error = screen_session.suspend_to_writer(&mut terminal_stdout).err();
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
             self.set_resume_action(ResumeAction::RealignInline);
@@ -93,8 +89,10 @@ impl SuspendContext {
             cursor_y = self.cursor_y(),
             "restored terminal state after resume"
         );
-
-        Ok(())
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     /// Consume the pending resume intent and precompute any viewport changes needed post-resume.
@@ -103,11 +101,12 @@ impl SuspendContext {
     /// resumes; returns `None` when there was no pending suspend intent.
     pub(crate) fn prepare_resume_action(
         &self,
-        alt_saved_viewport: &mut Option<Rect>,
+        screen_session: &ScreenSession,
     ) -> Option<PreparedResumeAction> {
-        let action = self.take_resume_action()?;
-        match action {
-            ResumeAction::RealignInline => {
+        match self.take_resume_action() {
+            None if screen_session.is_suspended() => Some(PreparedResumeAction::RestoreAltScreen),
+            None => None,
+            Some(ResumeAction::RealignInline) => {
                 let viewport = Rect::new(
                     /*x*/ 0,
                     self.cursor_y(),
@@ -116,10 +115,8 @@ impl SuspendContext {
                 );
                 Some(PreparedResumeAction::RealignViewport(viewport))
             }
-            ResumeAction::RestoreAlt => {
-                if let Some(saved) = alt_saved_viewport.as_mut() {
-                    saved.y = self.cursor_y();
-                }
+            Some(ResumeAction::RestoreAlt) => {
+                screen_session.update_saved_viewport_y(self.cursor_y());
                 Some(PreparedResumeAction::RestoreAltScreen)
             }
         }
@@ -178,19 +175,17 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
+    pub(crate) fn apply(
+        self,
+        terminal: &mut Terminal,
+        screen_session: &ScreenSession,
+    ) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(terminal.backend_mut(), EnableAlternateScroll)?;
-                if let Ok(size) = terminal.size() {
-                    terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    terminal.clear()?;
-                }
+                screen_session.resume(terminal)?;
             }
         }
         Ok(())

@@ -21,8 +21,6 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyEvent;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 #[cfg(not(unix))]
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
@@ -50,6 +48,7 @@ use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use crate::tui::screen_session::ScreenSession;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 
@@ -59,6 +58,7 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod screen_session;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -532,11 +532,9 @@ pub struct Tui {
     pending_history_lines: Vec<PendingHistoryLines>,
     ambient_pet_image_state: crate::pets::PetImageRenderState,
     pet_picker_preview_image_state: crate::pets::PetImageRenderState,
-    alt_saved_viewport: Option<ratatui::layout::Rect>,
+    screen_session: ScreenSession,
     #[cfg(unix)]
     suspend_context: SuspendContext,
-    // True when overlay alt-screen UI is active
-    alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
@@ -544,8 +542,6 @@ pub struct Tui {
     notification_condition: NotificationCondition,
     // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
     is_zellij: bool,
-    // When false, enter_alt_screen() becomes a no-op.
-    alt_screen_enabled: bool,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -589,23 +585,21 @@ impl Tui {
             pending_history_lines: vec![],
             ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
             pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
-            alt_saved_viewport: None,
+            screen_session: ScreenSession::new(),
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
-            alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
-            alt_screen_enabled: true,
             _stderr_guard: stderr_guard,
         }
     }
 
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
-        self.alt_screen_enabled = enabled;
+        self.screen_session.set_enabled(enabled);
     }
 
     pub fn set_notification_settings(
@@ -626,7 +620,7 @@ impl Tui {
     }
 
     pub fn is_alt_screen_active(&self) -> bool {
-        self.alt_screen_active.load(Ordering::Relaxed)
+        self.screen_session.is_active()
     }
 
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
@@ -655,8 +649,8 @@ impl Tui {
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
-        if was_alt_screen {
-            let _ = self.leave_alt_screen();
+        if was_alt_screen && let Err(err) = self.screen_session.suspend(&mut self.terminal) {
+            tracing::warn!("failed to suspend alternate screen before external program: {err}");
         }
 
         if let Err(err) = mode.restore() {
@@ -677,8 +671,8 @@ impl Tui {
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
         flush_terminal_input_buffer();
 
-        if was_alt_screen {
-            let _ = self.enter_alt_screen();
+        if was_alt_screen && let Err(err) = self.screen_session.resume(&mut self.terminal) {
+            tracing::warn!("failed to resume alternate screen after external program: {err}");
         }
 
         self.resume_events();
@@ -720,7 +714,7 @@ impl Tui {
             self.draw_tx.subscribe(),
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
-            self.alt_screen_active.clone(),
+            self.screen_session.clone(),
         );
         #[cfg(not(unix))]
         let stream = TuiEventStream::new(
@@ -734,39 +728,12 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
-        let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
-        if let Ok(size) = self.terminal.size() {
-            self.alt_saved_viewport = Some(self.terminal.viewport_area);
-            self.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                0,
-                0,
-                size.width,
-                size.height,
-            ));
-            let _ = self.terminal.clear();
-        }
-        self.alt_screen_active.store(true, Ordering::Relaxed);
-        Ok(())
+        self.screen_session.enter(&mut self.terminal)
     }
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        if !self.alt_screen_enabled {
-            return Ok(());
-        }
-        // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
-        if let Some(saved) = self.alt_saved_viewport.take() {
-            self.terminal.set_viewport_area(saved);
-        }
-        self.alt_screen_active.store(false, Ordering::Relaxed);
-        Ok(())
+        self.screen_session.leave(&mut self.terminal)
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -887,7 +854,7 @@ impl Tui {
         #[cfg(unix)]
         let mut prepared_resume = self
             .suspend_context
-            .prepare_resume_action(&mut self.alt_saved_viewport);
+            .prepare_resume_action(&self.screen_session);
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
@@ -898,7 +865,7 @@ impl Tui {
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                prepared.apply(&mut self.terminal)?;
+                prepared.apply(&mut self.terminal, &self.screen_session)?;
             }
 
             let terminal = &mut self.terminal;
@@ -936,8 +903,9 @@ impl Tui {
             #[cfg(unix)]
             {
                 let area = terminal.viewport_area;
-                let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
-                    self.alt_saved_viewport
+                let inline_area_bottom = if self.screen_session.is_active() {
+                    self.screen_session
+                        .saved_viewport()
                         .map(|r| r.bottom().saturating_sub(1))
                         .unwrap_or_else(|| area.bottom().saturating_sub(1))
                 } else {
@@ -1023,14 +991,14 @@ impl Tui {
         #[cfg(unix)]
         let mut prepared_resume = self
             .suspend_context
-            .prepare_resume_action(&mut self.alt_saved_viewport);
+            .prepare_resume_action(&self.screen_session);
 
         ensure_virtual_terminal_processing()?;
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
-                prepared.apply(&mut self.terminal)?;
+                prepared.apply(&mut self.terminal, &self.screen_session)?;
             }
 
             let terminal = &mut self.terminal;
@@ -1050,8 +1018,9 @@ impl Tui {
             #[cfg(unix)]
             {
                 let area = terminal.viewport_area;
-                let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
-                    self.alt_saved_viewport
+                let inline_area_bottom = if self.screen_session.is_active() {
+                    self.screen_session
+                        .saved_viewport()
                         .map(|r| r.bottom().saturating_sub(1))
                         .unwrap_or_else(|| area.bottom().saturating_sub(1))
                 } else {

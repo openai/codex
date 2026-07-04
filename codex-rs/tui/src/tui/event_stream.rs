@@ -34,6 +34,8 @@ use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::TuiEvent;
+#[cfg(unix)]
+use super::screen_session::ScreenSession;
 
 /// Result type produced by an event source.
 pub type EventResult = std::io::Result<Event>;
@@ -145,7 +147,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     #[cfg(unix)]
     suspend_context: crate::tui::job_control::SuspendContext,
     #[cfg(unix)]
-    alt_screen_active: Arc<AtomicBool>,
+    screen_session: ScreenSession,
 }
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
@@ -154,7 +156,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
-        #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
+        #[cfg(unix)] screen_session: ScreenSession,
     ) -> Self {
         let resume_stream = WatchStream::from_changes(broker.resume_events_rx());
         Self {
@@ -166,7 +168,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             #[cfg(unix)]
             suspend_context,
             #[cfg(unix)]
-            alt_screen_active,
+            screen_session,
         }
     }
 
@@ -240,7 +242,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
                     self.broker.pause_events();
-                    let suspend_result = self.suspend_context.suspend(&self.alt_screen_active);
+                    let suspend_result = self.suspend_context.suspend(&self.screen_session);
                     self.broker.resume_events();
                     if let Err(err) = suspend_result {
                         tracing::warn!(
@@ -374,7 +376,7 @@ mod tests {
             #[cfg(unix)]
             crate::tui::job_control::SuspendContext::new(),
             #[cfg(unix)]
-            Arc::new(AtomicBool::new(false)),
+            ScreenSession::new(),
         )
     }
 
