@@ -6,7 +6,7 @@ async fn reconcile_persisted_history_rejects_loaded_prefix_shorter_than_cursor()
     let (session, _turn_context) = make_session_and_context().await;
     let mut local_history = model_history_for_turn("first user", "first assistant");
     local_history.extend(model_history_for_turn("second user", "second assistant"));
-    session.replace_history(local_history.clone(), None).await;
+    set_history(&session, local_history.clone()).await;
 
     let mut full_rollout = completed_turn("turn-1", "first user", "first assistant");
     full_rollout.extend(completed_turn("turn-2", "second user", "second assistant"));
@@ -118,7 +118,7 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     let local_tail = assistant_message("valid local tail after uncertain append");
     let mut local_history = model_history_for_turn("first user", "first assistant");
     local_history.push(local_tail.clone());
-    session.replace_history(local_history.clone(), None).await;
+    set_history(&session, local_history.clone()).await;
     set_known_persisted_history(&session, &persisted_prefix).await;
     let append = RolloutItem::ResponseItem(local_tail.clone());
     invalidate_persisted_history_cursor(&session, std::slice::from_ref(&append)).await;
@@ -150,9 +150,7 @@ async fn uncertain_persisted_cursor_never_replaces_valid_in_memory_tail() {
     let second_ambiguous_append = assistant_message("second ambiguous append");
     let mut local_history_with_second_append = local_history.clone();
     local_history_with_second_append.push(second_ambiguous_append.clone());
-    session
-        .replace_history(local_history_with_second_append.clone(), None)
-        .await;
+    set_history(&session, local_history_with_second_append.clone()).await;
     invalidate_persisted_history_cursor(
         &session,
         &[RolloutItem::ResponseItem(second_ambiguous_append.clone())],
@@ -190,7 +188,7 @@ async fn uncertain_append_proven_by_cursor_allows_persisted_rollback_suffix() {
     let first_history = model_history_for_turn("first user", "first assistant");
     let mut local_history = first_history.clone();
     local_history.extend(model_history_for_turn("second user", "second assistant"));
-    session.replace_history(local_history, None).await;
+    set_history(&session, local_history).await;
     set_known_persisted_history(&session, &first_turn).await;
     invalidate_persisted_history_cursor(&session, &second_turn).await;
 
@@ -217,7 +215,7 @@ async fn uncertain_history_rewrite_never_restores_pre_rollback_disk_history() {
     let mut pre_rollback_rollout = first_turn.clone();
     pre_rollback_rollout.extend(second_turn);
     let first_history = model_history_for_turn("first user", "first assistant");
-    session.replace_history(first_history.clone(), None).await;
+    set_history(&session, first_history.clone()).await;
     set_known_persisted_history(&session, &pre_rollback_rollout).await;
     let rollback = rollback(/*num_turns*/ 1);
     invalidate_persisted_history_cursor(&session, std::slice::from_ref(&rollback)).await;
@@ -255,7 +253,7 @@ async fn uncertain_event_only_rollback_requires_the_durable_marker() {
     let (session, _turn_context) = make_session_and_context().await;
     let mut pre_rollback_rollout = vec![turn_started("event-only-turn")];
     pre_rollback_rollout.push(turn_complete("event-only-turn"));
-    session.replace_history(Vec::new(), None).await;
+    set_history(&session, Vec::new()).await;
     set_known_persisted_history(&session, &pre_rollback_rollout).await;
     let rollback = rollback(/*num_turns*/ 1);
     invalidate_persisted_history_cursor(&session, std::slice::from_ref(&rollback)).await;

@@ -49,7 +49,7 @@ pub(super) async fn handle_pending_thread_resume_request(
                 dispatch_buffered_thread_events(
                     buffered_events,
                     &pre_cut_connection_ids,
-                    None,
+                    /*resumed_connection_id*/ None,
                     conversation_id,
                     conversation,
                     listener_task_context,
@@ -94,7 +94,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             dispatch_buffered_thread_events(
                 buffered_events,
                 &pre_cut_connection_ids,
-                None,
+                /*resumed_connection_id*/ None,
                 conversation_id,
                 conversation,
                 listener_task_context,
@@ -184,7 +184,7 @@ pub(super) async fn handle_pending_thread_resume_request(
                 dispatch_buffered_thread_events(
                     buffered_events,
                     &pre_cut_connection_ids,
-                    None,
+                    /*resumed_connection_id*/ None,
                     conversation_id,
                     conversation,
                     listener_task_context,
@@ -258,7 +258,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             dispatch_buffered_thread_events(
                 buffered_events,
                 &pre_cut_connection_ids,
-                None,
+                /*resumed_connection_id*/ None,
                 conversation_id,
                 conversation,
                 listener_task_context,
@@ -282,7 +282,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             dispatch_buffered_thread_events(
                 buffered_events,
                 &pre_cut_connection_ids,
-                None,
+                /*resumed_connection_id*/ None,
                 conversation_id,
                 conversation,
                 listener_task_context,
@@ -313,7 +313,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             dispatch_buffered_thread_events(
                 buffered_events,
                 &pre_cut_connection_ids,
-                None,
+                /*resumed_connection_id*/ None,
                 conversation_id,
                 conversation,
                 listener_task_context,

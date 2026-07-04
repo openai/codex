@@ -15,7 +15,7 @@ fn token_budget_reminder(turn_id: &str) -> ResponseItem {
 async fn reconcile_imported_same_window_reminder_restores_one_shot_latch() {
     let (session, _turn_context) = make_session_and_context().await;
     let first_history = model_history_for_turn("first user", "first assistant");
-    session.replace_history(first_history.clone(), None).await;
+    set_history(&session, first_history.clone()).await;
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
     set_known_persisted_history(&session, &rollout).await;
     let reminder = token_budget_reminder("turn-2");

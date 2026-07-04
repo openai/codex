@@ -37,8 +37,8 @@ fn assert_page_coverage(
 
 #[test]
 fn buffered_token_usage_dedupes_only_the_reconciled_final_snapshot() {
-    let usage_a = token_usage_info(10);
-    let usage_b = token_usage_info(20);
+    let usage_a = token_usage_info(/*total_tokens*/ 10);
+    let usage_b = token_usage_info(/*total_tokens*/ 20);
     let mut buffered = vec![represented_buffered_event(
         "turn-a",
         EventMsg::TokenCount(TokenCountEvent {
@@ -70,7 +70,7 @@ fn buffered_token_usage_dedupes_only_the_reconciled_final_snapshot() {
         "equal usage still needs replay when the persisted owner advanced to a new turn"
     );
     assert!(
-        should_replay_reconciled_token_usage(&[], Some(&usage_a), None),
+        should_replay_reconciled_token_usage(&[], Some(&usage_a), /*reconciled_turn_id*/ None,),
         "a captured snapshot with no recoverable owner still uses the sender's fallback"
     );
 

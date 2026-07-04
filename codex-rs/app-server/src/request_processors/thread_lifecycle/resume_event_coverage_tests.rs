@@ -188,7 +188,8 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
             "durable answer",
         )),
     );
-    let mut occurrence_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
+    let mut occurrence_coverage =
+        ResumePayloadItemCoverage::new(&full_turns, /*initial_turns_page*/ None);
     assert!(consume_full_turn_coverage(
         &buffered_agent,
         &full_turns,
@@ -214,7 +215,8 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
             TurnItem::AgentMessage(same_canonical_id_item),
         ),
     ];
-    let mut lifecycle_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
+    let mut lifecycle_coverage =
+        ResumePayloadItemCoverage::new(&full_turns, /*initial_turns_page*/ None);
     for buffered in lifecycle_pair.iter_mut().rev() {
         buffered.represented_in_resume_snapshot =
             consume_full_turn_coverage(buffered, &full_turns, &mut lifecycle_coverage);
@@ -245,7 +247,12 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
     for (label, item) in redacted_items {
         let buffered = buffered_completed_item("omitted-turn", item);
         assert!(
-            event_is_represented(&buffered, &[], None, ResumePayloadMode::Redacted,),
+            event_is_represented(
+                &buffered,
+                &[],
+                /*initial_turns_page*/ None,
+                ResumePayloadMode::Redacted,
+            ),
             "redacted {label} must be covered"
         );
         assert!(
@@ -269,7 +276,7 @@ fn canonical_item_coverage_matches_generated_history_ids_and_respects_redaction(
     assert!(event_is_represented(
         &buffered_raw_image,
         &[],
-        None,
+        /*initial_turns_page*/ None,
         ResumePayloadMode::Redacted,
     ));
     assert!(full_turns_cover_event(&buffered_raw_image, &[]));
@@ -287,7 +294,8 @@ fn full_busy_snapshot_covers_projected_exec_lifecycle_but_omitted_items_do_not()
         .push(build_command_execution_end_item(end_event));
     let full_turns = vec![full_turn];
     let mut buffered = [begin, end];
-    let mut coverage = ResumePayloadItemCoverage::new(&full_turns, None);
+    let mut coverage =
+        ResumePayloadItemCoverage::new(&full_turns, /*initial_turns_page*/ None);
     for event in buffered.iter_mut().rev() {
         event.represented_in_resume_snapshot =
             consume_full_turn_coverage(event, &full_turns, &mut coverage);
@@ -340,7 +348,8 @@ fn raw_hook_prompt_routes_typed_and_raw_channels_independently() {
     });
     let full_turns = vec![full_turn];
 
-    let mut typed_coverage = ResumePayloadItemCoverage::new(&full_turns, None);
+    let mut typed_coverage =
+        ResumePayloadItemCoverage::new(&full_turns, /*initial_turns_page*/ None);
     assert!(consume_full_turn_coverage(
         &buffered,
         &full_turns,
@@ -357,7 +366,12 @@ fn raw_hook_prompt_routes_typed_and_raw_channels_independently() {
 
     assert!(!full_turns_cover_event(&buffered, &[]));
     assert!(
-        !event_is_represented(&buffered, &[], None, ResumePayloadMode::Redacted),
+        !event_is_represented(
+            &buffered,
+            &[],
+            /*initial_turns_page*/ None,
+            ResumePayloadMode::Redacted,
+        ),
         "an omitted hook remains safe to replay as a typed item on redacted resume"
     );
 
@@ -453,7 +467,8 @@ fn final_item_coverage_suppresses_folded_deltas_but_omitted_items_replay_them() 
         .items
         .push(thread_agent_message("history-generated-id", "final answer"));
     let full_turns = vec![full_turn];
-    let mut coverage = ResumePayloadItemCoverage::new(&full_turns, None);
+    let mut coverage =
+        ResumePayloadItemCoverage::new(&full_turns, /*initial_turns_page*/ None);
     for event in buffered.iter_mut().rev() {
         event.represented_in_resume_snapshot =
             consume_full_turn_coverage(event, &full_turns, &mut coverage);

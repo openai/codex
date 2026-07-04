@@ -3936,24 +3936,13 @@ async fn thread_resume_reconciles_history_appended_by_another_app_server() -> Re
 
 #[tokio::test]
 async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Result<()> {
-    #[cfg(target_os = "windows")]
-    let sleep_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 10".to_string(),
-    ];
-    #[cfg(not(target_os = "windows"))]
-    let sleep_command = vec!["sleep".to_string(), "10".to_string()];
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
-            sleep_command,
-            /*workdir*/ None,
-            Some(10_000),
-            "interrupted-command",
-        )?,
-        create_final_assistant_message_sse_response("external complete")?,
-    ])
-    .await;
+    let server = responses::start_mock_server().await;
+    let delayed_response = responses::sse_response(create_final_assistant_message_sse_response(
+        "interrupted complete",
+    )?)
+    .set_delay(Duration::from_secs(/*secs*/ 10));
+    let _interrupted_response_mock =
+        responses::mount_response_once(&server, delayed_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -3978,19 +3967,7 @@ async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Res
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
-    timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let notification = primary
-                .read_stream_until_notification_message("item/started")
-                .await?;
-            let started: ItemStartedNotification =
-                serde_json::from_value(notification.params.expect("item/started params"))?;
-            if matches!(started.item, ThreadItem::CommandExecution { .. }) {
-                return Ok::<(), anyhow::Error>(());
-            }
-        }
-    })
-    .await??;
+    wait_for_responses_request_count(&server, /*expected_count*/ 1).await?;
     primary
         .interrupt_turn_and_wait_for_aborted(
             thread.id.clone(),
@@ -3999,6 +3976,11 @@ async fn running_thread_resume_does_not_reappend_stale_interrupted_turn() -> Res
         )
         .await?;
 
+    let _external_response_mock = responses::mount_sse_once(
+        &server,
+        create_final_assistant_message_sse_response("external complete")?,
+    )
+    .await;
     let mut secondary = initialized_app_server(codex_home.path()).await?;
     resume_test_thread(
         &mut secondary,

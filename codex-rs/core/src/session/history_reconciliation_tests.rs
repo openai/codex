@@ -101,6 +101,12 @@ fn model_history_for_turn(user: &str, assistant: &str) -> Vec<ResponseItem> {
     vec![user_message(user), assistant_message(assistant)]
 }
 
+async fn set_history(session: &Session, history: Vec<ResponseItem>) {
+    session
+        .replace_history(history, /*reference_context_item*/ None)
+        .await;
+}
+
 fn session_meta(thread_id: ThreadId) -> RolloutItem {
     RolloutItem::SessionMeta(SessionMetaLine {
         meta: SessionMeta {

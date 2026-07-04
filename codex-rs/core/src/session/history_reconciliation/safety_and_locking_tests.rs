@@ -11,9 +11,7 @@ async fn known_crash_tail() -> (Session, Vec<ResponseItem>, Vec<RolloutItem>) {
         RolloutItem::ResponseItem(user_message("crash user")),
         RolloutItem::ResponseItem(assistant_message("partial assistant")),
     ];
-    session
-        .replace_history(history.clone(), /*reference_context_item*/ None)
-        .await;
+    set_history(&session, history.clone()).await;
     session
         .state
         .lock()
@@ -94,9 +92,9 @@ where
 async fn reconcile_persisted_history_hydrates_tokens_without_rewriting_equal_history() {
     let (session, turn_context) = make_session_and_context().await;
     let history = model_history_for_turn("user", "assistant");
-    session.replace_history(history.clone(), None).await;
-    let old_info = token_usage_info(10);
-    let new_info = token_usage_info(25);
+    set_history(&session, history.clone()).await;
+    let old_info = token_usage_info(/*total_tokens*/ 10);
+    let new_info = token_usage_info(/*total_tokens*/ 25);
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(old_info));
@@ -135,7 +133,7 @@ async fn reconcile_persisted_history_hydrates_tokens_without_rewriting_equal_his
 async fn reconcile_persisted_history_prefers_busy_over_incomplete_tail() {
     let (session, _turn_context) = make_session_and_context().await;
     let history = model_history_for_turn("local user", "local assistant");
-    session.replace_history(history.clone(), None).await;
+    set_history(&session, history.clone()).await;
     let snapshot = session
         .history_reconciliation_snapshot()
         .await
@@ -156,7 +154,7 @@ async fn reconcile_persisted_history_prefers_busy_over_incomplete_tail() {
 async fn reconcile_persisted_history_rejects_incomplete_idle_tail_without_mutation() {
     let (session, _turn_context) = make_session_and_context().await;
     let local_history = model_history_for_turn("local user", "local assistant");
-    session.replace_history(local_history.clone(), None).await;
+    set_history(&session, local_history.clone()).await;
     let snapshot = session
         .history_reconciliation_snapshot()
         .await
@@ -194,7 +192,7 @@ async fn reconcile_persisted_history_rejects_incomplete_idle_tail_without_mutati
 async fn reconcile_persisted_history_requires_terminal_event_after_turn_error() {
     let (session, _turn_context) = make_session_and_context().await;
     let local_history = model_history_for_turn("local user", "local assistant");
-    session.replace_history(local_history.clone(), None).await;
+    set_history(&session, local_history.clone()).await;
     let rollout = vec![
         turn_started("failed-turn"),
         RolloutItem::ResponseItem(user_message("external user")),
@@ -265,9 +263,7 @@ async fn reconcile_persisted_history_allows_rollback_after_known_crash_tail() {
 #[tokio::test]
 async fn reconcile_persisted_history_detects_optimistic_conflicts() {
     let (session, turn_context) = make_session_and_context().await;
-    session
-        .replace_history(vec![user_message("local baseline")], None)
-        .await;
+    set_history(&session, vec![user_message("local baseline")]).await;
     let snapshot_before_append = session
         .history_reconciliation_snapshot()
         .await
@@ -294,9 +290,7 @@ async fn reconcile_persisted_history_detects_optimistic_conflicts() {
         .history_reconciliation_snapshot()
         .await
         .expect("idle history snapshot");
-    session
-        .replace_history(history_after_append.clone(), None)
-        .await;
+    set_history(&session, history_after_append.clone()).await;
     let rewrite_outcome = session
         .reconcile_persisted_history(snapshot_before_rewrite, &persisted)
         .await;
@@ -316,7 +310,7 @@ async fn history_reconciliation_lock_serializes_idle_injection() {
     let history_guard = session.acquire_history_persistence_lock().await;
     let injection = session.inject_no_new_turn(
         vec![assistant_message("injected while resume is pending")],
-        None,
+        /*current_turn_context*/ None,
     );
     tokio::pin!(injection);
 

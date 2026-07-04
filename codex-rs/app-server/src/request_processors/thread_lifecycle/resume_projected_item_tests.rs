@@ -5,6 +5,7 @@ use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_utils_absolute_path::test_support::test_path_buf;
 
 fn guardian_assessment(status: GuardianAssessmentStatus) -> GuardianAssessmentEvent {
     GuardianAssessmentEvent {
@@ -22,7 +23,7 @@ fn guardian_assessment(status: GuardianAssessmentStatus) -> GuardianAssessmentEv
             "type": "command",
             "source": "shell",
             "command": "printf guardian",
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
         }))
         .expect("guardian command action"),
     }

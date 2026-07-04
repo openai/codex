@@ -4,9 +4,11 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn reconcile_persisted_history_installs_compaction_checkpoint() {
     let (session, _turn_context) = make_session_and_context().await;
-    session
-        .replace_history(model_history_for_turn("old user", "old assistant"), None)
-        .await;
+    set_history(
+        &session,
+        model_history_for_turn("old user", "old assistant"),
+    )
+    .await;
     {
         let mut state = session.state.lock().await;
         state.request_new_context_window();
@@ -40,7 +42,7 @@ async fn reconcile_persisted_history_installs_compaction_checkpoint() {
 async fn reconcile_persisted_history_resets_runtime_state_for_new_compaction_window() {
     let (session, _turn_context) = make_session_and_context().await;
     let history = model_history_for_turn("summary", "after summary");
-    session.replace_history(history.clone(), None).await;
+    set_history(&session, history.clone()).await;
     {
         let mut state = session.state.lock().await;
         state.ensure_auto_compact_window_server_prefill_from_usage(&TokenUsage {
@@ -75,7 +77,7 @@ async fn reconcile_persisted_history_queues_only_unconsumed_imported_compaction_
     for followed_by_turn in [false, true] {
         let (session, _turn_context) = make_session_and_context().await;
         let first_history = model_history_for_turn("first user", "first assistant");
-        session.replace_history(first_history, None).await;
+        set_history(&session, first_history).await;
         let mut rollout = completed_turn("turn-1", "first user", "first assistant");
         set_known_persisted_history(&session, &rollout).await;
         {
@@ -122,7 +124,7 @@ async fn cursor_mismatch_queues_imported_compaction_hook_exactly_once() {
     let local_item = assistant_message("locally known item after old prefix");
     let mut local_history = first_history.clone();
     local_history.push(local_item.clone());
-    session.replace_history(local_history.clone(), None).await;
+    set_history(&session, local_history.clone()).await;
 
     let first_turn = completed_turn("turn-1", "first user", "first assistant");
     let mut locally_known_rollout = first_turn.clone();
@@ -177,7 +179,7 @@ async fn reconcile_persisted_history_applies_external_rollback() {
     let second_history = model_history_for_turn("second user", "second assistant");
     let mut local_history = first_history.clone();
     local_history.extend(second_history);
-    session.replace_history(local_history, None).await;
+    set_history(&session, local_history).await;
     let window_id = session
         .state
         .lock()
@@ -266,7 +268,7 @@ async fn reconcile_persisted_history_rearms_token_budget_reminder_removed_by_rol
         let second_history = model_history_for_turn("second user", "second assistant");
         let mut local_history = first_history.clone();
         local_history.extend(second_history.clone());
-        session.replace_history(local_history, None).await;
+        set_history(&session, local_history).await;
 
         super::token_budget::maybe_record(&session, &turn_context, Some(25)).await;
 
@@ -343,9 +345,7 @@ async fn reconcile_persisted_history_rearms_token_budget_reminder_removed_by_rol
 async fn reconcile_persisted_history_preserves_loaded_prefix_truncation() {
     let (session, _turn_context) = make_session_and_context().await;
     let preserved_prefix = model_history_for_turn("truncated user", "truncated assistant");
-    session
-        .replace_history(preserved_prefix.clone(), None)
-        .await;
+    set_history(&session, preserved_prefix.clone()).await;
     let mut additional_context = BTreeMap::new();
     additional_context.insert(
         "project".to_string(),
@@ -404,7 +404,7 @@ async fn reconcile_persisted_history_preserves_loaded_prefix_truncation() {
 async fn reconcile_persisted_history_preserves_same_window_prefill_for_append_only_suffix() {
     let (session, _turn_context) = make_session_and_context().await;
     let local_history = model_history_for_turn("first user", "first assistant");
-    session.replace_history(local_history, None).await;
+    set_history(&session, local_history).await;
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
     set_known_persisted_history(&session, &rollout).await;
     set_server_prefill(&session, /*input_tokens*/ 777).await;
@@ -430,9 +430,7 @@ async fn reconcile_persisted_history_ignores_interleaved_session_metadata_in_cur
     let mut preserved_prefix = model_history_for_turn("first user", "first assistant");
     let local_item = assistant_message("local item after metadata update");
     preserved_prefix.push(local_item.clone());
-    session
-        .replace_history(preserved_prefix.clone(), None)
-        .await;
+    set_history(&session, preserved_prefix.clone()).await;
 
     let mut rollout = completed_turn("turn-1", "first user", "first assistant");
     rollout.push(session_meta(session.thread_id()));
@@ -465,7 +463,7 @@ async fn reconcile_persisted_history_rebuilds_after_external_append_interleaves_
     let local_item = assistant_message("local item after unseen external turn");
     let mut local_history = model_history_for_turn("first user", "first assistant");
     local_history.push(local_item.clone());
-    session.replace_history(local_history, None).await;
+    set_history(&session, local_history).await;
 
     let first_turn = completed_turn("turn-1", "first user", "first assistant");
     let mut locally_known_rollout = first_turn.clone();
