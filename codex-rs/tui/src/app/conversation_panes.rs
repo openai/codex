@@ -233,6 +233,13 @@ impl ConversationPanes {
         thread_ids
     }
 
+    pub(super) fn for_each_installed_mut(&mut self, mut visit: impl FnMut(&mut ConversationPane)) {
+        visit(&mut self.parent);
+        if let Some(side) = &mut self.side {
+            visit(side);
+        }
+    }
+
     pub(super) fn dispatch_to(&mut self, origin: ConversationOrigin) -> bool {
         if self.by_origin(origin).is_none() {
             return false;

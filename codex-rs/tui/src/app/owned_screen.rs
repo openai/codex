@@ -392,10 +392,12 @@ impl App {
     }
 
     pub(super) fn sync_owned_screen_render_mode(&mut self) {
-        let render_mode = self.chat_widget.history_render_mode();
-        if let Some(screen) = &mut self.chat_widget.owned_screen {
-            screen.viewport.set_render_mode(render_mode);
-        }
+        self.chat_widget.for_each_installed_mut(|pane| {
+            let render_mode = pane.chat_widget.history_render_mode();
+            if let Some(screen) = &mut pane.owned_screen {
+                screen.viewport.set_render_mode(render_mode);
+            }
+        });
     }
 
     pub(super) fn handle_owned_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<bool> {

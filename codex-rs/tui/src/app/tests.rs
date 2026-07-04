@@ -1683,8 +1683,61 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
 }
 
 #[tokio::test]
+async fn update_plan_mode_reasoning_effort_updates_both_widget_configs() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let parent_thread_id = app_server
+        .start_thread(&app.config)
+        .await?
+        .session
+        .thread_id;
+    let side_thread_id = app_server
+        .start_thread(&app.config)
+        .await?
+        .session
+        .thread_id;
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    let side_origin = app
+        .chat_widget
+        .by_slot(PaneSlot::Side)
+        .and_then(super::conversation_panes::ConversationPane::origin)
+        .expect("side origin");
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::FromConversation {
+            target: side_origin,
+            event: Box::new(AppEvent::UpdatePlanModeReasoningEffort(Some(
+                ReasoningEffortConfig::High,
+            ))),
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        app.config.plan_mode_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        assert_eq!(
+            app.chat_widget
+                .by_slot(slot)
+                .expect("installed pane")
+                .config_ref()
+                .plan_mode_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+    }
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
     let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    install_test_side_pane(&mut app, ThreadId::new(), ThreadId::new()).await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
@@ -1698,8 +1751,15 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
 
     assert!(!app.config.memories.use_memories);
     assert!(!app.config.memories.generate_memories);
-    assert!(!app.chat_widget.config_ref().memories.use_memories);
-    assert!(!app.chat_widget.config_ref().memories.generate_memories);
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        let config = app
+            .chat_widget
+            .by_slot(slot)
+            .expect("installed pane")
+            .config_ref();
+        assert!(!config.memories.use_memories);
+        assert!(!config.memories.generate_memories);
+    }
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     let config_value = toml::from_str::<TomlValue>(&config)?;
@@ -1726,7 +1786,7 @@ async fn update_memory_settings_persists_and_updates_widget_config() -> Result<(
 }
 
 #[test]
-fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
+fn update_memory_settings_updates_all_installed_thread_memory_modes() -> Result<()> {
     const WORKER_THREADS: usize = 1;
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -1746,9 +1806,17 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
 
         let mut app_server =
             Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-        let started = app_server.start_thread(&app.config).await?;
-        let thread_id = started.session.thread_id;
-        app.chat_widget.active_thread_id = Some(thread_id);
+        let parent_thread_id = app_server
+            .start_thread(&app.config)
+            .await?
+            .session
+            .thread_id;
+        let side_thread_id = app_server
+            .start_thread(&app.config)
+            .await?
+            .session
+            .thread_id;
+        install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
 
         Box::pin(app.update_memory_settings_with_app_server(
             &mut app_server,
@@ -1763,11 +1831,13 @@ fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
         )
         .await
         .expect("state db should initialize");
-        let memory_mode = state_db
-            .get_thread_memory_mode(thread_id)
-            .await
-            .expect("thread memory mode should be readable");
-        assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        for thread_id in [parent_thread_id, side_thread_id] {
+            let memory_mode = state_db
+                .get_thread_memory_mode(thread_id)
+                .await
+                .expect("thread memory mode should be readable");
+            assert_eq!(memory_mode.as_deref(), Some("disabled"));
+        }
 
         app_server.shutdown().await?;
         Ok(())

@@ -78,9 +78,10 @@ impl App {
     ) {
         if notify {
             self.chat_widget.set_raw_output_mode_and_notify(enabled);
-        } else {
-            self.chat_widget.set_raw_output_mode(enabled);
         }
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.set_raw_output_mode(enabled);
+        });
         self.sync_owned_screen_render_mode();
         if self.has_owned_screen() {
             tui.frame_requester().schedule_frame();

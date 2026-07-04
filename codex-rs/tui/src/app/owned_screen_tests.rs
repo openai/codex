@@ -14,10 +14,12 @@ use super::super::conversation_panes::ConversationPaneInit;
 use super::*;
 use crate::app_event::PaneSlot;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
+use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::file_search::FileSearchManager;
 use crate::tui::MouseScrollDirection;
 use crate::tui::MouseScrollEvent;
+use codex_app_server_protocol::ConfigWarningNotification;
 
 #[derive(Debug)]
 struct TestCell(&'static str);
@@ -29,6 +31,22 @@ impl HistoryCell for TestCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![self.0.into()]
+    }
+}
+
+#[derive(Debug)]
+struct RenderModeCell {
+    display: &'static str,
+    raw: &'static str,
+}
+
+impl HistoryCell for RenderModeCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![self.display.into()]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![self.raw.into()]
     }
 }
 
@@ -200,6 +218,129 @@ async fn renders_wide_parent_left_and_side_right() {
             .add_modifier
             .contains(ratatui::style::Modifier::DIM)
     );
+}
+
+#[tokio::test]
+async fn raw_output_mode_fans_out_without_changing_focus_or_drafts() {
+    let mut app = app_with_owned_side().await;
+    for (slot, draft, display, raw) in [
+        (
+            PaneSlot::Parent,
+            "parent draft",
+            "parent rich transcript",
+            "parent raw transcript",
+        ),
+        (
+            PaneSlot::Side,
+            "side draft",
+            "side rich transcript",
+            "side raw transcript",
+        ),
+    ] {
+        let pane = app.chat_widget.by_slot_mut(slot).expect("installed pane");
+        pane.chat_widget
+            .set_composer_text(draft.to_string(), Vec::new(), Vec::new());
+        pane.owned_screen
+            .as_mut()
+            .expect("owned screen")
+            .viewport
+            .push_cell(Arc::new(RenderModeCell { display, raw }));
+    }
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ true, /*notify*/ false);
+
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    for (slot, draft) in [
+        (PaneSlot::Parent, "parent draft"),
+        (PaneSlot::Side, "side draft"),
+    ] {
+        let pane = app.chat_widget.by_slot(slot).expect("installed pane");
+        assert!(pane.chat_widget.raw_output_mode());
+        assert_eq!(pane.chat_widget.composer_text_with_pending(), draft);
+    }
+    let terminal = render_app(&mut app, /*width*/ 83, /*height*/ 12);
+    assert_snapshot!("owned_screen_raw_output_mode_fans_out", terminal.backend());
+}
+
+#[tokio::test]
+async fn global_warning_renders_in_both_owned_panes() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) =
+        super::super::test_support::make_test_app_with_channels().await;
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
+        AltScreenBehavior::Owned,
+        &app.chat_widget,
+        app.keymap.pager.clone(),
+    );
+    let side_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Side, app.app_event_tx.clone()).await;
+    let file_search = FileSearchManager::new(
+        side_widget.config_ref().cwd.to_path_buf(),
+        side_widget.conversation_event_sender(),
+    );
+    let owned_screen = App::owned_screen_for_behavior(
+        AltScreenBehavior::Owned,
+        &side_widget,
+        app.keymap.pager.clone(),
+    );
+    assert!(
+        app.chat_widget
+            .install_side(ConversationPaneInit {
+                chat_widget: side_widget,
+                file_search,
+                owned_screen,
+            })
+            .is_ok(),
+        "side pane should install"
+    );
+    for (slot, draft) in [
+        (PaneSlot::Parent, "parent draft"),
+        (PaneSlot::Side, "side draft"),
+    ] {
+        app.chat_widget
+            .by_slot_mut(slot)
+            .expect("installed pane")
+            .set_composer_text(draft.to_string(), Vec::new(), Vec::new());
+    }
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::ConfigWarning(ConfigWarningNotification {
+                summary: "Shared configuration warning".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            }),
+        ),
+    )
+    .await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while let Ok(event) = app_event_rx.try_recv() {
+        app.handle_event(&mut tui, &mut app_server, event).await?;
+    }
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .expect("parent pane")
+            .transcript_cells
+            .len(),
+        1
+    );
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .expect("side pane")
+            .transcript_cells
+            .len(),
+        1
+    );
+
+    let terminal = render_app(&mut app, /*width*/ 83, /*height*/ 18);
+
+    assert_snapshot!("owned_screen_global_warning_fans_out", terminal.backend());
+    Ok(())
 }
 
 #[tokio::test]

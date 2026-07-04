@@ -128,6 +128,44 @@ async fn installed_thread_ids_are_parent_first_and_unique() {
 }
 
 #[tokio::test]
+async fn for_each_installed_mut_visits_parent_then_side_without_changing_selection() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let (side, _side_rx) = pane_init(PaneSlot::Side).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    assert!(panes.install_side(side).is_ok());
+    assert!(panes.focus(PaneSlot::Side));
+    let parent_origin = panes
+        .by_slot(PaneSlot::Parent)
+        .and_then(ConversationPane::origin)
+        .expect("parent origin");
+    assert!(panes.dispatch_to(parent_origin));
+    let mut visited = Vec::new();
+
+    panes.for_each_installed_mut(|pane| visited.push(pane.slot));
+
+    assert_eq!(visited, vec![PaneSlot::Parent, PaneSlot::Side]);
+    assert_eq!(panes.focused, PaneSlot::Side);
+    assert_eq!(panes.dispatch, Some(PaneSlot::Parent));
+}
+
+#[tokio::test]
+async fn for_each_installed_mut_visits_only_parent_without_a_side_pane() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    let mut visited = Vec::new();
+
+    panes.for_each_installed_mut(|pane| visited.push(pane.slot));
+
+    assert_eq!(visited, vec![PaneSlot::Parent]);
+    assert_eq!(panes.focused, PaneSlot::Parent);
+    assert_eq!(panes.dispatch, None);
+}
+
+#[tokio::test]
 async fn a_closed_receiver_does_not_starve_the_other_pane() {
     let (parent, _parent_app_rx) = pane_init(PaneSlot::Parent).await;
     let (side, _side_app_rx) = pane_init(PaneSlot::Side).await;

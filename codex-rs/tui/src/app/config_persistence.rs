@@ -211,7 +211,10 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
-        self.chat_widget.sync_plugin_mentions_config(&self.config);
+        let config = &self.config;
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.sync_plugin_mentions_config(config);
+        });
         Ok(())
     }
 
@@ -530,8 +533,10 @@ impl App {
                 *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
             });
         for (feature, effective_enabled) in feature_updates_to_apply {
-            self.chat_widget
-                .set_feature_enabled(feature, effective_enabled);
+            self.chat_widget.for_each_installed_mut(|pane| {
+                pane.chat_widget
+                    .set_feature_enabled(feature, effective_enabled);
+            });
         }
         if show_memory_enable_notice {
             self.chat_widget.add_memories_enable_notice();
@@ -658,8 +663,10 @@ impl App {
 
         self.config.memories.use_memories = use_memories;
         self.config.memories.generate_memories = generate_memories;
-        self.chat_widget
-            .set_memory_settings(use_memories, generate_memories);
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget
+                .set_memory_settings(use_memories, generate_memories);
+        });
         true
     }
 
@@ -669,7 +676,6 @@ impl App {
         use_memories: bool,
         generate_memories: bool,
     ) {
-        let previous_generate_memories = self.config.memories.generate_memories;
         if !self
             .update_memory_settings(app_server, use_memories, generate_memories)
             .await
@@ -678,25 +684,28 @@ impl App {
         }
 
         let generate_memories = self.config.memories.generate_memories;
-        if previous_generate_memories == generate_memories {
-            return;
-        }
-
-        let Some(thread_id) = self.current_displayed_thread_id() else {
-            return;
-        };
-
         let mode = if generate_memories {
             ThreadMemoryMode::Enabled
         } else {
             ThreadMemoryMode::Disabled
         };
+        let thread_ids: Vec<_> = self
+            .chat_widget
+            .installed_thread_ids()
+            .into_iter()
+            .filter(|thread_id| !self.is_thread_retired(thread_id))
+            .collect();
 
-        if let Err(err) = app_server.thread_memory_mode_set(thread_id, mode).await {
-            tracing::error!(error = %err, %thread_id, "failed to update thread memory mode");
-            self.chat_widget.add_error_message(format!(
-                "Saved memory settings, but failed to update the current thread: {err}"
-            ));
+        for thread_id in thread_ids {
+            if let Err(err) = app_server
+                .thread_memory_mode_set(thread_id, mode.clone())
+                .await
+            {
+                tracing::error!(error = %err, %thread_id, "failed to update thread memory mode");
+                self.chat_widget.add_error_message(format!(
+                    "Saved memory settings, but failed to update thread {thread_id}: {err}"
+                ));
+            }
         }
     }
 
@@ -747,19 +756,25 @@ impl App {
 
     pub(super) fn sync_tui_theme_selection(&mut self, name: String) {
         self.config.tui_theme = Some(name.clone());
-        self.chat_widget.set_tui_theme(Some(name));
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.set_tui_theme(Some(name.clone()));
+        });
     }
 
     #[cfg(test)]
     pub(super) fn sync_tui_pet_selection(&mut self, pet: String) {
         self.config.tui_pet = Some(pet.clone());
-        self.chat_widget.set_tui_pet(Some(pet));
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.set_tui_pet(Some(pet.clone()));
+        });
     }
 
     pub(super) fn sync_tui_pet_disabled(&mut self) {
         let pet = crate::pets::DISABLED_PET_ID.to_string();
         self.config.tui_pet = Some(pet.clone());
-        self.chat_widget.set_tui_pet(Some(pet));
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget.set_tui_pet(Some(pet.clone()));
+        });
     }
 
     pub(super) fn restore_runtime_theme_from_config(&self) {
@@ -803,7 +818,9 @@ impl App {
                 );
                 continue;
             }
-            self.chat_widget.set_feature_enabled(*feature, enabled);
+            self.chat_widget.for_each_installed_mut(|pane| {
+                pane.chat_widget.set_feature_enabled(*feature, enabled);
+            });
         }
 
         if feature_updates
@@ -928,8 +945,10 @@ impl App {
             .unwrap_or(self.config.memories.generate_memories);
         self.config.memories.use_memories = use_memories;
         self.config.memories.generate_memories = generate_memories;
-        self.chat_widget
-            .set_memory_settings(use_memories, generate_memories);
+        self.chat_widget.for_each_installed_mut(|pane| {
+            pane.chat_widget
+                .set_memory_settings(use_memories, generate_memories);
+        });
         true
     }
 
@@ -1062,11 +1081,26 @@ mod tests {
     use super::*;
     use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
+    use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
     use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    async fn install_test_side(app: &mut App) {
+        let (side_widget, _side_rx) = make_chatwidget_for_pane(PaneSlot::Side).await;
+        let file_search = FileSearchManager::new(
+            side_widget.config_ref().cwd.to_path_buf(),
+            side_widget.conversation_event_sender(),
+        );
+        let installed = app.chat_widget.install_side(ConversationPaneInit {
+            chat_widget: side_widget,
+            file_search,
+            owned_screen: None,
+        });
+        assert!(installed.is_ok(), "side pane should install");
+    }
 
     #[tokio::test]
     async fn update_reasoning_effort_updates_collaboration_mode() {
@@ -1342,32 +1376,49 @@ terminal_resize_reflow_max_rows = 9000
     #[tokio::test]
     async fn sync_tui_theme_selection_updates_chat_widget_config_copy() {
         let mut app = make_test_app().await;
+        install_test_side(&mut app).await;
 
         app.sync_tui_theme_selection("dracula".to_string());
 
         assert_eq!(app.config.tui_theme.as_deref(), Some("dracula"));
-        assert_eq!(
-            app.chat_widget.config_ref().tui_theme.as_deref(),
-            Some("dracula")
-        );
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            assert_eq!(
+                app.chat_widget
+                    .by_slot(slot)
+                    .expect("installed pane")
+                    .config_ref()
+                    .tui_theme
+                    .as_deref(),
+                Some("dracula")
+            );
+        }
     }
 
     #[tokio::test]
     async fn sync_tui_pet_selection_updates_chat_widget_config_copy() {
         let mut app = make_test_app().await;
+        install_test_side(&mut app).await;
 
         app.sync_tui_pet_selection("chefito".to_string());
 
         assert_eq!(app.config.tui_pet.as_deref(), Some("chefito"));
-        assert_eq!(
-            app.chat_widget.config_ref().tui_pet.as_deref(),
-            Some("chefito")
-        );
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            assert_eq!(
+                app.chat_widget
+                    .by_slot(slot)
+                    .expect("installed pane")
+                    .config_ref()
+                    .tui_pet
+                    .as_deref(),
+                Some("chefito")
+            );
+        }
     }
 
     #[tokio::test]
     async fn sync_tui_pet_disabled_updates_chat_widget_config_copy() {
         let mut app = make_test_app().await;
+        install_test_side(&mut app).await;
 
         app.sync_tui_pet_disabled();
 
@@ -1375,9 +1426,16 @@ terminal_resize_reflow_max_rows = 9000
             app.config.tui_pet.as_deref(),
             Some(crate::pets::DISABLED_PET_ID)
         );
-        assert_eq!(
-            app.chat_widget.config_ref().tui_pet.as_deref(),
-            Some(crate::pets::DISABLED_PET_ID)
-        );
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            assert_eq!(
+                app.chat_widget
+                    .by_slot(slot)
+                    .expect("installed pane")
+                    .config_ref()
+                    .tui_pet
+                    .as_deref(),
+                Some(crate::pets::DISABLED_PET_ID)
+            );
+        }
     }
 }

@@ -144,7 +144,7 @@ impl ChatWidget {
     /// so the footer reflects it without waiting for the next mode switch.
     /// Passing `None` resets to the Plan-mode preset default.
     pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.config.plan_mode_reasoning_effort = effort.clone();
+        self.sync_plan_mode_reasoning_effort_config(effort.clone());
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode == Some(ModeKind::Plan)
@@ -158,6 +158,13 @@ impl ChatWidget {
             }
         }
         self.refresh_model_dependent_surfaces();
+    }
+
+    pub(crate) fn sync_plan_mode_reasoning_effort_config(
+        &mut self,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.config.plan_mode_reasoning_effort = effort;
     }
 
     /// Set the reasoning effort for the non-Plan collaboration mode.
