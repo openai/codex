@@ -75,11 +75,17 @@ async fn taking_focused_side_restores_parent_selection() {
     assert!(panes.install_side(side).is_ok());
     assert!(panes.focus(PaneSlot::Side));
     let side_origin = panes.conversation_origin().expect("side origin");
+    panes
+        .by_slot(PaneSlot::Side)
+        .expect("side pane")
+        .commit_anim_running
+        .store(/*val*/ true, Ordering::Release);
     assert!(panes.dispatch_to(side_origin));
 
     let removed = panes.take_side().expect("installed side pane");
 
     assert_eq!(removed.origin(), Some(side_origin));
+    assert!(!removed.commit_anim_running.load(Ordering::Acquire));
     assert_eq!(panes.focused_slot(), PaneSlot::Parent);
     assert_eq!(panes.clear_dispatch(), None);
     assert!(panes.finish_dispatch(side_origin));

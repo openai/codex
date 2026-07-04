@@ -482,6 +482,7 @@ impl App {
     }
 
     pub(super) fn reset_thread_event_state(&mut self) {
+        self.chat_widget.take_side();
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();

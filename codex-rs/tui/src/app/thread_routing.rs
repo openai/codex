@@ -1574,6 +1574,25 @@ impl App {
         ) && self.pending_shutdown_exit_thread_id
             == self.chat_widget.active_thread_id;
 
+        if matches!(
+            &event,
+            ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
+        ) && let Some(side_thread_id) = self.chat_widget.active_thread_id
+            && self.side_threads.contains_key(&side_thread_id)
+        {
+            if pending_shutdown_exit_completed {
+                self.pending_shutdown_exit_thread_id = None;
+            }
+            self.mark_agent_picker_thread_closed(side_thread_id);
+            self.discard_closed_side_thread(side_thread_id).await;
+            self.chat_widget.add_info_message(
+                format!("Side conversation {side_thread_id} closed. Returned to parent."),
+                /*hint*/ None,
+            );
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
+
         // Processing order matters:
         //
         // 1. handle unexpected non-primary shutdown failover first;

@@ -8,6 +8,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
@@ -168,6 +169,10 @@ impl ConversationPanes {
         }
         if self.dispatch == Some(PaneSlot::Side) {
             self.dispatch = None;
+        }
+        if let Some(side) = &self.side {
+            side.commit_anim_running
+                .store(/*val*/ false, Ordering::Release);
         }
         self.side.take()
     }

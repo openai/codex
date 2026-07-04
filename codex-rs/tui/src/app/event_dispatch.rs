@@ -6,6 +6,7 @@
 use super::conversation_events::normalize_conversation_event;
 use super::resize_reflow::trailing_run_start;
 use super::*;
+use crate::app_event::ConversationOrigin;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
 #[cfg(target_os = "windows")]
@@ -38,7 +39,9 @@ impl App {
         } else {
             None
         };
-        let result = self.handle_event_inner(tui, app_server, event).await;
+        let result = self
+            .handle_event_inner(tui, app_server, conversation_origin, event)
+            .await;
         if let Some(previous_sender) = previous_sender {
             self.app_event_tx = previous_sender;
         }
@@ -52,6 +55,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        conversation_origin: Option<ConversationOrigin>,
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
@@ -356,6 +360,20 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::Exit(mode) => {
+                if mode == ExitMode::ShutdownFirst
+                    && conversation_origin.is_some_and(|origin| origin.pane == PaneSlot::Side)
+                    && let Some(side_thread_id) = self
+                        .chat_widget
+                        .by_slot(PaneSlot::Side)
+                        .and_then(|pane| pane.active_thread_id.or(pane.chat_widget.thread_id()))
+                {
+                    if self.discard_side_thread(app_server, side_thread_id).await {
+                        self.surface_pending_inactive_thread_interactive_requests()
+                            .await?;
+                    }
+                    tui.frame_requester().schedule_frame();
+                    return Ok(AppRunControl::Continue);
+                }
                 if mode == ExitMode::ShutdownFirst {
                     self.show_shutdown_feedback(tui)?;
                 }

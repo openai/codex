@@ -43,6 +43,15 @@ pub(crate) async fn make_chatwidget_for_pane(
     (ChatWidget::new_with_app_event_for_pane(init, pane), rx)
 }
 
+pub(crate) async fn make_chatwidget_for_pane_with_sender(
+    pane: PaneSlot,
+    app_event_tx: AppEventSender,
+) -> ChatWidget {
+    let (mut init, _rx) = test_init().await;
+    init.app_event_tx = app_event_tx;
+    ChatWidget::new_with_app_event_for_pane(init, pane)
+}
+
 #[tokio::test]
 async fn app_event_constructor_defaults_to_parent_pane() {
     let (init, _rx) = test_init().await;
