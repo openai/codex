@@ -76,6 +76,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn set_stage_paths_hook(point: StagePathsHookPoint, hook: impl FnOnce() + 'static) {
     STAGE_PATHS_HOOKS.with(|slots| {
         let prior = slots.borrow_mut()[point as usize].replace(Box::new(hook));
