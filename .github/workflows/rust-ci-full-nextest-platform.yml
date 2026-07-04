@@ -47,6 +47,22 @@ on:
         required: false
         default: false
         type: boolean
+      nextest_filterset:
+        required: false
+        default: "all()"
+        type: string
+      partition_tests:
+        required: false
+        default: true
+        type: boolean
+      require_single_test:
+        required: false
+        default: false
+        type: boolean
+      run_tests_in_place:
+        required: false
+        default: false
+        type: boolean
 
 # Caller workflow-level env does not flow through workflow_call, so keep the
 # Cargo git transport hardening on the archive and shard jobs directly here.
@@ -55,7 +71,7 @@ env:
 
 jobs:
   archive:
-    name: Build nextest archive
+    name: ${{ inputs.run_tests_in_place && 'Run selected test in place' || 'Build nextest archive' }}
     runs-on: ${{ inputs.archive_runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.archive_runner_group, inputs.archive_runner_labels)) || inputs.archive_runner != '' && inputs.archive_runner || inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
     timeout-minutes: 60
     defaults:
@@ -186,7 +202,37 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      - name: Resolve selected test in place
+        if: ${{ inputs.run_tests_in_place }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          nextest_list_args=(
+            list
+            --target ${{ inputs.target }}
+            --cargo-profile ${{ inputs.profile }}
+            --filterset "${NEXTEST_FILTERSET}"
+            --message-format json
+          )
+
+          if [[ "${REQUIRE_SINGLE_TEST}" == "true" ]]; then
+            test_count="$(
+              cargo nextest "${nextest_list_args[@]}" |
+                python3 -c 'import json, sys; test_list = json.load(sys.stdin); print(sum(testcase["filter-match"]["status"] == "matches" for suite in test_list["rust-suites"].values() for testcase in suite["testcases"].values()))'
+            )"
+            if [[ "${test_count}" != "1" ]]; then
+              echo "nextest filterset must resolve to exactly one test; got ${test_count}" >&2
+              exit 1
+            fi
+          else
+            cargo nextest "${nextest_list_args[@]}" >/dev/null
+          fi
+        env:
+          NEXTEST_FILTERSET: ${{ inputs.nextest_filterset }}
+          REQUIRE_SINGLE_TEST: ${{ inputs.require_single_test && 'true' || 'false' }}
+
       - name: Build nextest archive
+        if: ${{ !inputs.run_tests_in_place }}
         shell: bash
         run: |
           set -euo pipefail
@@ -224,6 +270,88 @@ jobs:
             cp "target/${{ inputs.target }}/${{ inputs.profile }}/codex-command-runner.exe" "${helper_dir}/"
           fi
 
+      - name: Set up remote test env (Docker)
+        if: ${{ inputs.run_tests_in_place && runner.os == 'Linux' && inputs.remote_env }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME="codex-remote-test-env-${{ github.run_id }}-in-place"
+          export CODEX_TEST_REMOTE_ENV_CODEX_BINARY_PATH="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}/codex"
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+          echo "CODEX_TEST_REMOTE_EXEC_SERVER_URL=${CODEX_TEST_REMOTE_EXEC_SERVER_URL}" >> "$GITHUB_ENV"
+
+      - name: tests
+        if: ${{ inputs.run_tests_in_place }}
+        id: test_in_place
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper_target_dir="$(pwd)/target/${{ inputs.target }}/${{ inputs.profile }}"
+          nextest_args=(
+            run
+            --no-fail-fast
+            --target ${{ inputs.target }}
+            --cargo-profile ${{ inputs.profile }}
+            --filterset "${NEXTEST_FILTERSET}"
+          )
+          if [[ "${{ inputs.test_threads }}" != "0" ]]; then
+            nextest_args+=(--test-threads "${{ inputs.test_threads }}")
+          fi
+
+          test_command=(cargo nextest "${nextest_args[@]}")
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            sandbox_helper="${helper_target_dir}/codex-linux-sandbox"
+            test_command=(
+              env
+              "CARGO_BIN_EXE_codex-linux-sandbox=${sandbox_helper}"
+              "CARGO_BIN_EXE_codex_linux_sandbox=${sandbox_helper}"
+              cargo nextest "${nextest_args[@]}"
+            )
+          elif [[ "${RUNNER_OS}" == "Windows" ]]; then
+            setup_helper="$(cygpath -w "${helper_target_dir}/codex-windows-sandbox-setup.exe")"
+            command_runner="$(cygpath -w "${helper_target_dir}/codex-command-runner.exe")"
+            test_command=(
+              env
+              "CARGO_BIN_EXE_codex_windows_sandbox_setup=${setup_helper}"
+              "CARGO_BIN_EXE_codex_command_runner=${command_runner}"
+              cargo nextest "${nextest_args[@]}"
+            )
+          fi
+
+          "${test_command[@]}"
+        env:
+          NEXTEST_FILTERSET: ${{ inputs.nextest_filterset }}
+          RUST_BACKTRACE: 1
+          RUST_MIN_STACK: "8388608" # 8 MiB
+          NEXTEST_STATUS_LEVEL: leak
+
+      - name: Upload nextest JUnit report
+        if: ${{ always() && inputs.run_tests_in_place }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: nextest-junit-rust-ci-${{ inputs.artifact_id }}-shard-0
+          path: codex-rs/target/nextest/default/junit.xml
+          if-no-files-found: warn
+
+      - name: Tear down remote test env
+        if: ${{ always() && inputs.run_tests_in_place && runner.os == 'Linux' && inputs.remote_env }}
+        shell: bash
+        run: |
+          set +e
+          if [[ "${STEPS_TEST_OUTCOME}" != "success" ]]; then
+            docker logs "${CODEX_TEST_REMOTE_ENV}" || true
+          fi
+          docker rm -f "${CODEX_TEST_REMOTE_ENV}" >/dev/null 2>&1 || true
+        env:
+          STEPS_TEST_OUTCOME: ${{ steps.test_in_place.outcome }}
+
+      - name: verify tests passed
+        if: ${{ inputs.run_tests_in_place && steps.test_in_place.outcome == 'failure' }}
+        run: |
+          echo "Tests failed. See logs for details."
+          exit 1
+
       - name: Upload Cargo timings (nextest)
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -233,6 +361,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload nextest archive
+        if: ${{ !inputs.run_tests_in_place }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: nextest-archive-${{ inputs.artifact_id }}
@@ -241,7 +370,7 @@ jobs:
           retention-days: 1
 
       - name: Upload runtime test helpers
-        if: ${{ runner.os == 'Linux' || runner.os == 'Windows' }}
+        if: ${{ !inputs.run_tests_in_place && (runner.os == 'Linux' || runner.os == 'Windows') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.TEST_HELPERS_ARTIFACT }}
@@ -287,7 +416,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   shard:
-    name: Tests shard ${{ matrix.shard }}/4
+    if: ${{ !inputs.run_tests_in_place }}
+    name: Tests ${{ matrix.shard == 0 && 'selected test' || format('shard {0}/4', matrix.shard) }}
     needs: archive
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
     timeout-minutes: 60
@@ -300,7 +430,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ inputs.partition_tests && fromJSON('[1, 2, 3, 4]') || fromJSON('[0]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -393,10 +523,28 @@ jobs:
             --no-fail-fast
             --archive-file "${archive_file}"
             --workspace-remap "${workspace_root}"
-            --partition "hash:${{ matrix.shard }}/4"
+            --filterset "${NEXTEST_FILTERSET}"
           )
+          if [[ "${{ matrix.shard }}" != "0" ]]; then
+            nextest_args+=(--partition "hash:${{ matrix.shard }}/4")
+          fi
           if [[ "${{ inputs.test_threads }}" != "0" ]]; then
             nextest_args+=(--test-threads "${{ inputs.test_threads }}")
+          fi
+
+          if [[ "${REQUIRE_SINGLE_TEST}" == "true" ]]; then
+            test_count="$(
+              cargo nextest list \
+                --archive-file "${archive_file}" \
+                --workspace-remap "${workspace_root}" \
+                --filterset "${NEXTEST_FILTERSET}" \
+                --message-format json |
+                python3 -c 'import json, sys; test_list = json.load(sys.stdin); print(sum(testcase["filter-match"]["status"] == "matches" for suite in test_list["rust-suites"].values() for testcase in suite["testcases"].values()))'
+            )"
+            if [[ "${test_count}" != "1" ]]; then
+              echo "nextest filterset must resolve to exactly one test; got ${test_count}" >&2
+              exit 1
+            fi
           fi
 
           test_command=(cargo nextest "${nextest_args[@]}")
@@ -421,6 +569,8 @@ jobs:
 
           "${test_command[@]}"
         env:
+          NEXTEST_FILTERSET: ${{ inputs.nextest_filterset }}
+          REQUIRE_SINGLE_TEST: ${{ inputs.require_single_test && 'true' || 'false' }}
           RUST_BACKTRACE: 1
           RUST_MIN_STACK: "8388608" # 8 MiB
           NEXTEST_STATUS_LEVEL: leak
@@ -453,14 +603,15 @@ jobs:
 
   result:
     name: Platform result
-    needs: shard
+    needs: [archive, shard]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Confirm test shards passed
         shell: bash
         run: |
-          if [[ "${{ needs.shard.result }}" != "success" ]]; then
-            echo "Nextest shards finished with result: ${{ needs.shard.result }}" >&2
+          result="${{ inputs.run_tests_in_place && needs.archive.result || needs.shard.result }}"
+          if [[ "${result}" != "success" ]]; then
+            echo "Nextest tests finished with result: ${result}" >&2
             exit 1
           fi
