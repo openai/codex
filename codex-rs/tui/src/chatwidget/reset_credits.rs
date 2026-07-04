@@ -115,9 +115,13 @@ pub(super) fn reset_credit_options(
                     .unwrap_or_else(|| "Expiration unavailable".to_string()),
                 None => "Does not expire".to_string(),
             };
-            let reset_label = match credit.reset_type {
-                RateLimitResetType::CodexRateLimits => scope.picker_label(),
-            };
+            let reset_label = credit
+                .title
+                .as_deref()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| match credit.reset_type {
+                    RateLimitResetType::CodexRateLimits => scope.picker_label(),
+                });
             ResetCreditOption {
                 credit_id: Some(credit.id.clone()),
                 name: reset_label.to_string(),

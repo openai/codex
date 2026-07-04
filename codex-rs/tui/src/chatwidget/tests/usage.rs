@@ -38,6 +38,15 @@ fn reset_credit(id: &str, expires_at: Option<i64>) -> RateLimitResetCredit {
         status: RateLimitResetCreditStatus::Available,
         granted_at: 0,
         expires_at,
+        title: None,
+        description: None,
+    }
+}
+
+fn reset_credit_with_title(id: &str, expires_at: Option<i64>, title: &str) -> RateLimitResetCredit {
+    RateLimitResetCredit {
+        title: Some(title.to_string()),
+        ..reset_credit(id, expires_at)
     }
 }
 
@@ -266,8 +275,16 @@ async fn rate_limit_reset_popup_states_snapshot() {
         Ok(detailed_reset_credits(
             /*available_count*/ 2,
             vec![
-                reset_credit("credit-2", Some(second_expiry)),
-                reset_credit("credit-1", Some(first_expiry)),
+                reset_credit_with_title(
+                    "credit-2",
+                    Some(second_expiry),
+                    "Full reset (Weekly + 5 hr)",
+                ),
+                reset_credit_with_title(
+                    "credit-1",
+                    Some(first_expiry),
+                    "Full reset (Weekly + 5 hr)",
+                ),
             ],
         )),
     ));
