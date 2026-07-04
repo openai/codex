@@ -15,6 +15,13 @@ pub(super) async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let Ok(chat_widget) = ConversationPanes::new_parent(ConversationPaneInit {
+        chat_widget,
+        file_search,
+        owned_screen: None,
+    }) else {
+        unreachable!("test chat widget must use the parent pane scope");
+    };
 
     App {
         model_catalog: chat_widget.model_catalog(),
@@ -30,17 +37,11 @@ pub(super) async fn make_test_app() -> App {
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
-        file_search,
-        transcript_cells: Vec::new(),
-        owned_screen: None,
         overlay: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
-        transcript_reflow: TranscriptReflowState::default(),
-        initial_history_replay_buffer: None,
         enhanced_keys_supported: false,
         keymap: crate::keymap::RuntimeKeymap::defaults(),
-        commit_anim_running: Arc::new(AtomicBool::new(false)),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         skill_load_warnings: SkillLoadWarningState::default(),
@@ -57,8 +58,6 @@ pub(super) async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
-        active_thread_id: None,
-        active_thread_rx: None,
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,

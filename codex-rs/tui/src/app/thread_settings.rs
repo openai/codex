@@ -27,7 +27,7 @@ impl App {
         &self,
         model: String,
     ) -> Option<ThreadSettingsUpdateParams> {
-        let thread_id = self.active_thread_id?;
+        let thread_id = self.chat_widget.active_thread_id?;
         Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             model: Some(model),
@@ -51,7 +51,7 @@ impl App {
         &self,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     ) -> Option<ThreadSettingsUpdateParams> {
-        let thread_id = self.active_thread_id?;
+        let thread_id = self.chat_widget.active_thread_id?;
         Some(ThreadSettingsUpdateParams {
             thread_id: thread_id.to_string(),
             effort,
@@ -64,7 +64,7 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
     ) {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(thread_id) = self.chat_widget.active_thread_id else {
             return;
         };
         let params = ThreadSettingsUpdateParams {
@@ -80,7 +80,7 @@ impl App {
         app_server: &mut AppServerSession,
         personality: codex_protocol::config_types::Personality,
     ) {
-        let Some(thread_id) = self.active_thread_id else {
+        let Some(thread_id) = self.chat_widget.active_thread_id else {
             return;
         };
         let params = ThreadSettingsUpdateParams {

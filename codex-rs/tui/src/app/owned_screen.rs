@@ -120,29 +120,30 @@ impl App {
     }
 
     pub(super) fn has_owned_screen(&self) -> bool {
-        self.owned_screen.is_some()
+        self.chat_widget.owned_screen.is_some()
     }
 
     pub(super) fn owned_screen_push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
-        if let Some(screen) = &mut self.owned_screen {
+        if let Some(screen) = &mut self.chat_widget.owned_screen {
             screen.viewport.push_cell(cell);
         }
     }
 
     pub(super) fn begin_owned_screen_replay(&mut self) {
-        if let Some(screen) = &mut self.owned_screen {
+        if let Some(screen) = &mut self.chat_widget.owned_screen {
             screen.replay_in_progress = true;
         }
     }
 
     pub(super) fn finish_owned_screen_replay(&mut self) {
-        if let Some(screen) = &mut self.owned_screen {
+        if let Some(screen) = &mut self.chat_widget.owned_screen {
             screen.replay_in_progress = false;
         }
     }
 
     pub(super) fn owned_screen_replay_in_progress(&self) -> bool {
-        self.owned_screen
+        self.chat_widget
+            .owned_screen
             .as_ref()
             .is_some_and(|screen| screen.replay_in_progress)
     }
@@ -156,6 +157,7 @@ impl App {
             return false;
         }
         let handled = self
+            .chat_widget
             .owned_screen
             .as_mut()
             .is_some_and(|screen| screen.handle_navigation_key(key_event));
@@ -175,6 +177,7 @@ impl App {
             return false;
         }
         let handled = self
+            .chat_widget
             .owned_screen
             .as_mut()
             .is_some_and(|screen| screen.handle_mouse_scroll(event));
@@ -186,21 +189,21 @@ impl App {
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
-        if let Some(screen) = &mut self.owned_screen {
-            screen.viewport.replace_cells(self.transcript_cells.clone());
+        let cells = self.chat_widget.transcript_cells.clone();
+        if let Some(screen) = &mut self.chat_widget.owned_screen {
+            screen.viewport.replace_cells(cells);
         }
     }
 
     pub(super) fn sync_owned_screen_render_mode(&mut self) {
-        if let Some(screen) = &mut self.owned_screen {
-            screen
-                .viewport
-                .set_render_mode(self.chat_widget.history_render_mode());
+        let render_mode = self.chat_widget.history_render_mode();
+        if let Some(screen) = &mut self.chat_widget.owned_screen {
+            screen.viewport.set_render_mode(render_mode);
         }
     }
 
     pub(super) fn handle_owned_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<bool> {
-        if self.owned_screen.is_none() {
+        if self.chat_widget.owned_screen.is_none() {
             return Ok(false);
         }
         let size = tui.terminal.size()?;
@@ -210,18 +213,19 @@ impl App {
         if size != tui.terminal.last_known_screen_size {
             self.refresh_status_line();
         }
-        self.transcript_reflow.clear();
+        self.chat_widget.transcript_reflow.clear();
         tui.clear_pending_history_lines();
         Ok(true)
     }
 
     pub(super) fn render_owned_screen_frame(&mut self, tui: &mut tui::Tui) -> Result<Option<Rect>> {
-        let Some(screen) = &mut self.owned_screen else {
-            return Ok(None);
-        };
         self.chat_widget
             .update_owned_screen_width(tui.terminal.size()?.width);
-        let chat_widget = &self.chat_widget;
+        let pane = self.chat_widget.selected_mut();
+        let Some(screen) = &mut pane.owned_screen else {
+            return Ok(None);
+        };
+        let chat_widget = &pane.chat_widget;
         let mut rendered_area = Rect::default();
         tui.draw(/*height*/ u16::MAX, |frame| {
             rendered_area = frame.area();

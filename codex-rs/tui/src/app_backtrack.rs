@@ -200,7 +200,7 @@ impl App {
             return;
         }
 
-        let user_total = user_count(&self.transcript_cells);
+        let user_total = user_count(&self.chat_widget.transcript_cells);
         if user_total == 0 {
             return;
         }
@@ -240,7 +240,7 @@ impl App {
     }
 
     pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
-        let user_total = user_count(&self.transcript_cells);
+        let user_total = user_count(&self.chat_widget.transcript_cells);
         let selection = BacktrackSelection {
             nth_user_message: user_total.saturating_sub(1),
             prefill: prompt.text.clone(),
@@ -275,7 +275,7 @@ impl App {
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
         self.overlay = Some(Overlay::new_transcript(
-            self.transcript_cells.clone(),
+            self.chat_widget.transcript_cells.clone(),
             self.keymap.pager.clone(),
         ));
         tui.frame_requester().schedule_frame();
@@ -306,14 +306,14 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.nth_user_message = usize::MAX;
         self.backtrack.base_id = self.chat_widget.thread_id();
-        if has_backtrack_target(&self.transcript_cells) {
+        if has_backtrack_target(&self.chat_widget.transcript_cells) {
             self.chat_widget.show_esc_backtrack_hint();
         }
     }
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
-        if !has_backtrack_target(&self.transcript_cells) {
+        if !has_backtrack_target(&self.chat_widget.transcript_cells) {
             self.reset_backtrack_state();
             self.chat_widget
                 .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
@@ -330,7 +330,7 @@ impl App {
 
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
-        if !has_backtrack_target(&self.transcript_cells) {
+        if !has_backtrack_target(&self.chat_widget.transcript_cells) {
             self.close_transcript_overlay(tui);
             self.chat_widget
                 .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
@@ -341,7 +341,7 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
-        let count = user_count(&self.transcript_cells);
+        let count = user_count(&self.chat_widget.transcript_cells);
         if let Some(last) = count.checked_sub(1) {
             self.apply_backtrack_selection_internal(last);
         }
@@ -350,7 +350,7 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = user_count(&self.chat_widget.transcript_cells);
         if count == 0 {
             return;
         }
@@ -373,7 +373,7 @@ impl App {
 
     /// Step selection to the next newer user message and update overlay.
     fn step_forward_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = user_count(&self.chat_widget.transcript_cells);
         if count == 0 {
             return;
         }
@@ -394,7 +394,9 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
+        if let Some(cell_idx) =
+            nth_user_position(&self.chat_widget.transcript_cells, nth_user_message)
+        {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
@@ -537,13 +539,17 @@ impl App {
     ///
     /// Returns `true` when local transcript state changed.
     pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
-        if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
+        if !trim_transcript_cells_drop_last_n_user_turns(
+            &mut self.chat_widget.transcript_cells,
+            num_turns,
+        ) {
             return false;
         }
         self.chat_widget.clear_pending_token_activity_refreshes();
         self.chat_widget.clear_pending_rate_limit_reset_hint();
+        let remaining_user_turns = user_count(&self.chat_widget.transcript_cells);
         self.chat_widget
-            .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
+            .truncate_agent_copy_history_to_user_turn_count(remaining_user_turns);
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -562,13 +568,14 @@ impl App {
             return;
         }
         if trim_transcript_cells_to_nth_user(
-            &mut self.transcript_cells,
+            &mut self.chat_widget.transcript_cells,
             pending.selection.nth_user_message,
         ) {
             self.chat_widget.clear_pending_token_activity_refreshes();
             self.chat_widget.clear_pending_rate_limit_reset_hint();
+            let remaining_user_turns = user_count(&self.chat_widget.transcript_cells);
             self.chat_widget
-                .truncate_agent_copy_history_to_user_turn_count(user_count(&self.transcript_cells));
+                .truncate_agent_copy_history_to_user_turn_count(remaining_user_turns);
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
@@ -581,8 +588,8 @@ impl App {
         }
 
         let (prefill, text_elements, local_image_paths, remote_image_urls) =
-            nth_user_position(&self.transcript_cells, nth_user_message)
-                .and_then(|idx| self.transcript_cells.get(idx))
+            nth_user_position(&self.chat_widget.transcript_cells, nth_user_message)
+                .and_then(|idx| self.chat_widget.transcript_cells.get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|cell| {
                     (
@@ -613,10 +620,10 @@ impl App {
     fn sync_overlay_after_transcript_trim(&mut self) {
         self.sync_owned_screen_cells();
         if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-            t.replace_cells(self.transcript_cells.clone());
+            t.replace_cells(self.chat_widget.transcript_cells.clone());
         }
         if self.backtrack.overlay_preview_active {
-            let total_users = user_count(&self.transcript_cells);
+            let total_users = user_count(&self.chat_widget.transcript_cells);
             let next_selection = if total_users == 0 {
                 usize::MAX
             } else {

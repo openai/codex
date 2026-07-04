@@ -173,7 +173,7 @@ impl App {
             // Enter alternate screen and set viewport to full size.
             let _ = tui.enter_alt_screen();
             self.overlay = Some(Overlay::new_transcript(
-                self.transcript_cells.clone(),
+                self.chat_widget.transcript_cells.clone(),
                 self.keymap.pager.clone(),
             ));
             tui.frame_requester().schedule_frame();

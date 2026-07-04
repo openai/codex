@@ -14,7 +14,7 @@ impl App {
             t.insert_cell(cell.clone());
             tui.frame_requester().schedule_frame();
         }
-        self.transcript_cells.push(cell.clone());
+        self.chat_widget.transcript_cells.push(cell.clone());
         self.owned_screen_push_cell(cell.clone());
         if self.has_owned_screen() {
             self.chat_widget.request_pending_usage_output_insertion();
@@ -23,7 +23,12 @@ impl App {
             }
             return;
         }
-        if self.initial_history_replay_buffer.as_ref().is_some() {
+        if self
+            .chat_widget
+            .initial_history_replay_buffer
+            .as_ref()
+            .is_some()
+        {
             self.insert_history_cell_lines_with_initial_replay_buffer(
                 tui,
                 cell.as_ref(),
@@ -46,6 +51,7 @@ impl App {
     pub(super) fn pending_usage_output_insertion_blocked(&self) -> bool {
         self.chat_widget.usage_history_insertion_blocked()
             || self
+                .chat_widget
                 .transcript_cells
                 .last()
                 .is_some_and(|cell| cell.as_any().is::<history_cell::AgentMessageCell>())
@@ -131,7 +137,7 @@ impl App {
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
         if self.has_owned_screen() {
             let cell: Arc<dyn HistoryCell> = Arc::new(self.clear_ui_header_cell(CODEX_CLI_VERSION));
-            self.transcript_cells.push(cell.clone());
+            self.chat_widget.transcript_cells.push(cell.clone());
             self.owned_screen_push_cell(cell);
             tui.frame_requester().schedule_frame();
             return;
@@ -190,15 +196,15 @@ impl App {
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
-        self.transcript_cells.clear();
+        self.chat_widget.transcript_cells.clear();
         self.sync_owned_screen_cells();
         self.finish_owned_screen_replay();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
-        self.transcript_reflow.clear();
+        self.chat_widget.transcript_reflow.clear();
         self.chat_widget.clear_pending_token_activity_refreshes();
         self.chat_widget.clear_pending_rate_limit_reset_hint();
-        self.initial_history_replay_buffer = None;
+        self.chat_widget.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         self.skill_load_warnings.clear();

@@ -245,7 +245,7 @@ fn stale_startup_thread_started_removes_local_routing_state() -> Result<()> {
 
             assert!(!app.thread_event_channels.contains_key(&stale_thread_id));
             assert_eq!(app.agent_navigation.get(&stale_thread_id), None);
-            assert_eq!(app.active_thread_id, Some(primary_thread_id));
+            assert_eq!(app.chat_widget.active_thread_id, Some(primary_thread_id));
             Ok(())
         })
 }
@@ -293,5 +293,5 @@ async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread(
     });
 
     assert!(!ignored);
-    assert!(app.transcript_cells.is_empty());
+    assert!(app.chat_widget.transcript_cells.is_empty());
 }

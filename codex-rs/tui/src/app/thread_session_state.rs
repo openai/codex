@@ -9,7 +9,7 @@ use codex_protocol::models::PermissionProfile;
 
 impl App {
     pub(super) async fn sync_active_thread_service_tier_to_cached_session(&mut self) {
-        let Some(active_thread_id) = self.active_thread_id else {
+        let Some(active_thread_id) = self.chat_widget.active_thread_id else {
             return;
         };
 
@@ -33,7 +33,7 @@ impl App {
     }
 
     pub(super) async fn sync_active_thread_permission_settings_to_cached_session(&mut self) {
-        let Some(active_thread_id) = self.active_thread_id else {
+        let Some(active_thread_id) = self.chat_widget.active_thread_id else {
             return;
         };
 
@@ -210,7 +210,7 @@ mod tests {
         };
 
         app.primary_thread_id = Some(main_thread_id);
-        app.active_thread_id = Some(main_thread_id);
+        app.chat_widget.active_thread_id = Some(main_thread_id);
         app.primary_session_configured = Some(main_session.clone());
         app.thread_event_channels.insert(
             main_thread_id,
@@ -317,7 +317,7 @@ mod tests {
         };
 
         app.primary_thread_id = Some(thread_id);
-        app.active_thread_id = Some(thread_id);
+        app.chat_widget.active_thread_id = Some(thread_id);
         app.primary_session_configured = Some(session.clone());
         app.thread_event_channels.insert(
             thread_id,
@@ -363,7 +363,7 @@ mod tests {
         };
 
         app.primary_thread_id = Some(thread_id);
-        app.active_thread_id = Some(thread_id);
+        app.chat_widget.active_thread_id = Some(thread_id);
         app.primary_session_configured = Some(session.clone());
         app.thread_event_channels.insert(
             thread_id,

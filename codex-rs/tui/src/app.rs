@@ -3,7 +3,6 @@
 //! This module owns the `App` struct, shared imports, and the high-level run loop that coordinates
 //! the focused app submodules.
 
-use self::owned_screen::OwnedScreen;
 use crate::AppServerTarget;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
@@ -76,7 +75,6 @@ use crate::test_support::test_path_buf;
 #[cfg(test)]
 use crate::test_support::test_path_display;
 use crate::token_usage::TokenUsage;
-use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -207,6 +205,7 @@ pub(crate) mod app_server_requests;
 mod background_requests;
 mod config_persistence;
 mod conversation_events;
+mod conversation_panes;
 mod event_dispatch;
 mod history_ui;
 mod input;
@@ -230,6 +229,8 @@ mod thread_settings;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::conversation_panes::ConversationPaneInit;
+use self::conversation_panes::ConversationPanes;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::platform_actions::*;
@@ -508,7 +509,7 @@ pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) chat_widget: ChatWidget,
+    pub(crate) chat_widget: ConversationPanes,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -520,23 +521,13 @@ pub(crate) struct App {
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
 
-    pub(crate) file_search: FileSearchManager,
-
-    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
-    owned_screen: Option<OwnedScreen>,
-
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
-    transcript_reflow: TranscriptReflowState,
-    initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
-
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) keymap: RuntimeKeymap,
 
-    /// Controls the animation thread that sends CommitTick events.
-    pub(crate) commit_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid terminal-title config warnings only emit once.
@@ -574,8 +565,6 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     side_threads: HashMap<ThreadId, SideThreadState>,
-    active_thread_id: Option<ThreadId>,
-    active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
@@ -1025,6 +1014,13 @@ See the Codex keymap documentation for supported actions and examples."
             &chat_widget,
             runtime_keymap.pager.clone(),
         );
+        let Ok(chat_widget) = ConversationPanes::new_parent(ConversationPaneInit {
+            chat_widget,
+            file_search,
+            owned_screen,
+        }) else {
+            unreachable!("initial chat widget must use the parent pane scope");
+        };
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1039,17 +1035,11 @@ See the Codex keymap documentation for supported actions and examples."
             cloud_config_bundle,
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
-            file_search,
             enhanced_keys_supported,
             keymap: runtime_keymap,
-            transcript_cells: Vec::new(),
-            owned_screen,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
-            transcript_reflow: TranscriptReflowState::default(),
-            initial_history_replay_buffer: None,
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             skill_load_warnings: SkillLoadWarningState::default(),
@@ -1066,8 +1056,6 @@ See the Codex keymap documentation for supported actions and examples."
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
-            active_thread_id: None,
-            active_thread_rx: None,
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
@@ -1186,14 +1174,14 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                     }
                     active = async {
-                        if let Some(rx) = app.active_thread_rx.as_mut() {
+                        if let Some(rx) = app.chat_widget.active_thread_rx.as_mut() {
                             rx.recv().await
                         } else {
                             None
                         }
                     }, if App::should_handle_active_thread_events(
                         waiting_for_initial_session_configured,
-                        app.active_thread_rx.is_some()
+                        app.chat_widget.active_thread_rx.is_some()
                     ) => {
                         if let Some(event) = active {
                             if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {

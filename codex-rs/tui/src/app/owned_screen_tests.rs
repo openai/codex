@@ -60,7 +60,7 @@ async fn renders_committed_conversation_above_fixed_composer() {
 #[tokio::test]
 async fn committed_cell_updates_viewport_without_queuing_terminal_history() {
     let mut app = super::super::test_support::make_test_app().await;
-    app.owned_screen = App::owned_screen_for_behavior(
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
         AltScreenBehavior::Owned,
         &app.chat_widget,
         app.keymap.pager.clone(),
@@ -69,9 +69,9 @@ async fn committed_cell_updates_viewport_without_queuing_terminal_history() {
 
     app.insert_history_cell(&mut tui, Box::new(TestCell("retained")));
 
-    let screen = app.owned_screen.as_ref().expect("owned screen");
+    let screen = app.chat_widget.owned_screen.as_ref().expect("owned screen");
     assert_eq!(screen.viewport.committed_cell_count(), 1);
-    assert_eq!(app.transcript_cells.len(), 1);
+    assert_eq!(app.chat_widget.transcript_cells.len(), 1);
     assert!(!app.has_emitted_history_lines);
     assert!(!tui.has_pending_history_lines());
 }
@@ -79,7 +79,7 @@ async fn committed_cell_updates_viewport_without_queuing_terminal_history() {
 #[tokio::test]
 async fn replay_retains_cells_while_draw_scheduling_is_deferred() {
     let mut app = super::super::test_support::make_test_app().await;
-    app.owned_screen = App::owned_screen_for_behavior(
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
         AltScreenBehavior::Owned,
         &app.chat_widget,
         app.keymap.pager.clone(),
@@ -96,7 +96,8 @@ async fn replay_retains_cells_while_draw_scheduling_is_deferred() {
 
     assert!(app.owned_screen_replay_in_progress());
     assert_eq!(
-        app.owned_screen
+        app.chat_widget
+            .owned_screen
             .as_ref()
             .expect("owned screen")
             .viewport
@@ -116,7 +117,7 @@ async fn replay_retains_cells_while_draw_scheduling_is_deferred() {
 #[tokio::test]
 async fn navigation_does_not_steal_printable_or_draft_input() {
     let mut app = super::super::test_support::make_test_app().await;
-    app.owned_screen = App::owned_screen_for_behavior(
+    app.chat_widget.owned_screen = App::owned_screen_for_behavior(
         AltScreenBehavior::Owned,
         &app.chat_widget,
         app.keymap.pager.clone(),

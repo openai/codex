@@ -391,7 +391,7 @@ impl App {
         self.thread_event_channels.remove(&thread_id);
         self.side_threads.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
-        if self.active_thread_id == Some(thread_id) {
+        if self.chat_widget.active_thread_id == Some(thread_id) {
             self.clear_active_thread().await;
         } else {
             self.refresh_pending_thread_approvals().await;
@@ -421,7 +421,7 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) {
-        if self.active_thread_id != Some(thread_id)
+        if self.chat_widget.active_thread_id != Some(thread_id)
             && let Err(err) = self.select_agent_thread(tui, app_server, thread_id).await
         {
             tracing::warn!(
@@ -530,10 +530,10 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        let active_thread_id_before_switch = self.active_thread_id;
+        let active_thread_id_before_switch = self.chat_widget.active_thread_id;
         let side_thread_to_discard = self.side_thread_to_discard_after_switch(thread_id);
         self.select_agent_thread(tui, app_server, thread_id).await?;
-        if self.active_thread_id == Some(thread_id)
+        if self.chat_widget.active_thread_id == Some(thread_id)
             && let Some(side_thread_id) = side_thread_to_discard
         {
             if self.discard_side_thread(app_server, side_thread_id).await {
@@ -604,7 +604,7 @@ impl App {
                         .discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
                         .await;
                     if discarded
-                        && self.active_thread_id != Some(parent_thread_id)
+                        && self.chat_widget.active_thread_id != Some(parent_thread_id)
                         && let Err(restore_err) = self
                             .select_agent_thread(tui, app_server, parent_thread_id)
                             .await
@@ -619,7 +619,7 @@ impl App {
                     ));
                     return Ok(AppRunControl::Continue);
                 }
-                if self.active_thread_id == Some(child_thread_id) {
+                if self.chat_widget.active_thread_id == Some(child_thread_id) {
                     if let Some(user_message) = user_message.take() {
                         let _ = self
                             .chat_widget

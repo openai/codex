@@ -101,7 +101,7 @@ impl App {
             .into_iter()
             .enumerate()
             .map(|(idx, (thread_id, entry))| {
-                if self.active_thread_id == Some(thread_id) {
+                if self.chat_widget.active_thread_id == Some(thread_id) {
                     initial_selected_idx = Some(idx);
                 }
                 let id = thread_id;
@@ -116,7 +116,7 @@ impl App {
                     name: name.clone(),
                     name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
                     description: Some(uuid.clone()),
-                    is_current: self.active_thread_id == Some(thread_id),
+                    is_current: self.chat_widget.active_thread_id == Some(thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
@@ -328,7 +328,7 @@ impl App {
         // A ticker belongs to the widget generation that started it. Stop it before installing a
         // replacement so a stale StopCommitAnimation event cannot leave the shared latch stuck.
         let retired_commit_anim_running = std::mem::replace(
-            &mut self.commit_anim_running,
+            &mut self.chat_widget.commit_anim_running,
             Arc::new(AtomicBool::new(/*v*/ false)),
         );
         retired_commit_anim_running.store(/*val*/ false, Ordering::Release);
@@ -348,7 +348,7 @@ impl App {
                 entry.agent_role.clone(),
             );
         }
-        self.chat_widget = chat_widget;
+        self.chat_widget.chat_widget = chat_widget;
         self.sync_active_agent_label();
     }
 
@@ -358,7 +358,7 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        if self.active_thread_id == Some(thread_id) {
+        if self.chat_widget.active_thread_id == Some(thread_id) {
             return Ok(());
         }
 
@@ -400,9 +400,9 @@ impl App {
             return Ok(());
         }
 
-        let previous_thread_id = self.active_thread_id;
+        let previous_thread_id = self.chat_widget.active_thread_id;
         self.store_active_thread_receiver().await;
-        self.active_thread_id = None;
+        self.chat_widget.active_thread_id = None;
         let Some((receiver, mut snapshot)) = self.activate_thread_for_replay(thread_id).await
         else {
             self.chat_widget
@@ -421,8 +421,8 @@ impl App {
         )
         .await;
 
-        self.active_thread_id = Some(thread_id);
-        self.active_thread_rx = Some(receiver);
+        self.chat_widget.active_thread_id = Some(thread_id);
+        self.chat_widget.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
@@ -486,8 +486,8 @@ impl App {
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
-        self.active_thread_id = None;
-        self.active_thread_rx = None;
+        self.chat_widget.active_thread_id = None;
+        self.chat_widget.active_thread_rx = None;
         self.primary_thread_id = None;
         self.last_subagent_backfill_attempt = None;
         self.primary_session_configured = None;
@@ -809,7 +809,8 @@ impl App {
                     self.config.tui_notifications.method,
                     self.config.tui_notifications.condition,
                 );
-                self.file_search
+                self.chat_widget
+                    .file_search
                     .update_search_dir(self.config.cwd.to_path_buf());
                 match self
                     .replace_chat_widget_with_app_server_thread(

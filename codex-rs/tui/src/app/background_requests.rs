@@ -58,7 +58,7 @@ impl App {
 
     fn mcp_inventory_request_thread_id(&self, thread_id: Option<ThreadId>) -> Option<ThreadId> {
         thread_id.filter(|thread_id| {
-            self.active_thread_id == Some(*thread_id)
+            self.chat_widget.active_thread_id == Some(*thread_id)
                 && self
                     .agent_navigation
                     .get(thread_id)
@@ -716,6 +716,7 @@ impl App {
 
     pub(super) fn clear_committed_mcp_inventory_loading(&mut self) {
         let Some(index) = self
+            .chat_widget
             .transcript_cells
             .iter()
             .rposition(|cell| cell.as_any().is::<history_cell::McpInventoryLoadingCell>())
@@ -723,10 +724,10 @@ impl App {
             return;
         };
 
-        self.transcript_cells.remove(index);
+        self.chat_widget.transcript_cells.remove(index);
         self.sync_owned_screen_cells();
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
-            overlay.replace_cells(self.transcript_cells.clone());
+            overlay.replace_cells(self.chat_widget.transcript_cells.clone());
         }
     }
 }
@@ -1495,7 +1496,7 @@ mod tests {
     async fn mcp_inventory_omits_thread_id_for_closed_agent_thread() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
-        app.active_thread_id = Some(thread_id);
+        app.chat_widget.active_thread_id = Some(thread_id);
         app.agent_navigation.upsert(
             thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
             /*is_closed*/ false,
