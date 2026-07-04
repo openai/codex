@@ -207,6 +207,7 @@ pub(crate) mod app_server_requests;
 mod background_requests;
 mod config_persistence;
 mod conversation_events;
+mod conversation_lifecycle;
 mod conversation_panes;
 mod conversation_retirement;
 mod event_dispatch;

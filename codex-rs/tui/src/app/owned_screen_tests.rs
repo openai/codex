@@ -203,6 +203,25 @@ async fn renders_wide_parent_left_and_side_right() {
 }
 
 #[tokio::test]
+async fn renders_closed_parent_read_only_while_side_remains_focused() {
+    let mut app = app_with_owned_side().await;
+    seed_pane(&mut app, PaneSlot::Parent, "", &["parent transcript"]);
+    seed_pane(&mut app, PaneSlot::Side, "side draft", &["side transcript"]);
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .mark_thread_closed();
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+
+    let terminal = render_app(&mut app, /*width*/ 83, /*height*/ 12);
+
+    assert_snapshot!(
+        "owned_screen_closed_parent_side_focused",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
 async fn narrow_layout_renders_only_the_focused_side() {
     let mut app = app_with_owned_side().await;
     seed_pane(

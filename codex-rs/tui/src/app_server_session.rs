@@ -101,6 +101,7 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -987,9 +988,12 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_unsubscribe(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadUnsubscribeStatus> {
         let request_id = self.next_request_id();
-        let _: ThreadUnsubscribeResponse = self
+        let response: ThreadUnsubscribeResponse = self
             .client
             .request_typed(ClientRequest::ThreadUnsubscribe {
                 request_id,
@@ -999,7 +1003,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/unsubscribe failed in TUI")?;
-        Ok(())
+        Ok(response.status)
     }
 
     pub(crate) async fn thread_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {

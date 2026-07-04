@@ -157,6 +157,13 @@ impl ChatWidget {
         self.request_immediate_exit();
     }
 
+    pub(crate) fn mark_thread_closed(&mut self) {
+        self.bottom_pane.set_composer_input_enabled(
+            /*enabled*/ false,
+            Some("Conversation closed.".to_string()),
+        );
+    }
+
     pub(super) fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
         self.refresh_status_line();

@@ -12,7 +12,7 @@ use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlo
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
-const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+const SHUTDOWN_THREAD_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 impl App {
     pub(super) async fn handle_event(
@@ -2445,27 +2445,22 @@ impl App {
     ) -> AppRunControl {
         match mode {
             ExitMode::ShutdownFirst => {
+                let thread_ids: Vec<_> = self
+                    .chat_widget
+                    .installed_thread_ids()
+                    .into_iter()
+                    .filter(|thread_id| !self.is_thread_retired(thread_id))
+                    .collect();
                 // Mark the thread we are explicitly shutting down for exit so
                 // its shutdown completion does not trigger agent failover.
-                self.pending_shutdown_exit_thread_id = self
-                    .chat_widget
-                    .active_thread_id
-                    .or(self.chat_widget.thread_id());
-                if self.pending_shutdown_exit_thread_id.is_some() {
-                    // This is a UI escape-hatch budget, not a protocol
-                    // deadline. A healthy local thread/unsubscribe round trip
-                    // should finish comfortably inside two seconds, while a
-                    // longer wait makes Ctrl+C feel broken when the app-server
-                    // is already wedged.
-                    if tokio::time::timeout(
-                        SHUTDOWN_FIRST_EXIT_TIMEOUT,
-                        self.shutdown_current_thread(app_server),
+                self.pending_shutdown_exit_thread_id = thread_ids.first().copied();
+                if !thread_ids.is_empty() {
+                    self.shutdown_installed_threads(
+                        app_server,
+                        thread_ids,
+                        SHUTDOWN_THREAD_EXIT_TIMEOUT,
                     )
-                    .await
-                    .is_err()
-                    {
-                        tracing::warn!("timed out waiting for app-server thread shutdown");
-                    }
+                    .await;
                 }
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)

@@ -14,17 +14,6 @@ pub(super) enum ThreadRollbackOrigin {
 }
 
 impl App {
-    pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
-        if let Some(thread_id) = self.chat_widget.thread_id() {
-            // Clear any in-flight rollback guard when switching threads.
-            self.backtrack.pending_rollback = None;
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-                tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
-            }
-            self.abort_thread_event_listener(thread_id);
-        }
-    }
-
     pub(super) fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
         if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
             handle.abort();
@@ -1551,7 +1540,7 @@ impl App {
         let Some(origin) = self
             .chat_widget
             .by_slot(pane)
-            .and_then(|pane| pane.origin())
+            .and_then(super::conversation_panes::ConversationPane::origin)
         else {
             return Ok(());
         };
@@ -1560,9 +1549,25 @@ impl App {
         }
         let sender = self.chat_widget.conversation_event_sender();
         let previous_sender = std::mem::replace(&mut self.app_event_tx, sender);
-        let result = self
-            .handle_active_thread_event(tui, app_server, event)
-            .await;
+        let closed_parent_thread_id = (pane == PaneSlot::Parent
+            && self.chat_widget.has_side()
+            && matches!(
+                &event,
+                ThreadBufferedEvent::Notification(ServerNotification::ThreadClosed(_))
+            ))
+        .then(|| {
+            self.chat_widget
+                .by_slot(PaneSlot::Parent)
+                .and_then(|pane| pane.active_thread_id)
+        })
+        .flatten();
+        let result = if let Some(parent_thread_id) = closed_parent_thread_id {
+            self.handle_closed_parent_pane(tui, parent_thread_id).await;
+            Ok(())
+        } else {
+            self.handle_active_thread_event(tui, app_server, event)
+                .await
+        };
         self.app_event_tx = previous_sender;
         debug_assert!(self.chat_widget.finish_dispatch(origin));
         result

@@ -97,6 +97,37 @@ async fn taking_focused_side_restores_parent_selection() {
 }
 
 #[tokio::test]
+async fn installed_thread_ids_are_parent_first_and_unique() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let (side, _side_rx) = pane_init(PaneSlot::Side).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    assert!(panes.install_side(side).is_ok());
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    for (slot, thread_id) in [
+        (PaneSlot::Parent, parent_thread_id),
+        (PaneSlot::Side, side_thread_id),
+    ] {
+        panes
+            .by_slot_mut(slot)
+            .expect("installed pane")
+            .attach_thread(thread_id, /*receiver*/ None);
+    }
+    assert_eq!(
+        panes.installed_thread_ids(),
+        vec![parent_thread_id, side_thread_id]
+    );
+
+    panes
+        .by_slot_mut(PaneSlot::Side)
+        .expect("side pane")
+        .attach_thread(parent_thread_id, /*receiver*/ None);
+    assert_eq!(panes.installed_thread_ids(), vec![parent_thread_id]);
+}
+
+#[tokio::test]
 async fn a_closed_receiver_does_not_starve_the_other_pane() {
     let (parent, _parent_app_rx) = pane_init(PaneSlot::Parent).await;
     let (side, _side_app_rx) = pane_init(PaneSlot::Side).await;

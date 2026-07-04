@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: "rendered_cells.join(\"\\n\")"
+---
+• Parent conversation closed. This side conversation remains available.

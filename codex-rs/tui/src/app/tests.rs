@@ -4129,6 +4129,80 @@ async fn side_thread_closed_removes_only_side_and_keeps_parent_live() -> Result<
 }
 
 #[tokio::test]
+async fn parent_thread_closed_keeps_side_live_without_exiting() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    let parent_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Parent, app.app_event_tx.clone()).await;
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .chat_widget = parent_widget;
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+
+    app.handle_pane_thread_event(
+        &mut tui,
+        &mut app_server,
+        PaneSlot::Parent,
+        ThreadBufferedEvent::Notification(thread_closed_notification(parent_thread_id)),
+    )
+    .await?;
+
+    assert!(app.chat_widget.has_side());
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    assert_eq!(app.chat_widget.active_thread_id, Some(side_thread_id));
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.active_thread_id),
+        None
+    );
+    assert!(app.is_thread_retired(&parent_thread_id));
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        match event {
+            AppEvent::FromConversation { target, event } => match *event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    assert_eq!(target.pane, PaneSlot::Side);
+                    rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+                }
+                AppEvent::Exit(_) => {
+                    panic!("parent closure must not exit while Side remains live")
+                }
+                _ => {}
+            },
+            AppEvent::Exit(_) => panic!("parent closure must not exit while Side remains live"),
+            _ => {}
+        }
+    }
+    assert_app_snapshot!(
+        "parent_thread_closed_keeps_side_live",
+        rendered_cells.join("\n")
+    );
+
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    app.chat_widget
+        .set_composer_text("must not submit".to_string(), Vec::new(), Vec::new());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    while let Ok(event) = app_event_rx.try_recv() {
+        assert!(!matches!(
+            conversation_event_payload(event),
+            AppEvent::CodexOp(_)
+                | AppEvent::ConversationOp { .. }
+                | AppEvent::SubmitThreadOp { .. }
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()> {
     let mut app = make_test_app().await;
     app.chat_widget.active_thread_id = Some(ThreadId::new());
@@ -6104,27 +6178,71 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
 }
 
 #[tokio::test]
-async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
+async fn parent_scoped_exit_shuts_down_both_panes_without_submitting_op() -> Result<()> {
     let (mut app, _app_event_rx, mut op_rx) = Box::pin(make_test_app_with_channels()).await;
-    let thread_id = ThreadId::new();
-    app.chat_widget.active_thread_id = Some(thread_id);
-
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
     .await
     .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+    let parent_thread_id = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await?
+        .session
+        .thread_id;
+    let side_thread_id = app_server
+        .start_thread(app.chat_widget.config_ref())
+        .await?
+        .session
+        .thread_id;
+    let parent_widget =
+        make_chatwidget_for_pane_with_sender(PaneSlot::Parent, app.app_event_tx.clone()).await;
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .chat_widget = parent_widget;
+    install_test_side_pane(&mut app, parent_thread_id, side_thread_id).await;
+    for thread_id in [parent_thread_id, side_thread_id] {
+        app.thread_event_listener_tasks
+            .insert(thread_id, tokio::spawn(std::future::pending::<()>()));
+    }
+    let parent_origin = app
+        .chat_widget
+        .by_slot(PaneSlot::Parent)
+        .and_then(super::conversation_panes::ConversationPane::origin)
+        .expect("parent origin");
+
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let control = app
+        .handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::FromConversation {
+                target: parent_origin,
+                event: Box::new(AppEvent::Exit(ExitMode::ShutdownFirst)),
+            },
+        )
+        .await?;
 
     assert_eq!(app.pending_shutdown_exit_thread_id, None);
+    assert!(app.thread_event_listener_tasks.is_empty());
     assert!(matches!(
         control,
         AppRunControl::Exit(ExitReason::UserRequested)
     ));
+    assert_eq!(
+        app_server.thread_unsubscribe(parent_thread_id).await?,
+        codex_app_server_protocol::ThreadUnsubscribeStatus::NotSubscribed
+    );
+    assert_eq!(
+        app_server.thread_unsubscribe(side_thread_id).await?,
+        codex_app_server_protocol::ThreadUnsubscribeStatus::NotSubscribed
+    );
     assert!(
         op_rx.try_recv().is_err(),
         "shutdown should not submit Op::Shutdown"
     );
+    Ok(())
 }
 
 #[tokio::test]

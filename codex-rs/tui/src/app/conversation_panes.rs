@@ -221,6 +221,18 @@ impl ConversationPanes {
         self.by_thread_id(thread_id).is_some()
     }
 
+    pub(super) fn installed_thread_ids(&self) -> Vec<ThreadId> {
+        let mut thread_ids = Vec::new();
+        for pane in std::iter::once(&self.parent).chain(self.side.iter()) {
+            if let Some(thread_id) = pane.thread_id()
+                && !thread_ids.contains(&thread_id)
+            {
+                thread_ids.push(thread_id);
+            }
+        }
+        thread_ids
+    }
+
     pub(super) fn dispatch_to(&mut self, origin: ConversationOrigin) -> bool {
         if self.by_origin(origin).is_none() {
             return false;
