@@ -116,6 +116,10 @@ impl GitRunner {
             .ensure_config_source_is_not_worktree_controlled(path, description)
     }
 
+    pub(crate) fn ensure_active_worktree_root(&self, root: &Path) -> io::Result<()> {
+        self.authority.ensure_active_worktree_root(root)
+    }
+
     pub(crate) fn config_environment_value(&self, name: &str) -> Option<&OsStr> {
         self.config_environment.value(name)
     }

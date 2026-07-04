@@ -9,6 +9,7 @@ mod git_config;
 mod git_config_environment;
 mod git_config_sources;
 mod git_executable;
+mod guarded_config;
 mod info;
 mod local_only;
 mod operations;
