@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use crate::FsmonitorOverride;
 use crate::apply_output::parse_git_apply_output;
 use crate::git_command::GitRunner;
+use crate::git_config_sources::ensure_no_worktree_primary_config_sources;
 use crate::patch_paths::extract_effective_paths_from_patch;
 use crate::patch_paths::stage_effective_paths;
 use crate::safe_git::DISABLED_HOOKS_PATH;
@@ -47,17 +48,24 @@ pub struct ApplyGitResult {
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let git = GitRunner::for_cwd_io(&req.cwd)?;
     let mut cfg_parts = configured_git_config_parts();
+    ensure_no_worktree_primary_config_sources(&git, &req.cwd)?;
+    let requested_cwd = std::fs::canonicalize(&req.cwd)?;
     let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
+    if git_root != requested_cwd {
+        ensure_no_worktree_primary_config_sources(&git, &git_root)?;
+    }
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
-    let patch_paths = extract_effective_paths_from_patch(&git, &patch_path, req.revert)?;
+    let patch_paths =
+        extract_effective_paths_from_patch(&git, &git_root, &patch_path, req.revert, &cfg_parts)?;
+    cfg_parts.extend(safe_git_config_parts());
 
     if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
-        stage_effective_paths(&git, &git_root, &patch_paths)?;
+        stage_effective_paths(&git, &git_root, &patch_paths, &cfg_parts)?;
     }
 
     // Build git args
@@ -65,8 +73,6 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     if req.revert {
         args.push("-R".into());
     }
-
-    cfg_parts.extend(safe_git_config_parts());
 
     args.push(patch_path.to_string_lossy().to_string());
 

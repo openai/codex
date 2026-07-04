@@ -65,6 +65,41 @@ fn git_boolean_rejects_values_native_git_rejects() {
 }
 
 #[test]
+fn symmetric_git_boolean_parser_excludes_only_int_min_spellings() {
+    for value in [
+        b"-2147483648".as_slice(),
+        b"-0x80000000".as_slice(),
+        b"-020000000000".as_slice(),
+        b"-2097152k".as_slice(),
+        b"-2048m".as_slice(),
+        b"-2g".as_slice(),
+        b" -2G".as_slice(),
+    ] {
+        assert_eq!(parse_git_boolean(value), Some(true), "value {value:?}");
+        assert_eq!(
+            parse_git_boolean_symmetric_i32(value),
+            None,
+            "value {value:?}"
+        );
+    }
+
+    for value in [
+        b"0x1".as_slice(),
+        b"010".as_slice(),
+        b"1k".as_slice(),
+        b"-1g".as_slice(),
+        b" 1".as_slice(),
+        b"-2147483647".as_slice(),
+    ] {
+        assert_eq!(
+            parse_git_boolean_symmetric_i32(value),
+            parse_git_boolean(value),
+            "value {value:?}"
+        );
+    }
+}
+
+#[test]
 fn path_containment_uses_component_boundaries() {
     let root = Path::new("/repo/root");
     assert!(path_is_within(Path::new("/repo/root"), root));
