@@ -12,7 +12,7 @@ use crate::server::ServerOptions;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
-const ANSI_GRAY: &str = "\x1b[90m";
+const ANSI_DIM: &str = "\x1b[2m";
 const ANSI_RESET: &str = "\x1b[0m";
 
 #[derive(Debug, Clone)]
@@ -145,16 +145,26 @@ async fn poll_for_token(
     }
 }
 
-fn print_device_code_prompt(verification_url: &str, code: &str) {
-    let version = env!("CARGO_PKG_VERSION");
-    println!(
-        "\nWelcome to Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}\n\
+fn format_device_code_prompt(version: &str, verification_url: &str, code: &str) -> String {
+    format!(
+        "\nWelcome to Codex [v{ANSI_DIM}{version}{ANSI_RESET}]\n{ANSI_DIM}OpenAI's command-line coding agent{ANSI_RESET}\n\
 \nFollow these steps to sign in with ChatGPT using device code authorization:\n\
 \n1. Open this link in your browser and sign in to your account\n   {ANSI_BLUE}{verification_url}{ANSI_RESET}\n\
-\n2. Enter this one-time code {ANSI_GRAY}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
-\n{ANSI_GRAY}Device codes are a common phishing target. Never share this code.{ANSI_RESET}\n",
+\n2. Enter this one-time code {ANSI_DIM}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
+\nDevice codes are a common phishing target. Never share this code.\n",
+    )
+}
+
+fn print_device_code_prompt(verification_url: &str, code: &str) {
+    println!(
+        "{}",
+        format_device_code_prompt(env!("CARGO_PKG_VERSION"), verification_url, code)
     );
 }
+
+#[cfg(test)]
+#[path = "device_code_auth_tests.rs"]
+mod tests;
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
     let base_url = opts.issuer.trim_end_matches('/');

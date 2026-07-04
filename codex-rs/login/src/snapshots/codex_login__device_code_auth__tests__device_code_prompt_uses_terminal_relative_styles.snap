@@ -1,0 +1,5 @@
+---
+source: login/src/device_code_auth_tests.rs
+expression: prompt.escape_default().to_string()
+---
+\nWelcome to Codex [v\u{1b}[2m1.2.3\u{1b}[0m]\n\u{1b}[2mOpenAI\'s command-line coding agent\u{1b}[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u{1b}[94mhttps://auth.openai.com/codex/device\u{1b}[0m\n\n2. Enter this one-time code \u{1b}[2m(expires in 15 minutes)\u{1b}[0m\n   \u{1b}[94mABCD-EFGH\u{1b}[0m\n\nDevice codes are a common phishing target. Never share this code.\n
