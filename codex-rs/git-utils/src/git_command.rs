@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::errors::GitReadError;
+use crate::git_config_environment::GitConfigEnvironmentSnapshot;
 #[cfg(test)]
 use crate::git_executable::git_executable_name;
 use crate::git_executable::harden_git_launch_environment;
@@ -30,6 +31,7 @@ pub(crate) struct GitRunner {
     argv0: PathBuf,
     safe_path: std::ffi::OsString,
     authority: RepositoryAuthority,
+    config_environment: GitConfigEnvironmentSnapshot,
 }
 
 /// A Git command that can only be spawned through [`GitRunner::output`],
@@ -84,6 +86,7 @@ impl GitRunner {
             command.current_dir(parent);
         }
         harden_git_launch_environment(&mut command, &self.safe_path);
+        self.config_environment.apply_to(&mut command);
         GitCommand { inner: command }
     }
 
@@ -117,12 +120,18 @@ impl GitRunner {
     ) -> Result<Self, GitReadError> {
         authority.ensure_primary_authority()?;
         let selected = select_git_executable(&authority, search_path)?;
+        let config_environment = GitConfigEnvironmentSnapshot::capture().map_err(|error| {
+            GitReadError::InvalidConfigEnvironment {
+                reason: error.to_string(),
+            }
+        })?;
         Ok(Self {
             executable: selected.executable,
             #[cfg(any(unix, test))]
             argv0: selected.argv0,
             safe_path: selected.safe_path,
             authority,
+            config_environment,
         })
     }
 }
