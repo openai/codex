@@ -33,6 +33,24 @@ pub(super) fn normalize_absolute_path(path: impl AsRef<Path>) -> io::Result<Path
     Ok(AbsolutePathBuf::from_absolute_path(path)?.into_path_buf())
 }
 
+#[cfg(windows)]
+pub(super) fn reject_raw_ambiguous_windows_config_path(path: &str) -> io::Result<()> {
+    if windows_config_path_is_ambiguous(path) {
+        return Err(invalid_config_source("ambiguous Windows Git config path"));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub(super) fn reject_raw_ambiguous_windows_config_path(_path: &str) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn windows_config_path_is_ambiguous(path: &str) -> bool {
+    crate::path_authority::windows_path_is_ambiguous(path)
+}
+
 pub(super) fn invalid_config_source(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }

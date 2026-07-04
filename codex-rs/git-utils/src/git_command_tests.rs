@@ -1514,6 +1514,46 @@ fn active_commondir_route_is_revalidated_before_every_child() {
     );
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn active_worktree_identity_is_revalidated_before_every_child() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("repo");
+    let moved_root = fixture.path().join("repo-moved");
+    std::fs::create_dir_all(&root).expect("create repository");
+    run_git(&root, &["init", "-q"]);
+    let runner = GitRunner::for_cwd(&root).expect("runner for original repository");
+    let sentinel = fixture.path().join("git-child-ran");
+    let mut command = runner
+        .command_for_cwd(&root)
+        .expect("command for original repository");
+    command
+        .args(["config", "--file"])
+        .arg(&sentinel)
+        .args(["probe.value", "ran"]);
+
+    std::fs::rename(&root, &moved_root).expect("move original repository");
+    std::fs::create_dir_all(&root).expect("create replacement repository");
+    run_git(&root, &["init", "-q"]);
+    assert!(moved_root.join(".git").is_dir());
+    assert!(root.join(".git").is_dir());
+
+    let error = runner
+        .output(command)
+        .expect_err("same-path repository replacement must block Git child");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("guarded Git repository identity changed before Git launch"),
+        "{error}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "Git child executed after same-path repository replacement"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_external_separate_git_dir_absolute_and_relative_routes_execute_git() {

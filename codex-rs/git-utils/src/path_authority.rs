@@ -18,7 +18,7 @@ use route_walker::invalid_data;
 use route_walker::observe_route;
 #[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_authority_path_is_ambiguous;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) use windows_path::windows_path_is_ambiguous;
 
 #[derive(Clone, Copy, Eq, PartialEq)]

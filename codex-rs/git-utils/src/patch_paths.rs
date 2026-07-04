@@ -9,7 +9,7 @@ use crate::apply::safe_git_config_parts;
 use crate::apply::write_temp_patch;
 use crate::git_command::GitRunner;
 use crate::git_config::path_is_within;
-use crate::git_config_sources::ensure_no_worktree_primary_config_sources;
+use crate::git_config_sources::ensure_no_worktree_config_sources;
 
 /// Extract paths with Git from a cwd whose config sources have already been
 /// authorized for `git_config_args`.
@@ -66,7 +66,7 @@ fn extract_paths_from_patch_from_cwd(diff_text: &str, cwd: &Path) -> Vec<String>
         let git_root = crate::get_git_repo_root(cwd)
             .ok_or_else(|| io::Error::other("not a Git repository"))?;
         let git_root = std::fs::canonicalize(git_root)?;
-        ensure_no_worktree_primary_config_sources(&git, &git_root)?;
+        ensure_no_worktree_config_sources(&git, &git_root, &[])?;
         extract_effective_paths_from_patch(&git, &git_root, &patch_path, /*revert*/ false, &[])
     })()
     .unwrap_or_default();
@@ -245,7 +245,7 @@ fn invalid_windows_patch_component(component: &str) -> bool {
 pub fn stage_paths(git_root: &Path, diff: &str) -> io::Result<()> {
     let git = GitRunner::for_cwd_io(git_root)?;
     let git_config_args = safe_git_config_parts();
-    ensure_no_worktree_primary_config_sources(&git, git_root)?;
+    ensure_no_worktree_config_sources(&git, git_root, &git_config_args)?;
     let (tmpdir, patch_path) = write_temp_patch(diff)?;
     let paths = extract_effective_paths_from_patch(
         &git,

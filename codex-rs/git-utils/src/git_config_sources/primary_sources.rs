@@ -9,6 +9,30 @@ use super::path_safety::invalid_config_source;
 use crate::git_command::GitRunner;
 use crate::git_config::parse_git_boolean_symmetric_i32;
 
+pub(super) fn default_system_config_source_candidates(
+    git: &GitRunner,
+    cwd: &Path,
+) -> io::Result<Vec<(&'static str, PathBuf)>> {
+    if git_env_bool(git, "GIT_CONFIG_NOSYSTEM")?
+        || git.config_environment_value("GIT_CONFIG_SYSTEM").is_some()
+    {
+        return Ok(Vec::new());
+    }
+    // `GIT_CONFIG_SYSTEM` was added to `git var` in Git 2.42. The PSEC-4394
+    // boundary treats the selected Git installation and its non-environment
+    // compile-time system config as host-owned trusted inputs. For older Git,
+    // the exact custom ETC_GITCONFIG path is therefore a documented residual;
+    // the derivable prefix/ProgramData paths are still checked separately and
+    // the no-includes graph validates every directive the system file exposes.
+    let Some(paths) = git_var_config_paths(git, cwd, "GIT_CONFIG_SYSTEM")? else {
+        return Ok(Vec::new());
+    };
+    Ok(paths
+        .into_iter()
+        .map(|path| ("GIT_CONFIG_SYSTEM", path))
+        .collect())
+}
+
 pub(super) fn selected_git_home_config_candidates(
     git: &GitRunner,
     cwd: &Path,
@@ -84,6 +108,54 @@ fn selected_git_path_candidate(git: &GitRunner, cwd: &Path, raw: &str) -> io::Re
         return Err(invalid_config_source("ambiguous selected Git path"));
     }
     git_var_path_from_bytes(value)
+}
+
+fn git_var_config_paths(
+    git: &GitRunner,
+    cwd: &Path,
+    variable: &str,
+) -> io::Result<Option<Vec<PathBuf>>> {
+    let mut command = git.command_for_cwd(cwd)?;
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["var", variable]);
+    let output = git.output(command)?;
+    parse_git_var_config_paths_result(
+        output.status.code(),
+        &output.stdout,
+        &output.stderr,
+        variable,
+    )
+}
+
+pub(super) fn parse_git_var_config_paths_result(
+    status_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+    variable: &str,
+) -> io::Result<Option<Vec<PathBuf>>> {
+    match status_code {
+        Some(0) => parse_git_var_paths(stdout).map(Some),
+        Some(1) if stdout.is_empty() && stderr.is_empty() => Ok(Some(Vec::new())),
+        // These variables were added in Git 2.42. Older Git reports usage
+        // status 129; fall back to its documented environment/home sources.
+        Some(129) => Ok(None),
+        _ => Err(io::Error::other(format!(
+            "git {variable} source probe failed with status {status_code:?}: {}",
+            String::from_utf8_lossy(stderr).trim()
+        ))),
+    }
+}
+
+fn parse_git_var_paths(output: &[u8]) -> io::Result<Vec<PathBuf>> {
+    output
+        .split(|byte| *byte == b'\n')
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let path = path.strip_suffix(b"\r").unwrap_or(path);
+            git_var_path_from_bytes(path)
+        })
+        .collect()
 }
 
 pub(super) fn legacy_primary_config_source_candidates(
