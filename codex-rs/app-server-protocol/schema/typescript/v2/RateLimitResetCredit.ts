@@ -16,4 +16,12 @@ grantedAt: number,
 /**
  * Unix timestamp in seconds when the credit expires, or `null` if it does not expire.
  */
-expiresAt: number | null, };
+expiresAt: number | null,
+/**
+ * Backend-provided display title for this credit, or `null` when unavailable.
+ */
+title: string | null,
+/**
+ * Backend-provided display description for this credit, or `null` when unavailable.
+ */
+description: string | null, };

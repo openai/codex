@@ -82,7 +82,8 @@ async fn account_rate_limit_reset_credit_list_returns_available_details() -> Res
                     "status": "available",
                     "granted_at": "2026-06-17T00:00:00Z",
                     "expires_at": "2026-07-17T00:00:00Z",
-                    "title": "Full reset",
+                    "title": "Full reset (Weekly + 5 hr)",
+                    "description": "Ready to redeem",
                     "profile_user_id": "ignored"
                 },
                 {
@@ -121,6 +122,8 @@ async fn account_rate_limit_reset_credit_list_returns_available_details() -> Res
                     expires_at: Some(
                         chrono::DateTime::parse_from_rfc3339("2026-07-17T00:00:00Z")?.timestamp()
                     ),
+                    title: Some("Full reset (Weekly + 5 hr)".to_string()),
+                    description: Some("Ready to redeem".to_string()),
                 },
                 RateLimitResetCredit {
                     id: "credit-2".to_string(),
@@ -129,6 +132,8 @@ async fn account_rate_limit_reset_credit_list_returns_available_details() -> Res
                     granted_at: chrono::DateTime::parse_from_rfc3339("2026-06-18T00:00:00Z")?
                         .timestamp(),
                     expires_at: None,
+                    title: None,
+                    description: None,
                 },
             ],
         }

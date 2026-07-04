@@ -322,6 +322,10 @@ pub struct RateLimitResetCredit {
     /// Unix timestamp in seconds when the credit expires, or `null` if it does not expire.
     #[ts(type = "number | null")]
     pub expires_at: Option<i64>,
+    /// Backend-provided display title for this credit, or `null` when unavailable.
+    pub title: Option<String>,
+    /// Backend-provided display description for this credit, or `null` when unavailable.
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

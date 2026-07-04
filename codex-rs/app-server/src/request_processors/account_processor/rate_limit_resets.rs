@@ -146,6 +146,8 @@ fn rate_limit_reset_credit_from_backend(
         status,
         granted_at,
         expires_at,
+        title: credit.title,
+        description: credit.description,
     })
 }
 

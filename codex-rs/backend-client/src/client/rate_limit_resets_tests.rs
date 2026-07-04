@@ -103,6 +103,8 @@ fn rate_limit_reset_contract_uses_expected_paths_and_payloads() {
                     status: "available".to_string(),
                     granted_at: "2026-06-17T00:00:00Z".to_string(),
                     expires_at: Some("2026-07-17T00:00:00Z".to_string()),
+                    title: Some("Full reset (Weekly + 5 hr)".to_string()),
+                    description: Some("Ready to redeem".to_string()),
                 },
                 RateLimitResetCreditDetails {
                     id: "credit-2".to_string(),
@@ -110,6 +112,8 @@ fn rate_limit_reset_contract_uses_expected_paths_and_payloads() {
                     status: "available".to_string(),
                     granted_at: "2026-06-18T00:00:00Z".to_string(),
                     expires_at: None,
+                    title: None,
+                    description: None,
                 },
             ],
             available_count: 2,

@@ -36,6 +36,8 @@ pub struct RateLimitResetCreditDetails {
     pub status: String,
     pub granted_at: String,
     pub expires_at: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

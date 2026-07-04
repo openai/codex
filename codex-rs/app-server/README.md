@@ -2073,14 +2073,18 @@ Field notes:
         "resetType": "codexRateLimits",
         "status": "available",
         "grantedAt": 1781654400,
-        "expiresAt": 1784246400
+        "expiresAt": 1784246400,
+        "title": "Full reset (Weekly + 5 hr)",
+        "description": "Ready to redeem"
       },
       {
         "id": "RateLimitResetCredit_2",
         "resetType": "codexRateLimits",
         "status": "available",
         "grantedAt": 1781740800,
-        "expiresAt": null
+        "expiresAt": null,
+        "title": null,
+        "description": null
       }
     ]
   }
@@ -2093,6 +2097,7 @@ Field notes:
 
 - `availableCount` is the authoritative total. `data` contains details for at most the first 10 available credits. The backend does not expose a cursor, so the count can be greater than the number of rows and this method cannot paginate the remainder.
 - Reset-credit `id` values are opaque strings. `grantedAt` and `expiresAt` are Unix timestamps in seconds; `expiresAt` is `null` for a credit that does not expire.
+- `title` and `description` are backend-provided display text. Either field can be `null` when the backend does not provide it.
 - `resetType` is currently `codexRateLimits`. `status` reports the credit lifecycle state: `available`, `redeeming`, or `redeemed`.
 - `idempotencyKey` must be non-empty. A UUID is recommended for each logical redemption attempt; reuse the same value when retrying that attempt.
 - `creditId` is optional. When provided, it must be a non-empty opaque ID returned by `account/rateLimitResetCredit/list`; when omitted, the backend selects the next available credit.

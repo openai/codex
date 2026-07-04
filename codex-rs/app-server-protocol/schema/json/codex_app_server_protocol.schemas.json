@@ -14570,6 +14570,13 @@
       },
       "RateLimitResetCredit": {
         "properties": {
+          "description": {
+            "description": "Backend-provided display description for this credit, or `null` when unavailable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expiresAt": {
             "description": "Unix timestamp in seconds when the credit expires, or `null` if it does not expire.",
             "format": "int64",
@@ -14592,6 +14599,13 @@
           },
           "status": {
             "$ref": "#/definitions/v2/RateLimitResetCreditStatus"
+          },
+          "title": {
+            "description": "Backend-provided display title for this credit, or `null` when unavailable.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
