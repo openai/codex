@@ -10,7 +10,7 @@
 //! visible immediately.
 //!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
-//! during draws using `active_cell_transcript_key()` and
+//! during draws using `active_cell_render_key()` and
 //! `active_cell_transcript_hyperlink_lines()`. The
 //! cache key is designed to change when the active cell mutates in place or when its transcript
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
@@ -754,12 +754,12 @@ enum CodexOpTarget {
     AppEvent,
 }
 
-/// Snapshot of active-cell state that affects transcript overlay rendering.
+/// Snapshot of active-cell state that affects retained viewport rendering.
 ///
-/// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
-/// it cheaply decide when to recompute that tail as the active cell evolves.
+/// Retained views keep a cached "live tail" for the in-flight cell; this key lets them cheaply
+/// decide when to recompute that tail as the active cell evolves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ActiveCellTranscriptKey {
+pub(crate) struct ActiveCellRenderKey {
     /// Cache-busting revision for in-place updates.
     ///
     /// Many active cells are updated incrementally while streaming (for example when exec groups
@@ -1921,7 +1921,7 @@ impl ChatWidget {
     /// If callers mutate the active cell's transcript output without bumping the revision (or
     /// providing an appropriate animation tick), the overlay will keep showing a stale tail while
     /// the main viewport updates.
-    pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
+    pub(crate) fn active_cell_render_key(&self) -> Option<ActiveCellRenderKey> {
         let cell = self.transcript.active_cell.as_ref();
         let hook_cell = self.active_hook_cell.as_ref();
         let token_activity_cell = self.pending_token_activity_output();
@@ -1933,7 +1933,7 @@ impl ChatWidget {
         {
             return None;
         }
-        Some(ActiveCellTranscriptKey {
+        Some(ActiveCellRenderKey {
             revision: self.transcript.active_cell_revision,
             is_stream_continuation: cell
                 .map(|cell| cell.is_stream_continuation())
@@ -1981,6 +1981,40 @@ impl ChatWidget {
                 lines.push(HyperlinkLine::from(""));
             }
             lines.extend(hint_lines);
+        }
+        (!lines.is_empty()).then_some(lines)
+    }
+
+    /// Returns the active cells' main-viewport lines for a given terminal width.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn active_cell_display_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<HyperlinkLine>> {
+        let mode = self.history_render_mode();
+        let mut lines = Vec::new();
+        let mut append = |cell: &dyn HistoryCell| {
+            let cell_lines = cell.display_hyperlink_lines_for_mode(width, mode);
+            if !cell_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(cell_lines);
+        };
+        if let Some(cell) = self.transcript.active_cell.as_deref() {
+            append(cell);
+        }
+        if let Some(cell) = self
+            .active_hook_cell
+            .as_ref()
+            .filter(|cell| cell.should_render())
+        {
+            append(cell);
+        }
+        if let Some(cell) = self.pending_token_activity_output() {
+            append(cell);
+        }
+        if let Some(cell) = self.pending_rate_limit_reset_hint() {
+            append(cell);
         }
         (!lines.is_empty()).then_some(lines)
     }

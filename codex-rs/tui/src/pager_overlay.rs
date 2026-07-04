@@ -10,7 +10,7 @@
 //! stream-continuation flag (spacing), and an animation tick (time-based spinner/shimmer output).
 //!
 //! The transcript overlay live tail is kept in sync by `App` during draws: `App` supplies an
-//! `ActiveCellTranscriptKey` and a function to compute the active cell transcript lines, and
+//! `ActiveCellRenderKey` and a function to compute the active cell transcript lines, and
 //! `TranscriptOverlay::sync_live_tail` uses the key to decide when the cached tail must be
 //! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
 //! mutates in place or when its transcript output is time-dependent.
@@ -18,7 +18,7 @@
 use std::io::Result;
 use std::sync::Arc;
 
-use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::chatwidget::ActiveCellRenderKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -169,7 +169,7 @@ impl PagerView {
             .scroll_offset
             .min(content_height.saturating_sub(content_area.height as usize));
 
-        self.render_content(content_area, buf);
+        self.render_content(content_area, buf, /*empty_row_marker*/ Some('~'));
 
         self.render_bottom_bar(area, content_area, buf, content_height);
     }
@@ -182,7 +182,7 @@ impl PagerView {
         header.dim().render_ref(area, buf);
     }
 
-    fn render_content(&self, area: Rect, buf: &mut Buffer) {
+    fn render_content(&self, area: Rect, buf: &mut Buffer, empty_row_marker: Option<char>) {
         let mut y = -(self.scroll_offset as isize);
         let mut drawn_bottom = area.y;
         for renderable in &self.renderables {
@@ -207,11 +207,14 @@ impl PagerView {
             }
         }
 
+        let Some(empty_row_marker) = empty_row_marker else {
+            return;
+        };
         for y in drawn_bottom..area.bottom() {
             if area.width == 0 {
                 break;
             }
-            buf[(area.x, y)] = Cell::from('~');
+            buf[(area.x, y)] = Cell::from(empty_row_marker);
             for x in area.x + 1..area.right() {
                 buf[(x, y)] = Cell::from(' ');
             }
@@ -311,6 +314,28 @@ impl PagerView {
         area.height = area.height.saturating_sub(2);
         area
     }
+
+    /// Render only scrollable content, without pager header, footer, or empty-row markers.
+    ///
+    /// This is the shared rendering primitive for application-owned views that provide their own
+    /// chrome. A view that was following the bottom stays pinned there when wrapping or the
+    /// available height changes.
+    fn render_content_only(&mut self, area: Rect, buf: &mut Buffer) {
+        let follow_bottom = self.is_scrolled_to_bottom();
+        Clear.render(area, buf);
+        self.update_last_content_height(area.height);
+        let content_height = self.content_height(area.width);
+        self.last_rendered_height = Some(content_height);
+        if let Some(idx) = self.pending_scroll_chunk.take() {
+            self.ensure_chunk_visible(idx, area);
+        } else if follow_bottom {
+            self.scroll_offset = usize::MAX;
+        }
+        self.scroll_offset = self
+            .scroll_offset
+            .min(content_height.saturating_sub(area.height as usize));
+        self.render_content(area, buf, /*empty_row_marker*/ None);
+    }
 }
 
 impl PagerView {
@@ -357,6 +382,52 @@ impl PagerView {
         } else if last > current_bottom {
             self.scroll_offset = last.saturating_sub(area.height.saturating_sub(1) as usize);
         }
+    }
+}
+
+/// Scrollable content state shared by full-frame views that provide their own chrome.
+pub(crate) struct PagerContent {
+    view: PagerView,
+}
+
+impl PagerContent {
+    pub(crate) fn new(renderables: Vec<Box<dyn Renderable>>, keymap: PagerKeymap) -> Self {
+        Self {
+            view: PagerView::new(
+                renderables,
+                /*title*/ String::new(),
+                /*scroll_offset*/ usize::MAX,
+                keymap,
+            ),
+        }
+    }
+
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.view.render_content_only(area, buf);
+    }
+
+    pub(crate) fn replace(&mut self, renderables: Vec<Box<dyn Renderable>>) {
+        self.view.renderables = renderables;
+    }
+
+    pub(crate) fn push(&mut self, renderable: Box<dyn Renderable>) {
+        self.view.renderables.push(renderable);
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<Box<dyn Renderable>> {
+        self.view.renderables.pop()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.view.renderables.len()
+    }
+
+    pub(crate) fn is_following_bottom(&self) -> bool {
+        self.view.is_scrolled_to_bottom()
+    }
+
+    pub(crate) fn scroll_to_bottom(&mut self) {
+        self.view.scroll_offset = usize::MAX;
     }
 }
 
@@ -637,7 +708,7 @@ impl TranscriptOverlay {
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,
-        active_key: Option<ActiveCellTranscriptKey>,
+        active_key: Option<ActiveCellRenderKey>,
         compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
     ) {
         let next_key = active_key.map(|key| LiveTailKey {
@@ -1095,7 +1166,7 @@ mod tests {
         })]);
         overlay.sync_live_tail(
             /*width*/ 40,
-            Some(ActiveCellTranscriptKey {
+            Some(ActiveCellRenderKey {
                 revision: 1,
                 is_stream_continuation: false,
                 animation_tick: None,
@@ -1124,7 +1195,7 @@ mod tests {
 
         overlay.sync_live_tail(
             area.width,
-            Some(ActiveCellTranscriptKey {
+            Some(ActiveCellRenderKey {
                 revision: 1,
                 is_stream_continuation: false,
                 animation_tick: None,
@@ -1147,7 +1218,7 @@ mod tests {
         })]);
 
         let calls = std::cell::Cell::new(0usize);
-        let key = ActiveCellTranscriptKey {
+        let key = ActiveCellRenderKey {
             revision: 1,
             is_stream_continuation: false,
             animation_tick: None,

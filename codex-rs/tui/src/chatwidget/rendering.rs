@@ -3,6 +3,16 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn bottom_pane_renderable(&self) -> RenderableItem<'_> {
+        RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
+            bottom_pane: &self.bottom_pane,
+            right_reserve: self.ambient_pet_wrap_reserved_cols(),
+        }))
+        .inset(Insets::tlbr(
+            /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+        ))
+    }
+
     pub(super) fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
@@ -46,16 +56,7 @@ impl ChatWidget {
                 })),
             );
         }
-        flex.push(
-            /*flex*/ 0,
-            RenderableItem::Owned(Box::new(BottomPaneComposerReserveRenderable {
-                bottom_pane: &self.bottom_pane,
-                right_reserve: active_cell_right_reserve,
-            }))
-            .inset(Insets::tlbr(
-                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-            )),
-        );
+        flex.push(/*flex*/ 0, self.bottom_pane_renderable());
         RenderableItem::Owned(Box::new(flex))
     }
 }

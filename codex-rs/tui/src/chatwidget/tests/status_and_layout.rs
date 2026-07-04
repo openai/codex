@@ -1957,6 +1957,29 @@ async fn ambient_pet_reduces_stream_width_and_composer_text_width() {
     assert!(!row_tail_is_blank(&disabled_row, /*start_col*/ 69));
 }
 
+#[tokio::test]
+async fn bottom_pane_renderable_can_be_laid_out_independently() {
+    use ratatui::Terminal;
+
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let bottom_pane = chat.bottom_pane_renderable();
+    let width = 48;
+    let height = bottom_pane.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+
+    terminal
+        .draw(|frame| bottom_pane.render(frame.area(), frame.buffer_mut()))
+        .expect("render bottom pane");
+
+    assert_snapshot!(normalized_backend_snapshot(terminal.backend()), @r###"
+"                                                "
+"                                                "
+"› Ask Codex to do anything                      "
+"                                                "
+"  gpt-5.5 default · /tmp/project                "
+"###);
+}
+
 fn buffer_row_containing(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<String> {
     (0..buffer.area.height)
         .map(|y| {
@@ -3816,6 +3839,10 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
         .active_cell_transcript_lines(/*width*/ 80)
         .expect("active exec transcript lines")
         .len();
+    let exec_only_display_line_count = chat
+        .active_cell_display_hyperlink_lines(/*width*/ 80)
+        .expect("active exec display lines")
+        .len();
 
     handle_hook_started(
         &mut chat,
@@ -3829,6 +3856,10 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
         .active_cell_transcript_lines(/*width*/ 80)
         .expect("active exec transcript lines");
     assert_eq!(hidden_hook_transcript.len(), exec_only_line_count);
+    let hidden_hook_display = chat
+        .active_cell_display_hyperlink_lines(/*width*/ 80)
+        .expect("active exec display lines");
+    assert_eq!(hidden_hook_display.len(), exec_only_display_line_count);
 
     reveal_running_hooks(&mut chat);
     let visible_hook_lines = chat
