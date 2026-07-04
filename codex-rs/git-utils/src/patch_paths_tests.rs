@@ -234,6 +234,318 @@ fn standalone_stage_paths_rejects_a_route_crossing_a_related_worktree() {
     );
 }
 
+#[cfg(any(unix, windows))]
+fn configure_and_commit_seed(root: &Path) {
+    assert_eq!(run(root, &["git", "config", "user.email", "a@b.c"]).0, 0);
+    assert_eq!(run(root, &["git", "config", "user.name", "Codex"]).0, 0);
+    commit_seed(root);
+}
+
+#[cfg(any(unix, windows))]
+fn linked_route_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let common = fixture.path().join("repository.git");
+    let primary = fixture.path().join("primary");
+    let linked = fixture.path().join("linked");
+    let nested = primary.join("nested");
+    let c = common.to_string_lossy().into_owned();
+    let p = primary.to_string_lossy().into_owned();
+    assert_eq!(run(fixture.path(), &["git", "init", "--bare", &c]).0, 0);
+    let primary_add = run(
+        fixture.path(),
+        &["git", "--git-dir", &c, "worktree", "add", "--orphan", &p],
+    );
+    assert_eq!(primary_add.0, 0, "add primary: {primary_add:?}");
+    configure_and_commit_seed(&primary);
+    let primary_head = run(&primary, &["git", "rev-parse", "HEAD"]);
+    assert_eq!(primary_head.0, 0, "resolve primary HEAD: {primary_head:?}");
+    let primary_head = primary_head.1.trim().to_string();
+    let l = linked.to_string_lossy().into_owned();
+    let linked_add = run(
+        fixture.path(),
+        &[
+            "git",
+            "--git-dir",
+            &c,
+            "worktree",
+            "add",
+            "--detach",
+            &l,
+            &primary_head,
+        ],
+    );
+    assert_eq!(linked_add.0, 0, "add linked: {linked_add:?}");
+    std::fs::create_dir_all(&nested).expect("nested primary directory");
+    std::fs::write(linked.join("routed.txt"), "routed\n").expect("write linked file");
+    (fixture, primary, linked, nested)
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn standalone_stage_paths_rejects_relative_related_worktree_routes_from_nested_cwd() {
+    const TEST_NAME: &str = "patch_paths::tests::standalone_stage_paths_rejects_relative_related_worktree_routes_from_nested_cwd";
+    const CWD_ALIAS_ENV: &str = "CODEX_GIT_UTILS_RELATIVE_ROUTE_CWD_ALIAS";
+    const INDEPENDENT_ENV: &str = "CODEX_GIT_UTILS_RELATIVE_ROUTE_INDEPENDENT";
+    const PRIMARY_ENV: &str = "CODEX_GIT_UTILS_RELATIVE_ROUTE_PRIMARY";
+    const NESTED_ENV: &str = "CODEX_GIT_UTILS_RELATIVE_ROUTE_NESTED";
+
+    if std::env::var_os(NESTED_ENV).is_none() {
+        let (fixture, primary, linked, nested) = linked_route_fixture();
+        let deeper = nested.join("deeper");
+        let independent = primary.join("independent");
+        std::fs::create_dir_all(nested.join("routes")).expect("nested primary directories");
+        std::fs::create_dir_all(&deeper).expect("deeper primary directory");
+        std::fs::create_dir_all(&independent).expect("independent repository directory");
+        assert_eq!(run(&independent, &["git", "init", "-q"]).0, 0);
+        configure_and_commit_seed(&independent);
+        let linked_child = linked.join("child");
+        std::fs::create_dir_all(&linked_child).expect("linked child directory");
+        for path in [
+            "absolute-parent-control.txt",
+            "deep-curdir-control.txt",
+            "deep-parent-control.txt",
+            "parent-control.txt",
+            "physical-cwd-control.txt",
+            "root-curdir-control.txt",
+        ] {
+            std::fs::write(primary.join(path), "control\n").expect("write control file");
+        }
+        let _direct_route = create_dir_alias(&linked, &nested.join("linked-route"));
+        let _nested_route = create_dir_alias(&linked, &nested.join("routes/linked-route"));
+        let _direct_parent_route =
+            create_dir_alias(&linked_child, &nested.join("linked-child-route"));
+        let _nested_parent_route =
+            create_dir_alias(&linked_child, &nested.join("routes/linked-child-route"));
+        let cwd_alias = fixture.path().join("nested-cwd-route");
+        let _cwd_alias = create_dir_alias(&nested, &cwd_alias);
+
+        run_isolated_test(
+            TEST_NAME,
+            &[
+                (CWD_ALIAS_ENV, cwd_alias.as_os_str()),
+                (INDEPENDENT_ENV, independent.as_os_str()),
+                (PRIMARY_ENV, primary.as_os_str()),
+                (NESTED_ENV, nested.as_os_str()),
+            ],
+        );
+        assert!(
+            run(&linked, &["git", "diff", "--cached", "--name-only"])
+                .1
+                .is_empty(),
+            "relative related-worktree routes must not stage the linked index"
+        );
+        assert_eq!(
+            run(&primary, &["git", "diff", "--cached", "--name-only"]).1,
+            "absolute-parent-control.txt\ndeep-curdir-control.txt\ndeep-parent-control.txt\nparent-control.txt\nphysical-cwd-control.txt\nroot-curdir-control.txt\n"
+        );
+        assert!(
+            run(&independent, &["git", "diff", "--cached", "--name-only"])
+                .1
+                .is_empty(),
+            "parent traversal must not mutate the nested independent index"
+        );
+        return;
+    }
+
+    let primary = PathBuf::from(std::env::var_os(PRIMARY_ENV).expect("primary route"));
+    let nested = PathBuf::from(std::env::var_os(NESTED_ENV).expect("nested route"));
+    let independent =
+        PathBuf::from(std::env::var_os(INDEPENDENT_ENV).expect("independent repository"));
+    std::env::set_current_dir(&nested).expect("enter nested primary directory");
+    let primary_before = git_index_bytes(&primary);
+    let linked = primary.parent().expect("fixture").join("linked");
+    let linked_before = git_index_bytes(&linked);
+    for route in [
+        ".",
+        "linked-route",
+        "routes/linked-route",
+        "linked-child-route/..",
+        "routes/linked-child-route/./..",
+    ] {
+        let error = stage_paths(Path::new(route), &new_file_diff("routed.txt"))
+            .expect_err("unsafe relative route must reject");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{route}");
+        assert_eq!(git_index_bytes(&primary), primary_before, "{route}");
+        assert_eq!(git_index_bytes(&linked), linked_before, "{route}");
+    }
+
+    stage_paths(Path::new(".."), &new_file_diff("parent-control.txt"))
+        .expect("parent-only route from nested cwd selects the active root");
+
+    std::env::set_current_dir(nested.join("deeper")).expect("enter deeper primary directory");
+    stage_paths(
+        Path::new("../.."),
+        &new_file_diff("deep-parent-control.txt"),
+    )
+    .expect("deeper parent-only route selects the active root");
+    stage_paths(
+        Path::new("./.././.."),
+        &new_file_diff("deep-curdir-control.txt"),
+    )
+    .expect("deeper parent and current-directory route selects the active root");
+
+    let cwd_alias = PathBuf::from(std::env::var_os(CWD_ALIAS_ENV).expect("cwd alias"));
+    std::env::set_current_dir(cwd_alias).expect("enter aliased nested cwd");
+    stage_paths(Path::new(".."), &new_file_diff("physical-cwd-control.txt"))
+        .expect("parent traversal is based on the captured physical cwd");
+
+    std::env::set_current_dir(&primary).expect("enter primary worktree root");
+    stage_paths(Path::new("."), &new_file_diff("root-curdir-control.txt"))
+        .expect("ordinary relative active-worktree route remains supported");
+
+    std::env::set_current_dir(&independent).expect("enter nested independent repository");
+    let primary_before = git_index_bytes(&primary);
+    let independent_before = git_index_bytes(&independent);
+    let error = stage_paths(Path::new(".."), &new_file_diff("parent-control.txt"))
+        .expect_err("parent traversal must not escape a nested independent repository");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(git_index_bytes(&primary), primary_before);
+    assert_eq!(git_index_bytes(&independent), independent_before);
+    stage_paths(&primary, &new_file_diff("absolute-parent-control.txt"))
+        .expect("explicit outer route remains supported");
+    assert_eq!(git_index_bytes(&independent), independent_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_stage_paths_rejects_actual_cwd_reparented_into_linked_worktree() {
+    const TEST_NAME: &str = "patch_paths::tests::standalone_stage_paths_rejects_actual_cwd_reparented_into_linked_worktree";
+    const MODE_ENV: &str = "CODEX_GIT_UTILS_REPARENTED_CWD_MODE";
+    const PRIMARY_ENV: &str = "CODEX_GIT_UTILS_REPARENTED_CWD_PRIMARY";
+    const NESTED_ENV: &str = "CODEX_GIT_UTILS_REPARENTED_CWD_NESTED";
+
+    if std::env::var_os(MODE_ENV).is_none() {
+        for mode in ["pathname", "aba", "reparent", "combined", "prespawn"] {
+            let (_fixture, primary, linked, nested) = linked_route_fixture();
+            if mode == "pathname" {
+                std::fs::create_dir_all(linked.join("child")).expect("linked child directory");
+            }
+
+            run_isolated_test(
+                TEST_NAME,
+                &[
+                    (MODE_ENV, OsStr::new(mode)),
+                    (PRIMARY_ENV, primary.as_os_str()),
+                    (NESTED_ENV, nested.as_os_str()),
+                ],
+            );
+        }
+        return;
+    }
+
+    let mode = std::env::var(MODE_ENV).expect("reparent mode");
+    let primary = PathBuf::from(std::env::var_os(PRIMARY_ENV).expect("primary route"));
+    let nested = PathBuf::from(std::env::var_os(NESTED_ENV).expect("nested route"));
+    let linked = primary.parent().expect("fixture").join("linked");
+    let moved_primary = primary.parent().expect("fixture").join("primary-moved");
+    std::env::set_current_dir(&nested).expect("enter nested primary directory");
+    let index_path = |root: &Path| {
+        let output = run(root, &["git", "rev-parse", "--git-path", "index"]);
+        assert_eq!(output.0, 0, "resolve index path: {output:?}");
+        let path = PathBuf::from(output.1.trim());
+        let path = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
+        std::fs::canonicalize(path).expect("canonical index path")
+    };
+    let primary_index = index_path(&primary);
+    let linked_index = index_path(&linked);
+    let primary_before = std::fs::read(&primary_index).expect("read primary index");
+    let linked_before = std::fs::read(&linked_index).expect("read linked index");
+    let replacement = std::rc::Rc::new(std::cell::RefCell::new(None));
+    if matches!(mode.as_str(), "combined" | "prespawn") {
+        let replacement_for_hook = std::rc::Rc::clone(&replacement);
+        let primary_for_hook = primary.clone();
+        let linked_for_hook = linked;
+        let moved_primary_for_hook = moved_primary;
+        let primary_admin = PathBuf::from(
+            run(&primary, &["git", "rev-parse", "--absolute-git-dir"])
+                .1
+                .trim(),
+        );
+        let hook = move || {
+            std::fs::rename(&primary_for_hook, &moved_primary_for_hook)
+                .expect("rename initial repository root");
+            std::fs::write(
+                primary_admin.join("gitdir"),
+                format!("{}\n", moved_primary_for_hook.join(".git").display()),
+            )
+            .expect("update moved primary worktree backlink");
+            std::fs::rename(
+                moved_primary_for_hook.join("nested"),
+                linked_for_hook.join("child"),
+            )
+            .expect("reparent actual cwd into linked worktree");
+            replacement_for_hook
+                .borrow_mut()
+                .replace(create_dir_alias(&linked_for_hook, &primary_for_hook));
+        };
+        set_stage_paths_hook(
+            if mode == "combined" {
+                StagePathsHookPoint::BindRunner
+            } else {
+                StagePathsHookPoint::PreSpawn
+            },
+            hook,
+        );
+    } else if mode == "aba" {
+        let primary_for_hook = primary;
+        let linked_for_hook = linked;
+        let moved_primary_for_hook = moved_primary;
+        set_stage_paths_hook(StagePathsHookPoint::BindRunner, move || {
+            std::fs::rename(&primary_for_hook, &moved_primary_for_hook).expect("rename root");
+            drop(create_dir_alias(&linked_for_hook, &primary_for_hook));
+            std::fs::rename(&moved_primary_for_hook, &primary_for_hook).expect("restore root");
+        });
+    } else if mode == "reparent" {
+        let nested_for_hook = nested;
+        let linked_child_for_hook = linked.join("child");
+        set_stage_paths_hook(StagePathsHookPoint::ResolvePhysicalCwd, move || {
+            std::fs::rename(&nested_for_hook, &linked_child_for_hook)
+                .expect("reparent actual cwd into linked worktree");
+        });
+    } else {
+        let replacement_for_hook = std::rc::Rc::clone(&replacement);
+        let nested_for_hook = nested;
+        let moved_nested_for_hook = primary.join("nested-moved");
+        let linked_child_for_hook = linked.join("child");
+        set_stage_paths_hook(StagePathsHookPoint::ResolvePhysicalCwd, move || {
+            std::fs::rename(&nested_for_hook, &moved_nested_for_hook)
+                .expect("rename actual cwd directory");
+            replacement_for_hook
+                .borrow_mut()
+                .replace(create_dir_alias(&linked_child_for_hook, &nested_for_hook));
+        });
+    }
+
+    let result = stage_paths(Path::new(".."), &new_file_diff("routed.txt"));
+    assert_eq!(
+        std::fs::read(primary_index).expect("reread primary index"),
+        primary_before
+    );
+    assert_eq!(
+        std::fs::read(linked_index).expect("reread linked index"),
+        linked_before
+    );
+    if matches!(mode.as_str(), "pathname" | "aba") {
+        result.expect("a restored or renamed pathname must remain bound to the origin repository");
+    } else {
+        let error = result.expect_err("reparented cwd must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        if matches!(mode.as_str(), "combined" | "prespawn") {
+            let expected = if mode == "combined" {
+                "does not match runner repository"
+            } else {
+                "changed before Git launch"
+            };
+            assert!(error.to_string().contains(expected), "{mode}: {error}");
+        }
+    }
+    drop(replacement.borrow_mut().take());
+}
+
 #[test]
 fn effective_paths_cover_supported_patch_headers() {
     let cases = [
@@ -713,6 +1025,181 @@ fn stage_effective_paths(
     let canonical_root = std::fs::canonicalize(root)?;
     let mut config = GuardedGitConfig::authorize(git, &canonical_root, Vec::new())?;
     stage_effective_paths_standalone(&mut config, paths)
+}
+
+#[test]
+fn composed_staging_preserves_eligible_path_when_ignored_peer_is_refused() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("write ignore rule");
+    assert_eq!(run(root, &["git", "add", ".gitignore"]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "ignore rule"]).0, 0);
+    std::fs::write(root.join("ignored.txt"), "ignored\n").expect("write ignored file");
+    std::fs::write(root.join("ordinary.txt"), "ordinary\n").expect("write ordinary file");
+    let paths = vec!["ignored.txt".to_string(), "ordinary.txt".to_string()];
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&paths)
+        .expect("apply filter snapshot");
+    let result = update_index_exact_paths_from_apply(&mut config, &paths, &paths)
+        .expect("ignored peer does not suppress eligible pre-staging");
+
+    assert_eq!(result.exit_code, 0, "{result:?}");
+    assert!(result.stderr.contains("ignored.txt"), "{result:?}");
+    assert_eq!(
+        run(root, &["git", "diff", "--cached", "--name-only"]).1,
+        "ordinary.txt\n"
+    );
+    assert!(index_entry(root, "ignored.txt").is_empty());
+}
+
+#[test]
+fn composed_staging_preserves_eligible_sparse_path_and_skips_excluded_peer() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::create_dir_all(root.join("inside")).expect("create included directory");
+    std::fs::create_dir_all(root.join("outside")).expect("create excluded directory");
+    std::fs::write(root.join("inside/base.txt"), "inside\n").expect("write included base");
+    std::fs::write(root.join("outside/base.txt"), "outside\n").expect("write excluded base");
+    assert_eq!(run(root, &["git", "add", "."]).0, 0);
+    assert_eq!(run(root, &["git", "commit", "-m", "sparse base"]).0, 0);
+    assert_eq!(
+        run(root, &["git", "sparse-checkout", "init", "--cone"]).0,
+        0
+    );
+    assert_eq!(run(root, &["git", "sparse-checkout", "set", "inside"]).0, 0);
+    std::fs::write(root.join("inside/eligible.txt"), "eligible\n").expect("write eligible path");
+    std::fs::create_dir_all(root.join("outside")).expect("recreate excluded directory");
+    std::fs::write(root.join("outside/base.txt"), "changed outside\n")
+        .expect("modify sparse-excluded tracked path");
+    let paths = vec![
+        "inside/eligible.txt".to_string(),
+        "outside/base.txt".to_string(),
+    ];
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&paths)
+        .expect("apply filter snapshot");
+    stage_effective_paths_from_apply(&mut config, &paths)
+        .expect("sparse-excluded peer does not suppress eligible pre-staging");
+
+    assert_eq!(
+        run(root, &["git", "diff", "--cached", "--name-only"]).1,
+        "inside/eligible.txt\n"
+    );
+    assert!(
+        run(root, &["git", "diff", "--cached", "--", "outside/base.txt"])
+            .1
+            .is_empty(),
+        "sparse-excluded tracked path must retain its prior index entry"
+    );
+}
+
+#[test]
+fn composed_staging_non_sparse_skip_worktree_refusal_remains_atomic() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join("eligible.txt"), "base eligible\n").expect("write eligible base");
+    std::fs::write(root.join("skipped.txt"), "base skipped\n").expect("write skipped base");
+    assert_eq!(
+        run(root, &["git", "add", "eligible.txt", "skipped.txt"]).0,
+        0
+    );
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "update-index",
+                "--skip-worktree",
+                "--",
+                "skipped.txt"
+            ]
+        )
+        .0,
+        0
+    );
+    std::fs::write(root.join("eligible.txt"), "changed eligible\n").expect("modify eligible path");
+    std::fs::write(root.join("skipped.txt"), "changed skipped\n").expect("modify skipped path");
+    let paths = vec!["eligible.txt".to_string(), "skipped.txt".to_string()];
+    let before = git_index_bytes(root);
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&paths)
+        .expect("apply filter snapshot");
+    let result = update_index_exact_paths_from_apply(&mut config, &paths, &paths)
+        .expect("policy refusal is a staging result");
+
+    assert_ne!(result.exit_code, 0);
+    assert!(result.stderr.contains("skip-worktree"), "{result:?}");
+    assert_eq!(git_index_bytes(root), before);
+}
+
+#[test]
+fn composed_staging_late_filter_refusal_precedes_eligible_index_mutation() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::write(root.join(".gitignore"), "ignored.txt\n").expect("write ignore rule");
+    std::fs::write(root.join(".gitattributes"), "ordinary.txt filter=fresh\n")
+        .expect("write attributes");
+    std::fs::write(root.join("ordinary.txt"), "base\n").expect("write ordinary base");
+    assert_eq!(
+        run(
+            root,
+            &["git", "add", ".gitignore", ".gitattributes", "ordinary.txt"]
+        )
+        .0,
+        0
+    );
+    assert_eq!(run(root, &["git", "commit", "-m", "base"]).0, 0);
+    std::fs::write(root.join("ordinary.txt"), "changed\n").expect("modify ordinary path");
+    std::fs::write(root.join("ignored.txt"), "ignored\n").expect("write ignored path");
+    let paths = vec!["ignored.txt".to_string(), "ordinary.txt".to_string()];
+
+    let git = GitRunner::for_cwd_io(root).expect("trusted Git");
+    let canonical_root = std::fs::canonicalize(root).expect("canonical root");
+    let mut config =
+        GuardedGitConfig::authorize(&git, &canonical_root, Vec::new()).expect("authorization");
+    config
+        .authorize_filter_paths(&paths)
+        .expect("initial apply filter snapshot");
+    assert_eq!(
+        run(
+            root,
+            &[
+                "git",
+                "config",
+                "filter.fresh.clean",
+                "git config codex.stage-filter-ran true && git hash-object --stdin",
+            ],
+        )
+        .0,
+        0
+    );
+    let before = git_index_bytes(root);
+
+    let error = stage_effective_paths_from_apply(&mut config, &paths)
+        .expect_err("fresh selected filter must refuse before staging eligible paths");
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    assert_eq!(git_index_bytes(root), before);
+    assert_ne!(
+        run(root, &["git", "config", "--get", "codex.stage-filter-ran"]).0,
+        0,
+        "refused filter helper must not execute"
+    );
 }
 
 #[test]
