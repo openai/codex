@@ -75,8 +75,8 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
 }
 
 fn best_effort_paths(diff: &str) -> Vec<String> {
-    let repo = init_repo();
-    extract_paths_from_patch_from_cwd(diff, repo.path())
+    let cwd = tempfile::tempdir().expect("non-repository cwd");
+    extract_paths_from_patch_from_cwd(diff, cwd.path())
 }
 
 #[test]

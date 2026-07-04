@@ -48,12 +48,12 @@ pub struct ApplyGitResult {
 pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     let git = GitRunner::for_cwd_io(&req.cwd)?;
     let mut cfg_parts = configured_git_config_parts();
-    ensure_no_worktree_primary_config_sources(&git, &req.cwd)?;
     let requested_cwd = std::fs::canonicalize(&req.cwd)?;
-    let git_root = resolve_git_root(&git, &req.cwd, &cfg_parts)?;
-    if git_root != requested_cwd {
-        ensure_no_worktree_primary_config_sources(&git, &git_root)?;
-    }
+    let expected_root = crate::get_git_repo_root(&requested_cwd)
+        .ok_or_else(|| io::Error::other("not a Git repository"))
+        .and_then(std::fs::canonicalize)?;
+    ensure_no_worktree_primary_config_sources(&git, &expected_root)?;
+    let git_root = resolve_git_root(&git, &expected_root, &cfg_parts)?;
 
     // Write unified diff into a temporary file
     let (tmpdir, patch_path) = write_temp_patch(&req.diff)?;
@@ -357,6 +357,72 @@ mod tests {
         assert_eq!(r.exit_code, 0, "exit code 0");
         // File exists now
         assert!(root.join("hello.txt").exists());
+    }
+
+    #[test]
+    fn apply_resolves_relative_primary_config_from_repository_root() {
+        let _g = env_lock().lock().unwrap();
+        if std::env::var_os("CODEX_GIT_UTILS_APPLY_ENV_CHILD").is_none() {
+            run_isolated_test(
+                "apply::tests::apply_resolves_relative_primary_config_from_repository_root",
+                &[("GIT_CONFIG_GLOBAL", OsStr::new("../external/config"))],
+            );
+            return;
+        }
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("repo");
+        let nested_cwd = root.join("nested");
+        let external_config = fixture.path().join("external/config");
+        let mismatched_nested_config = root.join("external/config");
+        std::fs::create_dir_all(&nested_cwd).expect("nested cwd");
+        std::fs::create_dir_all(external_config.parent().expect("config parent"))
+            .expect("external config directory");
+        std::fs::create_dir_all(
+            mismatched_nested_config
+                .parent()
+                .expect("mismatched config parent"),
+        )
+        .expect("mismatched config directory");
+        std::fs::write(&external_config, "[codex]\n\tprobe = loaded\n").expect("external config");
+        std::fs::write(&mismatched_nested_config, "[invalid\n")
+            .expect("mismatched nested-cwd config");
+        let (init_code, _, init_err) = run(&root, &["git", "init"]);
+        assert_eq!(init_code, 0, "init repository: {init_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: nested_cwd,
+            diff: "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello\n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("apply with root-relative primary config");
+        assert_eq!(result.exit_code, 0, "apply result: {result:?}");
+        assert_eq!(read_file_normalized(&root.join("hello.txt")), "hello\n");
+    }
+
+    #[test]
+    fn numstat_path_discovery_does_not_preempt_apply_whitespace_result() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        let (config_code, _, config_err) =
+            run(root, &["git", "config", "apply.whitespace", "error"]);
+        assert_eq!(config_code, 0, "configure whitespace policy: {config_err}");
+
+        let result = apply_git_patch(&ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: "diff --git a/trailing.txt b/trailing.txt\nnew file mode 100644\n--- /dev/null\n+++ b/trailing.txt\n@@ -0,0 +1 @@\n+trailing \n".to_string(),
+            revert: false,
+            preflight: false,
+        })
+        .expect("path discovery must leave apply failure in the structured result");
+        assert_ne!(result.exit_code, 0);
+        assert!(
+            result.stderr.contains("trailing whitespace"),
+            "apply result: {result:?}"
+        );
+        assert!(!root.join("trailing.txt").exists());
     }
 
     #[test]
