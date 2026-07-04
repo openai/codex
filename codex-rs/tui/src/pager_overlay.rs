@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellRenderKey;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
@@ -28,7 +27,6 @@ use crate::keymap::PagerKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
@@ -629,21 +627,15 @@ impl TranscriptOverlay {
             .enumerate()
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
-                let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: c.clone(),
-                        style: if highlight_cell == Some(i) {
-                            user_message_style().reversed()
-                        } else {
-                            user_message_style()
-                        },
-                    })) as Box<dyn Renderable>
-                } else {
-                    Box::new(CachedRenderable::new(CellRenderable {
-                        cell: c.clone(),
-                        style: Style::default(),
-                    })) as Box<dyn Renderable>
+                let style = match c.rich_block_style() {
+                    Some(style) if highlight_cell == Some(i) => style.reversed(),
+                    Some(style) => style,
+                    None => Style::default(),
                 };
+                let mut cell_renderable = Box::new(CachedRenderable::new(CellRenderable {
+                    cell: c.clone(),
+                    style,
+                })) as Box<dyn Renderable>;
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
                         cell_renderable,

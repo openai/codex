@@ -244,7 +244,12 @@ impl Renderable for ConversationCellRenderable {
         let hyperlink_lines = self
             .cell
             .display_hyperlink_lines_for_mode(area.width, self.render_mode);
+        let block_style = match self.render_mode {
+            HistoryRenderMode::Rich => self.cell.rich_block_style().unwrap_or_default(),
+            HistoryRenderMode::Raw => Default::default(),
+        };
         Paragraph::new(Text::from(visible_lines(hyperlink_lines.clone())))
+            .style(block_style)
             .wrap(Wrap { trim: false })
             .render(area, buf);
         mark_buffer_hyperlinks(buf, area, &hyperlink_lines, /*scroll_rows*/ 0);

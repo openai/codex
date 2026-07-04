@@ -176,6 +176,10 @@ impl HistoryCell for UserHistoryCell {
         lines
     }
 
+    fn rich_block_style(&self) -> Option<Style> {
+        Some(user_message_style())
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let mut lines = raw_lines_from_source(self.message.trim_end_matches(['\r', '\n']));
         if !self.remote_image_urls.is_empty() {

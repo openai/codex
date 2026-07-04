@@ -7,10 +7,13 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::text::Line;
 
 use super::*;
 use crate::history_cell::AgentMarkdownCell;
+use crate::history_cell::UserHistoryCell;
 use crate::tui::MouseScrollDirection;
 
 #[derive(Debug)]
@@ -36,6 +39,30 @@ impl HistoryCell for TestCell {
 
     fn is_stream_continuation(&self) -> bool {
         self.is_stream_continuation
+    }
+}
+
+#[derive(Debug)]
+struct BlockStyleCell;
+
+impl HistoryCell for BlockStyleCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![
+            "".into(),
+            "› one two three".into(),
+            "  four".into(),
+            "  five six".into(),
+            "  seven eight".into(),
+            "".into(),
+        ]
+    }
+
+    fn rich_block_style(&self) -> Option<Style> {
+        Some(Style::default().bg(Color::Red))
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec!["raw source".into()]
     }
 }
 
@@ -113,6 +140,94 @@ fn switches_between_rich_and_raw_cell_representations() {
     assert!(buffer_text(&rich, area).contains("rich display"));
     assert!(buffer_text(&raw, area).contains("raw source"));
     assert!(!buffer_text(&raw, area).contains("expanded transcript detail"));
+}
+
+#[test]
+fn rich_block_style_fills_owned_cell_without_leaking_to_raw_or_following_cells() {
+    let user_cell = UserHistoryCell {
+        message: "prompt".to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    };
+    assert!(user_cell.rich_block_style().is_some());
+
+    let mut viewport = viewport(vec![Arc::new(BlockStyleCell), cell("assistant")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 16, /*height*/ 8,
+    );
+    let mut rich = Buffer::empty(area);
+    viewport.render(area, &mut rich);
+
+    viewport.set_render_mode(HistoryRenderMode::Raw);
+    let mut raw = Buffer::empty(area);
+    viewport.render(area, &mut raw);
+
+    let trim_rows = |buffer: &Buffer| {
+        buffer_text(buffer, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let background_mask = |buffer: &Buffer| {
+        (area.y..area.bottom())
+            .map(|y| {
+                (area.x..area.right())
+                    .map(|x| match buffer[(x, y)].style().bg {
+                        Some(Color::Red) => '#',
+                        _ => '.',
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    assert_snapshot!(format!(
+        "rich text:\n{}\nrich background:\n{}\nraw text:\n{}\nraw background:\n{}",
+        trim_rows(&rich),
+        background_mask(&rich),
+        trim_rows(&raw),
+        background_mask(&raw),
+    ), @r###"
+rich text:
+
+› one two three
+  four
+  five six
+  seven eight
+
+
+assistant
+rich background:
+################
+################
+################
+################
+################
+################
+................
+................
+raw text:
+raw source
+
+assistant
+
+
+
+
+
+raw background:
+................
+................
+................
+................
+................
+................
+................
+................
+"###);
 }
 
 #[test]

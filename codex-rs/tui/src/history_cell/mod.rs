@@ -190,6 +190,14 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns a base style that rich application-owned renderers apply across the full cell.
+    ///
+    /// Cells with block backgrounds use this to fill blank padding and the unused width after
+    /// their content. Raw renderers intentionally ignore this style.
+    fn rich_block_style(&self) -> Option<Style> {
+        None
+    }
+
     /// Returns copy-friendly plain logical lines for raw scrollback mode.
     fn raw_lines(&self) -> Vec<Line<'static>>;
 
