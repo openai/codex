@@ -121,12 +121,25 @@ impl AgentControlHarness {
     }
 
     async fn new_with_config(home: TempDir, config: Config) -> Self {
+        Self::new_with_config_and_environment_manager(
+            home,
+            config,
+            Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        )
+        .await
+    }
+
+    async fn new_with_config_and_environment_manager(
+        home: TempDir,
+        config: Config,
+        environment_manager: Arc<codex_exec_server::EnvironmentManager>,
+    ) -> Self {
         let state_db = init_state_db(&config).await;
         let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.to_path_buf(),
-            std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            environment_manager,
             state_db.clone(),
         );
         let control = manager.agent_control();
@@ -582,12 +595,39 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 }
 
 #[tokio::test]
-async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
+async fn ensure_v2_agent_loaded_preserves_inherited_environment() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
-    let harness = AgentControlHarness::new_with_config(home, config).await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
+        std::env::current_exe().expect("current exe"),
+        /*codex_linux_sandbox_exe*/ None,
+    )
+    .expect("runtime paths");
+    let environment_manager = Arc::new(
+        codex_exec_server::EnvironmentManager::create_for_tests_with_local(
+            Some("none".to_string()),
+            runtime_paths,
+        )
+        .await,
+    );
+    let harness = AgentControlHarness::new_with_config_and_environment_manager(
+        home,
+        config,
+        environment_manager,
+    )
+    .await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let environment = TurnEnvironmentSelection {
+        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&harness.config.cwd),
+    };
+    parent_thread
+        .codex
+        .session
+        .services
+        .turn_environments
+        .update_selections(std::slice::from_ref(&environment));
     let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
     let spawned_agent = harness
         .control
@@ -603,6 +643,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
             })),
             SpawnAgentOptions {
                 parent_thread_id: Some(parent_thread_id),
+                environments: Some(vec![environment.clone()]),
                 ..Default::default()
             },
         )
@@ -643,11 +684,22 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id)
         .await
         .expect("known v2 agent should reload");
-    let _ = harness
+    let reloaded_child = harness
         .manager
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    assert_eq!(
+        reloaded_child
+            .codex
+            .session
+            .services
+            .turn_environments
+            .snapshot()
+            .await
+            .to_selections(),
+        vec![environment]
+    );
 
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
