@@ -1787,7 +1787,7 @@ async fn run_ratatui_app(
     };
 
     if alt_screen_behavior == AltScreenBehavior::Owned {
-        tui.enter_alt_screen()?;
+        tui.enter_owned_alt_screen()?;
     }
     let app_result = App::run(
         &mut tui,

@@ -27,6 +27,7 @@ use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
+use crate::tui::MouseScrollDirection;
 
 pub(crate) struct ConversationViewport {
     content: PagerContent,
@@ -64,6 +65,10 @@ impl ConversationViewport {
 
     pub(crate) fn handle_navigation_key(&mut self, area: Rect, key_event: KeyEvent) -> bool {
         self.content.handle_navigation_key(area, key_event)
+    }
+
+    pub(crate) fn handle_mouse_scroll(&mut self, direction: MouseScrollDirection) {
+        self.content.handle_mouse_scroll(direction);
     }
 
     pub(crate) fn push_cell(&mut self, cell: Arc<dyn HistoryCell>) {

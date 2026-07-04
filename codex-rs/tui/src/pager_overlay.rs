@@ -33,6 +33,8 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::tui;
+use crate::tui::MouseScrollDirection;
+use crate::tui::MouseScrollEvent;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -95,6 +97,8 @@ fn first_or_empty(bindings: &[KeyBinding]) -> Vec<KeyBinding> {
     bindings.first().copied().into_iter().collect()
 }
 
+const MOUSE_SCROLL_ROWS: usize = 3;
+
 // Render a single line of key hints from (key(s), description) pairs.
 fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &str)]) {
     let mut spans: Vec<Span<'static>> = vec![" ".into()];
@@ -120,6 +124,8 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<KeyBinding>, &st
 struct PagerView {
     renderables: Vec<Box<dyn Renderable>>,
     scroll_offset: usize,
+    /// Rows to move upward from the freshly measured bottom on the next render.
+    pending_rows_from_bottom: usize,
     title: String,
     keymap: PagerKeymap,
     last_content_height: Option<usize>,
@@ -138,6 +144,7 @@ impl PagerView {
         Self {
             renderables,
             scroll_offset,
+            pending_rows_from_bottom: 0,
             title,
             keymap,
             last_content_height: None,
@@ -165,9 +172,7 @@ impl PagerView {
         if let Some(idx) = self.pending_scroll_chunk.take() {
             self.ensure_chunk_visible(idx, content_area);
         }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(content_height.saturating_sub(content_area.height as usize));
+        self.resolve_scroll_offset(content_height, content_area.height as usize);
 
         self.render_content(content_area, buf, /*empty_row_marker*/ Some('~'));
 
@@ -264,40 +269,86 @@ impl PagerView {
     fn apply_key_event(&mut self, viewport_area: Rect, key_event: KeyEvent) -> bool {
         match key_event {
             e if self.keymap.scroll_up.is_pressed(e) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                self.scroll_up_rows(/*rows*/ 1);
             }
             e if self.keymap.scroll_down.is_pressed(e) => {
-                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                self.scroll_down_rows(/*rows*/ 1);
             }
             e if self.keymap.page_up.is_pressed(e) => {
                 let page_height = self.page_height(viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_sub(page_height);
+                self.scroll_up_rows(page_height);
             }
             e if self.keymap.page_down.is_pressed(e) => {
                 let page_height = self.page_height(viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_add(page_height);
+                self.scroll_down_rows(page_height);
             }
             e if self.keymap.half_page_down.is_pressed(e) => {
                 let area = self.content_area(viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
-                self.scroll_offset = self.scroll_offset.saturating_add(half_page);
+                self.scroll_down_rows(half_page);
             }
             e if self.keymap.half_page_up.is_pressed(e) => {
                 let area = self.content_area(viewport_area);
                 let half_page = (area.height as usize).saturating_add(1) / 2;
-                self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
+                self.scroll_up_rows(half_page);
             }
             e if self.keymap.jump_top.is_pressed(e) => {
                 self.scroll_offset = 0;
+                self.pending_rows_from_bottom = 0;
             }
             e if self.keymap.jump_bottom.is_pressed(e) => {
-                self.scroll_offset = usize::MAX;
+                self.scroll_to_bottom();
             }
             _ => {
                 return false;
             }
         }
         true
+    }
+
+    fn handle_mouse_scroll(&mut self, tui: &mut tui::Tui, event: MouseScrollEvent) -> Result<()> {
+        self.apply_mouse_scroll(event.direction);
+        tui.frame_requester()
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        Ok(())
+    }
+
+    fn apply_mouse_scroll(&mut self, direction: MouseScrollDirection) {
+        match direction {
+            MouseScrollDirection::Up => self.scroll_up_rows(MOUSE_SCROLL_ROWS),
+            MouseScrollDirection::Down => self.scroll_down_rows(MOUSE_SCROLL_ROWS),
+        }
+    }
+
+    fn scroll_up_rows(&mut self, rows: usize) {
+        if self.scroll_offset == usize::MAX {
+            self.pending_rows_from_bottom = self.pending_rows_from_bottom.saturating_add(rows);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+        }
+    }
+
+    fn scroll_down_rows(&mut self, rows: usize) {
+        if self.scroll_offset == usize::MAX {
+            self.pending_rows_from_bottom = self.pending_rows_from_bottom.saturating_sub(rows);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_add(rows);
+        }
+    }
+
+    fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = usize::MAX;
+        self.pending_rows_from_bottom = 0;
+    }
+
+    fn resolve_scroll_offset(&mut self, content_height: usize, viewport_height: usize) {
+        let max_scroll = content_height.saturating_sub(viewport_height);
+        if self.scroll_offset == usize::MAX {
+            self.scroll_offset = max_scroll.saturating_sub(self.pending_rows_from_bottom);
+            self.pending_rows_from_bottom = 0;
+        } else {
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+        }
     }
 
     /// Returns the height of one page in content rows.
@@ -335,11 +386,9 @@ impl PagerView {
         if let Some(idx) = self.pending_scroll_chunk.take() {
             self.ensure_chunk_visible(idx, area);
         } else if follow_bottom {
-            self.scroll_offset = usize::MAX;
+            self.scroll_to_bottom();
         }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(content_height.saturating_sub(area.height as usize));
+        self.resolve_scroll_offset(content_height, area.height as usize);
         self.render_content(area, buf, /*empty_row_marker*/ None);
     }
 }
@@ -347,7 +396,7 @@ impl PagerView {
 impl PagerView {
     fn is_scrolled_to_bottom(&self) -> bool {
         if self.scroll_offset == usize::MAX {
-            return true;
+            return self.pending_rows_from_bottom == 0;
         }
         let Some(height) = self.last_content_height else {
             return false;
@@ -368,6 +417,7 @@ impl PagerView {
     /// Request that the given text chunk index be scrolled into view on next render.
     fn scroll_chunk_into_view(&mut self, chunk_index: usize) {
         self.pending_scroll_chunk = Some(chunk_index);
+        self.pending_rows_from_bottom = 0;
     }
 
     fn ensure_chunk_visible(&mut self, idx: usize, area: Rect) {
@@ -433,7 +483,7 @@ impl PagerContent {
     }
 
     pub(crate) fn scroll_to_bottom(&mut self) {
-        self.view.scroll_offset = usize::MAX;
+        self.view.scroll_to_bottom();
     }
 
     pub(crate) fn handle_navigation_key(
@@ -442,6 +492,10 @@ impl PagerContent {
         key_event: KeyEvent,
     ) -> bool {
         self.view.apply_key_event(viewport_area, key_event)
+    }
+
+    pub(crate) fn handle_mouse_scroll(&mut self, direction: MouseScrollDirection) {
+        self.view.apply_mouse_scroll(direction);
     }
 }
 
@@ -640,7 +694,7 @@ impl TranscriptOverlay {
             self.view.renderables.push(tail);
         }
         if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
+            self.view.scroll_to_bottom();
         }
     }
 
@@ -660,7 +714,7 @@ impl TranscriptOverlay {
         }
         self.rebuild_renderables();
         if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
+            self.view.scroll_to_bottom();
         }
     }
 
@@ -703,7 +757,7 @@ impl TranscriptOverlay {
             self.rebuild_renderables();
         }
         if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
+            self.view.scroll_to_bottom();
         }
     }
 
@@ -751,7 +805,7 @@ impl TranscriptOverlay {
             }
         }
         if follow_bottom {
-            self.view.scroll_offset = usize::MAX;
+            self.view.scroll_to_bottom();
         }
     }
 
@@ -876,6 +930,7 @@ impl TranscriptOverlay {
                 }
                 other => self.view.handle_key_event(tui, other),
             },
+            TuiEvent::MouseScroll(event) => self.view.handle_mouse_scroll(tui, event),
             TuiEvent::Draw | TuiEvent::Resize => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -979,6 +1034,7 @@ impl StaticOverlay {
                 }
                 other => self.view.handle_key_event(tui, other),
             },
+            TuiEvent::MouseScroll(event) => self.view.handle_mouse_scroll(tui, event),
             TuiEvent::Draw | TuiEvent::Resize => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -1360,6 +1416,66 @@ mod tests {
         }));
 
         assert_eq!(overlay.view.scroll_offset, usize::MAX);
+    }
+
+    #[test]
+    fn transcript_overlay_mouse_wheel_scrolls_active_pager() {
+        let mut overlay = transcript_overlay(
+            (0..20)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 12,
+        );
+        let mut buffer = Buffer::empty(area);
+        overlay.render(area, &mut buffer);
+        let bottom_offset = overlay.view.scroll_offset;
+
+        overlay.view.apply_mouse_scroll(MouseScrollDirection::Up);
+        assert_eq!(
+            overlay.view.scroll_offset,
+            bottom_offset.saturating_sub(MOUSE_SCROLL_ROWS)
+        );
+
+        overlay.view.apply_mouse_scroll(MouseScrollDirection::Down);
+        overlay.render(area, &mut buffer);
+        assert!(overlay.view.is_scrolled_to_bottom());
+    }
+
+    #[test]
+    fn mouse_scroll_after_followed_append_uses_updated_bottom() {
+        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+            lines: vec!["initial".into()],
+        })]);
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 12,
+        );
+        let mut buffer = Buffer::empty(area);
+        overlay.render(area, &mut buffer);
+        overlay.insert_cell(Arc::new(TestCell {
+            lines: (0..20)
+                .map(|line| Line::from(format!("tail-{line:02}")))
+                .collect(),
+        }));
+
+        overlay.view.apply_mouse_scroll(MouseScrollDirection::Up);
+        overlay.render(area, &mut buffer);
+
+        let max_scroll = overlay
+            .view
+            .last_rendered_height
+            .expect("rendered height")
+            .saturating_sub(overlay.view.last_content_height.expect("content height"));
+        assert_eq!(
+            overlay.view.scroll_offset,
+            max_scroll.saturating_sub(MOUSE_SCROLL_ROWS)
+        );
+        assert!(overlay.view.scroll_offset > 0);
     }
 
     #[test]

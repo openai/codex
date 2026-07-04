@@ -9,6 +9,8 @@ use std::sync::PoisonError;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crossterm::event::DisableMouseCapture;
+use crossterm::event::EnableMouseCapture;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
@@ -23,34 +25,75 @@ static PHYSICAL_ALT_SCREEN: PhysicalAltScreenTracker = PhysicalAltScreenTracker:
 
 struct PhysicalAltScreenTracker {
     active: AtomicBool,
+    alternate_scroll_active: AtomicBool,
+    mouse_capture_active: AtomicBool,
 }
 
 impl PhysicalAltScreenTracker {
     const fn new() -> Self {
         Self {
-            active: AtomicBool::new(false),
+            active: AtomicBool::new(/*v*/ false),
+            alternate_scroll_active: AtomicBool::new(/*v*/ false),
+            mouse_capture_active: AtomicBool::new(/*v*/ false),
         }
     }
 
     fn mark_entered(&self) {
-        self.active.store(true, Ordering::Release);
+        self.active.store(/*val*/ true, Ordering::Release);
     }
 
     fn mark_left(&self) {
-        self.active.store(false, Ordering::Release);
+        self.active.store(/*val*/ false, Ordering::Release);
+    }
+
+    fn mark_alternate_scroll_enabled(&self) {
+        self.alternate_scroll_active
+            .store(/*val*/ true, Ordering::Release);
+    }
+
+    fn mark_alternate_scroll_disabled(&self) {
+        self.alternate_scroll_active
+            .store(/*val*/ false, Ordering::Release);
+    }
+
+    fn mark_mouse_capture_enabled(&self) {
+        self.mouse_capture_active
+            .store(/*val*/ true, Ordering::Release);
+    }
+
+    fn mark_mouse_capture_disabled(&self) {
+        self.mouse_capture_active
+            .store(/*val*/ false, Ordering::Release);
     }
 
     fn restore(&self, writer: &mut impl Write) -> io::Result<()> {
-        if !self.active.load(Ordering::Acquire) {
-            return Ok(());
-        }
-
-        let disable_result = execute!(writer, DisableAlternateScroll);
-        let leave_result = execute!(writer, LeaveAlternateScreen);
+        let mouse_result = if self.mouse_capture_active.load(Ordering::Acquire) {
+            let result = execute!(writer, DisableMouseCapture);
+            if result.is_ok() {
+                self.mark_mouse_capture_disabled();
+            }
+            result
+        } else {
+            Ok(())
+        };
+        let scroll_result = if self.alternate_scroll_active.load(Ordering::Acquire) {
+            let result = execute!(writer, DisableAlternateScroll);
+            if result.is_ok() {
+                self.mark_alternate_scroll_disabled();
+            }
+            result
+        } else {
+            Ok(())
+        };
+        let leave_result = if self.active.load(Ordering::Acquire) {
+            execute!(writer, LeaveAlternateScreen)
+        } else {
+            Ok(())
+        };
         if leave_result.is_ok() {
             self.mark_left();
         }
-        merge_results(disable_result, leave_result)
+        merge_results(mouse_result, merge_results(scroll_result, leave_result))
     }
 }
 
@@ -77,6 +120,7 @@ enum ScreenOwnership {
         owners: NonZeroUsize,
         saved_viewport: Rect,
         physical: PhysicalAltScreen,
+        input_mode: AltScreenInputMode,
     },
 }
 
@@ -84,6 +128,28 @@ enum ScreenOwnership {
 enum PhysicalAltScreen {
     Active,
     Suspended,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AltScreenInputMode {
+    AlternateScroll,
+    MouseCapture,
+}
+
+impl AltScreenInputMode {
+    fn enable(self, commands: &mut impl ScreenCommands) -> io::Result<()> {
+        match self {
+            Self::AlternateScroll => commands.enable_alternate_scroll(),
+            Self::MouseCapture => commands.enable_mouse_capture(),
+        }
+    }
+
+    fn disable(self, commands: &mut impl ScreenCommands) -> io::Result<()> {
+        match self {
+            Self::AlternateScroll => commands.disable_alternate_scroll(),
+            Self::MouseCapture => commands.disable_mouse_capture(),
+        }
+    }
 }
 
 impl ScreenSession {
@@ -131,9 +197,21 @@ impl ScreenSession {
     }
 
     pub(super) fn enter(&self, terminal: &mut Terminal) -> io::Result<()> {
+        self.enter_with_input_mode(terminal, AltScreenInputMode::AlternateScroll)
+    }
+
+    pub(super) fn enter_owned(&self, terminal: &mut Terminal) -> io::Result<()> {
+        self.enter_with_input_mode(terminal, AltScreenInputMode::MouseCapture)
+    }
+
+    fn enter_with_input_mode(
+        &self,
+        terminal: &mut Terminal,
+        input_mode: AltScreenInputMode,
+    ) -> io::Result<()> {
         let was_active = self.is_active();
         let saved_viewport = terminal.viewport_area;
-        let command_result = self.acquire(terminal, saved_viewport);
+        let command_result = self.acquire(terminal, saved_viewport, input_mode);
         let layout_result = if !was_active && self.is_active() {
             expand_to_full_screen(terminal)
         } else {
@@ -193,7 +271,12 @@ impl ScreenSession {
         merge_results(command_result, layout_result)
     }
 
-    fn acquire(&self, commands: &mut impl ScreenCommands, saved_viewport: Rect) -> io::Result<()> {
+    fn acquire(
+        &self,
+        commands: &mut impl ScreenCommands,
+        saved_viewport: Rect,
+        input_mode: AltScreenInputMode,
+    ) -> io::Result<()> {
         let mut inner = self.lock();
         if inner.availability == AltScreenAvailability::Disabled {
             return Ok(());
@@ -205,9 +288,10 @@ impl ScreenSession {
                     owners: NonZeroUsize::MIN,
                     saved_viewport,
                     physical: PhysicalAltScreen::Active,
+                    input_mode,
                 };
-                if let Err(enable_error) = commands.enable_alternate_scroll() {
-                    let disable_result = commands.disable_alternate_scroll();
+                if let Err(enable_error) = input_mode.enable(commands) {
+                    let disable_result = input_mode.disable(commands);
                     let leave_result = commands.leave_alternate_screen();
                     if leave_result.is_ok() {
                         inner.ownership = ScreenOwnership::Inline;
@@ -234,7 +318,10 @@ impl ScreenSession {
     fn release(&self, commands: &mut impl ScreenCommands) -> io::Result<()> {
         let mut inner = self.lock();
         let ScreenOwnership::Alternate {
-            owners, physical, ..
+            owners,
+            physical,
+            input_mode,
+            ..
         } = &mut inner.ownership
         else {
             return Ok(());
@@ -250,7 +337,7 @@ impl ScreenSession {
             return Ok(());
         }
 
-        let disable_result = commands.disable_alternate_scroll();
+        let disable_result = input_mode.disable(commands);
         let leave_result = commands.leave_alternate_screen();
         if leave_result.is_ok() {
             inner.ownership = ScreenOwnership::Inline;
@@ -260,7 +347,12 @@ impl ScreenSession {
 
     fn finish_commands(&self, commands: &mut impl ScreenCommands) -> io::Result<()> {
         let mut inner = self.lock();
-        let ScreenOwnership::Alternate { physical, .. } = inner.ownership else {
+        let ScreenOwnership::Alternate {
+            physical,
+            input_mode,
+            ..
+        } = inner.ownership
+        else {
             return Ok(());
         };
         if physical == PhysicalAltScreen::Suspended {
@@ -268,7 +360,7 @@ impl ScreenSession {
             return Ok(());
         }
 
-        let disable_result = commands.disable_alternate_scroll();
+        let disable_result = input_mode.disable(commands);
         let leave_result = commands.leave_alternate_screen();
         if leave_result.is_ok() {
             inner.ownership = ScreenOwnership::Inline;
@@ -278,13 +370,18 @@ impl ScreenSession {
 
     fn suspend_commands(&self, commands: &mut impl ScreenCommands) -> io::Result<()> {
         let mut inner = self.lock();
-        let ScreenOwnership::Alternate { physical, .. } = &mut inner.ownership else {
+        let ScreenOwnership::Alternate {
+            physical,
+            input_mode,
+            ..
+        } = &mut inner.ownership
+        else {
             return Ok(());
         };
         if *physical == PhysicalAltScreen::Suspended {
             return Ok(());
         }
-        let disable_result = commands.disable_alternate_scroll();
+        let disable_result = input_mode.disable(commands);
         let leave_result = commands.leave_alternate_screen();
         if leave_result.is_ok() {
             *physical = PhysicalAltScreen::Suspended;
@@ -294,7 +391,12 @@ impl ScreenSession {
 
     fn resume_commands(&self, commands: &mut impl ScreenCommands) -> io::Result<()> {
         let mut inner = self.lock();
-        let ScreenOwnership::Alternate { physical, .. } = &mut inner.ownership else {
+        let ScreenOwnership::Alternate {
+            physical,
+            input_mode,
+            ..
+        } = &mut inner.ownership
+        else {
             return Ok(());
         };
         if *physical == PhysicalAltScreen::Active {
@@ -302,8 +404,8 @@ impl ScreenSession {
         }
         commands.enter_alternate_screen()?;
         *physical = PhysicalAltScreen::Active;
-        if let Err(enable_error) = commands.enable_alternate_scroll() {
-            let disable_result = commands.disable_alternate_scroll();
+        if let Err(enable_error) = input_mode.enable(commands) {
+            let disable_result = input_mode.disable(commands);
             let leave_result = commands.leave_alternate_screen();
             if leave_result.is_ok() {
                 *physical = PhysicalAltScreen::Suspended;
@@ -327,6 +429,8 @@ trait ScreenCommands {
     fn leave_alternate_screen(&mut self) -> io::Result<()>;
     fn enable_alternate_scroll(&mut self) -> io::Result<()>;
     fn disable_alternate_scroll(&mut self) -> io::Result<()>;
+    fn enable_mouse_capture(&mut self) -> io::Result<()>;
+    fn disable_mouse_capture(&mut self) -> io::Result<()>;
 }
 
 pub(super) fn restore_physical_alt_screen(writer: &mut impl Write) -> io::Result<()> {
@@ -351,11 +455,35 @@ impl ScreenCommands for Terminal {
     }
 
     fn enable_alternate_scroll(&mut self) -> io::Result<()> {
-        execute!(self.backend_mut(), EnableAlternateScroll)
+        let result = execute!(self.backend_mut(), EnableAlternateScroll);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_alternate_scroll_enabled();
+        }
+        result
     }
 
     fn disable_alternate_scroll(&mut self) -> io::Result<()> {
-        execute!(self.backend_mut(), DisableAlternateScroll)
+        let result = execute!(self.backend_mut(), DisableAlternateScroll);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_alternate_scroll_disabled();
+        }
+        result
+    }
+
+    fn enable_mouse_capture(&mut self) -> io::Result<()> {
+        let result = execute!(self.backend_mut(), EnableMouseCapture);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_mouse_capture_enabled();
+        }
+        result
+    }
+
+    fn disable_mouse_capture(&mut self) -> io::Result<()> {
+        let result = execute!(self.backend_mut(), DisableMouseCapture);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_mouse_capture_disabled();
+        }
+        result
     }
 }
 
@@ -379,11 +507,35 @@ impl<W: Write> ScreenCommands for WriterCommands<'_, W> {
     }
 
     fn enable_alternate_scroll(&mut self) -> io::Result<()> {
-        execute!(self.0, EnableAlternateScroll)
+        let result = execute!(self.0, EnableAlternateScroll);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_alternate_scroll_enabled();
+        }
+        result
     }
 
     fn disable_alternate_scroll(&mut self) -> io::Result<()> {
-        execute!(self.0, DisableAlternateScroll)
+        let result = execute!(self.0, DisableAlternateScroll);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_alternate_scroll_disabled();
+        }
+        result
+    }
+
+    fn enable_mouse_capture(&mut self) -> io::Result<()> {
+        let result = execute!(self.0, EnableMouseCapture);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_mouse_capture_enabled();
+        }
+        result
+    }
+
+    fn disable_mouse_capture(&mut self) -> io::Result<()> {
+        let result = execute!(self.0, DisableMouseCapture);
+        if result.is_ok() {
+            PHYSICAL_ALT_SCREEN.mark_mouse_capture_disabled();
+        }
+        result
     }
 }
 

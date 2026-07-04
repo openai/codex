@@ -1298,6 +1298,21 @@ See the Codex keymap documentation for supported actions and examples."
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
                 }
+                TuiEvent::MouseScroll(event) => {
+                    let handled = self.handle_owned_screen_mouse_scroll(tui, event);
+                    if !handled && !self.chat_widget.no_modal_or_popup_active() {
+                        let key_code = match event.direction {
+                            tui::MouseScrollDirection::Up => KeyCode::Up,
+                            tui::MouseScrollDirection::Down => KeyCode::Down,
+                        };
+                        self.handle_key_event(
+                            tui,
+                            app_server,
+                            KeyEvent::new(key_code, KeyModifiers::NONE),
+                        )
+                        .await;
+                    }
+                }
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.rebuild_transcript_after_backtrack(tui)?;

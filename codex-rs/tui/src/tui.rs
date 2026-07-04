@@ -300,9 +300,8 @@ pub(super) fn reapply_raw_mode_after_resume() -> Result<()> {
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
 /// terminal missed the stack pop that normally pairs with [`set_modes`].
 pub fn restore_after_exit() -> Result<()> {
-    let mut first_error =
-        restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
-    if let Err(err) = screen_session::restore_physical_alt_screen(&mut stdout()) {
+    let mut first_error = screen_session::restore_physical_alt_screen(&mut stdout()).err();
+    if let Err(err) = restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit) {
         first_error.get_or_insert(err);
     }
     if let Err(err) = terminal_stderr::finish() {
@@ -518,6 +517,8 @@ pub enum TuiEvent {
     Key(KeyEvent),
     /// A bracketed paste payload normalized by the app layer before it reaches the composer.
     Paste(String),
+    /// A vertical mouse-wheel event reported while an owned screen has mouse capture.
+    MouseScroll(MouseScrollEvent),
     /// A terminal size notification that should be handled as resize-sensitive draw work.
     ///
     /// Resize is separate from `Draw` so the app can run feature-gated pre-render logic without
@@ -525,6 +526,19 @@ pub enum TuiEvent {
     Resize,
     /// A scheduled repaint that does not necessarily correspond to a terminal size change.
     Draw,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MouseScrollEvent {
+    pub direction: MouseScrollDirection,
+    pub column: u16,
+    pub row: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseScrollDirection {
+    Up,
+    Down,
 }
 
 pub struct Tui {
@@ -737,6 +751,11 @@ impl Tui {
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         self.screen_session.enter(&mut self.terminal)
+    }
+
+    /// Enter an application-owned alternate screen with direct mouse input.
+    pub fn enter_owned_alt_screen(&mut self) -> Result<()> {
+        self.screen_session.enter_owned(&mut self.terminal)
     }
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.

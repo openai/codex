@@ -11,6 +11,7 @@ use ratatui::text::Line;
 
 use super::*;
 use crate::history_cell::AgentMarkdownCell;
+use crate::tui::MouseScrollDirection;
 
 #[derive(Debug)]
 struct TestCell {
@@ -269,6 +270,59 @@ scrolled:
 
 middle
 restored:
+
+LATEST
+"###);
+}
+
+#[test]
+fn mouse_wheel_leaves_and_restores_bottom_follow() {
+    let mut viewport = viewport(vec![
+        cell("oldest"),
+        cell("older"),
+        cell("middle"),
+        cell("newer"),
+        cell("LATEST"),
+    ]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 3,
+    );
+    let mut bottom = Buffer::empty(area);
+    viewport.render(area, &mut bottom);
+
+    viewport.handle_mouse_scroll(MouseScrollDirection::Up);
+    let mut scrolled = Buffer::empty(area);
+    viewport.render(area, &mut scrolled);
+    assert!(!viewport.is_following_bottom());
+
+    viewport.handle_mouse_scroll(MouseScrollDirection::Down);
+    let mut restored = Buffer::empty(area);
+    viewport.render(area, &mut restored);
+    assert!(viewport.is_following_bottom());
+
+    let trim_rows = |buffer: &Buffer| {
+        buffer_text(buffer, area)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_snapshot!(format!(
+        "bottom:\n{}\nscrolled:\n{}\nrestored:\n{}",
+        trim_rows(&bottom),
+        trim_rows(&scrolled),
+        trim_rows(&restored),
+    ), @r###"
+bottom:
+newer
+
+LATEST
+scrolled:
+
+middle
+
+restored:
+newer
 
 LATEST
 "###);
