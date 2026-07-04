@@ -82,6 +82,36 @@ fn plain_common_bare_parser_matches_native_boolean_syntax_and_is_stricter_on_dup
             Some(true),
         ),
         (
+            "yes",
+            b"[core]\n\tbare = yes\n".as_slice(),
+            CommonConfigAuthority::Bare,
+            Some(true),
+        ),
+        (
+            "on",
+            b"[core]\n\tbare = on\n".as_slice(),
+            CommonConfigAuthority::Bare,
+            Some(true),
+        ),
+        (
+            "numeric true",
+            b"[core]\n\tbare = 1\n".as_slice(),
+            CommonConfigAuthority::Bare,
+            Some(true),
+        ),
+        (
+            "hex true",
+            b"[core]\n\tbare = 0x1\n".as_slice(),
+            CommonConfigAuthority::Bare,
+            Some(true),
+        ),
+        (
+            "suffixed true",
+            b"[core]\n\tbare = 1k\n".as_slice(),
+            CommonConfigAuthority::Bare,
+            Some(true),
+        ),
+        (
             "false",
             b"[core]\n\tbare = false\n".as_slice(),
             CommonConfigAuthority::Unproven,
@@ -133,13 +163,13 @@ fn plain_common_bare_parser_matches_native_boolean_syntax_and_is_stricter_on_dup
 }
 
 #[test]
-fn common_bare_proof_accepts_only_explicit_boolean_literals() {
+fn common_bare_proof_rejects_invalid_git_boolean_values() {
     for (name, body) in [
-        ("empty", b"[core]\n\tbare =\n".as_slice()),
-        ("yes", b"[core]\n\tbare = yes\n".as_slice()),
-        ("on", b"[core]\n\tbare = on\n".as_slice()),
-        ("one", b"[core]\n\tbare = 1\n".as_slice()),
         ("leading zero", b"[core]\n\tbare = 08\n".as_slice()),
+        (
+            "negative leading zero",
+            b"[core]\n\tbare = -08\n".as_slice(),
+        ),
         (
             "positive overflow",
             b"[core]\n\tbare = 2147483648\n".as_slice(),
@@ -152,12 +182,42 @@ fn common_bare_proof_accepts_only_explicit_boolean_literals() {
             "i64 max",
             b"[core]\n\tbare = 9223372036854775807\n".as_slice(),
         ),
+        ("suffix overflow", b"[core]\n\tbare = 2g\n".as_slice()),
+        ("trailing junk", b"[core]\n\tbare = 1foo\n".as_slice()),
     ] {
         let common = write_common_config(body);
         assert_eq!(
             inspect_plain_common_config_authority(common.path()).expect(name),
             CommonConfigAuthority::Unproven,
             "authority result for {name}"
+        );
+    }
+}
+
+#[test]
+fn common_bare_proof_accepts_explicit_false_worktree_config_spellings() {
+    for value in ["false", "no", "off", "", "0", "-0", "+0", "00", "0x0"] {
+        let common = write_common_config(
+            format!("[core]\n\tbare = yes\n[extensions]\n\tworktreeConfig = {value}\n").as_bytes(),
+        );
+        assert_eq!(
+            inspect_plain_common_config_authority(common.path()).expect(value),
+            CommonConfigAuthority::Bare,
+            "authority result for worktreeConfig={value:?}"
+        );
+    }
+}
+
+#[test]
+fn common_bare_proof_rejects_explicit_true_worktree_config_spellings() {
+    for value in ["true", "yes", "on", "1", "-1", "0x1", "1k"] {
+        let common = write_common_config(
+            format!("[core]\n\tbare = yes\n[extensions]\n\tworktreeConfig = {value}\n").as_bytes(),
+        );
+        assert_eq!(
+            inspect_plain_common_config_authority(common.path()).expect(value),
+            CommonConfigAuthority::Unproven,
+            "authority result for worktreeConfig={value:?}"
         );
     }
 }
@@ -224,6 +284,25 @@ fn common_config_absolute_worktree_is_returned_as_authority() {
         inspect_plain_common_config_authority(common.path()).expect("worktree authority"),
         CommonConfigAuthority::Worktree(worktree.path().to_path_buf())
     );
+}
+
+#[test]
+fn common_config_false_bare_spellings_allow_absolute_worktree() {
+    let worktree = tempfile::tempdir().expect("worktree");
+    for bare in ["false", "no", "off", "", "0", "-0", "+0", "00", "0x0"] {
+        let common = write_common_config(
+            format!(
+                "[core]\n\tbare = {bare}\n\tworktree = {}\n",
+                git_config_path(worktree.path())
+            )
+            .as_bytes(),
+        );
+        assert_eq!(
+            inspect_plain_common_config_authority(common.path()).expect(bare),
+            CommonConfigAuthority::Worktree(worktree.path().to_path_buf()),
+            "authority result for core.bare={bare:?}"
+        );
+    }
 }
 
 #[test]

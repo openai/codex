@@ -68,8 +68,8 @@ fn effective_paths(diff: &str, revert: bool) -> io::Result<Vec<String>> {
     let git_root =
         crate::get_git_repo_root(cwd).ok_or_else(|| io::Error::other("not a Git repository"))?;
     let git_root = std::fs::canonicalize(git_root)?;
-    ensure_no_worktree_config_sources(&git, &git_root, &[])?;
-    let paths = extract_effective_paths_from_patch(&git, &git_root, &patch_path, revert, &[])?;
+    let config = GuardedGitConfig::authorize(&git, &git_root, Vec::new())?;
+    let paths = extract_effective_paths_from_patch_guarded(&config, &patch_path, revert)?;
     drop(tmpdir);
     Ok(paths)
 }
