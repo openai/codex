@@ -33,7 +33,7 @@ impl App {
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
-                self.reset_app_ui_state_after_clear();
+                self.reset_app_ui_state_after_clear(tui);
 
                 self.start_fresh_session_with_summary_hint(
                     tui,
@@ -48,7 +48,7 @@ impl App {
             }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
-                self.reset_app_ui_state_after_clear();
+                self.reset_app_ui_state_after_clear(tui);
 
                 self.start_fresh_session_with_summary_hint(
                     tui,
@@ -259,6 +259,7 @@ impl App {
                 if start < end {
                     self.transcript_cells
                         .splice(start..end, std::iter::once(consolidated.clone()));
+                    self.sync_owned_screen_cells();
 
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.consolidate_cells(start..end, consolidated.clone());
@@ -268,6 +269,7 @@ impl App {
                     self.finish_required_stream_reflow(tui)?;
                 } else {
                     self.transcript_cells.push(consolidated.clone());
+                    self.owned_screen_push_cell(consolidated.clone());
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                         t.insert_cell(consolidated.clone());
                         tui.frame_requester().schedule_frame();

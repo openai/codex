@@ -37,7 +37,8 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
-            self.transcript_cells.push(cell);
+            self.transcript_cells.push(cell.clone());
+            self.owned_screen_push_cell(cell);
         }
 
         // Walk backward to find the contiguous run of streaming AgentMessageCells that
@@ -56,6 +57,7 @@ impl App {
                 Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
+            self.sync_owned_screen_cells();
 
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.consolidate_cells(start..end, consolidated.clone());

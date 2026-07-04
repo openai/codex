@@ -3,6 +3,7 @@ use std::io;
 use pretty_assertions::assert_eq;
 use ratatui::layout::Rect;
 
+use super::PhysicalAltScreenTracker;
 use super::ScreenCommands;
 use super::ScreenSession;
 
@@ -96,6 +97,53 @@ fn nested_owners_only_transition_at_outer_boundaries() {
 
     assert!(!session.is_active());
     assert_effects(&commands, ENTER_AND_LEAVE);
+}
+
+#[test]
+fn finish_clears_all_nested_owners_with_one_physical_transition() {
+    let session = ScreenSession::new();
+    let mut commands = FakeCommands::default();
+    acquire(&session, &mut commands);
+    acquire(&session, &mut commands);
+    commands.effects.clear();
+
+    session.finish_commands(&mut commands).expect("finish");
+    session
+        .finish_commands(&mut commands)
+        .expect("repeat finish");
+
+    assert!(!session.is_active());
+    assert_effects(&commands, LEAVE);
+}
+
+#[test]
+fn emergency_restore_only_leaves_a_physically_owned_screen() {
+    let tracker = PhysicalAltScreenTracker::new();
+    let mut inactive_output = Vec::new();
+    tracker
+        .restore(&mut inactive_output)
+        .expect("restore inactive screen");
+    assert_eq!(inactive_output, Vec::<u8>::new());
+
+    tracker.mark_entered();
+
+    let mut restore_output = Vec::new();
+    tracker
+        .restore(&mut restore_output)
+        .expect("restore active screen");
+    let mut expected_output = Vec::new();
+    ratatui::crossterm::execute!(
+        expected_output,
+        super::DisableAlternateScroll,
+        crossterm::terminal::LeaveAlternateScreen
+    )
+    .expect("write expected restore sequence");
+    assert_eq!(restore_output, expected_output);
+
+    tracker
+        .restore(&mut restore_output)
+        .expect("repeat restore");
+    assert_eq!(restore_output, expected_output);
 }
 
 #[test]

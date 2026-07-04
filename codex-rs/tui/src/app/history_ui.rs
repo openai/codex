@@ -15,6 +15,12 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         self.transcript_cells.push(cell.clone());
+        self.owned_screen_push_cell(cell.clone());
+        if self.has_owned_screen() {
+            self.chat_widget.request_pending_usage_output_insertion();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
         if self.initial_history_replay_buffer.as_ref().is_some() {
             self.insert_history_cell_lines_with_initial_replay_buffer(
                 tui,
@@ -96,6 +102,13 @@ impl App {
         width: u16,
         version: &'static str,
     ) -> Vec<Line<'static>> {
+        self.clear_ui_header_cell(version).display_lines(width)
+    }
+
+    fn clear_ui_header_cell(
+        &self,
+        version: &'static str,
+    ) -> history_cell::SessionHeaderHistoryCell {
         history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.current_model().to_string(),
             self.chat_widget.current_reasoning_effort(),
@@ -107,7 +120,6 @@ impl App {
             version,
         )
         .with_yolo_mode(history_cell::is_yolo_mode(&self.config))
-        .display_lines(width)
     }
 
     pub(super) fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -115,6 +127,13 @@ impl App {
     }
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
+        if self.has_owned_screen() {
+            let cell: Arc<dyn HistoryCell> = Arc::new(self.clear_ui_header_cell(CODEX_CLI_VERSION));
+            self.transcript_cells.push(cell.clone());
+            self.owned_screen_push_cell(cell);
+            tui.frame_requester().schedule_frame();
+            return;
+        }
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
@@ -158,13 +177,19 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn reset_app_ui_state_after_clear(&mut self) {
+    pub(super) fn reset_app_ui_state_after_clear(&mut self, tui: &mut tui::Tui) {
+        if self.overlay.is_some()
+            && let Err(err) = tui.leave_alt_screen()
+        {
+            tracing::warn!(error = %err, "failed to release transcript overlay while clearing UI");
+        }
         self.reset_transcript_state_after_clear();
     }
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
+        self.sync_owned_screen_cells();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.transcript_reflow.clear();

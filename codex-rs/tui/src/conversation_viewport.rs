@@ -151,10 +151,12 @@ impl ConversationViewport {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn is_following_bottom(&self) -> bool {
         self.content.is_following_bottom()
     }
 
+    #[cfg(test)]
     pub(crate) fn committed_cell_count(&self) -> usize {
         self.cells.len()
     }

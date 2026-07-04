@@ -724,6 +724,7 @@ impl App {
         };
 
         self.transcript_cells.remove(index);
+        self.sync_owned_screen_cells();
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }

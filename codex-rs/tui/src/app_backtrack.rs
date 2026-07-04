@@ -611,6 +611,7 @@ impl App {
     /// 3. Drop deferred transcript lines buffered while overlay was open to avoid flushing lines
     ///    for cells that were just removed by the trim.
     fn sync_overlay_after_transcript_trim(&mut self) {
+        self.sync_owned_screen_cells();
         if let Some(Overlay::Transcript(t)) = &mut self.overlay {
             t.replace_cells(self.transcript_cells.clone());
         }

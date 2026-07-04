@@ -81,6 +81,11 @@ impl App {
         } else {
             self.chat_widget.set_raw_output_mode(enabled);
         }
+        self.sync_owned_screen_render_mode();
+        if self.has_owned_screen() {
+            tui.frame_requester().schedule_frame();
+            return;
+        }
         if let Err(err) = self.reflow_transcript_now(tui) {
             tracing::warn!(error = %err, "failed to reflow transcript after raw output mode toggle");
             self.chat_widget
@@ -218,7 +223,7 @@ impl App {
                     self.chat_widget
                         .add_error_message(format!("Failed to clear terminal UI: {err}"));
                 } else {
-                    self.reset_app_ui_state_after_clear();
+                    self.reset_app_ui_state_after_clear(tui);
                     self.queue_clear_ui_header(tui);
                     tui.frame_requester().schedule_frame();
                 }

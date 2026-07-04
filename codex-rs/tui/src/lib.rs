@@ -105,8 +105,6 @@ mod clipboard_paste;
 mod collaboration_modes;
 mod color;
 mod config_update;
-// Staged renderer primitive; the owned-screen app path is wired in a follow-up change.
-#[cfg_attr(not(test), allow(dead_code))]
 mod conversation_viewport;
 pub(crate) mod custom_terminal;
 mod pets;
@@ -1724,8 +1722,11 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
-    tui.set_alt_screen_enabled(use_alt_screen);
+    let alt_screen_behavior =
+        determine_alt_screen_behavior(no_alt_screen, config.tui_alternate_screen);
+    tui.set_alt_screen_enabled(
+        /*enabled*/ alt_screen_behavior != AltScreenBehavior::Disabled,
+    );
     let mut app_server = match app_server {
         Some(app_server) => app_server,
         None => match start_app_server(
@@ -1785,8 +1786,12 @@ async fn run_ratatui_app(
         StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
     };
 
+    if alt_screen_behavior == AltScreenBehavior::Owned {
+        tui.enter_alt_screen()?;
+    }
     let app_result = App::run(
         &mut tui,
+        alt_screen_behavior,
         app_server,
         config,
         cli_kv_overrides.clone(),
@@ -1807,6 +1812,21 @@ async fn run_ratatui_app(
         startup_hooks_browser,
     )
     .await;
+
+    let finish_alt_screen_result = if alt_screen_behavior == AltScreenBehavior::Owned {
+        tui.finish_alt_screen()
+    } else {
+        Ok(())
+    };
+    let app_result = match (app_result, finish_alt_screen_result) {
+        (Ok(exit_info), Ok(())) => Ok(exit_info),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(_), Err(err)) => Err(err.into()),
+        (Err(app_err), Err(finish_err)) => {
+            tracing::warn!(error = %finish_err, "failed to leave owned alternate screen");
+            Err(app_err)
+        }
+    };
 
     terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
@@ -1859,19 +1879,33 @@ impl Drop for TerminalRestoreGuard {
     }
 }
 
-/// Determine whether to use the terminal's alternate screen buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AltScreenBehavior {
+    Disabled,
+    OverlayOnly,
+    Owned,
+}
+
+/// Determine how the application uses the terminal's alternate screen buffer.
 ///
 /// - If `--no-alt-screen` is explicitly passed, always disable alternate screen
 /// - Otherwise, respect the `tui.alternate_screen` config setting:
-///   - `always`: Use alternate screen
+///   - `always`: Own the alternate screen for the full application run
 ///   - `never`: Inline mode only, preserves scrollback
-///   - `auto` (default): Use alternate screen
-fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScreenMode) -> bool {
+///   - `auto` (default): Enter alternate screen only for overlays
+fn determine_alt_screen_behavior(
+    no_alt_screen: bool,
+    tui_alternate_screen: AltScreenMode,
+) -> AltScreenBehavior {
     if no_alt_screen {
-        return false;
+        return AltScreenBehavior::Disabled;
     }
 
-    tui_alternate_screen != AltScreenMode::Never
+    match tui_alternate_screen {
+        AltScreenMode::Always => AltScreenBehavior::Owned,
+        AltScreenMode::Auto => AltScreenBehavior::OverlayOnly,
+        AltScreenMode::Never => AltScreenBehavior::Disabled,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2149,23 +2183,18 @@ mod tests {
     }
 
     #[test]
-    fn alternate_screen_auto_uses_alt_screen() {
-        assert!(determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Auto,
-        ));
-        assert!(determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Always,
-        ));
-        assert!(!determine_alt_screen_mode(
-            /*no_alt_screen*/ false,
-            AltScreenMode::Never,
-        ));
-        assert!(!determine_alt_screen_mode(
-            /*no_alt_screen*/ true,
-            AltScreenMode::Auto,
-        ));
+    fn alternate_screen_mode_maps_to_explicit_behavior() {
+        let cases = [
+            (false, AltScreenMode::Auto, AltScreenBehavior::OverlayOnly),
+            (false, AltScreenMode::Always, AltScreenBehavior::Owned),
+            (false, AltScreenMode::Never, AltScreenBehavior::Disabled),
+            (true, AltScreenMode::Auto, AltScreenBehavior::Disabled),
+            (true, AltScreenMode::Always, AltScreenBehavior::Disabled),
+            (true, AltScreenMode::Never, AltScreenBehavior::Disabled),
+        ];
+        for (no_alt_screen, mode, expected) in cases {
+            assert_eq!(determine_alt_screen_behavior(no_alt_screen, mode), expected,);
+        }
     }
 
     #[test]
