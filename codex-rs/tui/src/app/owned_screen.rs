@@ -10,12 +10,22 @@ use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use super::*;
 use crate::AltScreenBehavior;
 use crate::tui::MouseScrollEvent;
+
+const MIN_SPLIT_PANE_WIDTH: u16 = 41;
+const SPLIT_DIVIDER_WIDTH: u16 = 1;
+const MIN_SPLIT_WIDTH: u16 = MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_DIVIDER_WIDTH;
+const PANE_HEADER_HEIGHT: u16 = 1;
 
 pub(super) struct OwnedScreen {
     viewport: ConversationViewport,
@@ -26,6 +36,59 @@ pub(super) struct OwnedScreen {
 struct RenderedOwnedScreen {
     cursor: Option<(u16, u16)>,
     cursor_style: SetCursorStyle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnedScreenLayout {
+    Single {
+        slot: PaneSlot,
+        area: Rect,
+        show_header: bool,
+    },
+    Split {
+        area: Rect,
+        parent: Rect,
+        divider: Rect,
+        side: Rect,
+    },
+}
+
+impl OwnedScreenLayout {
+    fn new(area: Rect, has_side: bool, focused: PaneSlot) -> Self {
+        if !has_side {
+            return Self::Single {
+                slot: PaneSlot::Parent,
+                area,
+                show_header: false,
+            };
+        }
+        if area.width < MIN_SPLIT_WIDTH {
+            return Self::Single {
+                slot: focused,
+                area,
+                show_header: true,
+            };
+        }
+
+        let pane_width = area.width.saturating_sub(SPLIT_DIVIDER_WIDTH);
+        let parent_width = (pane_width + 1) / 2;
+        let side_width = pane_width.saturating_sub(parent_width);
+        let parent = Rect::new(area.x, area.y, parent_width, area.height);
+        let divider = Rect::new(parent.right(), area.y, SPLIT_DIVIDER_WIDTH, area.height);
+        let side = Rect::new(divider.right(), area.y, side_width, area.height);
+        Self::Split {
+            area,
+            parent,
+            divider,
+            side,
+        }
+    }
+
+    fn area(self) -> Rect {
+        match self {
+            Self::Single { area, .. } | Self::Split { area, .. } => area,
+        }
+    }
 }
 
 impl OwnedScreen {
@@ -105,6 +168,135 @@ impl OwnedScreen {
         self.viewport.handle_mouse_scroll(event.direction);
         true
     }
+
+    fn clear_last_conversation_area(&mut self) {
+        self.last_conversation_area = Rect::default();
+    }
+}
+
+fn pane_body_area(area: Rect, show_header: bool) -> Rect {
+    if !show_header {
+        return area;
+    }
+    let header_height = PANE_HEADER_HEIGHT.min(area.height);
+    Rect::new(
+        area.x,
+        area.y.saturating_add(header_height),
+        area.width,
+        area.height.saturating_sub(header_height),
+    )
+}
+
+fn render_pane_header(slot: PaneSlot, focused: bool, area: Rect, buffer: &mut Buffer) {
+    if area.height == 0 {
+        return;
+    }
+    let label = match slot {
+        PaneSlot::Parent => "Parent",
+        PaneSlot::Side => "Side",
+    };
+    let line: Line<'static> = if focused {
+        let parent: Span<'static> = conversation_panes::parent_pane_shortcut().into();
+        let side: Span<'static> = conversation_panes::side_pane_shortcut().into();
+        vec![
+            " ".into(),
+            label.cyan().bold(),
+            "  ".into(),
+            format!("{} / {} focus", parent.content, side.content).dim(),
+        ]
+        .into()
+    } else {
+        vec![" ".into(), label.dim()].into()
+    };
+    Paragraph::new(line).render(
+        Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            PANE_HEADER_HEIGHT.min(area.height),
+        ),
+        buffer,
+    );
+}
+
+fn render_divider(area: Rect, buffer: &mut Buffer) {
+    if area.width == 0 {
+        return;
+    }
+    for y in area.y..area.bottom() {
+        buffer[(area.x, y)]
+            .set_symbol("│")
+            .set_style(Style::default().dim());
+    }
+}
+
+fn render_pane(
+    panes: &mut ConversationPanes,
+    slot: PaneSlot,
+    area: Rect,
+    show_header: bool,
+    focused: PaneSlot,
+    buffer: &mut Buffer,
+) -> Option<RenderedOwnedScreen> {
+    render_pane_header(slot, slot == focused, area, buffer);
+    let body_area = pane_body_area(area, show_header);
+    let pane = panes.by_slot_mut(slot)?;
+    pane.chat_widget.update_owned_screen_width(body_area.width);
+    let screen = pane.owned_screen.as_mut()?;
+    Some(screen.render(&pane.chat_widget, body_area, buffer))
+}
+
+fn render_layout(
+    panes: &mut ConversationPanes,
+    layout: OwnedScreenLayout,
+    focused: PaneSlot,
+    buffer: &mut Buffer,
+) -> Option<RenderedOwnedScreen> {
+    Clear.render(layout.area(), buffer);
+    for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        if let Some(screen) = panes
+            .by_slot_mut(slot)
+            .and_then(|pane| pane.owned_screen.as_mut())
+        {
+            screen.clear_last_conversation_area();
+        }
+    }
+
+    match layout {
+        OwnedScreenLayout::Single {
+            slot,
+            area,
+            show_header,
+        } => render_pane(panes, slot, area, show_header, focused, buffer),
+        OwnedScreenLayout::Split {
+            parent,
+            divider,
+            side,
+            ..
+        } => {
+            let parent_rendered = render_pane(
+                panes,
+                PaneSlot::Parent,
+                parent,
+                /*show_header*/ true,
+                focused,
+                buffer,
+            );
+            let side_rendered = render_pane(
+                panes,
+                PaneSlot::Side,
+                side,
+                /*show_header*/ true,
+                focused,
+                buffer,
+            );
+            render_divider(divider, buffer);
+            match focused {
+                PaneSlot::Parent => parent_rendered,
+                PaneSlot::Side => side_rendered,
+            }
+        }
+    }
 }
 
 impl App {
@@ -120,7 +312,9 @@ impl App {
     }
 
     pub(super) fn has_owned_screen(&self) -> bool {
-        self.chat_widget.owned_screen.is_some()
+        self.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .is_some_and(|pane| pane.owned_screen.is_some())
     }
 
     pub(super) fn owned_screen_push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
@@ -173,19 +367,21 @@ impl App {
         tui: &mut tui::Tui,
         event: MouseScrollEvent,
     ) -> bool {
-        if !self.chat_widget.no_modal_or_popup_active() {
-            return false;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            let handled = self.chat_widget.by_slot_mut(slot).is_some_and(|pane| {
+                pane.chat_widget.no_modal_or_popup_active()
+                    && pane
+                        .owned_screen
+                        .as_mut()
+                        .is_some_and(|screen| screen.handle_mouse_scroll(event))
+            });
+            if handled {
+                tui.frame_requester()
+                    .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                return true;
+            }
         }
-        let handled = self
-            .chat_widget
-            .owned_screen
-            .as_mut()
-            .is_some_and(|screen| screen.handle_mouse_scroll(event));
-        if handled {
-            tui.frame_requester()
-                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
-        }
-        handled
+        false
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
@@ -203,34 +399,37 @@ impl App {
     }
 
     pub(super) fn handle_owned_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<bool> {
-        if self.chat_widget.owned_screen.is_none() {
+        if !self.has_owned_screen() {
             return Ok(false);
         }
         let size = tui.terminal.size()?;
-        if size.width != tui.terminal.last_known_screen_size.width {
-            self.chat_widget.on_terminal_resize(size.width);
+        let size_changed = size != tui.terminal.last_known_screen_size;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            if let Some(pane) = self.chat_widget.by_slot_mut(slot) {
+                if size_changed {
+                    pane.chat_widget.refresh_status_line();
+                }
+                pane.transcript_reflow.clear();
+            }
         }
-        if size != tui.terminal.last_known_screen_size {
-            self.refresh_status_line();
-        }
-        self.chat_widget.transcript_reflow.clear();
         tui.clear_pending_history_lines();
         Ok(true)
     }
 
     pub(super) fn render_owned_screen_frame(&mut self, tui: &mut tui::Tui) -> Result<Option<Rect>> {
-        self.chat_widget
-            .update_owned_screen_width(tui.terminal.size()?.width);
-        let pane = self.chat_widget.selected_mut();
-        let Some(screen) = &mut pane.owned_screen else {
+        if !self.has_owned_screen() {
             return Ok(None);
-        };
-        let chat_widget = &pane.chat_widget;
+        }
+        let focused = self.chat_widget.focused_slot();
+        let has_side = self.chat_widget.has_side();
         let mut rendered_area = Rect::default();
         tui.draw(/*height*/ u16::MAX, |frame| {
             rendered_area = frame.area();
-            let rendered = screen.render(chat_widget, rendered_area, frame.buffer);
-            if let Some((x, y)) = rendered.cursor {
+            let layout = OwnedScreenLayout::new(rendered_area, has_side, focused);
+            if let Some(rendered) =
+                render_layout(&mut self.chat_widget, layout, focused, frame.buffer)
+                && let Some((x, y)) = rendered.cursor
+            {
                 frame.set_cursor_style(rendered.cursor_style);
                 frame.set_cursor_position((x, y));
             }

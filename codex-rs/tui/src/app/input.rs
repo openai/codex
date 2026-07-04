@@ -100,6 +100,14 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.handle_conversation_pane_focus_key(key_event) {
+            if self.backtrack.primed {
+                self.reset_backtrack_state();
+            }
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -267,6 +275,32 @@ impl App {
         };
     }
 
+    fn handle_conversation_pane_focus_key(&mut self, key_event: KeyEvent) -> bool {
+        if self.overlay.is_some()
+            || self.chat_widget.by_slot(PaneSlot::Side).is_none()
+            || !self.chat_widget.no_modal_or_popup_active()
+        {
+            return false;
+        }
+
+        let composer_is_empty = self.chat_widget.composer_text_with_pending().is_empty();
+        let allow_word_motion_fallback = !self.enhanced_keys_supported && composer_is_empty;
+        let target = if conversation_panes::parent_pane_shortcut().is_press(key_event)
+            || (composer_is_empty
+                && previous_agent_shortcut_matches(key_event, allow_word_motion_fallback))
+        {
+            PaneSlot::Parent
+        } else if conversation_panes::side_pane_shortcut().is_press(key_event)
+            || (composer_is_empty
+                && next_agent_shortcut_matches(key_event, allow_word_motion_fallback))
+        {
+            PaneSlot::Side
+        } else {
+            return false;
+        };
+        self.chat_widget.focus(target)
+    }
+
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
@@ -299,6 +333,25 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use super::*;
+    use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
+
+    async fn install_side_pane(app: &mut App) {
+        let (chat_widget, _rx) = make_chatwidget_for_pane(PaneSlot::Side).await;
+        let file_search = FileSearchManager::new(
+            chat_widget.config_ref().cwd.to_path_buf(),
+            chat_widget.conversation_event_sender(),
+        );
+        assert!(
+            app.chat_widget
+                .install_side(ConversationPaneInit {
+                    chat_widget,
+                    file_search,
+                    owned_screen: None,
+                })
+                .is_ok()
+        );
+    }
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -309,5 +362,83 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
+    async fn canonical_pane_focus_keys_preserve_independent_drafts() {
+        let mut app = make_test_app().await;
+        install_side_pane(&mut app).await;
+        app.chat_widget
+            .set_composer_text("parent draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.handle_conversation_pane_focus_key(KeyEvent::new(
+            KeyCode::Char('2'),
+            KeyModifiers::ALT,
+        )));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+        app.chat_widget
+            .set_composer_text("side draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.handle_conversation_pane_focus_key(KeyEvent::new(
+            KeyCode::Char('1'),
+            KeyModifiers::ALT,
+        )));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "parent draft");
+        assert_eq!(
+            app.chat_widget
+                .by_slot(PaneSlot::Side)
+                .expect("side pane")
+                .composer_text_with_pending(),
+            "side draft"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn pane_focus_does_not_steal_word_motion_from_nonempty_draft() {
+        let mut app = make_test_app().await;
+        install_side_pane(&mut app).await;
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(
+            !app.handle_conversation_pane_focus_key(KeyEvent::new(
+                KeyCode::Right,
+                KeyModifiers::ALT,
+            ))
+        );
+        assert!(!app.handle_conversation_pane_focus_key(KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::ALT,
+        )));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    }
+
+    #[tokio::test]
+    async fn empty_composer_allows_arrow_pane_focus_shortcut() {
+        let mut app = make_test_app().await;
+        install_side_pane(&mut app).await;
+
+        assert!(
+            app.handle_conversation_pane_focus_key(KeyEvent::new(
+                KeyCode::Right,
+                KeyModifiers::ALT,
+            ))
+        );
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+    }
+
+    #[tokio::test]
+    async fn pane_focus_key_is_available_to_agent_navigation_without_side() {
+        let mut app = make_test_app().await;
+
+        assert!(
+            !app.handle_conversation_pane_focus_key(KeyEvent::new(
+                KeyCode::Right,
+                KeyModifiers::ALT,
+            ))
+        );
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
     }
 }

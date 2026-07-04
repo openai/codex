@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use codex_protocol::ThreadId;
+use crossterm::event::KeyCode;
 use tokio::sync::mpsc;
 
 use super::InitialHistoryReplayBuffer;
@@ -20,7 +21,17 @@ use crate::app_event::PaneSlot;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::transcript_reflow::TranscriptReflowState;
+
+pub(super) fn parent_pane_shortcut() -> KeyBinding {
+    key_hint::alt(KeyCode::Char('1'))
+}
+
+pub(super) fn side_pane_shortcut() -> KeyBinding {
+    key_hint::alt(KeyCode::Char('2'))
+}
 
 pub(super) struct ConversationPaneInit {
     pub(super) chat_widget: ChatWidget,
@@ -129,6 +140,10 @@ impl ConversationPanes {
 
     pub(super) fn focused_slot(&self) -> PaneSlot {
         self.focused
+    }
+
+    pub(super) fn has_side(&self) -> bool {
+        self.side.is_some()
     }
 
     pub(super) fn focus(&mut self, slot: PaneSlot) -> bool {
