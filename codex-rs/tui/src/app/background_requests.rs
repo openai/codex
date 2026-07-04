@@ -58,7 +58,7 @@ impl App {
 
     fn mcp_inventory_request_thread_id(&self, thread_id: Option<ThreadId>) -> Option<ThreadId> {
         thread_id.filter(|thread_id| {
-            self.chat_widget.active_thread_id == Some(*thread_id)
+            self.chat_widget.contains_thread(*thread_id)
                 && self
                     .agent_navigation
                     .get(thread_id)

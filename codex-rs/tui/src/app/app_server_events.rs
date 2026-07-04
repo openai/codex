@@ -71,9 +71,9 @@ impl App {
                         if let Some(request) = self
                             .pending_app_server_requests
                             .resolve_notification(thread_id, &notification.request_id)
-                            && self.chat_widget.active_thread_id == Some(thread_id)
+                            && let Some(pane) = self.chat_widget.by_thread_id_mut(thread_id)
                         {
-                            self.chat_widget.dismiss_app_server_request(&request);
+                            pane.dismiss_app_server_request(&request);
                         }
                     }
                     Err(err) => {

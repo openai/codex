@@ -19,7 +19,7 @@ fn current_generation_dispatches_to_its_conversation() {
             target: current,
             event: Box::new(AppEvent::RawOutputModeChanged { enabled: true }),
         },
-        Some(current),
+        |origin| origin == current,
     )
     .expect("current event should be delivered");
 
@@ -41,7 +41,7 @@ fn stale_presentation_event_is_dropped() {
                 target: stale,
                 event: Box::new(AppEvent::RawOutputModeChanged { enabled: true }),
             },
-            Some(current),
+            |origin| origin == current,
         )
         .is_none()
     );
@@ -58,7 +58,7 @@ fn stale_widget_completion_is_dropped() {
                 target: stale,
                 event: Box::new(AppEvent::PluginMentionsLoaded { plugins: None }),
             },
-            Some(current),
+            |origin| origin == current,
         )
         .is_none()
     );
@@ -73,7 +73,7 @@ fn stale_durable_event_is_delivered_without_pane_dispatch() {
             target: stale,
             event: Box::new(AppEvent::Exit(ExitMode::ShutdownFirst)),
         },
-        Some(current),
+        |origin| origin == current,
     )
     .expect("durable event should be delivered");
 

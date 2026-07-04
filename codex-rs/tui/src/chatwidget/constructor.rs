@@ -3,8 +3,13 @@
 use super::*;
 
 impl ChatWidget {
-    pub(crate) fn new_with_app_event(mut common: ChatWidgetInit) -> Self {
-        common.app_event_tx = common.app_event_tx.scoped_to_conversation(PaneSlot::Parent);
+    pub(crate) fn new_with_app_event(common: ChatWidgetInit) -> Self {
+        Self::new_with_app_event_for_pane(common, PaneSlot::Parent)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn new_with_app_event_for_pane(mut common: ChatWidgetInit, pane: PaneSlot) -> Self {
+        common.app_event_tx = common.app_event_tx.scoped_to_conversation(pane);
         Self::new_with_op_target(common, CodexOpTarget::AppEvent)
     }
 

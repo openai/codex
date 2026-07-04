@@ -10,6 +10,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
+use crate::app_event::PaneSlot;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::PluginLocation;
 use crate::app_event::PluginRemoteSectionError;
@@ -1173,22 +1174,16 @@ See the Codex keymap documentation for supported actions and examples."
                             Err(err) => break Err(err),
                         }
                     }
-                    active = async {
-                        if let Some(rx) = app.chat_widget.active_thread_rx.as_mut() {
-                            rx.recv().await
-                        } else {
-                            None
-                        }
-                    }, if App::should_handle_active_thread_events(
+                    (pane, active) = app.chat_widget.recv_thread_event(), if App::should_handle_active_thread_events(
                         waiting_for_initial_session_configured,
-                        app.chat_widget.active_thread_rx.is_some()
+                        app.chat_widget.has_thread_event_receiver()
                     ) => {
                         if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {
+                            if let Err(err) = app.handle_pane_thread_event(tui, &mut app_server, pane, event).await {
                                 break Err(err);
                             }
                         } else {
-                            app.clear_active_thread().await;
+                            app.clear_pane_thread(pane).await;
                         }
                         AppRunControl::Continue
                     }

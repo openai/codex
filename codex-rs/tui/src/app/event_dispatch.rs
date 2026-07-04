@@ -20,14 +20,18 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
-        let Some((conversation_origin, event)) =
-            normalize_conversation_event(event, self.chat_widget.conversation_origin())
-        else {
+        let Some((conversation_origin, event)) = normalize_conversation_event(event, |origin| {
+            self.chat_widget.by_origin(origin).is_some()
+        }) else {
             tracing::debug!("dropping event from retired conversation");
             return Ok(AppRunControl::Continue);
         };
 
         let previous_sender = if let Some(origin) = conversation_origin {
+            if !self.chat_widget.dispatch_to(origin) {
+                tracing::debug!(?origin, "dropping event from unavailable conversation pane");
+                return Ok(AppRunControl::Continue);
+            }
             let sender = self.chat_widget.conversation_event_sender();
             debug_assert_eq!(sender.conversation_origin(), Some(origin));
             Some(std::mem::replace(&mut self.app_event_tx, sender))
@@ -37,6 +41,9 @@ impl App {
         let result = self.handle_event_inner(tui, app_server, event).await;
         if let Some(previous_sender) = previous_sender {
             self.app_event_tx = previous_sender;
+        }
+        if let Some(origin) = conversation_origin {
+            debug_assert!(self.chat_widget.finish_dispatch(origin));
         }
         result
     }

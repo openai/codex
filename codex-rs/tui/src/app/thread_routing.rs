@@ -839,7 +839,7 @@ impl App {
 
         let mut pending_thread_ids = Vec::new();
         for (thread_id, store) in channels {
-            if Some(thread_id) == self.chat_widget.active_thread_id
+            if self.chat_widget.contains_thread(thread_id)
                 || Some(thread_id) == side_parent_thread_id
             {
                 continue;
@@ -1020,7 +1020,7 @@ impl App {
         thread_id: ThreadId,
         request: ServerRequest,
     ) -> Result<()> {
-        let inactive_interactive_request = if self.chat_widget.active_thread_id != Some(thread_id) {
+        let inactive_interactive_request = if !self.chat_widget.contains_thread(thread_id) {
             self.interactive_request_for_thread_request(thread_id, &request)
                 .await?
         } else {
@@ -1507,6 +1507,52 @@ impl App {
                 self.handle_feedback_thread_event(event);
             }
         }
+    }
+
+    pub(super) async fn clear_pane_thread(&mut self, pane: PaneSlot) {
+        let Some(active_thread_id) = self
+            .chat_widget
+            .by_slot(pane)
+            .and_then(|pane| pane.active_thread_id)
+        else {
+            if let Some(pane) = self.chat_widget.by_slot_mut(pane) {
+                pane.clear_thread();
+            }
+            return;
+        };
+        self.set_thread_active(active_thread_id, /*active*/ false)
+            .await;
+        if let Some(pane) = self.chat_widget.by_slot_mut(pane) {
+            pane.clear_thread();
+        }
+        self.refresh_pending_thread_approvals().await;
+    }
+
+    pub(super) async fn handle_pane_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        pane: PaneSlot,
+        event: ThreadBufferedEvent,
+    ) -> Result<()> {
+        let Some(origin) = self
+            .chat_widget
+            .by_slot(pane)
+            .and_then(|pane| pane.origin())
+        else {
+            return Ok(());
+        };
+        if !self.chat_widget.dispatch_to(origin) {
+            return Ok(());
+        }
+        let sender = self.chat_widget.conversation_event_sender();
+        let previous_sender = std::mem::replace(&mut self.app_event_tx, sender);
+        let result = self
+            .handle_active_thread_event(tui, app_server, event)
+            .await;
+        self.app_event_tx = previous_sender;
+        debug_assert!(self.chat_widget.finish_dispatch(origin));
+        result
     }
 
     /// Handles an event emitted by the currently active thread.

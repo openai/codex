@@ -9,10 +9,10 @@ use crate::app_event::ConversationOrigin;
 
 pub(super) fn normalize_conversation_event(
     event: AppEvent,
-    current_origin: Option<ConversationOrigin>,
+    is_live_origin: impl FnOnce(ConversationOrigin) -> bool,
 ) -> Option<(Option<ConversationOrigin>, AppEvent)> {
     match event {
-        AppEvent::FromConversation { target, event } if current_origin == Some(target) => {
+        AppEvent::FromConversation { target, event } if is_live_origin(target) => {
             Some((Some(target), *event))
         }
         AppEvent::FromConversation { event, .. } if survives_conversation_retirement(&event) => {
