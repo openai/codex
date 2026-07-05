@@ -297,13 +297,16 @@ async fn forward_events(
                     Err(_) => break,
                 };
                 match event {
+                    // These describe the delegate's private session. Re-emitting them through the
+                    // parent context would make parent clients treat child bootstrap state as their
+                    // own, and a cancelled delegate may never produce the matching terminal event.
                     Event {
                         id: _,
-                        msg: EventMsg::TokenCount(_),
-                    } => {}
-                    Event {
-                        id: _,
-                        msg: EventMsg::SessionConfigured(_),
+                        msg:
+                            EventMsg::TokenCount(_)
+                            | EventMsg::SessionConfigured(_)
+                            | EventMsg::McpStartupUpdate(_)
+                            | EventMsg::McpStartupComplete(_),
                     } => {}
                     Event {
                         id,

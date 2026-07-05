@@ -14,6 +14,9 @@ use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnAbortReason;
@@ -110,6 +113,75 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         ops.iter().any(|op| matches!(op, Op::Shutdown)),
         "expected Shutdown op after cancellation"
     );
+}
+
+#[tokio::test]
+async fn forward_events_keeps_delegate_mcp_startup_internal() {
+    let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (tx_sub, _rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (session, ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events,
+        agent_status,
+        session: Arc::clone(&session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+    let (tx_out, rx_out) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let cancel = CancellationToken::new();
+    let forward = tokio::spawn(forward_events(
+        codex,
+        tx_out,
+        session,
+        ctx,
+        Arc::new(Mutex::new(HashMap::new())),
+        cancel,
+    ));
+
+    tx_events
+        .send(Event {
+            id: "delegate-startup".to_string(),
+            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                server: "pending".to_string(),
+                status: McpStartupStatus::Starting,
+            }),
+        })
+        .await
+        .unwrap();
+    tx_events
+        .send(Event {
+            id: "delegate-startup".to_string(),
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent::default()),
+        })
+        .await
+        .unwrap();
+    tx_events
+        .send(Event {
+            id: "visible".to_string(),
+            msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+                item: ResponseItem::CustomToolCall {
+                    id: None,
+                    status: None,
+                    call_id: "call-1".to_string(),
+                    name: "tool".to_string(),
+                    namespace: None,
+                    input: "{}".to_string(),
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            }),
+        })
+        .await
+        .unwrap();
+    drop(tx_events);
+
+    let forwarded = timeout(Duration::from_secs(1), rx_out.recv())
+        .await
+        .expect("forward_events hung")
+        .expect("visible delegate event missing");
+    assert_eq!(forwarded.id, "visible");
+    assert!(rx_out.try_recv().is_err());
+    forward.await.expect("forward_events join error");
 }
 
 #[tokio::test]
