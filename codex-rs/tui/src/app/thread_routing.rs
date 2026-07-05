@@ -1465,9 +1465,17 @@ impl App {
         );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
+                let starts_turn = matches!(&notification, ServerNotification::TurnStarted(_));
+                let updates_mcp_startup =
+                    matches!(&notification, ServerNotification::McpServerStatusUpdated(_));
                 self.cache_collab_receiver_threads_for_notification(&notification);
                 self.chat_widget
                     .handle_server_notification(notification, /*replay_kind*/ None);
+                if self.startup_draft_protected && starts_turn {
+                    self.startup_draft_protected = false;
+                } else if self.startup_draft_protected && updates_mcp_startup {
+                    self.clear_startup_draft_protection_if_mcp_settled();
+                }
             }
             ThreadBufferedEvent::Request(request) => {
                 if self

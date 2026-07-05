@@ -174,7 +174,7 @@ async fn startup_thread_started_submits_queued_startup_input() {
 
     app.chat_widget
         .set_mcp_startup_expected_servers(["test".to_string()]);
-    app.chat_widget.handle_server_notification(
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some(thread_id.to_string()),
             name: "test".to_string(),
@@ -182,11 +182,10 @@ async fn startup_thread_started_submits_queued_startup_input() {
             error: None,
             failure_reason: None,
         }),
-        /*replay_kind*/ None,
-    );
+    ));
     assert!(app.startup_draft_blocks_key(enter));
 
-    app.chat_widget.handle_server_notification(
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some(thread_id.to_string()),
             name: "test".to_string(),
@@ -194,8 +193,19 @@ async fn startup_thread_started_submits_queued_startup_input() {
             error: None,
             failure_reason: None,
         }),
-        /*replay_kind*/ None,
-    );
+    ));
+    assert!(!app.startup_draft_blocks_key(enter));
+    assert!(!app.startup_draft_protected);
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some(thread_id.to_string()),
+            name: "test".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+            failure_reason: None,
+        }),
+    ));
     assert!(!app.startup_draft_blocks_key(enter));
 
     match next_user_turn_op(&mut op_rx) {

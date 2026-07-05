@@ -286,6 +286,12 @@ impl App {
             )
     }
 
+    pub(super) fn clear_startup_draft_protection_if_mcp_settled(&mut self) {
+        if !self.chat_widget.mcp_startup_active() {
+            self.startup_draft_protected = false;
+        }
+    }
+
     pub(super) fn reject_side_backtrack_esc(&mut self) {
         self.reset_backtrack_state();
         self.chat_widget
