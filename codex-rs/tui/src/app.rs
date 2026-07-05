@@ -1116,13 +1116,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         if allow_startup_text && let Some(startup_text) = tui.take_startup_text()? {
-            let expected_mcp_servers = app
-                .config
-                .mcp_servers
-                .get()
-                .iter()
-                .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
-                .collect::<Vec<_>>();
+            let expected_mcp_servers = app.expected_mcp_startup_servers();
             app.chat_widget
                 .restore_startup_draft(&startup_text, expected_mcp_servers);
         }

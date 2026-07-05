@@ -16,14 +16,20 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 
 impl App {
-    pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
-        let enabled_config_mcp_servers: Vec<String> = self
-            .config
+    pub(super) fn expected_mcp_startup_servers(&self) -> Vec<String> {
+        if self.app_server_target.uses_remote_workspace() {
+            return Vec::new();
+        }
+        self.config
             .mcp_servers
             .get()
             .iter()
             .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
-            .collect();
+            .collect()
+    }
+
+    pub(super) fn refresh_mcp_startup_expected_servers(&mut self) {
+        let enabled_config_mcp_servers = self.expected_mcp_startup_servers();
         self.chat_widget
             .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
     }
@@ -39,7 +45,7 @@ impl App {
                     skipped,
                     "app-server event consumer lagged; dropping ignored events"
                 );
-                self.refresh_mcp_startup_expected_servers_from_config();
+                self.refresh_mcp_startup_expected_servers();
                 self.chat_widget.finish_mcp_startup_after_lag();
             }
             AppServerEvent::ServerNotification(notification) => {
@@ -73,7 +79,7 @@ impl App {
                 }
             }
             ServerNotification::McpServerStatusUpdated(_) => {
-                self.refresh_mcp_startup_expected_servers_from_config();
+                self.refresh_mcp_startup_expected_servers();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget
