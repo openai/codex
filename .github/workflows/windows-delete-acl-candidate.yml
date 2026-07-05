@@ -1,0 +1,81 @@
+name: windows-delete-acl-candidate
+
+on:
+  push:
+    branches:
+      - codex/windows-delete-acl-candidate
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build-and-test:
+    name: Test and build Windows x64 candidate
+    runs-on:
+      group: ${{ github.event.repository.name }}-runners
+      labels: ${{ github.event.repository.name }}-windows-x64
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Configure LLVM linker
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ env.TARGET }}
+
+      - name: Run focused delete-rights regression
+        shell: bash
+        run: >-
+          cargo test
+          --target "$TARGET"
+          -p codex-windows-sandbox
+          legacy_workspace_write_delete_is_limited_to_writable_roots
+          -- --nocapture
+
+      - name: Run Windows sandbox crate tests
+        shell: bash
+        run: cargo test --target "$TARGET" -p codex-windows-sandbox
+
+      - name: Build Codex candidate
+        shell: bash
+        run: cargo build --target "$TARGET" --release --bin codex
+
+      - name: Stage candidate and provenance
+        shell: powershell
+        run: |
+          $release = "target/$env:TARGET/release"
+          $candidate = "$release/candidate"
+          New-Item -ItemType Directory -Force -Path $candidate | Out-Null
+          Copy-Item "$release/codex.exe" "$candidate/codex.exe"
+          $hash = (Get-FileHash "$candidate/codex.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item "$candidate/codex.exe").Length
+          "$hash  codex.exe" | Set-Content -NoNewline "$candidate/SHA256SUMS.txt"
+          "${{ github.sha }}" | Set-Content -NoNewline "$candidate/source-sha.txt"
+          @{
+            source_sha = "${{ github.sha }}"
+            target = $env:TARGET
+            codex_sha256 = $hash
+            codex_size = $size
+          } | ConvertTo-Json | Set-Content "$candidate/candidate.json"
+
+      - name: Upload candidate
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-windows-x64-candidate-${{ github.sha }}
+          path: codex-rs/target/${{ env.TARGET }}/release/candidate/*
+          if-no-files-found: error
+          retention-days: 30
