@@ -21,6 +21,7 @@ use ratatui::widgets::Widget;
 use super::*;
 use crate::AltScreenBehavior;
 use crate::key_hint::is_plain_text_key_event;
+use crate::tui::MousePrimaryPressEvent;
 use crate::tui::MouseScrollEvent;
 
 const MIN_SPLIT_PANE_WIDTH: u16 = 41;
@@ -31,6 +32,7 @@ const PANE_HEADER_HEIGHT: u16 = 1;
 pub(super) struct OwnedScreen {
     viewport: ConversationViewport,
     replay_in_progress: bool,
+    last_pane_area: Rect,
     last_conversation_area: Rect,
 }
 
@@ -101,6 +103,7 @@ impl OwnedScreen {
                 keymap,
             ),
             replay_in_progress: false,
+            last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
         }
     }
@@ -177,7 +180,8 @@ impl OwnedScreen {
         true
     }
 
-    fn clear_last_conversation_area(&mut self) {
+    fn clear_last_render_areas(&mut self) {
+        self.last_pane_area = Rect::default();
         self.last_conversation_area = Rect::default();
     }
 }
@@ -251,6 +255,7 @@ fn render_pane(
     let pane = panes.by_slot_mut(slot)?;
     pane.chat_widget.update_owned_screen_width(body_area.width);
     let screen = pane.owned_screen.as_mut()?;
+    screen.last_pane_area = area;
     Some(screen.render(&pane.chat_widget, body_area, buffer))
 }
 
@@ -266,7 +271,7 @@ fn render_layout(
             .by_slot_mut(slot)
             .and_then(|pane| pane.owned_screen.as_mut())
         {
-            screen.clear_last_conversation_area();
+            screen.clear_last_render_areas();
         }
     }
 
@@ -390,6 +395,36 @@ impl App {
             }
         }
         false
+    }
+
+    pub(super) fn handle_owned_screen_mouse_primary_press(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: MousePrimaryPressEvent,
+    ) -> bool {
+        if !self.chat_widget.has_side() {
+            return false;
+        }
+
+        let position = Position::new(event.column, event.row);
+        let target = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
+            self.chat_widget
+                .by_slot(*slot)
+                .and_then(|pane| pane.owned_screen.as_ref())
+                .is_some_and(|screen| screen.last_pane_area.contains(position))
+        });
+        let Some(target) = target else {
+            return false;
+        };
+        let focus_changed = self.chat_widget.focused_slot() != target;
+        let backtrack_was_primed = self.backtrack.primed;
+        if !self.focus_conversation_pane(target) {
+            return false;
+        }
+        if focus_changed || backtrack_was_primed {
+            tui.frame_requester().schedule_frame();
+        }
+        true
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {

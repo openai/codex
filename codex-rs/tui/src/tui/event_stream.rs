@@ -34,6 +34,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
+use super::MousePrimaryPressEvent;
 use super::MouseScrollDirection;
 use super::MouseScrollEvent;
 use super::TuiEvent;
@@ -179,11 +180,11 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
 
     /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
     ///
-    /// This skips events we don't use (mouse clicks, focus loss, etc.) and keeps polling until it yields
+    /// This skips events we don't use (mouse movement, focus loss, etc.) and keeps polling until it yields
     /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
     /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        // Some crossterm events map to None (e.g. FocusLost, mouse clicks); loop so we keep polling
+        // Some crossterm events map to None (e.g. FocusLost, mouse movement); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
         for _ in 0..MAX_SKIPPED_EVENTS_PER_POLL {
             let poll_result = {
@@ -264,23 +265,30 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             }
             Event::Resize(_, _) => Some(TuiEvent::Resize),
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
-            Event::Mouse(mouse_event) => {
-                let direction = match mouse_event.kind {
-                    MouseEventKind::ScrollUp => MouseScrollDirection::Up,
-                    MouseEventKind::ScrollDown => MouseScrollDirection::Down,
-                    MouseEventKind::Down(_)
-                    | MouseEventKind::Up(_)
-                    | MouseEventKind::Drag(_)
-                    | MouseEventKind::Moved
-                    | MouseEventKind::ScrollLeft
-                    | MouseEventKind::ScrollRight => return None,
-                };
-                Some(TuiEvent::MouseScroll(MouseScrollEvent {
-                    direction,
+            Event::Mouse(mouse_event) => match mouse_event.kind {
+                MouseEventKind::ScrollUp => Some(TuiEvent::MouseScroll(MouseScrollEvent {
+                    direction: MouseScrollDirection::Up,
                     column: mouse_event.column,
                     row: mouse_event.row,
-                }))
-            }
+                })),
+                MouseEventKind::ScrollDown => Some(TuiEvent::MouseScroll(MouseScrollEvent {
+                    direction: MouseScrollDirection::Down,
+                    column: mouse_event.column,
+                    row: mouse_event.row,
+                })),
+                MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                    Some(TuiEvent::MousePrimaryPress(MousePrimaryPressEvent {
+                        column: mouse_event.column,
+                        row: mouse_event.row,
+                    }))
+                }
+                MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::Moved
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => None,
+            },
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
                 crate::terminal_palette::requery_default_colors();
@@ -499,14 +507,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn primary_mouse_press_maps_to_event() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        })));
+
+        assert!(matches!(
+            stream.next().await,
+            Some(TuiEvent::MousePrimaryPress(MousePrimaryPressEvent {
+                column: 3,
+                row: 4,
+            }))
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn vertical_mouse_wheel_maps_to_scroll_and_ignored_events_yield_to_draws() {
         let (broker, handle, draw_tx, draw_rx, terminal_focused) = setup();
         let mut stream = make_stream(broker, draw_rx, terminal_focused);
         stream.poll_draw_first = false;
 
         handle.send(Ok(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Down(MouseButton::Right),
             column: 3,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 3,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 4,
             row: 4,
             modifiers: KeyModifiers::NONE,
         })));

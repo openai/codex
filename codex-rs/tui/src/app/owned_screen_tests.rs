@@ -17,6 +17,7 @@ use crate::chatwidget::tests::constructor::make_chatwidget_for_pane;
 use crate::chatwidget::tests::constructor::make_chatwidget_for_pane_with_sender;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 use crate::file_search::FileSearchManager;
+use crate::tui::MousePrimaryPressEvent;
 use crate::tui::MouseScrollDirection;
 use crate::tui::MouseScrollEvent;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -363,6 +364,60 @@ async fn renders_closed_parent_read_only_while_side_remains_focused() {
 }
 
 #[tokio::test]
+async fn primary_press_focuses_closed_parent_without_enabling_input() {
+    let mut app = app_with_owned_side().await;
+    seed_pane(&mut app, PaneSlot::Parent, "", &["parent transcript"]);
+    seed_pane(&mut app, PaneSlot::Side, "side draft", &["side transcript"]);
+    app.chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .expect("parent pane")
+        .mark_thread_closed();
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    let _terminal = render_app(&mut app, /*width*/ 83, /*height*/ 12);
+
+    let parent_area = app
+        .chat_widget
+        .by_slot(PaneSlot::Parent)
+        .and_then(|pane| pane.owned_screen.as_ref())
+        .expect("parent screen")
+        .last_pane_area;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: parent_area.x,
+            row: parent_area.y,
+        },
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    let mut rendered_cursor = None;
+    let mut terminal =
+        Terminal::new(TestBackend::new(/*width*/ 83, /*height*/ 12)).expect("create terminal");
+    terminal
+        .draw(|frame| {
+            rendered_cursor = Some(
+                render_layout(
+                    &mut app.chat_widget,
+                    OwnedScreenLayout::new(frame.area(), /*has_side*/ true, PaneSlot::Parent),
+                    PaneSlot::Parent,
+                    frame.buffer_mut(),
+                )
+                .expect("render closed parent")
+                .cursor,
+            );
+        })
+        .expect("render owned panes");
+    assert_eq!(rendered_cursor, Some(None));
+    assert_eq!(
+        app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .expect("side pane")
+            .composer_text_with_pending(),
+        "side draft"
+    );
+}
+
+#[tokio::test]
 async fn narrow_layout_renders_only_the_focused_side() {
     let mut app = app_with_owned_side().await;
     seed_pane(
@@ -372,6 +427,7 @@ async fn narrow_layout_renders_only_the_focused_side() {
         &["PARENT MUST BE HIDDEN"],
     );
     seed_pane(&mut app, PaneSlot::Side, "side draft", &["side transcript"]);
+    let _wide = render_app(&mut app, /*width*/ 83, /*height*/ 14);
     assert!(app.chat_widget.focus(PaneSlot::Side));
 
     let terminal = render_app(&mut app, /*width*/ 82, /*height*/ 14);
@@ -381,9 +437,16 @@ async fn narrow_layout_renders_only_the_focused_side() {
         app.chat_widget
             .by_slot(PaneSlot::Parent)
             .and_then(|pane| pane.owned_screen.as_ref())
-            .map(|screen| screen.last_conversation_area),
-        Some(Rect::default())
+            .map(|screen| (screen.last_pane_area, screen.last_conversation_area)),
+        Some((Rect::default(), Rect::default()))
     );
+
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent { column: 2, row: 2 },
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
 }
 
 #[tokio::test]
@@ -400,6 +463,259 @@ async fn terminal_cursor_tracks_only_the_focused_pane() {
     terminal = render_app(&mut app, /*width*/ 83, /*height*/ 8);
     let side_cursor = terminal.get_cursor_position().expect("side cursor");
     assert!(side_cursor.x > 41);
+}
+
+#[tokio::test]
+async fn primary_press_focuses_visible_pane_regions() {
+    let mut app = app_with_owned_side().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "parent draft",
+        &["parent transcript"],
+    );
+    seed_pane(&mut app, PaneSlot::Side, "side draft", &["side transcript"]);
+    let _terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    let (parent_area, parent_conversation_area, side_area, side_conversation_area) = {
+        let parent = app
+            .chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent screen");
+        let side = app
+            .chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side screen");
+        (
+            parent.last_pane_area,
+            parent.last_conversation_area,
+            side.last_pane_area,
+            side.last_conversation_area,
+        )
+    };
+    let region_pairs = [
+        ((parent_area.x, parent_area.y), (side_area.x, side_area.y)),
+        (
+            (parent_conversation_area.x, parent_conversation_area.y),
+            (side_conversation_area.x, side_conversation_area.y),
+        ),
+        (
+            (parent_area.x, parent_conversation_area.bottom()),
+            (side_area.x, side_conversation_area.bottom()),
+        ),
+        (
+            (parent_area.x, parent_area.bottom() - 1),
+            (side_area.x, side_area.bottom() - 1),
+        ),
+    ];
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    for (parent_position, side_position) in region_pairs {
+        app.backtrack.primed = true;
+        assert!(app.handle_owned_screen_mouse_primary_press(
+            &mut tui,
+            MousePrimaryPressEvent {
+                column: side_position.0,
+                row: side_position.1,
+            },
+        ));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+        assert!(!app.backtrack.primed);
+        assert!(app.handle_owned_screen_mouse_primary_press(
+            &mut tui,
+            MousePrimaryPressEvent {
+                column: parent_position.0,
+                row: parent_position.1,
+            },
+        ));
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+    }
+
+    app.backtrack.primed = true;
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: parent_area.x,
+            row: parent_area.y,
+        },
+    ));
+    assert!(!app.backtrack.primed);
+    assert!(!app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: parent_area.right(),
+            row: parent_area.y,
+        },
+    ));
+    assert!(!app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: side_area.right(),
+            row: side_area.y,
+        },
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+}
+
+#[tokio::test]
+async fn primary_press_preserves_pane_drafts_and_cursors() {
+    let mut app = app_with_owned_side().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "parent draft",
+        &["parent transcript"],
+    );
+    seed_pane(&mut app, PaneSlot::Side, "side draft", &["side transcript"]);
+    for (slot, cursor_moves) in [(PaneSlot::Parent, 1), (PaneSlot::Side, 2)] {
+        for _ in 0..cursor_moves {
+            app.chat_widget
+                .by_slot_mut(slot)
+                .expect("installed pane")
+                .handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        }
+    }
+
+    let mut parent_terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    let parent_cursor = parent_terminal
+        .get_cursor_position()
+        .expect("parent cursor");
+    let (parent_area, parent_conversation_area, side_area, side_conversation_area) = {
+        let parent = app
+            .chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent screen");
+        let side = app
+            .chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side screen");
+        (
+            parent.last_pane_area,
+            parent.last_conversation_area,
+            side.last_pane_area,
+            side.last_conversation_area,
+        )
+    };
+    assert!(app.chat_widget.focus(PaneSlot::Side));
+    let mut side_terminal_before_click =
+        render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    let side_cursor_before_click = side_terminal_before_click
+        .get_cursor_position()
+        .expect("side cursor before click");
+    assert!(app.chat_widget.focus(PaneSlot::Parent));
+    let _parent_terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: side_area.x,
+            row: side_conversation_area.bottom(),
+        },
+    ));
+    let mut side_terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    let side_cursor = side_terminal.get_cursor_position().expect("side cursor");
+    assert_eq!(side_cursor, side_cursor_before_click);
+    assert_snapshot!(
+        "owned_screen_wide_split_side_focused_by_click",
+        side_terminal.backend()
+    );
+    let buffer = side_terminal.backend().buffer();
+    assert!(
+        buffer[(parent_area.x + 1, parent_area.y)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    assert!(
+        buffer[(side_area.x + 1, side_area.y)]
+            .style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert_eq!(
+        (
+            app.chat_widget
+                .by_slot(PaneSlot::Parent)
+                .expect("parent pane")
+                .composer_text_with_pending(),
+            app.chat_widget
+                .by_slot(PaneSlot::Side)
+                .expect("side pane")
+                .composer_text_with_pending(),
+        ),
+        ("parent draft".to_string(), "side draft".to_string())
+    );
+
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: parent_area.x,
+            row: parent_conversation_area.bottom(),
+        },
+    ));
+    let mut parent_terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    assert_eq!(
+        parent_terminal
+            .get_cursor_position()
+            .expect("restored parent cursor"),
+        parent_cursor
+    );
+    assert!(app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: side_area.x,
+            row: side_conversation_area.bottom(),
+        },
+    ));
+    let mut side_terminal = render_app(&mut app, /*width*/ 83, /*height*/ 16);
+    assert_eq!(
+        side_terminal
+            .get_cursor_position()
+            .expect("restored side cursor"),
+        side_cursor
+    );
+}
+
+#[tokio::test]
+async fn primary_press_does_not_switch_behind_overlay_or_popup() {
+    let mut app = app_with_owned_side().await;
+    let _terminal = render_app(&mut app, /*width*/ 83, /*height*/ 12);
+    let side_area = app
+        .chat_widget
+        .by_slot(PaneSlot::Side)
+        .and_then(|pane| pane.owned_screen.as_ref())
+        .expect("side screen")
+        .last_pane_area;
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    app.overlay = Some(Overlay::new_transcript(
+        Vec::new(),
+        app.keymap.pager.clone(),
+    ));
+    assert!(!app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: side_area.x,
+            row: side_area.y,
+        },
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
+
+    app.overlay = None;
+    let keymap = app.keymap.clone();
+    app.chat_widget.open_keymap_debug(&keymap);
+    assert!(!app.handle_owned_screen_mouse_primary_press(
+        &mut tui,
+        MousePrimaryPressEvent {
+            column: side_area.x,
+            row: side_area.y,
+        },
+    ));
+    assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
 }
 
 #[tokio::test]

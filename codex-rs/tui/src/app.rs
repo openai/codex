@@ -1303,6 +1303,9 @@ See the Codex keymap documentation for supported actions and examples."
                         .await;
                     }
                 }
+                TuiEvent::MousePrimaryPress(event) => {
+                    self.handle_owned_screen_mouse_primary_press(tui, event);
+                }
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.rebuild_transcript_after_backtrack(tui)?;

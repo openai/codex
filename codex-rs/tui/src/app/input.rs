@@ -102,9 +102,6 @@ impl App {
         key_event: KeyEvent,
     ) {
         if self.handle_conversation_pane_focus_key(key_event) {
-            if self.backtrack.primed {
-                self.reset_backtrack_state();
-            }
             tui.frame_requester().schedule_frame();
             return;
         }
@@ -276,11 +273,24 @@ impl App {
         };
     }
 
-    fn handle_conversation_pane_focus_key(&mut self, key_event: KeyEvent) -> bool {
+    pub(super) fn focus_conversation_pane(&mut self, target: PaneSlot) -> bool {
         if self.overlay.is_some()
-            || self.chat_widget.by_slot(PaneSlot::Side).is_none()
             || !self.chat_widget.no_modal_or_popup_active()
+            || self.chat_widget.by_slot(target).is_none()
         {
+            return false;
+        }
+        if self.backtrack.primed {
+            self.reset_backtrack_state();
+        }
+        if self.chat_widget.focused_slot() == target {
+            return true;
+        }
+        self.chat_widget.focus(target)
+    }
+
+    fn handle_conversation_pane_focus_key(&mut self, key_event: KeyEvent) -> bool {
+        if self.chat_widget.by_slot(PaneSlot::Side).is_none() {
             return false;
         }
 
@@ -299,7 +309,7 @@ impl App {
         } else {
             return false;
         };
-        self.chat_widget.focus(target)
+        self.focus_conversation_pane(target)
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
@@ -393,6 +403,22 @@ mod tests {
                 .composer_text_with_pending(),
             "side draft"
         );
+    }
+
+    #[tokio::test]
+    async fn pane_focus_key_clears_primed_backtrack_before_switching() {
+        let mut app = make_test_app().await;
+        install_side_pane(&mut app).await;
+        app.backtrack.primed = true;
+        app.chat_widget.show_esc_backtrack_hint();
+
+        assert!(app.handle_conversation_pane_focus_key(KeyEvent::new(
+            KeyCode::Char('2'),
+            KeyModifiers::ALT,
+        )));
+
+        assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Side);
+        assert!(!app.backtrack.primed);
     }
 
     #[cfg(target_os = "macos")]
