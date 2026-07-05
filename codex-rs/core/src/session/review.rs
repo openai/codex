@@ -44,7 +44,7 @@ pub(super) async fn spawn_review_thread(
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
-    per_turn_config.features = review_features.clone();
+    per_turn_config.features = review_features;
     per_turn_config.permissions.shell_environment_policy = parent_turn_context
         .config
         .permissions
@@ -117,6 +117,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        mcp_access: parent_turn_context.mcp_access,
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
         environments: parent_turn_context.environments.clone(),

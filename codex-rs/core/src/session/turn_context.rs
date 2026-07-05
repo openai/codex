@@ -111,6 +111,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) mcp_access: McpAccess,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
     pub(crate) environments: TurnEnvironmentSnapshot,
@@ -148,7 +149,20 @@ enum TurnMultiAgentRuntime {
     Preview,
 }
 
+/// Controls whether a session may initialize and expose MCP-backed capabilities.
+///
+/// The policy is chosen when the session is spawned and remains fixed for the session lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum McpAccess {
+    Enabled,
+    Disabled,
+}
+
 impl TurnContext {
+    pub(crate) fn mcp_access(&self) -> McpAccess {
+        self.mcp_access
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
@@ -199,9 +213,11 @@ impl TurnContext {
             .auth_manager
             .as_deref()
             .is_some_and(AuthManager::current_auth_uses_codex_backend);
-        self.config
-            .features
-            .apps_enabled_for_auth(uses_codex_backend)
+        self.mcp_access() == McpAccess::Enabled
+            && self
+                .config
+                .features
+                .apps_enabled_for_auth(uses_codex_backend)
             && self.config.orchestrator_mcp_enabled
     }
 
@@ -262,6 +278,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            mcp_access: self.mcp_access,
             parent_thread_id: self.parent_thread_id,
             originator: self.originator.clone(),
             environments: self.environments.clone(),
@@ -472,6 +489,7 @@ impl Session {
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
+        mcp_access: McpAccess,
         multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
         shell_zsh_path: Option<&PathBuf>,
@@ -540,6 +558,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            mcp_access,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
             environments,
@@ -741,6 +760,7 @@ impl Session {
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
+            self.mcp_access,
             multi_agent_version,
             self.services.user_shell.as_ref(),
             self.services.shell_zsh_path.as_ref(),

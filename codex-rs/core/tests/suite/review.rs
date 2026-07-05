@@ -1,8 +1,12 @@
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
+use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
@@ -17,22 +21,34 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_remote;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
+use tokio::time::timeout;
 use uuid::Uuid;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 /// Verify that submitting `Op::Review` spawns a child task and emits
 /// EnteredReviewMode -> ExitedReviewMode(None) -> TurnComplete
@@ -248,6 +264,512 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
     let _codex_home_guard = codex_home;
     server.verify().await;
+}
+
+async fn submit_custom_review(codex: &CodexThread, instructions: &str) -> anyhow::Result<()> {
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: instructions.to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await?;
+    Ok(())
+}
+
+fn pinned_apps_builder(codex_home: Arc<TempDir>, apps_base_url: String) -> TestCodexBuilder {
+    test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[features]
+apps = true
+"#,
+            ),
+        )
+        .with_config(move |config| config.chatgpt_base_url = apps_base_url)
+}
+
+fn pinned_apps_with_tool_suggest_builder(
+    codex_home: Arc<TempDir>,
+    apps_base_url: String,
+) -> TestCodexBuilder {
+    pinned_apps_builder(codex_home, apps_base_url).with_config(|config| {
+        for feature in [
+            Feature::Plugins,
+            Feature::RemotePlugin,
+            Feature::ToolSuggest,
+        ] {
+            config
+                .features
+                .enable(feature)
+                .expect("test config should allow feature update");
+        }
+    })
+}
+
+async fn mount_suggested_plugin(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/suggested"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "enabled": true,
+            "plugins": [{
+                "id": "plugin_github",
+                "name": "github",
+                "status": "ENABLED",
+                "installation_policy": "AVAILABLE",
+                "release": {"display_name": "GitHub"}
+            }]
+        })))
+        .mount(server)
+        .await;
+}
+
+fn write_enabled_test_plugin(codex_home: &TempDir) -> anyhow::Result<PathBuf> {
+    let plugin_root = codex_home.path().join("plugins/cache/test/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )?;
+    Ok(plugin_root)
+}
+
+fn write_test_plugin_mcp(plugin_root: &std::path::Path, server_url: &str) -> anyhow::Result<()> {
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        format!(r#"{{"mcpServers":{{"sample":{{"type":"http","url":"{server_url}/mcp"}}}}}}"#),
+    )?;
+    Ok(())
+}
+
+async fn mount_pending_mcp_server(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+        .mount(server)
+        .await;
+}
+
+async fn wait_for_pending_mcp_request(server: &MockServer) -> anyhow::Result<usize> {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let request_count = server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|request| request.method.as_str() == "POST" && request.url.path() == "/mcp")
+                .count();
+            if request_count > 0 {
+                return request_count;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("MCP server did not receive a startup request"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_exposes_mcp_tools_when_parent_mcp_is_ready() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let unavailable_mcp_server = MockServer::start().await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    std::fs::write(
+        plugin_root.join(".mcp.json"),
+        format!(
+            r#"{{"mcpServers":{{
+                "sample":{{"type":"http","url":"{}/api/codex/apps"}},
+                "unavailable":{{"type":"http","url":"{}/mcp"}}
+            }}}}"#,
+            apps_server.chatgpt_base_url,
+            unavailable_mcp_server.uri()
+        ),
+    )?;
+    let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url.clone())
+        .with_home(codex_home)
+        .with_model_info_override("gpt-5.4", |model| {
+            model.supports_search_tool = false;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+    let request_log = responses::mount_sse_once(&server, responses::sse(completed_sse())).await;
+
+    submit_custom_review(&test.codex, "Review with ready MCP tools").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = request_log.single_request();
+    assert!(request.body_contains_text("list_mcp_resources"));
+    assert!(
+        request
+            .tool_by_name("mcp__sample", "calendar_create_event")
+            .is_some(),
+        "review request should expose the ready MCP tool: {:?}",
+        request.body_json()["tools"]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_preserves_plugin_pre_tool_use_hooks() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_remote!(
+        Ok(()),
+        "plugin hook fixture only exists in the host Codex home"
+    );
+
+    let server = start_mock_server().await;
+    let call_id = "review-plugin-pretooluse";
+    let file_name = "review_plugin_hook_apply_patch.txt";
+    let patch = format!(
+        r#"*** Begin Patch
+*** Add File: {file_name}
++blocked
+*** End Patch"#
+    );
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_apply_patch_custom_tool_call(call_id, &patch),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-1", "plugin hook blocked it"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    let hooks_dir = plugin_root.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+
+    let hook_script = hooks_dir.join("pre_tool_use_hook.py");
+    std::fs::write(
+        &hook_script,
+        r#"import json
+import sys
+
+json.load(sys.stdin)
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "blocked by plugin hook"
+    }
+}))
+"#,
+    )?;
+    let plugin_hooks_json = r#"{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "^apply_patch$",
+      "hooks": [{
+        "type": "command",
+        "command": "python3 ${PLUGIN_ROOT}/hooks/pre_tool_use_hook.py"
+      }]
+    }]
+  }
+}"#;
+    std::fs::write(hooks_dir.join("hooks.json"), plugin_hooks_json)?;
+
+    let test = test_codex()
+        .with_home(Arc::clone(&codex_home))
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow hooks");
+            config.bypass_hook_trust = true;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabling the sandbox");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_custom_review(&test.codex, "Apply the patch while reviewing").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].custom_tool_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(serde_json::Value::as_str)
+        .expect("apply_patch output");
+    assert!(
+        output.contains("Command blocked by PreToolUse hook: blocked by plugin hook"),
+        "unexpected apply_patch output: {output}"
+    );
+    let patched_file = PathUri::from_abs_path(&test.config.cwd).join(file_name)?;
+    assert!(
+        test.fs()
+            .get_metadata(&patched_file, /*sandbox*/ None)
+            .await
+            .is_err(),
+        "plugin hook should block apply_patch execution"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_skips_pending_mcp_even_if_apps_is_pinned() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_mcp_server = MockServer::start().await;
+    mount_pending_mcp_server(&plugin_mcp_server).await;
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    write_test_plugin_mcp(&plugin_root, &plugin_mcp_server.uri())?;
+    let mut builder = pinned_apps_builder(codex_home, apps_server.chatgpt_base_url.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+
+    let mcp_requests_before_review = wait_for_pending_mcp_request(&plugin_mcp_server).await?;
+
+    let responses = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-1")]),
+    )
+    .await;
+    submit_custom_review(&test.codex, "Review without starting pinned Apps MCP").await?;
+
+    let mut review_started = false;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::EnteredReviewMode(_) => {
+            review_started = true;
+            false
+        }
+        EventMsg::McpStartupUpdate(update) if review_started && update.server == "sample" => {
+            panic!("review emitted an MCP startup update for the pending server: {update:?}")
+        }
+        EventMsg::McpStartupComplete(complete) if review_started => {
+            panic!("review emitted an MCP startup completion: {complete:?}")
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let request = responses.single_request();
+    for tool_name in [
+        "mcp__codex_apps",
+        "mcp__sample",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ] {
+        assert!(
+            !request.body_contains_text(tool_name),
+            "pending review unexpectedly exposed {tool_name}: {:?}",
+            request.body_json()["tools"]
+        );
+    }
+    assert_eq!(
+        wait_for_pending_mcp_request(&plugin_mcp_server).await?,
+        mcp_requests_before_review,
+        "review should not start a second MCP client while the parent MCP is pending"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_skips_tool_suggestions_with_pending_mcp_and_pinned_apps() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_suggested_plugin(&server).await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_mcp_server = MockServer::start().await;
+    mount_pending_mcp_server(&plugin_mcp_server).await;
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    write_test_plugin_mcp(&plugin_root, &plugin_mcp_server.uri())?;
+    let mut builder =
+        pinned_apps_with_tool_suggest_builder(codex_home, apps_server.chatgpt_base_url.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_pending_mcp_request(&plugin_mcp_server).await?;
+
+    let suggested_requests_before_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    let responses = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-1")]),
+    )
+    .await;
+    submit_custom_review(&test.codex, "Review without tool suggestions").await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = responses.single_request();
+    assert!(
+        !request.body_contains_text("request_plugin_install"),
+        "review request unexpectedly exposed request_plugin_install: {:?}",
+        request.body_json()["tools"]
+    );
+    let suggested_requests_after_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    assert_eq!(
+        suggested_requests_after_review, suggested_requests_before_review,
+        "review should not fetch recommended plugins"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_keeps_tool_suggestions_with_ready_mcp_and_pinned_apps() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_suggested_plugin(&server).await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let mut builder =
+        pinned_apps_with_tool_suggest_builder(codex_home, apps_server.chatgpt_base_url.clone());
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpStartupComplete(_))
+    })
+    .await;
+
+    let suggested_requests_before_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    let responses = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-1")]),
+    )
+    .await;
+    submit_custom_review(&test.codex, "Review with tool suggestions").await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = responses.single_request();
+    assert!(
+        request.body_json()["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| {
+                tool.get("name").and_then(serde_json::Value::as_str)
+                    == Some("request_plugin_install")
+            })),
+        "ready review should expose request_plugin_install: {:?}",
+        request.body_json()["tools"]
+    );
+    let suggested_requests_after_review = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .count();
+    assert!(
+        suggested_requests_after_review > suggested_requests_before_review,
+        "ready review should fetch recommended plugins"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_skips_auth_discovery_when_parent_mcp_is_pending() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let plugin_mcp_server = MockServer::start().await;
+    mount_pending_mcp_server(&plugin_mcp_server).await;
+    let codex_home = Arc::new(TempDir::new()?);
+    let plugin_root = write_enabled_test_plugin(&codex_home)?;
+    write_test_plugin_mcp(&plugin_root, &plugin_mcp_server.uri())?;
+
+    let test = test_codex()
+        .with_home(codex_home)
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_pending_mcp_request(&plugin_mcp_server).await?;
+    let plugin_mcp_requests_before_review = plugin_mcp_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .len();
+
+    let responses = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-1")]),
+    )
+    .await;
+    submit_custom_review(&test.codex, "Review without MCP auth discovery").await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(responses.requests().len(), 1);
+    let plugin_mcp_requests_after_review = plugin_mcp_server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .len();
+    assert_eq!(
+        plugin_mcp_requests_after_review, plugin_mcp_requests_before_review,
+        "review should not perform auth discovery for plugin MCP servers"
+    );
+    Ok(())
 }
 
 /// Ensure review flow suppresses assistant-specific streaming/completion events:

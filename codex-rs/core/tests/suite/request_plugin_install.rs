@@ -411,6 +411,52 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_suggestions_remain_enabled_without_orchestrator_mcp() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_recommendations(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "plugins": [{
+                "id": "plugin_github",
+                "name": "github",
+                "status": "ENABLED",
+                "installation_policy": "AVAILABLE",
+                "release": {"display_name": "GitHub"}
+            }]
+        })),
+    )
+    .await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_apps_without_search_tool(config, &apps_base_url);
+            config.orchestrator_mcp_enabled = false;
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("suggest a plugin").await?;
+
+    let request = response.single_request();
+    assert!(
+        tool_names(&request.body_json())
+            .iter()
+            .any(|name| name == REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+        "disabling orchestrator MCP should not disable tool suggestions"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metadata() -> Result<()>
 {
     skip_if_no_network!(Ok(()));

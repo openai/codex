@@ -43,6 +43,8 @@ use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
@@ -5227,6 +5229,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
+        McpAccess::Enabled,
         skills_service,
         plugins_manager,
         mcp_manager,
@@ -5476,6 +5479,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
+        McpAccess::Enabled,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
@@ -5498,6 +5502,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
+        mcp_access: McpAccess::Enabled,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -5609,6 +5614,7 @@ async fn make_session_with_config_and_rx(
         agent_status_tx,
         InitialHistory::New,
         SessionSource::Exec,
+        McpAccess::Enabled,
         skills_service,
         plugins_manager,
         mcp_manager,
@@ -5717,6 +5723,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         agent_status_tx,
         initial_history,
         session_source,
+        McpAccess::Enabled,
         skills_service,
         plugins_manager,
         mcp_manager,
@@ -7602,6 +7609,7 @@ where
         &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
+        McpAccess::Enabled,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
         services.shell_zsh_path.as_ref(),
@@ -7624,6 +7632,7 @@ where
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
+        mcp_access: McpAccess::Enabled,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -7785,6 +7794,33 @@ async fn built_tools_uses_the_step_mcp_runtime() -> anyhow::Result<()> {
             .any(|name| name.to_string() == "list_mcp_resources")
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn disabled_mcp_step_uses_isolated_runtime_without_publishing_it() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    session.services.selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "review-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+            path: PathUri::from_abs_path(&turn_context.config.cwd),
+        },
+    }];
+    session.mcp_access = McpAccess::Disabled;
+    turn_context.mcp_access = McpAccess::Disabled;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let published_before = session.services.latest_mcp_runtime();
+
+    let step_context = session.capture_step_context(turn_context).await;
+
+    let published_after = session.services.latest_mcp_runtime();
+    assert!(Arc::ptr_eq(&published_before, &published_after));
+    assert!(!Arc::ptr_eq(&step_context.mcp, &published_before));
+    assert_eq!(
+        step_context.mcp.available_environment_ids(),
+        &[codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()]
+    );
 }
 
 #[tokio::test]
