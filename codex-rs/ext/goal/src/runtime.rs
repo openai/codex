@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
@@ -19,6 +20,10 @@ use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
+
+// Capacity failures do not consume user tokens, but retrying immediately can
+// create a tight loop of failed turns. Keep the retry cadence deliberately low.
+const SERVER_OVERLOADED_GOAL_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct GoalRuntimeHandle {
@@ -45,6 +50,7 @@ struct GoalRuntimeInner {
     thread_manager: Weak<ThreadManager>,
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
+    capacity_retry_pending: AtomicBool,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
 }
@@ -97,6 +103,7 @@ impl GoalRuntimeHandle {
                 thread_manager,
                 accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                capacity_retry_pending: AtomicBool::new(false),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
@@ -113,6 +120,34 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn tools_visible(&self) -> bool {
         self.is_enabled() && self.inner.tools_available_for_thread
+    }
+
+    pub(crate) fn defer_capacity_retry(&self) {
+        if self
+            .inner
+            .capacity_retry_pending
+            .swap(true, Ordering::Relaxed)
+        {
+            return;
+        }
+
+        // Do not keep an unloaded thread runtime alive just for this timer.
+        // A newly resumed runtime intentionally starts without this backoff.
+        let runtime = Arc::downgrade(&self.inner);
+        drop(tokio::spawn(async move {
+            tokio::time::sleep(SERVER_OVERLOADED_GOAL_RETRY_DELAY).await;
+            let Some(inner) = runtime.upgrade() else {
+                return;
+            };
+            inner.capacity_retry_pending.store(false, Ordering::Relaxed);
+            let runtime = GoalRuntimeHandle { inner };
+            if let Err(err) = runtime.continue_if_idle().await {
+                tracing::warn!(
+                    "failed to continue active goal after capacity retry delay for {}: {err}",
+                    runtime.thread_id()
+                );
+            }
+        }));
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -357,6 +392,9 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        if self.inner.capacity_retry_pending.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         if !self.tools_visible() {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());

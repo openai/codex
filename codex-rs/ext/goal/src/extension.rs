@@ -156,12 +156,6 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
-            if self
-                .goal_service
-                .capacity_retry_pending(runtime.thread_id())
-            {
-                return;
-            }
 
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
@@ -316,7 +310,7 @@ where
                         .accounting_state()
                         .turn_is_current_active_goal(input.turn_id) =>
                 {
-                    self.goal_service.defer_capacity_retry(runtime.thread_id());
+                    runtime.defer_capacity_retry();
                     return;
                 }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
