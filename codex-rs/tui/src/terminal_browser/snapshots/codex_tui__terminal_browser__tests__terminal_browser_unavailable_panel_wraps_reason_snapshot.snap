@@ -1,0 +1,14 @@
+---
+source: tui/src/terminal_browser/tests.rs
+expression: "buffer_text(&buffer, area)"
+---
+ unavailable Carbonyl
+ about:blank
+Browser unavailable: Carbonyl was not found on
+PATH; install it or set CODEX_CARBONYL_BINARY
+
+
+
+
+
+ Esc hide   /browser control take control
