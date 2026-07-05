@@ -1538,6 +1538,11 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
             responses::ev_response_created("goal-continuation"),
             responses::ev_completed_with_tokens("goal-continuation", /*total_tokens*/ 200),
         ]),
+        responses::sse_failed(
+            "capacity-error",
+            "server_is_overloaded",
+            "Selected model is at capacity. Please try a different model.",
+        ),
     ])
     .await;
     let codex_home = TempDir::new()?;
@@ -1717,6 +1722,46 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
     .await??;
     let clear_again: ThreadGoalClearResponse = to_response(clear_again_resp)?;
     assert!(!clear_again.cleared);
+
+    let retry_goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "retry after capacity recovers",
+            })),
+        )
+        .await?;
+    let retry_goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(retry_goal_id)),
+    )
+    .await??;
+    let _retry_goal: ThreadGoalSetResponse = to_response(retry_goal_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("error"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let _resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }
