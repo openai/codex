@@ -853,6 +853,7 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    let prepared_terminal = tui::PreparedTerminal::prepare()?;
     let strict_config = cli.strict_config;
     let (sandbox_mode, approval_policy) = if cli.dangerously_bypass_approvals_and_sandbox {
         (
@@ -883,6 +884,7 @@ pub async fn run_main(
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
+            tui::discard_terminal_input();
             eprintln!("Error parsing -c overrides: {e}");
             std::process::exit(1);
         }
@@ -893,6 +895,7 @@ pub async fn run_main(
     let codex_home = match find_codex_home() {
         Ok(codex_home) => codex_home.to_path_buf(),
         Err(err) => {
+            tui::discard_terminal_input();
             eprintln!("Error finding codex home: {err}");
             std::process::exit(1);
         }
@@ -1145,6 +1148,7 @@ pub async fn run_main(
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
         Ok(None) => {}
         Ok(Some(err)) | Err(err) => {
+            tui::discard_terminal_input();
             eprintln!(
                 "Error loading rules:\n{}",
                 format_exec_policy_error_with_source(&err)
@@ -1162,6 +1166,7 @@ pub async fn run_main(
     ) {
         #[allow(clippy::print_stderr)]
         {
+            tui::discard_terminal_input();
             eprintln!("Error adding directories: {warning}");
             std::process::exit(1);
         }
@@ -1181,6 +1186,7 @@ pub async fn run_main(
         })
         .await
         {
+            tui::discard_terminal_input();
             eprintln!("{err}");
             std::process::exit(1);
         }
@@ -1258,6 +1264,7 @@ pub async fn run_main(
         .try_init();
 
     run_ratatui_app(
+        prepared_terminal,
         cli,
         arg0_paths,
         loader_overrides,
@@ -1280,6 +1287,7 @@ pub async fn run_main(
 
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
+    prepared_terminal: tui::PreparedTerminal,
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
@@ -1310,15 +1318,16 @@ async fn run_ratatui_app(
         tracing::error!("panic: {info}");
         prev_hook(info);
     }));
-    let mut initialized_terminal = tui::init()?;
+    let mut initialized_terminal = prepared_terminal.activate()?;
+    let mut terminal_restore_guard = TerminalRestoreGuard::new();
     initialized_terminal.terminal.clear()?;
 
     let mut tui = Tui::new(
         initialized_terminal.terminal,
         initialized_terminal.enhanced_keys_supported,
         initialized_terminal.stderr_guard,
+        initialized_terminal.startup_text,
     );
-    let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]
     {
@@ -1817,6 +1826,7 @@ async fn run_ratatui_app(
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
 fn restore() {
+    tui::discard_terminal_input();
     if let Err(err) = tui::restore_after_exit() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
@@ -1936,6 +1946,7 @@ async fn load_config_or_exit_with_fallback_cwd(
     {
         Ok(config) => config,
         Err(err) => {
+            tui::discard_terminal_input();
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);
         }
@@ -1965,6 +1976,7 @@ async fn load_bootstrap_config_or_exit(
     {
         Ok(config_toml) => config_toml,
         Err(err) => {
+            tui::discard_terminal_input();
             let config_error = err
                 .get_ref()
                 .and_then(|err| err.downcast_ref::<ConfigLoadError>())

@@ -8,9 +8,8 @@
 //! unavailable, and reports `None` when a response is unavailable.
 //!
 //! Probes run only while the crossterm event stream is absent or paused, so they do not share
-//! crossterm's internal skipped-event queue. Bytes read while looking for probe responses are
-//! consumed from the terminal; callers must therefore own terminal input for the duration of the
-//! short timeout and accept that unrelated buffered input will be discarded.
+//! crossterm's internal skipped-event queue. The startup probe returns plain input read alongside
+//! terminal responses so callers can preserve it without replaying terminal control sequences.
 
 use std::time::Duration;
 
@@ -44,11 +43,12 @@ mod imp {
     use ratatui::layout::Position;
 
     /// Results from the TUI's one-shot startup terminal probe.
-    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    #[derive(Debug, Clone, Eq, PartialEq)]
     pub(crate) struct StartupProbe {
         pub(crate) cursor_position: Option<Position>,
         pub(crate) default_colors: Option<DefaultColors>,
         pub(crate) keyboard_enhancement_supported: Option<bool>,
+        pub(crate) input: Vec<u8>,
     }
 
     /// Whether the startup probe should query keyboard enhancement support.
@@ -301,6 +301,7 @@ mod imp {
             cursor_position: None,
             default_colors: None,
             keyboard_enhancement_supported: None,
+            input: Vec::new(),
         };
         let mut saw_supported_keyboard = false;
         loop {
@@ -312,15 +313,18 @@ mod imp {
                 keyboard_probe,
             );
             if startup_probe_complete(&probe, keyboard_probe) {
+                probe.input = extract_plain_input(&buffer);
                 return Ok(probe);
             }
             let now = Instant::now();
             if now >= deadline {
                 finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
+                probe.input = extract_plain_input(&buffer);
                 return Ok(probe);
             }
             if !tty.poll_readable(deadline.saturating_duration_since(now))? {
                 finish_startup_probe(&mut probe, keyboard_probe, saw_supported_keyboard);
+                probe.input = extract_plain_input(&buffer);
                 return Ok(probe);
             }
         }
@@ -377,6 +381,56 @@ mod imp {
         {
             probe.keyboard_enhancement_supported = saw_supported_keyboard.then_some(true);
         }
+    }
+
+    fn extract_plain_input(buffer: &[u8]) -> Vec<u8> {
+        const MAX_INPUT_BYTES: usize = 16 * 1024;
+
+        let mut input = Vec::new();
+        let mut index = 0;
+        while index < buffer.len() && input.len() < MAX_INPUT_BYTES {
+            if buffer[index] != b'\x1b' {
+                input.push(buffer[index]);
+                index += 1;
+                continue;
+            }
+
+            match buffer.get(index + 1) {
+                Some(b'[') => {
+                    let Some(end) = buffer[index + 2..]
+                        .iter()
+                        .position(|byte| (0x40..=0x7e).contains(byte))
+                    else {
+                        break;
+                    };
+                    index += end + 3;
+                }
+                Some(b']') => {
+                    let mut end = index + 2;
+                    let mut terminated = false;
+                    while end < buffer.len() {
+                        if buffer[end] == b'\x07' {
+                            end += 1;
+                            terminated = true;
+                            break;
+                        }
+                        if buffer[end] == b'\x1b' && buffer.get(end + 1) == Some(&b'\\') {
+                            end += 2;
+                            terminated = true;
+                            break;
+                        }
+                        end += 1;
+                    }
+                    if !terminated {
+                        break;
+                    }
+                    index = end;
+                }
+                Some(_) => index += 2,
+                None => break,
+            }
+        }
+        input
     }
 
     fn parse_cursor_position(buffer: &[u8]) -> Option<Position> {
@@ -535,12 +589,13 @@ mod imp {
                 cursor_position: None,
                 default_colors: None,
                 keyboard_enhancement_supported: None,
+                input: Vec::new(),
             };
             let mut saw_supported_keyboard = false;
             update_startup_probe(
                 &mut probe,
                 &mut saw_supported_keyboard,
-                b"\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[?7u",
+                b"draft\x1B[20;10R\x1B]11;rgb:1111/1111/1111\x07\x1B[?64;1;2c\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[?7u",
                 StartupKeyboardEnhancementProbe::Query,
             );
 
@@ -553,12 +608,23 @@ mod imp {
                         bg: (17, 17, 17),
                     }),
                     keyboard_enhancement_supported: Some(true),
+                    input: Vec::new(),
                 }
             );
             assert!(startup_probe_complete(
                 &probe,
                 StartupKeyboardEnhancementProbe::Query
             ));
+        }
+
+        #[test]
+        fn extracts_plain_input_around_terminal_responses() {
+            assert_eq!(
+                extract_plain_input(
+                    b"draft\x1B[20;10R\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B[200~ text\x1B[201~"
+                ),
+                b"draft text"
+            );
         }
     }
 }
@@ -603,6 +669,14 @@ mod imp {
             return Ok(Some(colors));
         }
 
+        console_default_colors()
+    }
+
+    /// Reads the configured console palette without consuming terminal input.
+    pub(crate) fn console_default_colors() -> io::Result<Option<DefaultColors>> {
+        let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
+            return Ok(None);
+        };
         Ok(query_console_default_colors(output).ok().flatten())
     }
 

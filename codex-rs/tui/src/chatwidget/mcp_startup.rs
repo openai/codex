@@ -181,6 +181,10 @@ impl ChatWidget {
         self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
     }
 
+    pub(crate) fn mcp_startup_active(&self) -> bool {
+        self.mcp_startup_status.is_some()
+    }
+
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
         if !cancelled.is_empty() {
             self.on_warning(format!(

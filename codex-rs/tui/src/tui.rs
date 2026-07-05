@@ -1,10 +1,8 @@
 use std::fmt;
 use std::future::Future;
-use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
 use std::io::Write;
-use std::io::stdin;
 use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
@@ -59,6 +57,7 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod startup;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -73,6 +72,16 @@ pub(crate) struct InitializedTerminal {
     pub(crate) terminal: Terminal,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
+    pub(crate) startup_text: Option<String>,
+}
+
+pub(crate) use startup::PreparedTerminal;
+use startup::StartupInputBuffer;
+use startup::capture_startup_input;
+pub(crate) use startup::discard_terminal_input;
+
+pub(super) fn flush_terminal_input_buffer() {
+    startup::flush_terminal_input_buffer();
 }
 
 pub(crate) fn running_in_vscode_terminal() -> bool {
@@ -173,11 +182,21 @@ mod tests {
 }
 
 pub fn set_modes() -> Result<()> {
+    set_base_modes()?;
+    set_event_modes();
+    Ok(())
+}
+
+fn set_base_modes() -> Result<()> {
     ensure_virtual_terminal_processing()?;
 
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
+    Ok(())
+}
+
+fn set_event_modes() {
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
     // to create a new line that require this.
@@ -187,7 +206,6 @@ pub fn set_modes() -> Result<()> {
     keyboard_modes::enable_keyboard_enhancement();
 
     let _ = execute!(stdout(), EnableFocusChange);
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,137 +351,6 @@ impl RestoreMode {
     }
 }
 
-/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
-/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
-#[cfg(unix)]
-fn flush_terminal_input_buffer() {
-    // Safety: flushing the stdin queue is safe and does not move ownership.
-    let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
-    if result != 0 {
-        let err = std::io::Error::last_os_error();
-        tracing::warn!("failed to tcflush stdin: {err}");
-    }
-}
-
-/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
-/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
-#[cfg(windows)]
-fn flush_terminal_input_buffer() {
-    use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
-    use windows_sys::Win32::System::Console::GetStdHandle;
-    use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
-
-    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle == INVALID_HANDLE_VALUE || handle == 0 {
-        let err = unsafe { GetLastError() };
-        tracing::warn!("failed to get stdin handle for flush: error {err}");
-        return;
-    }
-
-    let result = unsafe { FlushConsoleInputBuffer(handle) };
-    if result == 0 {
-        let err = unsafe { GetLastError() };
-        tracing::warn!("failed to flush stdin buffer: error {err}");
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn flush_terminal_input_buffer() {}
-
-/// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub(crate) fn init() -> Result<InitializedTerminal> {
-    if !stdin().is_terminal() {
-        return Err(std::io::Error::other("stdin is not a terminal"));
-    }
-    if !stdout().is_terminal() {
-        return Err(std::io::Error::other("stdout is not a terminal"));
-    }
-    set_modes()?;
-
-    flush_terminal_input_buffer();
-
-    set_panic_hook();
-
-    #[cfg(unix)]
-    let backend = CrosstermBackend::new(stdout());
-
-    #[cfg(unix)]
-    let startup_probe = {
-        use crate::terminal_probe::StartupKeyboardEnhancementProbe;
-
-        let started_at = std::time::Instant::now();
-        let keyboard_probe = if keyboard_modes::keyboard_enhancement_disabled() {
-            StartupKeyboardEnhancementProbe::Skip
-        } else {
-            StartupKeyboardEnhancementProbe::Query
-        };
-        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
-        {
-            Ok(probe) => {
-                tracing::info!(
-                    duration_ms = %started_at.elapsed().as_millis(),
-                    cursor_position = probe.cursor_position.is_some(),
-                    default_colors = probe.default_colors.is_some(),
-                    keyboard_enhancement_supported = ?probe.keyboard_enhancement_supported,
-                    "terminal startup probes completed"
-                );
-                probe
-            }
-            Err(err) => {
-                tracing::warn!(
-                    duration_ms = %started_at.elapsed().as_millis(),
-                    "terminal startup probes failed: {err}"
-                );
-                crate::terminal_probe::StartupProbe {
-                    cursor_position: None,
-                    default_colors: None,
-                    keyboard_enhancement_supported: None,
-                }
-            }
-        }
-    };
-
-    #[cfg(unix)]
-    crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
-
-    #[cfg(unix)]
-    let cursor_pos = match startup_probe.cursor_position {
-        Some(pos) => pos,
-        None => {
-            tracing::warn!("initial cursor position probe timed out; defaulting to origin");
-            Position { x: 0, y: 0 }
-        }
-    };
-
-    #[cfg(unix)]
-    let enhanced_keys_supported = startup_probe
-        .keyboard_enhancement_supported
-        .unwrap_or(/*default*/ false);
-
-    #[cfg(not(unix))]
-    let mut backend = CrosstermBackend::new(stdout());
-
-    #[cfg(not(unix))]
-    let cursor_pos = cursor_position_with_crossterm(&mut backend);
-
-    #[cfg(not(unix))]
-    let enhanced_keys_supported =
-        !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
-
-    #[cfg(windows)]
-    probe_windows_default_colors();
-
-    let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
-    let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
-    Ok(InitializedTerminal {
-        terminal: tui,
-        enhanced_keys_supported,
-        stderr_guard,
-    })
-}
-
 #[cfg(not(unix))]
 fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Position {
     backend.get_cursor_position().unwrap_or_else(|err| {
@@ -482,7 +369,7 @@ fn detect_keyboard_enhancement_supported() -> bool {
 #[cfg(windows)]
 fn probe_windows_default_colors() {
     let started_at = std::time::Instant::now();
-    match crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT) {
+    match crate::terminal_probe::console_default_colors() {
         Ok(colors) => {
             tracing::info!(
                 duration_ms = %started_at.elapsed().as_millis(),
@@ -542,6 +429,8 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
+    startup_text: Option<String>,
+    startup_input_active: bool,
     // Raw terminal-wrapped history needs a non-scroll-region insertion path in Zellij.
     is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op.
@@ -572,6 +461,7 @@ impl Tui {
         terminal: Terminal,
         enhanced_keys_supported: bool,
         stderr_guard: terminal_stderr::TerminalStderrGuard,
+        startup_text: Option<String>,
     ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
@@ -597,6 +487,8 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
+            startup_text,
+            startup_input_active: true,
             is_zellij,
             alt_screen_enabled: true,
             _stderr_guard: stderr_guard,
@@ -713,7 +605,24 @@ impl Tui {
         }
     }
 
-    pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
+    /// Begin reading interactive events for a screen.
+    ///
+    /// A screen that requests events becomes the new input owner, so text captured before the TUI
+    /// was ready must not survive through it and later appear in the composer.
+    pub fn event_stream(&mut self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
+        self.claim_startup_input();
+        self.build_event_stream()
+    }
+
+    fn claim_startup_input(&mut self) {
+        if self.startup_input_active {
+            self.startup_text = None;
+            discard_terminal_input();
+            self.startup_input_active = false;
+        }
+    }
+
+    fn build_event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
         #[cfg(unix)]
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
@@ -729,6 +638,20 @@ impl Tui {
             self.terminal_focused.clone(),
         );
         Box::pin(stream)
+    }
+
+    pub(crate) fn take_startup_text(&mut self) -> Result<Option<String>> {
+        if !self.startup_input_active {
+            return Ok(None);
+        }
+
+        let mut input = StartupInputBuffer::default();
+        if let Some(text) = self.startup_text.take() {
+            input.push_text(&text);
+        }
+        input.extend(capture_startup_input()?);
+        self.startup_input_active = false;
+        Ok(input.into_text())
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current

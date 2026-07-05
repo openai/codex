@@ -1,4 +1,6 @@
 use super::*;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -139,6 +141,7 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
 async fn startup_thread_started_submits_queued_startup_input() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
+    app.startup_draft_protected = true;
     app.chat_widget
         .set_queue_submissions_until_session_configured(/*queue*/ true);
     app.chat_widget
@@ -166,6 +169,34 @@ async fn startup_thread_started_submits_queued_startup_input() {
     )
     .await
     .expect("startup thread should attach");
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!app.startup_draft_blocks_key(enter));
+
+    app.chat_widget
+        .set_mcp_startup_expected_servers(["test".to_string()]);
+    app.chat_widget.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some(thread_id.to_string()),
+            name: "test".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+            failure_reason: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(app.startup_draft_blocks_key(enter));
+
+    app.chat_widget.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            thread_id: Some(thread_id.to_string()),
+            name: "test".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+            failure_reason: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(!app.startup_draft_blocks_key(enter));
 
     match next_user_turn_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(

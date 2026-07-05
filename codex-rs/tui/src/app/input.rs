@@ -95,6 +95,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.startup_draft_blocks_key(key_event) {
+            return;
+        }
+
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -268,6 +272,20 @@ impl App {
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
+    pub(super) fn startup_draft_blocks_key(&self, key_event: KeyEvent) -> bool {
+        self.startup_draft_protected
+            && (self.primary_session_configured.is_none() || self.chat_widget.mcp_startup_active())
+            && matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }
+            )
+    }
+
     pub(super) fn reject_side_backtrack_esc(&mut self) {
         self.reset_backtrack_state();
         self.chat_widget
@@ -286,6 +304,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyEventState;
+    use crossterm::event::KeyModifiers;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -296,5 +319,28 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
+    async fn startup_draft_only_blocks_unmodified_enter_presses() {
+        let mut app = make_test_app().await;
+        app.startup_draft_protected = true;
+
+        assert!(app.startup_draft_blocks_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(app.startup_draft_blocks_key(KeyEvent::new_with_kind(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(!app.startup_draft_blocks_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)));
+        assert!(
+            !app.startup_draft_blocks_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+        );
+        assert!(!app.startup_draft_blocks_key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Release,
+            state: KeyEventState::NONE,
+        }));
     }
 }

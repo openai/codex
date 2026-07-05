@@ -574,6 +574,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
+    startup_draft_protected: bool,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     pending_startup_thread_start: bool,
@@ -779,6 +780,11 @@ impl App {
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let startup_started_at = Instant::now();
+        let allow_startup_text = matches!(&session_selection, SessionSelection::StartFresh)
+            && initial_prompt.is_none()
+            && initial_images.is_empty()
+            && !should_prompt_windows_sandbox_nux_at_startup
+            && startup_hooks_browser.is_none();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
@@ -1059,6 +1065,7 @@ See the Codex keymap documentation for supported actions and examples."
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
+            startup_draft_protected: false,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_startup_thread_start,
@@ -1108,6 +1115,13 @@ See the Codex keymap documentation for supported actions and examples."
                     tx,
                 );
             }
+        }
+
+        if allow_startup_text {
+            if let Some(startup_text) = tui.take_startup_text()? {
+                app.chat_widget.insert_str(&startup_text);
+            }
+            app.startup_draft_protected = true;
         }
 
         let event_stream_started_at = Instant::now();
