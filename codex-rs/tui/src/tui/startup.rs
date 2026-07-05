@@ -51,9 +51,7 @@ impl StartupInputBuffer {
                 ..
             }) if modifiers.difference(KeyModifiers::SHIFT).is_empty() => match code {
                 KeyCode::Char(ch) if !ch.is_control() => self.push_char(ch),
-                KeyCode::Backspace if self.text.pop().is_some() => {
-                    self.char_count -= 1;
-                }
+                KeyCode::Backspace => self.pop_char(),
                 _ => {}
             },
             Event::Paste(text) => self.push_text(&text),
@@ -68,14 +66,26 @@ impl StartupInputBuffer {
         }
     }
 
+    fn pop_char(&mut self) {
+        if self.text.pop().is_some() {
+            self.char_count -= 1;
+        }
+    }
+
     pub(super) fn push_text(&mut self, text: &str) {
         for ch in text.chars().filter(|ch| !ch.is_control()) {
             self.push_char(ch);
         }
     }
 
-    pub(super) fn extend(&mut self, other: Self) {
-        self.push_text(&other.text);
+    pub(super) fn handle_probe_input(&mut self, input: &[u8]) {
+        for ch in String::from_utf8_lossy(input).chars() {
+            match ch {
+                '\u{8}' | '\u{7f}' => self.pop_char(),
+                ch if !ch.is_control() => self.push_char(ch),
+                _ => {}
+            }
+        }
     }
 
     pub(super) fn into_text(self) -> Option<String> {
@@ -124,12 +134,11 @@ pub(crate) fn discard_terminal_input() {
     flush_terminal_input_buffer();
 }
 
-pub(super) fn capture_startup_input() -> Result<StartupInputBuffer> {
-    let mut input = StartupInputBuffer::default();
+pub(super) fn capture_startup_input(input: &mut StartupInputBuffer) -> Result<()> {
     while crossterm::event::poll(Duration::ZERO)? {
         input.handle_event(crossterm::event::read()?);
     }
-    Ok(input)
+    Ok(())
 }
 
 impl PreparedTerminal {
@@ -152,7 +161,8 @@ impl PreparedTerminal {
     pub(crate) fn activate(mut self) -> Result<InitializedTerminal> {
         self.terminal_modes_active = true;
         super::set_base_modes()?;
-        let mut startup_input = capture_startup_input()?;
+        let mut startup_input = StartupInputBuffer::default();
+        capture_startup_input(&mut startup_input)?;
         super::set_panic_hook();
 
         #[cfg(unix)]
@@ -198,7 +208,7 @@ impl PreparedTerminal {
         };
 
         #[cfg(unix)]
-        startup_input.push_text(&String::from_utf8_lossy(&startup_probe.input));
+        startup_input.handle_probe_input(&startup_probe.input);
 
         #[cfg(unix)]
         crate::terminal_palette::set_default_colors_from_startup_probe(
@@ -233,7 +243,7 @@ impl PreparedTerminal {
         super::probe_windows_default_colors();
 
         super::set_event_modes();
-        startup_input.extend(capture_startup_input()?);
+        capture_startup_input(&mut startup_input)?;
 
         let terminal = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
         let stderr_guard = super::terminal_stderr::TerminalStderrGuard::install()?;

@@ -649,7 +649,7 @@ impl Tui {
         if let Some(text) = self.startup_text.take() {
             input.push_text(&text);
         }
-        input.extend(capture_startup_input()?);
+        capture_startup_input(&mut input)?;
         self.startup_input_active = false;
         Ok(input.into_text())
     }

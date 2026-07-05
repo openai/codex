@@ -37,3 +37,17 @@ fn startup_input_is_bounded() {
 
     assert_eq!(input.into_text(), Some("x".repeat(MAX_STARTUP_INPUT_CHARS)));
 }
+
+#[test]
+fn startup_input_applies_edits_across_capture_phases() {
+    let mut input = StartupInputBuffer::default();
+    input.handle_event(Event::Paste("draft".to_string()));
+
+    input.handle_probe_input(b"\x7f\x7fph");
+    input.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::NONE,
+    )));
+
+    assert_eq!(input.into_text(), Some("drap".to_string()));
+}
