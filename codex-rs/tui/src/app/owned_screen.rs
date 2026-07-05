@@ -116,6 +116,9 @@ impl OwnedScreen {
     }
 
     fn handle_mouse_scroll(&mut self, event: MouseScrollEvent) -> bool {
+        if self.viewport.selection_is_active() {
+            return true;
+        }
         if !self
             .last_conversation_area
             .contains(Position::new(event.column, event.row))
@@ -124,6 +127,29 @@ impl OwnedScreen {
         }
         self.viewport.handle_mouse_scroll(event.direction);
         true
+    }
+
+    fn begin_selection(&mut self, position: Position) -> bool {
+        self.viewport
+            .begin_selection(self.last_conversation_area, position)
+    }
+
+    fn update_selection(&mut self, position: Position) -> bool {
+        self.viewport
+            .update_selection(self.last_conversation_area, position)
+    }
+
+    fn finish_selection(&mut self, position: Position) -> Option<String> {
+        self.viewport
+            .finish_selection(self.last_conversation_area, position)
+    }
+
+    fn cancel_selection(&mut self) {
+        self.viewport.cancel_selection();
+    }
+
+    fn selection_is_active(&self) -> bool {
+        self.viewport.selection_is_active()
     }
 
     fn clear_last_render_areas(&mut self) {
@@ -220,10 +246,17 @@ fn render_layout(
     let divider_active = panes.owned_screen_split_is_dragging();
     Clear.render(layout.area(), buffer);
     for slot in [PaneSlot::Parent, PaneSlot::Side] {
+        let slot_is_visible = match layout {
+            OwnedScreenLayout::Single { slot: visible, .. } => slot == visible,
+            OwnedScreenLayout::Split { .. } => true,
+        };
         if let Some(screen) = panes
             .by_slot_mut(slot)
             .and_then(|pane| pane.owned_screen.as_mut())
         {
+            if !slot_is_visible {
+                screen.cancel_selection();
+            }
             screen.clear_last_render_areas();
         }
     }
@@ -333,7 +366,13 @@ impl App {
         tui: &mut tui::Tui,
         event: MouseScrollEvent,
     ) -> bool {
-        if self.chat_widget.owned_screen_split_is_dragging() {
+        let selection_is_active = [PaneSlot::Parent, PaneSlot::Side].into_iter().any(|slot| {
+            self.chat_widget
+                .by_slot(slot)
+                .and_then(|pane| pane.owned_screen.as_ref())
+                .is_some_and(OwnedScreen::selection_is_active)
+        });
+        if self.chat_widget.owned_screen_split_is_dragging() || selection_is_active {
             return true;
         }
         for slot in [PaneSlot::Parent, PaneSlot::Side] {
@@ -358,17 +397,17 @@ impl App {
         tui: &mut tui::Tui,
         event: MousePrimaryEvent,
     ) -> bool {
-        if self.overlay.is_some()
-            || !self.chat_widget.has_side()
-            || !self.chat_widget.no_modal_or_popup_active()
-        {
-            if self.chat_widget.cancel_owned_screen_split_drag() {
+        if self.overlay.is_some() || !self.chat_widget.no_modal_or_popup_active() {
+            let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
+            let selection_canceled = self.cancel_owned_screen_selection();
+            if split_canceled || selection_canceled {
                 tui.frame_requester().schedule_frame();
             }
             return false;
         }
 
         if self.chat_widget.handle_owned_screen_split_mouse(event) {
+            self.cancel_owned_screen_selection();
             match event.kind {
                 MousePrimaryEventKind::Drag => tui
                     .frame_requester()
@@ -379,11 +418,51 @@ impl App {
             }
             return true;
         }
+        let position = Position::new(event.column, event.row);
         if event.kind != MousePrimaryEventKind::Press {
-            return false;
+            let active_slot = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
+                self.chat_widget
+                    .by_slot(*slot)
+                    .and_then(|pane| pane.owned_screen.as_ref())
+                    .is_some_and(OwnedScreen::selection_is_active)
+            });
+            let Some(active_slot) = active_slot else {
+                return false;
+            };
+            let mut copied = None;
+            let handled = self
+                .chat_widget
+                .by_slot_mut(active_slot)
+                .and_then(|pane| pane.owned_screen.as_mut())
+                .is_some_and(|screen| match event.kind {
+                    MousePrimaryEventKind::Drag => screen.update_selection(position),
+                    MousePrimaryEventKind::Release => {
+                        copied = screen.finish_selection(position);
+                        true
+                    }
+                    MousePrimaryEventKind::Press => false,
+                });
+            if let Some(text) = copied
+                && let Some(pane) = self.chat_widget.by_slot_mut(active_slot)
+            {
+                pane.chat_widget.copy_selected_text(&text);
+                let lease = pane.chat_widget.take_clipboard_lease();
+                self.chat_widget.retain_selection_clipboard_lease(lease);
+            }
+            if handled {
+                match event.kind {
+                    MousePrimaryEventKind::Drag => tui
+                        .frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL),
+                    MousePrimaryEventKind::Press | MousePrimaryEventKind::Release => {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
+            }
+            return handled;
         }
 
-        let position = Position::new(event.column, event.row);
+        let selection_canceled = self.cancel_owned_screen_selection();
         let target = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
             self.chat_widget
                 .by_slot(*slot)
@@ -391,17 +470,46 @@ impl App {
                 .is_some_and(|screen| screen.last_pane_area.contains(position))
         });
         let Some(target) = target else {
+            if selection_canceled {
+                tui.frame_requester().schedule_frame();
+            }
             return false;
         };
+        let selection_started = self.chat_widget.by_slot_mut(target).is_some_and(|pane| {
+            pane.chat_widget.no_modal_or_popup_active()
+                && pane
+                    .owned_screen
+                    .as_mut()
+                    .is_some_and(|screen| screen.begin_selection(position))
+        });
         let focus_changed = self.chat_widget.focused_slot() != target;
         let backtrack_was_primed = self.backtrack.primed;
         if !self.focus_conversation_pane(target) {
+            if selection_canceled {
+                tui.frame_requester().schedule_frame();
+            }
             return false;
         }
-        if focus_changed || backtrack_was_primed {
+        if selection_started || selection_canceled || focus_changed || backtrack_was_primed {
             tui.frame_requester().schedule_frame();
         }
         true
+    }
+
+    pub(super) fn cancel_owned_screen_selection(&mut self) -> bool {
+        let mut canceled = false;
+        for slot in [PaneSlot::Parent, PaneSlot::Side] {
+            if let Some(screen) = self
+                .chat_widget
+                .by_slot_mut(slot)
+                .and_then(|pane| pane.owned_screen.as_mut())
+                && screen.selection_is_active()
+            {
+                screen.cancel_selection();
+                canceled = true;
+            }
+        }
+        canceled
     }
 
     pub(crate) fn sync_owned_screen_cells(&mut self) {
@@ -453,6 +561,7 @@ impl App {
         }
         if !self.chat_widget.no_modal_or_popup_active() {
             self.chat_widget.cancel_owned_screen_split_drag();
+            self.cancel_owned_screen_selection();
         }
         let focused = self.chat_widget.focused_slot();
         let has_side = self.chat_widget.has_side();

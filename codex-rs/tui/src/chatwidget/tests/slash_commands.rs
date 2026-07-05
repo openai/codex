@@ -1944,6 +1944,47 @@ async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
 }
 
 #[tokio::test]
+async fn selection_copy_is_exact_shows_footer_feedback_and_preserves_lease_on_failure() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let calls = std::cell::Cell::new(0);
+    chat.copy_selected_text_with("source-backed\ntext", |text| {
+        calls.set(calls.get() + 1);
+        assert_eq!(text, "source-backed\ntext");
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert_eq!(calls.get(), 1);
+    assert!(chat.clipboard_lease.is_some());
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "successful selection copy should use transient footer feedback"
+    );
+
+    let bottom_pane = chat.bottom_pane_renderable();
+    let width = 48;
+    let height = bottom_pane.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| bottom_pane.render(frame.area(), frame.buffer_mut()))
+        .expect("render copied selection feedback");
+    assert_snapshot!(normalized_backend_snapshot(terminal.backend()));
+    drop(bottom_pane);
+
+    chat.copy_selected_text_with("source-backed\ntext", |text| {
+        assert_eq!(text, "source-backed\ntext");
+        Err("blocked".to_string())
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one failure message");
+    assert!(lines_to_single_string(&cells[0]).contains("Copy failed: blocked"));
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

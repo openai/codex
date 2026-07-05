@@ -255,6 +255,36 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    pub(crate) fn copy_selected_text(&mut self, text: &str) {
+        self.copy_selected_text_with(text, crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    pub(crate) fn take_clipboard_lease(&mut self) -> Option<crate::clipboard_copy::ClipboardLease> {
+        self.clipboard_lease.take()
+    }
+
+    pub(super) fn copy_selected_text_with(
+        &mut self,
+        text: &str,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match copy_fn(text) {
+            Ok(lease) => {
+                self.clipboard_lease = lease;
+                self.bottom_pane.show_footer_flash(
+                    Line::from("Copied selection").green(),
+                    Duration::from_secs(/*secs*/ 2),
+                );
+            }
+            Err(error) => {
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                )));
+            }
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
         &mut self,
         user_turn_count: usize,

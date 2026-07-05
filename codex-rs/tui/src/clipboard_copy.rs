@@ -56,10 +56,9 @@ pub(crate) fn copy_to_clipboard(text: &str) -> Result<Option<ClipboardLease>, St
 ///
 /// On Linux/X11 and some Wayland compositors, clipboard contents are served by the
 /// owning process. Dropping the `arboard::Clipboard` before the user pastes causes
-/// the content to vanish. Store this lease on the widget that triggered the copy so
-/// the handle lives as long as the TUI does. On non-Linux native paths and OSC 52
-/// paths the lease is `None` — those backends do not require process-lifetime
-/// ownership.
+/// the content to vanish. Store this lease on an owner that lives as long as the TUI; an
+/// individual conversation pane may be removed before the user pastes. On non-Linux native paths
+/// and OSC 52 paths the lease is `None` — those backends do not require process-lifetime ownership.
 pub(crate) struct ClipboardLease {
     #[cfg(target_os = "linux")]
     _clipboard: Option<arboard::Clipboard>,

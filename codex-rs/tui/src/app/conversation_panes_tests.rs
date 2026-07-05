@@ -98,6 +98,21 @@ async fn taking_focused_side_restores_parent_selection() {
 }
 
 #[tokio::test]
+async fn selection_clipboard_lease_survives_side_removal() {
+    let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
+    let (side, _side_rx) = pane_init(PaneSlot::Side).await;
+    let Ok(mut panes) = ConversationPanes::new_parent(parent) else {
+        panic!("parent pane should install");
+    };
+    assert!(panes.install_side(side).is_ok());
+    panes.retain_selection_clipboard_lease(Some(crate::clipboard_copy::ClipboardLease::test()));
+
+    drop(panes.take_side().expect("side pane"));
+
+    assert!(panes.selection_clipboard_lease.is_some());
+}
+
+#[tokio::test]
 async fn only_focused_pane_owns_terminal_title_output() {
     let (parent, _parent_rx) = pane_init(PaneSlot::Parent).await;
     let (side, _side_rx) = pane_init(PaneSlot::Side).await;

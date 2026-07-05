@@ -873,6 +873,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
+        self.request_redraw();
+        self.request_redraw_in(duration);
+    }
+
     /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
         if self.composer.set_plan_mode_nudge_visible(visible) {

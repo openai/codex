@@ -1273,9 +1273,12 @@ See the Codex keymap documentation for supported actions and examples."
         match &event {
             TuiEvent::Resize => {
                 self.chat_widget.cancel_owned_screen_split_drag();
+                self.cancel_owned_screen_selection();
             }
             TuiEvent::FocusLost => {
-                if self.chat_widget.cancel_owned_screen_split_drag() {
+                let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
+                let selection_canceled = self.cancel_owned_screen_selection();
+                if split_canceled || selection_canceled {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -1290,7 +1293,9 @@ See the Codex keymap documentation for supported actions and examples."
         }
 
         if self.overlay.is_some() {
-            if self.chat_widget.cancel_owned_screen_split_drag() {
+            let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();
+            let selection_canceled = self.cancel_owned_screen_selection();
+            if split_canceled || selection_canceled {
                 tui.frame_requester().schedule_frame();
             }
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
