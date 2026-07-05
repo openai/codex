@@ -33,11 +33,13 @@ pub(super) struct OwnedScreen {
     replay_in_progress: bool,
     last_pane_area: Rect,
     last_conversation_area: Rect,
+    last_selection_viewport_area: Option<Rect>,
 }
 
 struct RenderedOwnedScreen {
     cursor: Option<(u16, u16)>,
     cursor_style: SetCursorStyle,
+    selection_autoscroll_active: bool,
 }
 
 impl OwnedScreen {
@@ -51,6 +53,7 @@ impl OwnedScreen {
             replay_in_progress: false,
             last_pane_area: Rect::default(),
             last_conversation_area: Rect::default(),
+            last_selection_viewport_area: None,
         }
     }
 
@@ -86,12 +89,24 @@ impl OwnedScreen {
             .sync_live_tail(conversation_area.width, active_key, |width| {
                 chat_widget.active_cell_display_snapshots(width)
             });
+        let now = Instant::now();
+        let selection_autoscroll_active =
+            if self.last_selection_viewport_area.replace(conversation_area)
+                == Some(conversation_area)
+            {
+                self.viewport
+                    .advance_selection_autoscroll(conversation_area, now)
+            } else {
+                self.viewport
+                    .prepare_selection_autoscroll(conversation_area, now)
+            };
         self.viewport.render(conversation_area, buffer);
         bottom_pane.render(bottom_area, buffer);
 
         RenderedOwnedScreen {
             cursor: bottom_pane.cursor_pos(bottom_area),
             cursor_style: bottom_pane.cursor_style(bottom_area),
+            selection_autoscroll_active,
         }
     }
 
@@ -305,10 +320,20 @@ fn render_layout(
                 buffer,
             );
             render_divider(divider, divider_active, buffer);
-            match focused {
+            let selection_autoscroll_active = parent_rendered
+                .as_ref()
+                .is_some_and(|rendered| rendered.selection_autoscroll_active)
+                || side_rendered
+                    .as_ref()
+                    .is_some_and(|rendered| rendered.selection_autoscroll_active);
+            let focused_rendered = match focused {
                 PaneSlot::Parent => parent_rendered,
                 PaneSlot::Side => side_rendered,
-            }
+            };
+            focused_rendered.map(|mut rendered| {
+                rendered.selection_autoscroll_active = selection_autoscroll_active;
+                rendered
+            })
         }
     }
 }
@@ -594,17 +619,24 @@ impl App {
         let has_side = self.chat_widget.has_side();
         let split_preference = self.chat_widget.owned_screen_split_preference();
         let mut rendered_area = Rect::default();
+        let mut selection_autoscroll_active = false;
         tui.draw(/*height*/ u16::MAX, |frame| {
             rendered_area = frame.area();
             let layout = OwnedScreenLayout::new(rendered_area, has_side, focused, split_preference);
             if let Some(rendered) =
                 render_layout(&mut self.chat_widget, layout, focused, frame.buffer)
-                && let Some((x, y)) = rendered.cursor
             {
-                frame.set_cursor_style(rendered.cursor_style);
-                frame.set_cursor_position((x, y));
+                selection_autoscroll_active = rendered.selection_autoscroll_active;
+                if let Some((x, y)) = rendered.cursor {
+                    frame.set_cursor_style(rendered.cursor_style);
+                    frame.set_cursor_position((x, y));
+                }
             }
         })?;
+        if selection_autoscroll_active {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        }
         Ok(Some(rendered_area))
     }
 }

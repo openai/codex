@@ -382,7 +382,7 @@ impl CellSelectionProjection {
         })
     }
 
-    fn point_range(&self, row: usize, column: u16) -> Range<usize> {
+    pub(crate) fn point_range(&self, row: usize, column: u16) -> Range<usize> {
         if let Some(hit) = self.hit(row, column) {
             return hit;
         }
@@ -640,6 +640,15 @@ impl ConversationSelection {
 
     pub(crate) fn is_active(&self) -> bool {
         self.anchor.is_some()
+    }
+
+    pub(crate) fn endpoints(&self) -> Option<(SelectionPoint, SelectionPoint)> {
+        Some((self.anchor?, self.focus?))
+    }
+
+    pub(crate) fn remap_endpoints(&mut self, anchor: SelectionPoint, focus: SelectionPoint) {
+        self.anchor = Some(anchor);
+        self.focus = Some(focus);
     }
 
     pub(crate) fn selected_cell_span(

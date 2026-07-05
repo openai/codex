@@ -7,6 +7,8 @@
 
 use std::cell::Cell;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyEvent;
@@ -24,6 +26,9 @@ use crate::conversation_selection::CellSelectionProjection;
 use crate::conversation_selection::ConversationSelection;
 use crate::conversation_selection::SelectionCellLayout;
 use crate::conversation_selection::SelectionPoint;
+use crate::conversation_selection_autoscroll::AutoscrollDirection;
+use crate::conversation_selection_autoscroll::SelectionAutoscroll;
+use crate::conversation_selection_reflow::SelectionBookmarks;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::keymap::PagerKeymap;
@@ -46,7 +51,10 @@ pub(crate) struct ConversationViewport {
     deferred_cells: Option<Vec<Arc<dyn HistoryCell>>>,
     deferred_render_mode: Option<HistoryRenderMode>,
     selection: ConversationSelection,
+    selection_pointer: Option<Position>,
     selection_projection_cache: Option<SelectionProjectionCache>,
+    selection_autoscroll: SelectionAutoscroll,
+    selection_autoscroll_last_tick: Option<Instant>,
 }
 
 struct SelectionProjectionCache {
@@ -81,7 +89,10 @@ impl ConversationViewport {
             deferred_cells: None,
             deferred_render_mode: None,
             selection: ConversationSelection::default(),
+            selection_pointer: None,
             selection_projection_cache: None,
+            selection_autoscroll: SelectionAutoscroll::default(),
+            selection_autoscroll_last_tick: None,
         }
     }
 
@@ -91,9 +102,11 @@ impl ConversationViewport {
         } else {
             BottomFollowMode::Enabled
         };
-        self.content.render(area, buf, bottom_follow);
         if self.selection_projection_cache.is_some() {
             self.ensure_selection_projections(area.width);
+        }
+        self.content.render(area, buf, bottom_follow);
+        if self.selection_projection_cache.is_some() {
             self.ensure_selected_projections();
             self.render_selection(area, buf);
         }
@@ -117,7 +130,7 @@ impl ConversationViewport {
         direction: MouseScrollDirection,
         position: Position,
     ) {
-        self.content.handle_mouse_scroll(direction);
+        self.content.scroll_mouse_wheel_rows(direction);
         self.update_selection(area, position);
     }
 
@@ -125,6 +138,8 @@ impl ConversationViewport {
         let Some(point) = self.selection_point(area, position, /*clamp*/ false) else {
             return false;
         };
+        self.stop_selection_autoscroll();
+        self.selection_pointer = None;
         self.selection.start(point);
         true
     }
@@ -133,11 +148,29 @@ impl ConversationViewport {
         let Some(point) = self.selection_point(area, position, /*clamp*/ true) else {
             return false;
         };
-        self.selection.update(point)
+        let updated = self.selection.update(point);
+        if updated {
+            self.selection_pointer = Some(position);
+            let was_active = self.selection_autoscroll.needs_frame();
+            self.selection_autoscroll.update_pointer(area, position);
+            match (was_active, self.selection_autoscroll.needs_frame()) {
+                (false, true) => self.selection_autoscroll_last_tick = Some(Instant::now()),
+                (_, false) => self.selection_autoscroll_last_tick = None,
+                (true, true) => {}
+            }
+        }
+        updated
     }
 
     pub(crate) fn finish_selection(&mut self, area: Rect, position: Position) -> Option<String> {
-        let point = self.selection_point(area, position, /*clamp*/ true);
+        let release_matches_last_drag = self.selection_pointer == Some(position);
+        self.stop_selection_autoscroll();
+        self.selection_pointer = None;
+        let point = if release_matches_last_drag {
+            None
+        } else {
+            self.selection_point(area, position, /*clamp*/ true)
+        };
         self.selection.set_release_point(point);
         self.ensure_selected_projections();
         let selected = if let Some(cache) = self.selection_projection_cache.as_ref() {
@@ -151,12 +184,70 @@ impl ConversationViewport {
     }
 
     pub(crate) fn cancel_selection(&mut self) {
+        self.stop_selection_autoscroll();
+        self.selection_pointer = None;
         self.selection.cancel();
         self.apply_deferred_state();
     }
 
     pub(crate) fn selection_is_active(&self) -> bool {
         self.selection.is_active()
+    }
+
+    pub(crate) fn advance_selection_autoscroll(&mut self, area: Rect, now: Instant) -> bool {
+        let Some(pointer) = self.selection_autoscroll.pointer() else {
+            return false;
+        };
+        self.selection_autoscroll.update_pointer(area, pointer);
+        if !self.selection_autoscroll.needs_frame() {
+            self.selection_autoscroll_last_tick = None;
+            return false;
+        }
+        let elapsed = self
+            .selection_autoscroll_last_tick
+            .replace(now)
+            .map_or(Duration::ZERO, |last_tick| {
+                now.saturating_duration_since(last_tick)
+            });
+        self.advance_selection_autoscroll_by(area, elapsed)
+    }
+
+    pub(crate) fn prepare_selection_autoscroll(&mut self, area: Rect, now: Instant) -> bool {
+        let Some(pointer) = self.selection_autoscroll.pointer() else {
+            return false;
+        };
+        self.selection_autoscroll.update_pointer(area, pointer);
+        let needs_frame = self.selection_autoscroll.needs_frame();
+        self.selection_autoscroll_last_tick = needs_frame.then_some(now);
+        needs_frame
+    }
+
+    fn advance_selection_autoscroll_by(&mut self, area: Rect, elapsed: Duration) -> bool {
+        let Some(step) = self.selection_autoscroll.advance(elapsed) else {
+            return self.selection_autoscroll.needs_frame();
+        };
+        let direction = match step.direction {
+            AutoscrollDirection::Up => MouseScrollDirection::Up,
+            AutoscrollDirection::Down => MouseScrollDirection::Down,
+        };
+        let moved = self.content.scroll_rows(direction, step.rows);
+        if moved == 0 {
+            self.stop_selection_autoscroll();
+            return false;
+        }
+        if let Some(point) = self.selection_point(area, step.pointer, /*clamp*/ true) {
+            self.selection.update(point);
+        }
+        if moved < step.rows {
+            self.stop_selection_autoscroll();
+            return false;
+        }
+        true
+    }
+
+    fn stop_selection_autoscroll(&mut self) {
+        self.selection_autoscroll.reset();
+        self.selection_autoscroll_last_tick = None;
     }
 
     pub(crate) fn push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
@@ -240,7 +331,17 @@ impl ConversationViewport {
             if width_is_stable {
                 return;
             }
-            self.cancel_selection();
+            match (self.live_tail_key, active_key) {
+                (None, _) => return,
+                (Some(current), Some(next))
+                    if current.revision == next.revision
+                        && current.is_stream_continuation == next.is_stream_continuation =>
+                {
+                    // The semantic live tail is unchanged, so it is safe to re-render it at the
+                    // new width before remapping the selection's source-backed endpoints.
+                }
+                _ => self.cancel_selection(),
+            }
         }
         let next_key = active_key.map(|key| LiveTailKey {
             width,
@@ -252,9 +353,11 @@ impl ConversationViewport {
             return;
         }
 
-        let follow_bottom = self.content.is_following_bottom();
+        let follow_bottom = !self.selection.is_active() && self.content.is_following_bottom();
         self.take_live_tail_renderables();
-        self.selection_projection_cache = None;
+        if !self.selection.is_active() {
+            self.selection_projection_cache = None;
+        }
         self.live_tail_key = next_key;
         self.live_cells.clear();
         if next_key.is_some() {
@@ -381,6 +484,50 @@ impl ConversationViewport {
         }
     }
 
+    fn selection_bookmarks(&mut self) -> Option<SelectionBookmarks> {
+        let (anchor, focus) = self.selection.endpoints()?;
+        for point in [anchor, focus] {
+            let cell = self
+                .selection_projection_cache
+                .as_ref()?
+                .layout
+                .iter()
+                .position(|layout| {
+                    layout.height > 0
+                        && point.row >= layout.top
+                        && point.row < layout.top.saturating_add(layout.height)
+                });
+            if let Some(cell) = cell {
+                self.ensure_cell_projection(cell);
+            }
+        }
+        let cache = self.selection_projection_cache.as_ref()?;
+        SelectionBookmarks::capture(
+            &self.selection,
+            &cache.projections,
+            &cache.layout,
+            self.content.scroll_offset(),
+        )
+    }
+
+    fn restore_selection_bookmarks(&mut self, bookmarks: SelectionBookmarks) -> bool {
+        let projected_cells = bookmarks.projected_cells().collect::<Vec<_>>();
+        for cell in projected_cells {
+            self.ensure_cell_projection(cell);
+        }
+        let Some(restored) = self
+            .selection_projection_cache
+            .as_ref()
+            .and_then(|cache| bookmarks.restore(&cache.projections, &cache.layout, cache.width))
+        else {
+            return false;
+        };
+        self.selection
+            .remap_endpoints(restored.anchor, restored.focus);
+        self.content.set_scroll_offset(restored.scroll_offset);
+        true
+    }
+
     fn ensure_selection_projections(&mut self, width: u16) {
         let current_cell_count = self.cells.len().saturating_add(self.live_cells.len());
         let cache_matches = self
@@ -394,7 +541,10 @@ impl ConversationViewport {
         if cache_matches {
             return;
         }
-        self.cancel_selection();
+        let selection_was_active = self.selection.is_active();
+        let bookmarks = selection_was_active
+            .then(|| self.selection_bookmarks())
+            .flatten();
         let selection_cell_count = self.cells.len().saturating_add(self.live_cells.len());
         let renderable_heights = self.content.renderable_heights(width);
         let mut content_top = 0usize;
@@ -451,6 +601,11 @@ impl ConversationViewport {
             computed,
             layout,
         });
+        if selection_was_active
+            && !bookmarks.is_some_and(|bookmarks| self.restore_selection_bookmarks(bookmarks))
+        {
+            self.cancel_selection();
+        }
     }
 
     fn ensure_cell_projection(&mut self, index: usize) {

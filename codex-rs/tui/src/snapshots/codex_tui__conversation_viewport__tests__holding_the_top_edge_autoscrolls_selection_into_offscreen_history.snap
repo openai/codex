@@ -1,0 +1,12 @@
+---
+source: tui/src/conversation_viewport_tests.rs
+expression: "format!(\"text:\\n{text}\\nselection:\\n{mask}\")"
+---
+text:
+
+three
+
+selection:
+....................
+#####...............
+....................

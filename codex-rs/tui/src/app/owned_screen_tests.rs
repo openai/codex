@@ -563,6 +563,25 @@ async fn text_drag_crosses_divider_but_divider_press_takes_priority() {
             .expect("parent owned screen")
             .selection_is_active()
     );
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(MousePrimaryEventKind::Drag, u16::MAX, u16::MAX),
+    ));
+    assert!(!app.chat_widget.owned_screen_split_is_dragging());
+    assert!(
+        !app.chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side owned screen")
+            .selection_is_active()
+    );
+    let selected = app
+        .chat_widget
+        .by_slot_mut(PaneSlot::Parent)
+        .and_then(|pane| pane.owned_screen.as_mut())
+        .expect("parent owned screen")
+        .finish_selection(Position::new(/*x*/ u16::MAX, /*y*/ u16::MAX));
+    assert_eq!(selected, Some("parent selectable".to_string()));
 
     assert!(app.handle_owned_screen_mouse_primary(
         &mut tui,
@@ -584,6 +603,56 @@ async fn text_drag_crosses_divider_but_divider_press_takes_priority() {
             conversation.y,
         ),
     ));
+}
+
+#[tokio::test]
+async fn edge_selection_schedules_frames_and_survives_resize_events() -> Result<()> {
+    let mut app = app_with_owned_parent().await;
+    seed_pane(
+        &mut app,
+        PaneSlot::Parent,
+        "",
+        &[
+            "zero", "one", "two", "three", "four", "five", "six", "seven",
+        ],
+    );
+    let _terminal = render_app(&mut app, /*width*/ 40, /*height*/ 8);
+    let area = app
+        .chat_widget
+        .owned_screen
+        .as_ref()
+        .expect("parent owned screen")
+        .last_conversation_area;
+    let mut input_tui = crate::tui::test_support::make_test_tui().expect("create input test TUI");
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut input_tui,
+        primary_press(area.x, area.bottom().saturating_sub(/*rhs*/ 1),),
+    ));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut input_tui,
+        primary_event(MousePrimaryEventKind::Drag, area.x, area.y),
+    ));
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create render test TUI");
+    let mut draw_rx = tui.subscribe_draws_for_test();
+
+    app.render_owned_screen_frame(&mut tui)
+        .expect("render owned screen");
+
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), draw_rx.recv())
+        .await
+        .expect("timed out waiting for autoscroll frame")
+        .expect("draw channel closed");
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize)
+        .await?;
+    assert!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen")
+            .selection_is_active()
+    );
+    Ok(())
 }
 
 #[tokio::test]

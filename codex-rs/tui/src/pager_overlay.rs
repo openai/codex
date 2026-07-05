@@ -520,8 +520,48 @@ impl PagerContent {
         self.view.apply_mouse_scroll(direction);
     }
 
+    pub(crate) fn scroll_mouse_wheel_rows(&mut self, direction: MouseScrollDirection) -> usize {
+        self.scroll_rows(direction, MOUSE_SCROLL_ROWS)
+    }
+
+    /// Scrolls by an explicit number of rows and returns the distance actually travelled.
+    ///
+    /// Unlike the pager's ordinary input handlers, this clamps immediately against the most
+    /// recently rendered content. Selection autoscroll needs the resolved offset before it maps
+    /// the stationary pointer back into content coordinates.
+    pub(crate) fn scroll_rows(&mut self, direction: MouseScrollDirection, rows: usize) -> usize {
+        if let (Some(content_height), Some(viewport_height)) = (
+            self.view.last_rendered_height,
+            self.view.last_content_height,
+        ) {
+            self.view
+                .resolve_scroll_offset(content_height, viewport_height);
+        }
+        let before = self.view.scroll_offset;
+        match direction {
+            MouseScrollDirection::Up => self.view.scroll_up_rows(rows),
+            MouseScrollDirection::Down => self.view.scroll_down_rows(rows),
+        }
+        if let (Some(content_height), Some(viewport_height)) = (
+            self.view.last_rendered_height,
+            self.view.last_content_height,
+        ) {
+            self.view
+                .resolve_scroll_offset(content_height, viewport_height);
+        }
+        match direction {
+            MouseScrollDirection::Up => before.saturating_sub(self.view.scroll_offset),
+            MouseScrollDirection::Down => self.view.scroll_offset.saturating_sub(before),
+        }
+    }
+
     pub(crate) fn scroll_offset(&self) -> usize {
         self.view.scroll_offset
+    }
+
+    pub(crate) fn set_scroll_offset(&mut self, scroll_offset: usize) {
+        self.view.scroll_offset = scroll_offset;
+        self.view.pending_rows_from_bottom = 0;
     }
 }
 

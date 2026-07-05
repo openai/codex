@@ -1273,7 +1273,6 @@ See the Codex keymap documentation for supported actions and examples."
         match &event {
             TuiEvent::Resize => {
                 self.chat_widget.cancel_owned_screen_split_drag();
-                self.cancel_owned_screen_selection();
             }
             TuiEvent::FocusLost => {
                 let split_canceled = self.chat_widget.cancel_owned_screen_split_drag();

@@ -12,6 +12,7 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
+use std::time::Duration;
 
 use super::*;
 use crate::history_cell::AgentMarkdownCell;
@@ -744,6 +745,58 @@ fn mouse_wheel_extends_an_active_selection_into_offscreen_history() {
 }
 
 #[test]
+fn holding_the_top_edge_autoscrolls_selection_into_offscreen_history() {
+    let mut viewport = viewport(vec![
+        cell("zero"),
+        cell("one"),
+        cell("two"),
+        cell("three"),
+        cell("four"),
+        cell("five"),
+        cell("six"),
+        cell("seven"),
+    ]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 3,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert_eq!(viewport.content.scroll_offset(), 12);
+
+    let anchor = Position::new(/*x*/ 4, /*y*/ 2);
+    let edge = Position::new(/*x*/ 0, /*y*/ 0);
+    assert!(viewport.begin_selection(area, anchor));
+    assert!(viewport.update_selection(area, edge));
+
+    assert!(viewport.advance_selection_autoscroll_by(area, Duration::from_millis(/*millis*/ 100),));
+    assert_eq!(viewport.content.scroll_offset(), 5);
+
+    let mut highlighted = Buffer::empty(area);
+    viewport.render(area, &mut highlighted);
+    let text = trimmed_buffer_text(&highlighted, area);
+    let mask = selection_mask(&highlighted, area);
+    assert_snapshot!(format!("text:\n{text}\nselection:\n{mask}"));
+    assert_eq!(
+        viewport.finish_selection(area, edge),
+        Some("three\n\nfour\n\nfive\n\nsix\n\nseven".to_string())
+    );
+}
+
+#[test]
+fn edge_autoscroll_stops_requesting_frames_at_history_boundary() {
+    let mut viewport = viewport(vec![cell("only")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 3,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    let edge = Position::new(/*x*/ 0, /*y*/ 0);
+    assert!(viewport.begin_selection(area, edge));
+    assert!(viewport.update_selection(area, edge));
+
+    assert!(!viewport.advance_selection_autoscroll_by(area, Duration::from_secs(/*secs*/ 1),));
+    assert!(!viewport.selection_autoscroll.needs_frame());
+}
+
+#[test]
 fn selection_hit_testing_accounts_for_scroll_offset_and_cell_spacing() {
     let mut viewport = viewport(vec![cell("oldest"), cell("LATEST")]);
     let area = Rect::new(
@@ -781,6 +834,9 @@ fn selection_can_start_in_right_padding_and_drag_backward() {
 
     assert!(viewport.begin_selection(area, Position::new(/*x*/ 19, /*y*/ 0)));
     assert!(viewport.update_selection(area, Position::new(/*x*/ 1, /*y*/ 0)));
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 10, /*height*/ 1,
+    );
     let mut highlighted = Buffer::empty(area);
     viewport.render(area, &mut highlighted);
     let mask = (area.x..area.right())
@@ -795,7 +851,7 @@ fn selection_can_start_in_right_padding_and_drag_backward() {
             }
         })
         .collect::<String>();
-    assert_snapshot!(mask, @".####...............");
+    assert_snapshot!(mask, @".####.....");
     assert_eq!(
         viewport.finish_selection(area, Position::new(/*x*/ 1, /*y*/ 0)),
         Some("ello".to_string())
@@ -884,7 +940,7 @@ fn replacing_cells_is_deferred_until_active_selection_finishes() {
 }
 
 #[test]
-fn width_change_safely_applies_a_deferred_shrinking_replacement() {
+fn width_change_preserves_selection_before_applying_a_deferred_replacement() {
     let mut viewport = viewport(vec![cell("first"), cell("second")]);
     let wide = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 3,
@@ -899,11 +955,46 @@ fn width_change_safely_applies_a_deferred_shrinking_replacement() {
     );
     viewport.render(narrow, &mut Buffer::empty(narrow));
 
-    assert!(!viewport.selection_is_active());
+    assert!(viewport.selection_is_active());
+    assert_eq!(viewport.committed_cell_count(), 2);
+    assert_eq!(
+        viewport.finish_selection(narrow, Position::new(/*x*/ 4, /*y*/ 0)),
+        Some("first".to_string())
+    );
     assert_eq!(viewport.committed_cell_count(), 1);
     let mut updated = Buffer::empty(narrow);
     viewport.render(narrow, &mut updated);
     assert!(buffer_text(&updated, narrow).starts_with("new"));
+}
+
+#[test]
+fn width_change_remaps_selection_to_the_same_source_range() {
+    let source = "alpha beta gamma delta epsilon";
+    let mut viewport = viewport(vec![cell("012345678901234567890123456789"), cell(source)]);
+    let wide = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 2,
+    );
+    viewport.render(wide, &mut Buffer::empty(wide));
+    assert_eq!(viewport.content.scroll_offset(), 1);
+    assert!(viewport.begin_selection(wide, Position::new(/*x*/ 6, /*y*/ 1)));
+    assert!(viewport.update_selection(wide, Position::new(/*x*/ 15, /*y*/ 1)));
+
+    let narrow = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 10, /*height*/ 4,
+    );
+    let mut highlighted = Buffer::empty(narrow);
+    viewport.render(narrow, &mut highlighted);
+
+    assert!(viewport.selection_is_active());
+    assert_eq!(viewport.content.scroll_offset(), 4);
+    let text = trimmed_buffer_text(&highlighted, narrow);
+    let mask = selection_mask(&highlighted, narrow);
+    assert_snapshot!(format!("text:\n{text}\nselection:\n{mask}"));
+
+    assert_eq!(
+        viewport.finish_selection(narrow, Position::new(/*x*/ 15, /*y*/ 1)),
+        Some("beta gamma".to_string())
+    );
 }
 
 #[test]
@@ -933,7 +1024,8 @@ fn committed_stream_chunks_are_deferred_until_active_selection_finishes() {
 
 #[test]
 fn live_tail_updates_are_frozen_while_selecting_live_text() {
-    let mut viewport = viewport(vec![cell("committed")]);
+    let live_text = "live one wraps across several terminal rows";
+    let mut viewport = viewport(vec![cell("older"), cell("012345678901234567890123456789")]);
     viewport.sync_live_tail(
         /*width*/ 20,
         Some(ActiveCellRenderKey {
@@ -943,7 +1035,7 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
         }),
         |width| {
             Some(vec![live_cell(
-                width, "live one", /*is_stream_continuation*/ false,
+                width, live_text, /*is_stream_continuation*/ false,
             )])
         },
     );
@@ -951,10 +1043,30 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
         /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 4,
     );
     viewport.render(area, &mut Buffer::empty(area));
-    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 2),));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 1),));
+
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 10, /*height*/ 4,
+    );
+    viewport.sync_live_tail(
+        area.width,
+        Some(ActiveCellRenderKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation_tick: Some(1),
+        }),
+        |width| {
+            Some(vec![live_cell(
+                width, live_text, /*is_stream_continuation*/ false,
+            )])
+        },
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert!(viewport.selection_is_active());
+    assert_eq!(viewport.content.scroll_offset(), 5);
 
     viewport.sync_live_tail(
-        /*width*/ 20,
+        area.width,
         Some(ActiveCellRenderKey {
             revision: 1,
             is_stream_continuation: false,
@@ -974,12 +1086,12 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
     assert!(viewport.selection_is_active());
     assert!(buffer_text(&frozen, area).contains("live one"));
     assert!(!buffer_text(&frozen, area).contains("live two"));
-    assert!(viewport.update_selection(area, Position::new(/*x*/ 7, /*y*/ 2),));
+    assert!(viewport.update_selection(area, Position::new(/*x*/ 7, /*y*/ 1),));
     let mut highlighted = Buffer::empty(area);
     viewport.render(area, &mut highlighted);
     let mask = (area.x..area.right())
         .map(|x| {
-            if highlighted[(x, area.y.saturating_add(/*rhs*/ 2))]
+            if highlighted[(x, area.y.saturating_add(/*rhs*/ 1))]
                 .modifier
                 .contains(Modifier::REVERSED)
             {
@@ -989,9 +1101,9 @@ fn live_tail_updates_are_frozen_while_selecting_live_text() {
             }
         })
         .collect::<String>();
-    assert_snapshot!(mask, @"########............");
+    assert_snapshot!(mask, @"########..");
     assert_eq!(
-        viewport.finish_selection(area, Position::new(/*x*/ 7, /*y*/ 2)),
+        viewport.finish_selection(area, Position::new(/*x*/ 7, /*y*/ 1)),
         Some("live one".to_string())
     );
 }
@@ -1367,25 +1479,8 @@ fn selected_user_prompt_highlights_source_glyphs_without_chrome_or_padding() {
 
     let mut highlighted = Buffer::empty(area);
     viewport.render(area, &mut highlighted);
-    let text = buffer_text(&highlighted, area)
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mask = (area.y..area.bottom())
-        .map(|y| {
-            (area.x..area.right())
-                .map(|x| {
-                    if highlighted[(x, y)].modifier.contains(Modifier::REVERSED) {
-                        '#'
-                    } else {
-                        '.'
-                    }
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = trimmed_buffer_text(&highlighted, area);
+    let mask = selection_mask(&highlighted, area);
 
     assert_snapshot!(format!("text:\n{text}\nselection:\n{mask}"));
     assert_eq!(
@@ -1404,4 +1499,29 @@ fn buffer_text(buffer: &Buffer, area: Rect) -> String {
         rows.push(row);
     }
     rows.join("\n")
+}
+
+fn trimmed_buffer_text(buffer: &Buffer, area: Rect) -> String {
+    buffer_text(buffer, area)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn selection_mask(buffer: &Buffer, area: Rect) -> String {
+    (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| {
+                    if buffer[(x, y)].modifier.contains(Modifier::REVERSED) {
+                        '#'
+                    } else {
+                        '.'
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
