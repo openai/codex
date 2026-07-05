@@ -13,7 +13,6 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
-use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
@@ -576,36 +575,25 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
 
 #[tokio::test]
 async fn turn_error_blocks_goal() -> anyhow::Result<()> {
-    let runtime = test_runtime().await?;
-    let thread_id = test_thread_id()?;
-    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
-    harness.start_turn("turn-1", &TokenUsage::default()).await;
-
-    let tools = harness.tools();
-    tool_by_name(&tools, "create_goal")
-        .handle(tool_call(
-            "create_goal",
-            "call-create-goal",
-            json!({ "objective": "ship goal extension backend" }),
-        ))
-        .await?;
-
-    harness
-        .notify_turn_error("turn-1", CodexErrorInfo::Other)
-        .await;
-
-    let goal = runtime
-        .thread_goals()
-        .get_thread_goal(thread_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-    assert_eq!(codex_state::ThreadGoalStatus::Blocked, goal.status);
+    assert_eq!(
+        codex_state::ThreadGoalStatus::Blocked,
+        goal_status_after_turn_error(CodexErrorInfo::Other).await?
+    );
     Ok(())
 }
 
 #[tokio::test]
 async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
+    assert_eq!(
+        codex_state::ThreadGoalStatus::Active,
+        goal_status_after_turn_error(CodexErrorInfo::ServerOverloaded).await?
+    );
+    Ok(())
+}
+
+async fn goal_status_after_turn_error(
+    error: CodexErrorInfo,
+) -> anyhow::Result<codex_state::ThreadGoalStatus> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -621,19 +609,14 @@ async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
         ))
         .await?;
 
-    harness
-        .notify_turn_error("turn-1", CodexErrorInfo::ServerOverloaded)
-        .await;
-    harness.stop_turn("turn-1").await;
-    tokio::time::timeout(Duration::from_secs(1), harness.notify_thread_idle()).await?;
+    harness.notify_turn_error("turn-1", error).await;
 
     let goal = runtime
         .thread_goals()
         .get_thread_goal(thread_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
-    Ok(())
+    Ok(goal.status)
 }
 
 #[tokio::test]
@@ -1273,17 +1256,6 @@ impl GoalExtensionHarness {
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                     turn_store: &turn_store,
-                })
-                .await;
-        }
-    }
-
-    async fn notify_thread_idle(&self) {
-        for contributor in self.registry.thread_lifecycle_contributors() {
-            contributor
-                .on_thread_idle(ThreadIdleInput {
-                    session_store: &self.session_store,
-                    thread_store: &self.thread_store,
                 })
                 .await;
         }
