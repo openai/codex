@@ -19,7 +19,10 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 pub(crate) mod chunking;
 pub(crate) mod commit_tick;
 pub(crate) mod controller;
+mod surface;
 mod table_holdback;
+
+pub(crate) use surface::StreamSurface;
 
 struct QueuedLine {
     line: HyperlinkLine,

@@ -59,6 +59,7 @@ impl ChatWidget {
         self.transcript.reset_turn_flags();
         self.adaptive_chunking.reset();
         if self.plan_stream_controller.take().is_some() {
+            self.clear_active_stream_tail();
             self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
@@ -124,16 +125,24 @@ impl ChatWidget {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take() {
+            let retained_stream = self.stream_surface == StreamSurface::Retained;
             let had_live_tail = controller.has_live_tail();
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if !had_live_tail && let Some(cell) = cell {
-                self.add_boxed_history(cell);
-            }
-            if let Some(source) = source {
-                self.note_stream_consolidation_queued();
-                self.app_event_tx
-                    .send(AppEvent::ConsolidateProposedPlan(source));
+            if retained_stream {
+                if let Some(source) = source {
+                    let cwd = self.config.cwd.to_path_buf();
+                    self.queue_retained_stream_cell(history_cell::new_proposed_plan(source, &cwd));
+                }
+            } else {
+                if !had_live_tail && let Some(cell) = cell {
+                    self.add_boxed_history(cell);
+                }
+                if let Some(source) = source {
+                    self.note_stream_commit_queued();
+                    self.app_event_tx
+                        .send(AppEvent::ConsolidateProposedPlan(source));
+                }
             }
             self.request_pending_usage_output_insertion_after_stream_shutdown();
         }
@@ -306,9 +315,33 @@ impl ChatWidget {
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
         self.clear_safety_buffering();
-        // Drop preview-only stream tail content on any termination path before
-        // failed-cell finalization, so transient tail cells are never persisted.
+        let retained_sources = if self.stream_surface == StreamSurface::Retained {
+            (
+                self.stream_controller
+                    .as_ref()
+                    .and_then(StreamController::retained_live_source)
+                    .map(str::to_owned),
+                self.plan_stream_controller
+                    .as_ref()
+                    .and_then(PlanStreamController::retained_live_source)
+                    .map(str::to_owned),
+            )
+        } else {
+            (None, None)
+        };
+        // Persist completed retained source below while dropping any incomplete
+        // preview suffix before failed-cell finalization.
         self.clear_active_stream_tail();
+        if self.stream_surface == StreamSurface::Retained {
+            let cwd = self.config.cwd.to_path_buf();
+            if let Some(source) = retained_sources.0 {
+                let source = parse_assistant_markdown(&source, cwd.as_path()).visible_markdown;
+                self.queue_retained_stream_cell(history_cell::AgentMarkdownCell::new(source, &cwd));
+            }
+            if let Some(source) = retained_sources.1 {
+                self.queue_retained_stream_cell(history_cell::new_proposed_plan(source, &cwd));
+            }
+        }
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Turn-scoped hook rows are transient live state; once the turn is over,

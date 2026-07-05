@@ -153,6 +153,15 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent, origin: Option<Conversatio
             });
             write_inbound_app_event(value, origin);
         }
+        AppEvent::CommitRetainedStreamCell(cell) => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "commit_retained_stream_cell",
+                "lines": cell.transcript_lines(u16::MAX).len(),
+            });
+            write_inbound_app_event(value, origin);
+        }
         AppEvent::StartFileSearch(query) => {
             let value = json!({
                 "ts": now_ts(),

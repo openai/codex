@@ -728,6 +728,12 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Atomically commit the final semantic cell for a retained stream.
+    ///
+    /// The app releases the stream-ordering barrier only after inserting this cell, preventing
+    /// asynchronous usage output from overtaking the finalized assistant message or plan.
+    CommitRetainedStreamCell(Box<dyn HistoryCell>),
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 

@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "format!(\"wide (72 columns):\\n{wide}\\nnarrow (32 columns):\\n{narrow}\")"
+---
+wide (72 columns):
+• Table status:
+
+   Item     Notes
+  ━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   alpha    a longer description that wraps when narrow
+
+narrow (32 columns):
+• Table status:
+
+   Item     Notes
+  ━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━
+   alpha    a longer
+            description that
+            wraps when narrow

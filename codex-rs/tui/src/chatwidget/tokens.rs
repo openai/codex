@@ -7,7 +7,7 @@
 //! matching response arrives, [`TokenActivityHandle`] updates the shared card state
 //! and [`ChatWidget::finish_token_activity_refresh`] moves the cell into a completed
 //! slot. Event dispatch commits that completed cell into history only after active
-//! output and stream consolidation no longer block insertion.
+//! output and stream commits no longer block insertion.
 //!
 //! Pure chart rendering and date bucketing live in [`chart`]. This module owns
 //! request correlation, transient/completed card state, and integration with
@@ -232,33 +232,31 @@ impl ChatWidget {
 
     /// Reports whether completed asynchronous usage output must wait before insertion.
     ///
-    /// Inserting while a stream, queued consolidation, or active transcript cell is
+    /// Inserting while a stream, queued commit, or active transcript cell is
     /// present can reorder output relative to visible work, so callers retry once
     /// these barriers clear.
     pub(crate) fn usage_history_insertion_blocked(&self) -> bool {
         self.stream_controller.is_some()
             || self.plan_stream_controller.is_some()
-            || self.pending_stream_consolidations > 0
+            || self.pending_stream_commits > 0
             || self.transcript.active_cell.is_some()
             || self.active_hook_cell.is_some()
     }
 
-    /// Records a stream consolidation barrier that delays token card insertion.
+    /// Records a stream commit barrier that delays token card insertion.
     ///
-    /// Each queued consolidation should eventually call
-    /// [`ChatWidget::note_stream_consolidation_completed`].
-    pub(crate) fn note_stream_consolidation_queued(&mut self) {
-        self.pending_stream_consolidations =
-            self.pending_stream_consolidations.saturating_add(/*rhs*/ 1);
+    /// Each queued commit should eventually call
+    /// [`ChatWidget::note_stream_commit_completed`].
+    pub(crate) fn note_stream_commit_queued(&mut self) {
+        self.pending_stream_commits = self.pending_stream_commits.saturating_add(/*rhs*/ 1);
     }
 
-    /// Releases one queued stream consolidation barrier.
+    /// Releases one queued stream commit barrier.
     ///
     /// The counter saturates at zero so an unmatched completion does not underflow,
     /// but paired queue/completion calls are still the intended contract.
-    pub(crate) fn note_stream_consolidation_completed(&mut self) {
-        self.pending_stream_consolidations =
-            self.pending_stream_consolidations.saturating_sub(/*rhs*/ 1);
+    pub(crate) fn note_stream_commit_completed(&mut self) {
+        self.pending_stream_commits = self.pending_stream_commits.saturating_sub(/*rhs*/ 1);
     }
 
     /// Transfers the completed token activity card into the history insertion path.

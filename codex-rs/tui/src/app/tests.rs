@@ -6096,14 +6096,14 @@ async fn late_usage_result_can_follow_finalized_plan() {
         other => panic!("expected token activity refresh request, got {other:?}"),
     };
 
-    app.chat_widget.note_stream_consolidation_queued();
+    app.chat_widget.note_stream_commit_queued();
     app.chat_widget
         .transcript_cells
         .push(Arc::new(history_cell::new_proposed_plan_stream(
             vec![Line::from("finalized plan")],
             /*is_stream_continuation*/ false,
         )));
-    app.chat_widget.note_stream_consolidation_completed();
+    app.chat_widget.note_stream_commit_completed();
 
     assert!(
         app.chat_widget.finish_token_activity_refresh(

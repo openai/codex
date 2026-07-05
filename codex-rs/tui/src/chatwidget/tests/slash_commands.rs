@@ -1438,14 +1438,14 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
 }
 
 #[tokio::test]
-async fn completed_token_activity_refresh_waits_for_queued_stream_consolidation() {
+async fn completed_token_activity_refresh_waits_for_queued_stream_commit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
     let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     chat.on_agent_message_delta("partial response".to_string());
     chat.finalize_completed_assistant_message(/*message*/ None);
-    assert!(chat.pending_stream_consolidations > 0);
+    assert!(chat.pending_stream_commits > 0);
 
     assert!(
         chat.finish_token_activity_refresh(
@@ -1455,7 +1455,7 @@ async fn completed_token_activity_refresh_waits_for_queued_stream_consolidation(
     );
     assert!(chat.usage_history_insertion_blocked());
 
-    chat.note_stream_consolidation_completed();
+    chat.note_stream_commit_completed();
 
     assert!(!chat.usage_history_insertion_blocked());
 }
@@ -1535,6 +1535,7 @@ async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
         /*width*/ None,
         &chat.config.cwd,
         chat.history_render_mode(),
+        crate::streaming::StreamSurface::Inline,
     );
     controller.push("Plan details");
     chat.plan_stream_controller = Some(controller);

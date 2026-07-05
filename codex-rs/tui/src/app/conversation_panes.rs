@@ -27,6 +27,7 @@ use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::streaming::StreamSurface;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui::MousePrimaryEvent;
 
@@ -66,6 +67,14 @@ impl ConversationPane {
         {
             return Err(init);
         }
+
+        let mut init = init;
+        let stream_surface = if init.owned_screen.is_some() {
+            StreamSurface::Retained
+        } else {
+            StreamSurface::Inline
+        };
+        init.chat_widget.set_stream_surface(stream_surface);
 
         Ok(Self {
             slot,

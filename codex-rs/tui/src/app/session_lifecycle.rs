@@ -350,6 +350,12 @@ impl App {
             chat_widget.last_terminal_title = previous_terminal_title;
         }
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
+        let stream_surface = if self.chat_widget.owned_screen.is_some() {
+            crate::streaming::StreamSurface::Retained
+        } else {
+            crate::streaming::StreamSurface::Inline
+        };
+        chat_widget.set_stream_surface(stream_surface);
         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
             chat_widget.set_collab_agent_metadata(
                 thread_id,

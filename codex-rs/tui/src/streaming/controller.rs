@@ -1,8 +1,10 @@
-//! Two-region streaming controllers for agent messages and proposed plans.
+//! Streaming controllers for agent messages and proposed plans.
 //!
-//! Each stream partitions rendered markdown into a *stable region* (committed
+//! Inline streams partition rendered markdown into a *stable region* (committed
 //! to scrollback via the animation queue in `StreamState`) and a *tail region*
 //! (mutable, displayed in the active-cell slot as a transient stream-tail cell).
+//! Retained streams expose their complete source as one mutable entry for the
+//! application-owned viewport to render and replace in place.
 //!
 //! `StreamCore` owns the shared bookkeeping: source accumulation, re-rendering,
 //! stable/tail partitioning, commit-animation queue management, and terminal
@@ -16,16 +18,18 @@
 //! (`table_holdback_state`) detects pipe-table patterns (header + delimiter
 //! pair) in the accumulated source and keeps content from the table header
 //! onward as mutable tail until the stream finalizes. Holdback is enabled for
-//! agent and proposed-plan streams. Lines in `Outside` and `Markdown` fence
-//! contexts are scanned; lines inside non-markdown fences are skipped.
+//! inline agent and proposed-plan streams. Retained streams keep the full
+//! source mutable and do not need table detection. Lines in `Outside` and
+//! `Markdown` fence contexts are scanned; lines inside non-markdown fences are
+//! skipped.
 //!
 //! ## Resize handling
 //!
 //! On terminal width change, `StreamCore::set_width` re-renders at the new
-//! width and rebuilds the queued stable region from the current emitted line
-//! count. This intentionally avoids byte-level remap complexity while the
-//! stream is active; finalized content is canonicalized by transcript
-//! consolidation into source-backed markdown cells.
+//! width. Inline streams rebuild the queued stable region from the current
+//! emitted line count; retained streams keep only source and let their live
+//! canonical cell re-render. Finalized content is canonicalized into
+//! source-backed markdown cells.
 //!
 //! ## Invariants
 //!
@@ -59,6 +63,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::StreamState;
+use super::StreamSurface;
 use super::table_holdback::TableHoldbackScanner;
 use super::table_holdback::TableHoldbackState;
 #[cfg(test)]
@@ -68,21 +73,25 @@ use super::table_holdback::table_holdback_state;
 // StreamCore — shared bookkeeping for both stream controllers
 // ---------------------------------------------------------------------------
 
-/// Shared state and logic for the two-region streaming model.
+/// Shared state and logic for inline and retained streaming models.
 ///
 /// Both [`StreamController`] (agent messages) and [`PlanStreamController`]
 /// (proposed plans) delegate their core bookkeeping here: source
 /// accumulation, re-rendering, stable/tail partitioning, commit-animation
-/// queue management, and terminal resize handling.
+/// queue management, and terminal resize handling. A retained surface keeps
+/// source only; its application-owned cell handles live rendering.
 ///
 /// The wrapping controllers add only their own `emit()` styling and
 /// finalize return types.
 struct StreamCore {
     state: StreamState,
+    surface: StreamSurface,
     /// Current rendering width (columns available for markdown content).
     width: Option<usize>,
     /// Accumulated raw markdown source for the current stream.
     raw_source: String,
+    /// Revision of newline-completed source exposed by a retained stream.
+    retained_source_revision: u64,
     /// Full re-render of `raw_source` at `width`. Rebuilt on every committed delta.
     rendered_lines: Vec<HyperlinkLine>,
     /// Lines enqueued into the commit-animation queue.
@@ -120,11 +129,18 @@ struct StreamSelectionProjection {
 }
 
 impl StreamCore {
-    fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+    fn new(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        surface: StreamSurface,
+    ) -> Self {
         Self {
             state: StreamState::new(width, cwd),
+            surface,
             width,
             raw_source: String::with_capacity(1024),
+            retained_source_revision: 0,
             rendered_lines: Vec::with_capacity(64),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
@@ -153,7 +169,10 @@ impl StreamCore {
         if delta.contains('\n')
             && let Some(committed_source) = self.state.collector.commit_complete_source()
         {
-            self.raw_source.push_str(&committed_source);
+            self.append_completed_source(&committed_source);
+            if self.surface.is_retained() {
+                return false;
+            }
             self.holdback_scanner.push_source_chunk(&committed_source);
             self.recompute_streaming_render();
             enqueued = self.sync_stable_queue();
@@ -161,18 +180,24 @@ impl StreamCore {
         enqueued
     }
 
-    /// Drain the collector, render the final source snapshot, and return lines not yet emitted.
+    /// Drain the collector and return inline lines not yet emitted.
     ///
-    /// This intentionally re-renders from the full raw source instead of
+    /// Inline mode intentionally re-renders from the full raw source instead of
     /// trying to stitch together queued stable lines and the current tail. The
     /// final render is the canonical transcript representation used for
     /// consolidation, so callers that skip `reset()` can accidentally replay a
-    /// finished stream into the next answer.
+    /// finished stream into the next answer. Retained mode returns no lines;
+    /// its source-backed cell performs the canonical render.
     fn finalize_remaining(&mut self) -> Vec<HyperlinkLine> {
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
-            self.raw_source.push_str(&remainder_source);
+            self.append_completed_source(&remainder_source);
+            if self.surface.is_retained() {
+                return Vec::new();
+            }
             self.holdback_scanner.push_source_chunk(&remainder_source);
+        } else if self.surface.is_retained() {
+            return Vec::new();
         }
         self.rendered_lines = self.render_source(&self.raw_source);
         self.selection_projection_cache.take();
@@ -221,13 +246,15 @@ impl StreamCore {
         self.state.oldest_queued_age(now)
     }
 
-    /// Lines that belong to the mutable tail, not yet queued for stable commit.
+    /// Inline lines that belong to the mutable tail, not yet queued for stable commit.
     ///
     /// The tail starts at `enqueued_stable_len`, so this returns the portion
     /// of the current render snapshot that is still allowed to change without
     /// violating scrollback ordering. If callers were to derive the tail from
     /// `emitted_stable_len` instead, queued-but-not-yet-emitted lines could
     /// reappear in the active cell and duplicate content on screen.
+    /// Retained callers render [`Self::retained_live_source`] directly, so no
+    /// duplicate controller-owned render is maintained for that surface.
     #[inline]
     fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
@@ -250,12 +277,31 @@ impl StreamCore {
     }
 
     fn current_tail_selection_fragment(&self) -> Option<StreamSelectionFragment> {
+        if self.surface.is_retained() {
+            return None;
+        }
         self.selection_fragment(self.enqueued_stable_len..self.rendered_lines.len())
+    }
+
+    fn retained_live_source(&self) -> Option<&str> {
+        self.surface
+            .is_retained()
+            .then_some(self.raw_source.as_str())
+            .filter(|source| !source.is_empty())
+    }
+
+    fn retained_source_revision(&self) -> Option<u64> {
+        self.retained_live_source()
+            .map(|_| self.retained_source_revision)
     }
 
     #[inline]
     fn has_tail(&self) -> bool {
-        self.enqueued_stable_len < self.rendered_lines.len()
+        if self.surface.is_retained() {
+            !self.raw_source.is_empty()
+        } else {
+            self.enqueued_stable_len < self.rendered_lines.len()
+        }
     }
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
@@ -271,10 +317,13 @@ impl StreamCore {
         if self.width == width {
             return;
         }
-        let had_pending_queue = self.state.queued_len() > 0;
-        let had_live_tail = self.has_tail();
         self.width = width;
         self.state.collector.set_width(width);
+        if self.surface.is_retained() {
+            return;
+        }
+        let had_pending_queue = self.state.queued_len() > 0;
+        let had_live_tail = self.has_tail();
         if self.raw_source.is_empty() {
             return;
         }
@@ -305,12 +354,24 @@ impl StreamCore {
     fn reset(&mut self) {
         self.state.clear();
         self.raw_source.clear();
+        self.retained_source_revision = 0;
         self.rendered_lines.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
         self.selection_projection_cache.take();
         self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
+    }
+
+    fn append_completed_source(&mut self, source: &str) {
+        if source.is_empty() {
+            return;
+        }
+        self.raw_source.push_str(source);
+        if self.surface.is_retained() {
+            self.retained_source_revision =
+                self.retained_source_revision.saturating_add(/*rhs*/ 1);
+        }
     }
 
     fn render_source(&self, source: &str) -> Vec<HyperlinkLine> {
@@ -394,9 +455,12 @@ impl StreamCore {
             return;
         }
 
+        self.render_mode = render_mode;
+        if self.surface.is_retained() {
+            return;
+        }
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
-        self.render_mode = render_mode;
         if self.raw_source.is_empty() {
             return;
         }
@@ -419,6 +483,9 @@ impl StreamCore {
 
     /// Compute how many rendered lines should be in the stable region.
     fn compute_target_stable_len(&mut self) -> usize {
+        if self.surface.is_retained() {
+            return 0;
+        }
         let tail_budget = self.active_tail_budget_lines();
         self.rendered_lines
             .len()
@@ -569,9 +636,14 @@ impl StreamController {
     /// `width` is the content width available to markdown rendering, not necessarily the full
     /// terminal width. Passing a stale width after resize will keep queued live output wrapped for
     /// the old viewport until app-level reflow repairs the finalized transcript.
-    pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+    pub(crate) fn new(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        surface: StreamSurface,
+    ) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(width, cwd, render_mode, surface),
             header_emitted: false,
         }
     }
@@ -589,18 +661,28 @@ impl StreamController {
             self.core.reset();
             return (None, None);
         }
-        let selection_fragment = self
-            .core
-            .selection_fragment(rendered_start..self.core.rendered_lines.len());
+        let selection_fragment = if self.core.surface.is_retained() {
+            None
+        } else {
+            self.core
+                .selection_fragment(rendered_start..self.core.rendered_lines.len())
+        };
 
         // Move ownership — source is consumed before reset() clears it.
         let source = std::mem::take(&mut self.core.raw_source);
-        let out = self.emit(remaining, selection_fragment);
+        let out = if self.core.surface.is_retained() {
+            None
+        } else {
+            self.emit(remaining, selection_fragment)
+        };
         self.core.reset();
         (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
+        if self.core.surface.is_retained() {
+            return (None, true);
+        }
         let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick();
         let selection_fragment = self
@@ -613,6 +695,9 @@ impl StreamController {
         &mut self,
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
+        if self.core.surface.is_retained() {
+            return (None, true);
+        }
         let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick_batch(max_lines);
         let selection_fragment = self
@@ -641,6 +726,16 @@ impl StreamController {
     #[inline]
     pub(crate) fn current_tail_selection_fragment(&self) -> Option<StreamSelectionFragment> {
         self.core.current_tail_selection_fragment()
+    }
+
+    /// Completed source represented by the current retained live display.
+    pub(crate) fn retained_live_source(&self) -> Option<&str> {
+        self.core.retained_live_source()
+    }
+
+    /// Revision of the current completed retained source.
+    pub(crate) fn retained_source_revision(&self) -> Option<u64> {
+        self.core.retained_source_revision()
     }
 
     #[inline]
@@ -718,9 +813,14 @@ impl PlanStreamController {
     ///
     /// The width has the same meaning as in `StreamController`: it is the markdown body width, and
     /// callers must update it when the terminal width changes.
-    pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+    pub(crate) fn new(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        surface: StreamSurface,
+    ) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(width, cwd, render_mode, surface),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -739,22 +839,32 @@ impl PlanStreamController {
             self.core.reset();
             return (None, None);
         }
-        let selection_fragment = self
-            .core
-            .selection_fragment(rendered_start..self.core.rendered_lines.len());
+        let selection_fragment = if self.core.surface.is_retained() {
+            None
+        } else {
+            self.core
+                .selection_fragment(rendered_start..self.core.rendered_lines.len())
+        };
 
         // Move ownership — source is consumed before reset() clears it.
         let source = std::mem::take(&mut self.core.raw_source);
-        let out = self.emit(
-            remaining,
-            selection_fragment,
-            /*include_bottom_padding*/ true,
-        );
+        let out = if self.core.surface.is_retained() {
+            None
+        } else {
+            self.emit(
+                remaining,
+                selection_fragment,
+                /*include_bottom_padding*/ true,
+            )
+        };
         self.core.reset();
         (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
+        if self.core.surface.is_retained() {
+            return (None, true);
+        }
         let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick();
         let selection_fragment = self
@@ -774,6 +884,9 @@ impl PlanStreamController {
         &mut self,
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
+        if self.core.surface.is_retained() {
+            return (None, true);
+        }
         let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick_batch(max_lines);
         let selection_fragment = self
@@ -820,6 +933,16 @@ impl PlanStreamController {
             body_line_range: rendered.body_line_range,
             selection_fragment: self.core.current_tail_selection_fragment(),
         })
+    }
+
+    /// Completed source represented by the current retained live display.
+    pub(crate) fn retained_live_source(&self) -> Option<&str> {
+        self.core.retained_live_source()
+    }
+
+    /// Revision of the current completed retained source.
+    pub(crate) fn retained_source_revision(&self) -> Option<u64> {
+        self.core.retained_source_revision()
     }
 
     pub(crate) fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
@@ -915,11 +1038,30 @@ mod tests {
     }
 
     fn stream_controller(width: Option<usize>) -> StreamController {
-        StreamController::new(width, &test_cwd(), HistoryRenderMode::Rich)
+        StreamController::new(
+            width,
+            &test_cwd(),
+            HistoryRenderMode::Rich,
+            StreamSurface::Inline,
+        )
     }
 
     fn plan_stream_controller(width: Option<usize>) -> PlanStreamController {
-        PlanStreamController::new(width, &test_cwd(), HistoryRenderMode::Rich)
+        PlanStreamController::new(
+            width,
+            &test_cwd(),
+            HistoryRenderMode::Rich,
+            StreamSurface::Inline,
+        )
+    }
+
+    fn retained_stream_controller(width: Option<usize>) -> StreamController {
+        StreamController::new(
+            width,
+            &test_cwd(),
+            HistoryRenderMode::Rich,
+            StreamSurface::Retained,
+        )
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
@@ -982,6 +1124,59 @@ mod tests {
             lines.extend(cell.transcript_lines(u16::MAX));
         }
         lines_to_plain_strings(&lines)
+    }
+
+    #[test]
+    fn retained_agent_stream_keeps_source_without_provisional_cells() {
+        let width = Some(48);
+        let mut ctrl = retained_stream_controller(width);
+
+        assert_eq!(ctrl.retained_live_source(), None);
+        assert_eq!(ctrl.retained_source_revision(), None);
+        assert!(!ctrl.push("incomplete"));
+        assert_eq!(ctrl.retained_live_source(), None);
+        assert_eq!(ctrl.retained_source_revision(), None);
+        assert_eq!(ctrl.queued_lines(), 0);
+        assert!(ctrl.current_tail_lines().is_empty());
+        assert!(ctrl.current_tail_selection_fragment().is_none());
+
+        assert!(!ctrl.push(" line\n"));
+        let first_source = "incomplete line\n";
+        assert_eq!(ctrl.retained_live_source(), Some(first_source));
+        assert_eq!(ctrl.retained_source_revision(), Some(1));
+
+        assert!(!ctrl.push("another incomplete"));
+        assert_eq!(ctrl.retained_live_source(), Some(first_source));
+        assert_eq!(ctrl.retained_source_revision(), Some(1));
+
+        ctrl.set_width(/*width*/ Some(24));
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+        assert_eq!(ctrl.retained_live_source(), Some(first_source));
+        assert_eq!(ctrl.retained_source_revision(), Some(1));
+
+        let table = " line\n\n| Key | Value |\n| --- | --- |\n| first | short |\n";
+        assert!(!ctrl.push(table));
+        let source = format!("{first_source}another incomplete{table}");
+        assert_eq!(ctrl.retained_live_source(), Some(source.as_str()));
+        assert_eq!(ctrl.retained_source_revision(), Some(2));
+        assert!(ctrl.has_live_tail());
+        assert_eq!(ctrl.queued_lines(), 0);
+        assert!(ctrl.current_tail_lines().is_empty());
+        assert!(ctrl.current_tail_selection_fragment().is_none());
+
+        let (tick_cell, idle) = ctrl.on_commit_tick();
+        assert!(tick_cell.is_none());
+        assert!(idle);
+        assert_eq!(ctrl.queued_lines(), 0);
+
+        let (final_cell, finalized_source) = ctrl.finalize();
+        assert!(final_cell.is_none());
+        assert_eq!(finalized_source.as_deref(), Some(source.as_str()));
+        assert_eq!(ctrl.retained_live_source(), None);
+        assert_eq!(ctrl.retained_source_revision(), None);
+        assert_eq!(ctrl.queued_lines(), 0);
+        assert!(ctrl.current_tail_lines().is_empty());
+        assert!(ctrl.current_tail_selection_fragment().is_none());
     }
 
     #[test]
@@ -1935,6 +2130,7 @@ mod tests {
             /*width*/ Some(32),
             &test_cwd(),
             HistoryRenderMode::Rich,
+            StreamSurface::Inline,
         );
         ctrl.push(&source);
 

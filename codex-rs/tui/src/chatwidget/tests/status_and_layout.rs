@@ -258,15 +258,188 @@ async fn raw_output_mode_can_change_without_inserting_notice() {
     );
 }
 
+fn install_retained_plan_stream(chat: &mut ChatWidget, source: &str) {
+    let mut plan = crate::streaming::controller::PlanStreamController::new(
+        /*width*/ Some(80),
+        &chat.config.cwd,
+        HistoryRenderMode::Rich,
+        crate::streaming::StreamSurface::Retained,
+    );
+    assert!(!plan.push(source));
+    chat.plan_stream_controller = Some(plan);
+    chat.sync_active_stream_tail();
+}
+
+fn take_retained_commit(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Box<dyn HistoryCell> {
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::CommitRetainedStreamCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("retained stream commit")
+}
+
+#[tokio::test]
+async fn retained_stream_cells_only_rebuild_when_source_revision_changes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_stream_surface(crate::streaming::StreamSurface::Retained);
+    chat.handle_streaming_delta("first line\n".to_string());
+
+    let first_active_revision = chat.transcript.active_cell_revision;
+    assert_eq!(chat.transcript.retained_stream_source_revision, Some(1));
+    chat.sync_active_stream_tail();
+    {
+        let controller = chat.stream_controller.as_mut().expect("agent controller");
+        controller.set_width(/*width*/ Some(24));
+        assert!(!controller.push("partial"));
+    }
+    chat.sync_active_stream_tail();
+    assert_eq!(
+        (
+            chat.transcript.retained_stream_source_revision,
+            chat.transcript.active_cell_revision,
+        ),
+        (Some(1), first_active_revision),
+    );
+
+    let controller = chat.stream_controller.as_mut().expect("agent controller");
+    assert!(!controller.push(" second line\n"));
+    chat.sync_active_stream_tail();
+    assert_eq!(
+        (
+            chat.transcript.retained_stream_source_revision,
+            chat.transcript.active_cell_revision,
+        ),
+        (Some(2), first_active_revision + 1),
+    );
+
+    chat.clear_active_stream_tail();
+    assert_eq!(chat.transcript.retained_stream_source_revision, None);
+}
+
+#[tokio::test]
+async fn retained_agent_interruption_commits_only_completed_source() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_stream_surface(crate::streaming::StreamSurface::Retained);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_streaming_delta("complete line\npartial".to_string());
+    chat.finalize_turn();
+
+    let committed = take_retained_commit(&mut rx);
+    assert!(committed.as_any().is::<history_cell::AgentMarkdownCell>());
+    assert_eq!(
+        lines_to_single_string(&committed.raw_lines()),
+        "complete line\n"
+    );
+}
+
+#[tokio::test]
+async fn retained_plan_interruption_commits_only_completed_source() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_stream_surface(crate::streaming::StreamSurface::Retained);
+    install_retained_plan_stream(&mut chat, "1. completed step\npartial");
+    while rx.try_recv().is_ok() {}
+
+    chat.finalize_turn();
+
+    let committed = take_retained_commit(&mut rx);
+    assert!(committed.as_any().is::<history_cell::ProposedPlanCell>());
+    assert_eq!(
+        lines_to_single_string(&committed.raw_lines()),
+        "1. completed step\n"
+    );
+}
+
+#[tokio::test]
+async fn task_start_clears_stale_retained_plan_before_next_agent_revision() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_stream_surface(crate::streaming::StreamSurface::Retained);
+    install_retained_plan_stream(&mut chat, "stale plan\n");
+    assert_eq!(chat.transcript.retained_stream_source_revision, Some(1));
+
+    chat.on_task_started();
+
+    assert!(chat.plan_stream_controller.is_none() && chat.transcript.active_cell.is_none());
+    assert_eq!(chat.transcript.retained_stream_source_revision, None);
+
+    chat.handle_streaming_delta("fresh answer\n".to_string());
+    assert_eq!(chat.transcript.retained_stream_source_revision, Some(1));
+    let active = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .expect("fresh agent cell");
+    assert_eq!(
+        lines_to_single_string(&active.raw_lines()),
+        "fresh answer\n"
+    );
+}
+
+#[tokio::test]
+async fn retained_live_agent_table_reflows_and_matches_final_commit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_stream_surface(crate::streaming::StreamSurface::Retained);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_streaming_delta(
+        "Table status:\n\n| Item | Notes |\n| --- | --- |\n| alpha | a longer description that wraps when narrow |\n"
+            .to_string(),
+    );
+    let widths = [72, 32];
+    let live_rendered = {
+        let active = chat
+            .transcript
+            .active_cell
+            .as_ref()
+            .expect("live table cell");
+        widths.map(|width| lines_to_single_string(&active.display_lines(width)))
+    };
+
+    chat.flush_answer_stream_with_separator();
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AppEvent::InsertHistoryCell(_)
+                | AppEvent::ConsolidateAgentMessage { .. }
+                | AppEvent::ConsolidateProposedPlan(_)
+                | AppEvent::StartCommitAnimation
+        )),
+        "retained stream emitted a provisional event: {events:?}",
+    );
+    let mut commits = events.into_iter().filter_map(|event| match event {
+        AppEvent::CommitRetainedStreamCell(cell) => Some(cell),
+        _ => None,
+    });
+    let committed = commits.next().expect("retained stream commit");
+    assert!(
+        commits.next().is_none(),
+        "expected exactly one retained commit"
+    );
+    let final_rendered =
+        widths.map(|width| lines_to_single_string(&committed.display_lines(width)));
+    assert_eq!(final_rendered, live_rendered);
+    let [wide, narrow] = live_rendered;
+    insta::assert_snapshot!(
+        "retained_live_agent_table_reflows",
+        format!("wide (72 columns):\n{wide}\nnarrow (32 columns):\n{narrow}")
+    );
+}
+
 #[tokio::test]
 async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut controller = crate::streaming::controller::StreamController::new(
-        Some(80),
+        /*width*/ Some(80),
         cwd.as_path(),
         HistoryRenderMode::Rich,
+        crate::streaming::StreamSurface::Inline,
     );
     assert!(controller.push("plain response line\n"));
     chat.stream_controller = Some(controller);
@@ -312,9 +485,10 @@ async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut controller = crate::streaming::controller::StreamController::new(
-        Some(80),
+        /*width*/ Some(80),
         cwd.as_path(),
         HistoryRenderMode::Rich,
+        crate::streaming::StreamSurface::Inline,
     );
     controller.push("| Name | Notes |\n");
     controller.push("| --- | --- |\n");
@@ -369,9 +543,10 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut controller = crate::streaming::controller::PlanStreamController::new(
-        Some(80),
+        /*width*/ Some(80),
         cwd.as_path(),
         HistoryRenderMode::Rich,
+        crate::streaming::StreamSurface::Inline,
     );
     controller.push("| Step | Owner |\n");
     controller.push("| --- | --- |\n");
