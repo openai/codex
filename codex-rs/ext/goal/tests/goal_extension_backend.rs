@@ -604,6 +604,37 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+
+    harness
+        .notify_turn_error("turn-1", CodexErrorInfo::ServerOverloaded)
+        .await;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
 async fn usage_limit_budget_limited_goal_accounts_remaining_progress() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;

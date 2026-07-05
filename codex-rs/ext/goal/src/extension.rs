@@ -303,6 +303,9 @@ where
             };
 
             let reason = match input.error {
+                // Capacity retries do not consume the user's token budget, so
+                // leave the goal active for the idle continuation.
+                CodexErrorInfo::ServerOverloaded => return,
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic
