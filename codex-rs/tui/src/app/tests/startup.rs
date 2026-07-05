@@ -138,20 +138,20 @@ fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
 }
 
 #[tokio::test]
-async fn startup_thread_started_submits_queued_startup_input() {
+async fn restored_startup_draft_waits_for_initial_mcp_settlement() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.pending_startup_thread_start = true;
-    app.startup_draft_protected = true;
     app.chat_widget
         .set_queue_submissions_until_session_configured(/*queue*/ true);
     app.chat_widget
-        .apply_external_edit("queued before startup completes".to_string());
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        .restore_startup_draft("captured during startup", ["test".to_string()]);
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    app.chat_widget.handle_key_event(enter);
 
+    assert!(app.chat_widget.queued_user_message_texts().is_empty());
     assert_eq!(
-        app.chat_widget.queued_user_message_texts(),
-        vec!["queued before startup completes".to_string()]
+        app.chat_widget.composer_text_with_pending(),
+        "captured during startup"
     );
 
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
@@ -169,8 +169,12 @@ async fn startup_thread_started_submits_queued_startup_input() {
     )
     .await
     .expect("startup thread should attach");
-    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    assert!(!app.startup_draft_blocks_key(enter));
+
+    app.chat_widget.handle_key_event(enter);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "captured during startup"
+    );
 
     app.chat_widget
         .set_mcp_startup_expected_servers(["test".to_string()]);
@@ -183,7 +187,11 @@ async fn startup_thread_started_submits_queued_startup_input() {
             failure_reason: None,
         }),
     ));
-    assert!(app.startup_draft_blocks_key(enter));
+    app.chat_widget.handle_key_event(enter);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "captured during startup"
+    );
 
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
@@ -194,8 +202,18 @@ async fn startup_thread_started_submits_queued_startup_input() {
             failure_reason: None,
         }),
     ));
-    assert!(!app.startup_draft_blocks_key(enter));
-    assert!(!app.startup_draft_protected);
+
+    app.chat_widget.handle_key_event(enter);
+    match next_user_turn_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "captured during startup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected restored startup input submission, got {other:?}"),
+    }
 
     app.handle_thread_event_now(ThreadBufferedEvent::Notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
@@ -206,18 +224,25 @@ async fn startup_thread_started_submits_queued_startup_input() {
             failure_reason: None,
         }),
     ));
-    assert!(!app.startup_draft_blocks_key(enter));
+    app.chat_widget.insert_str("later round");
+    app.chat_widget.handle_key_event(enter);
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+}
 
-    match next_user_turn_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "queued before startup completes".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued startup input submission, got {other:?}"),
-    }
+#[tokio::test]
+async fn startup_without_restored_draft_uses_normal_queued_submission() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.chat_widget
+        .set_queue_submissions_until_session_configured(/*queue*/ true);
+    app.chat_widget.insert_str("typed after the first frame");
+
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        vec!["typed after the first frame".to_string()]
+    );
 }
 
 #[tokio::test]

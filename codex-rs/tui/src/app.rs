@@ -574,7 +574,6 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
-    startup_draft_protected: bool,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
     pending_startup_thread_start: bool,
@@ -1065,7 +1064,6 @@ See the Codex keymap documentation for supported actions and examples."
             primary_thread_id: None,
             last_subagent_backfill_attempt: None,
             primary_session_configured: None,
-            startup_draft_protected: false,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
             pending_startup_thread_start,
@@ -1117,11 +1115,16 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
-        if allow_startup_text {
-            if let Some(startup_text) = tui.take_startup_text()? {
-                app.chat_widget.insert_str(&startup_text);
-            }
-            app.startup_draft_protected = true;
+        if allow_startup_text && let Some(startup_text) = tui.take_startup_text()? {
+            let expected_mcp_servers = app
+                .config
+                .mcp_servers
+                .get()
+                .iter()
+                .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
+                .collect::<Vec<_>>();
+            app.chat_widget
+                .restore_startup_draft(&startup_text, expected_mcp_servers);
         }
 
         let event_stream_started_at = Instant::now();

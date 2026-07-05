@@ -361,6 +361,7 @@ pub(crate) struct ChatComposer {
     placeholder_text: String,
     is_task_running: bool,
     queue_submissions: bool,
+    startup_draft_submission_blocked: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -529,6 +530,7 @@ impl ChatComposer {
             placeholder_text,
             is_task_running: false,
             queue_submissions: false,
+            startup_draft_submission_blocked: false,
             pending_slash_command_history: None,
             skills: None,
             plugins: None,
@@ -2759,6 +2761,9 @@ impl ChatComposer {
         should_queue: bool,
         now: Instant,
     ) -> (InputResult, bool) {
+        if self.startup_draft_submission_blocked {
+            return (InputResult::None, false);
+        }
         if should_queue {
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
                 self.handle_paste(pasted);
@@ -3889,6 +3894,10 @@ impl ChatComposer {
 
     pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
         self.queue_submissions = queue_submissions;
+    }
+
+    pub(crate) fn set_startup_draft_submission_blocked(&mut self, blocked: bool) {
+        self.startup_draft_submission_blocked = blocked;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -8468,6 +8477,46 @@ mod tests {
 
         assert_eq!(InputResult::None, result);
         assert_eq!("explain the change\n", composer.draft.textarea.text());
+    }
+
+    #[test]
+    fn startup_draft_protection_respects_remapped_submit() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("captured during startup");
+        composer
+            .draft
+            .textarea
+            .set_cursor(composer.draft.textarea.text().len());
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![key_hint::ctrl(KeyCode::Char('j'))];
+        composer.set_keymap_bindings(&keymap);
+        composer.set_startup_draft_submission_blocked(/*blocked*/ true);
+
+        let (enter_result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let (submit_result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+
+        assert_eq!(InputResult::None, enter_result);
+        assert_eq!(InputResult::None, submit_result);
+        assert_eq!("captured during startup\n", composer.draft.textarea.text());
     }
 
     #[test]

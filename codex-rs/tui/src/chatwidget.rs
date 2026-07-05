@@ -598,6 +598,11 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
+    /// Initial MCP servers that must settle before a restored startup draft can be submitted.
+    ///
+    /// `Some(_)` also records that startup text was actually restored. The set may become empty
+    /// before session configuration arrives, but protection remains until both conditions settle.
+    startup_draft_pending_mcp_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
     mcp_startup_ignore_updates_until_next_start: bool,
     /// A lag signal for the next round means terminal-only updates are enough to settle it.

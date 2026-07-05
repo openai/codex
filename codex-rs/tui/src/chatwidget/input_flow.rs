@@ -7,6 +7,30 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn restore_startup_draft<I>(&mut self, text: &str, expected_mcp_servers: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.insert_str(text);
+        self.startup_draft_pending_mcp_servers = Some(expected_mcp_servers.into_iter().collect());
+        self.bottom_pane
+            .set_startup_draft_submission_blocked(/*blocked*/ true);
+        self.finish_startup_draft_protection_if_ready();
+    }
+
+    pub(super) fn finish_startup_draft_protection_if_ready(&mut self) {
+        let startup_ready = self.is_session_configured()
+            && self
+                .startup_draft_pending_mcp_servers
+                .as_ref()
+                .is_some_and(HashSet::is_empty);
+        if startup_ready {
+            self.startup_draft_pending_mcp_servers = None;
+            self.bottom_pane
+                .set_startup_draft_submission_blocked(/*blocked*/ false);
+        }
+    }
+
     pub(super) fn handle_composer_input_result(
         &mut self,
         input_result: InputResult,

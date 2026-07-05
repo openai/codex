@@ -181,10 +181,6 @@ impl ChatWidget {
         self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
     }
 
-    pub(crate) fn mcp_startup_active(&self) -> bool {
-        self.mcp_startup_status.is_some()
-    }
-
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
         if !cancelled.is_empty() {
             self.on_warning(format!(
@@ -215,6 +211,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if let Some(pending) = &mut self.startup_draft_pending_mcp_servers {
+            pending.clear();
+        }
+        self.finish_startup_draft_protection_if_ready();
         if self.mcp_startup_ignore_updates_until_next_start {
             if self.mcp_startup_pending_next_round.is_empty() {
                 self.mcp_startup_pending_next_round_saw_starting = false;
@@ -267,6 +267,12 @@ impl ChatWidget {
         &mut self,
         notification: McpServerStatusUpdatedNotification,
     ) {
+        if notification.status != McpServerStartupState::Starting
+            && let Some(pending) = &mut self.startup_draft_pending_mcp_servers
+        {
+            pending.remove(&notification.name);
+        }
+        self.finish_startup_draft_protection_if_ready();
         let status = match notification.status {
             McpServerStartupState::Starting => McpStartupStatus::Starting,
             McpServerStartupState::Ready => McpStartupStatus::Ready,

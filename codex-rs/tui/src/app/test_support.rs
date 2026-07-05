@@ -61,7 +61,6 @@ pub(super) async fn make_test_app() -> App {
         primary_thread_id: None,
         last_subagent_backfill_attempt: None,
         primary_session_configured: None,
-        startup_draft_protected: false,
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
         pending_startup_thread_start: false,

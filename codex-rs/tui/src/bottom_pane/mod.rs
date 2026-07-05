@@ -1020,6 +1020,10 @@ impl BottomPane {
         self.composer.set_queue_submissions(queue_submissions);
     }
 
+    pub(crate) fn set_startup_draft_submission_blocked(&mut self, blocked: bool) {
+        self.composer.set_startup_draft_submission_blocked(blocked);
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
@@ -2862,6 +2866,34 @@ mod tests {
 
         assert!(pane.no_modal_or_popup_active());
         assert!(matches!(rx.try_recv(), Ok(AppEvent::OpenApprovalsPopup)));
+    }
+
+    #[test]
+    fn startup_draft_protection_does_not_block_active_view_enter() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        pane.insert_str("captured during startup");
+        pane.set_startup_draft_submission_blocked(/*blocked*/ true);
+        pane.show_selection_view(SelectionViewParams {
+            title: Some("Confirm".to_string()),
+            items: vec![SelectionItem {
+                name: "Continue".to_string(),
+                actions: vec![Box::new(|tx: &_| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let result = pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert!(pane.no_modal_or_popup_active());
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::OpenApprovalsPopup)));
+        assert_eq!(pane.composer_text(), "captured during startup");
     }
 
     #[test]
