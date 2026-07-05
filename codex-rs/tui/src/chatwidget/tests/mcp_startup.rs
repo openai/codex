@@ -177,6 +177,29 @@ async fn interrupted_review_clears_mcp_startup_and_reenables_review() {
 }
 
 #[tokio::test]
+async fn interrupted_review_restores_queued_input_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["pending".to_string()]);
+    handle_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "pending", McpServerStartupState::Starting);
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("edit this queued input").into());
+    chat.refresh_pending_input_preview();
+
+    handle_exited_review_mode(&mut chat);
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "edit this queued input");
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn replayed_review_exit_preserves_live_mcp_startup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["pending".to_string()]);

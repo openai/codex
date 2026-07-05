@@ -197,6 +197,7 @@ impl ChatWidget {
         }
 
         self.clear_mcp_startup_state();
+        self.maybe_send_next_queued_input();
     }
 
     pub(super) fn clear_mcp_startup_state(&mut self) {
@@ -210,7 +211,6 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() && mcp_startup_owned_status {
             self.restore_reasoning_status_header();
         }
-        self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
