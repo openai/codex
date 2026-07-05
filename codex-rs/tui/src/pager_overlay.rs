@@ -373,10 +373,16 @@ impl PagerView {
     /// Render only scrollable content, without pager header, footer, or empty-row markers.
     ///
     /// This is the shared rendering primitive for application-owned views that provide their own
-    /// chrome. A view that was following the bottom stays pinned there when wrapping or the
-    /// available height changes.
-    fn render_content_only(&mut self, area: Rect, buf: &mut Buffer) {
-        let follow_bottom = self.is_scrolled_to_bottom();
+    /// chrome. Callers can keep normal bottom-follow behavior or freeze the current offset during
+    /// a pointer gesture.
+    fn render_content_only(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        bottom_follow: BottomFollowMode,
+    ) {
+        let follow_bottom =
+            bottom_follow == BottomFollowMode::Enabled && self.is_scrolled_to_bottom();
         Clear.render(area, buf);
         self.update_last_content_height(area.height);
         let content_height = self.content_height(area.width);
@@ -444,6 +450,12 @@ pub(crate) struct PagerContent {
     view: PagerView,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BottomFollowMode {
+    Enabled,
+    Frozen,
+}
+
 impl PagerContent {
     pub(crate) fn new(renderables: Vec<Box<dyn Renderable>>, keymap: PagerKeymap) -> Self {
         Self {
@@ -456,8 +468,8 @@ impl PagerContent {
         }
     }
 
-    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.view.render_content_only(area, buf);
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, bottom_follow: BottomFollowMode) {
+        self.view.render_content_only(area, buf, bottom_follow);
     }
 
     pub(crate) fn replace(&mut self, renderables: Vec<Box<dyn Renderable>>) {
@@ -474,6 +486,14 @@ impl PagerContent {
 
     pub(crate) fn len(&self) -> usize {
         self.view.renderables.len()
+    }
+
+    pub(crate) fn renderable_heights(&self, width: u16) -> Vec<u16> {
+        self.view
+            .renderables
+            .iter()
+            .map(|renderable| renderable.desired_height(width))
+            .collect()
     }
 
     pub(crate) fn is_following_bottom(&self) -> bool {
@@ -498,6 +518,10 @@ impl PagerContent {
 
     pub(crate) fn handle_mouse_scroll(&mut self, direction: MouseScrollDirection) {
         self.view.apply_mouse_scroll(direction);
+    }
+
+    pub(crate) fn scroll_offset(&self) -> usize {
+        self.view.scroll_offset
     }
 }
 

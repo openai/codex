@@ -6,8 +6,10 @@ use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 
@@ -81,6 +83,36 @@ fn viewport(cells: Vec<Arc<dyn HistoryCell>>) -> ConversationViewport {
         HistoryRenderMode::Rich,
         crate::keymap::RuntimeKeymap::defaults().pager,
     )
+}
+
+fn select_entire_projection(projection: CellSelectionProjection) -> String {
+    let first_bytes = projection
+        .rows()
+        .iter()
+        .find_map(|row| row.segments.first())
+        .expect("projection should have a first selectable grapheme")
+        .bytes
+        .clone();
+    let last_bytes = projection
+        .rows()
+        .iter()
+        .rev()
+        .find_map(|row| row.segments.last())
+        .expect("projection should have a last selectable grapheme")
+        .bytes
+        .clone();
+    let mut selection = ConversationSelection::default();
+    selection.start(SelectionPoint {
+        cell: 0,
+        bytes: first_bytes,
+    });
+    selection.update(SelectionPoint {
+        cell: 0,
+        bytes: last_bytes,
+    });
+    selection
+        .finish(/*point*/ None, &[Some(projection)])
+        .expect("dragging the full projection should select text")
 }
 
 #[test]
@@ -441,6 +473,239 @@ newer
 
 LATEST
 "###);
+}
+
+#[test]
+fn selection_hit_testing_accounts_for_scroll_offset_and_cell_spacing() {
+    let mut viewport = viewport(vec![cell("oldest"), cell("LATEST")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 2,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+
+    assert!(!viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 0)));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 1),));
+    assert!(viewport.update_selection(area, Position::new(/*x*/ 5, /*y*/ 1),));
+
+    let mut highlighted = Buffer::empty(area);
+    viewport.render(area, &mut highlighted);
+    for column in 0..=5 {
+        assert!(
+            highlighted[(column, 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+    }
+    assert_eq!(
+        viewport.finish_selection(area, Position::new(/*x*/ 5, /*y*/ 1)),
+        Some("LATEST".to_string())
+    );
+}
+
+#[test]
+fn release_beyond_the_last_drag_lazily_projects_the_full_cell_span() {
+    let mut viewport = viewport(vec![cell("first"), cell("second"), cell("third")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 5,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 0),));
+    assert!(viewport.update_selection(area, Position::new(/*x*/ 2, /*y*/ 0),));
+
+    assert_eq!(
+        viewport.finish_selection(area, Position::new(/*x*/ 4, /*y*/ 4)),
+        Some("first\n\nsecond\n\nthird".to_string())
+    );
+}
+
+#[test]
+fn replacing_cells_cancels_an_active_selection() {
+    let mut viewport = viewport(vec![cell("old")]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 2,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 0),));
+
+    viewport.replace_cells(vec![cell("replacement")]);
+
+    assert!(!viewport.selection_is_active());
+    assert_eq!(
+        viewport.finish_selection(area, Position::new(/*x*/ 3, /*y*/ 0)),
+        None
+    );
+}
+
+#[test]
+fn animation_only_live_tail_update_preserves_an_active_selection() {
+    let mut viewport = viewport(vec![cell("committed")]);
+    viewport.sync_live_tail(
+        /*width*/ 20,
+        Some(ActiveCellRenderKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation_tick: Some(1),
+        }),
+        |_| Some(vec![HyperlinkLine::from("live one")]),
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 20, /*height*/ 4,
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 0, /*y*/ 0),));
+
+    viewport.sync_live_tail(
+        /*width*/ 20,
+        Some(ActiveCellRenderKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation_tick: Some(2),
+        }),
+        |_| {
+            Some(vec![HyperlinkLine::from(
+                "live two now wraps across several terminal rows",
+            )])
+        },
+    );
+    viewport.render(area, &mut Buffer::empty(area));
+
+    assert!(viewport.selection_is_active());
+    assert!(viewport.update_selection(area, Position::new(/*x*/ 8, /*y*/ 0),));
+    assert_eq!(
+        viewport.finish_selection(area, Position::new(/*x*/ 8, /*y*/ 0)),
+        Some("committed".to_string())
+    );
+}
+
+#[test]
+fn user_selection_is_source_exact_at_narrow_and_wide_widths() {
+    let source = "界 x — visit https://example.com/a/very/long/path and keep going";
+    let cell = UserHistoryCell {
+        message: source.to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    };
+
+    for width in [18, 80] {
+        let projection = cell
+            .selection_projection(width, HistoryRenderMode::Rich)
+            .expect("user message should be selectable");
+        assert_eq!(select_entire_projection(projection), source);
+    }
+}
+
+#[test]
+fn agent_markdown_selection_is_semantic_and_width_invariant() {
+    let destination = "https://example.com/a/very/long/path";
+    let markdown = format!("**界 x** — [site]({destination})\n\n`code` stays");
+    let expected = format!("界 x — site ({destination})\n\ncode stays");
+    let cell = AgentMarkdownCell::new(markdown, std::path::Path::new("/tmp"));
+
+    for width in [18, 80] {
+        let projection = cell
+            .selection_projection(width, HistoryRenderMode::Rich)
+            .expect("agent Markdown should be selectable");
+        assert_eq!(select_entire_projection(projection), expected);
+    }
+}
+
+#[test]
+fn agent_markdown_partial_selection_uses_screen_coordinates_and_semantic_link_text() {
+    let destination = "https://example.com/z";
+    let markdown = format!("before **bold** [Ω]({destination}) after");
+    let cell: Arc<dyn HistoryCell> = Arc::new(AgentMarkdownCell::new(
+        markdown,
+        std::path::Path::new("/tmp"),
+    ));
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 18, /*height*/ 6,
+    );
+    let mut viewport = viewport(vec![cell]);
+    let mut buffer = Buffer::empty(area);
+    viewport.render(area, &mut buffer);
+    let find_symbol = |needle: char| {
+        (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| Position::new(x, y)))
+            .find(|position| {
+                crate::terminal_hyperlinks::strip_osc8(buffer[(position.x, position.y)].symbol())
+                    == needle.to_string()
+            })
+            .unwrap_or_else(|| panic!("rendered Markdown should contain {needle}"))
+    };
+    let start = find_symbol('Ω');
+    let end = find_symbol(')');
+
+    assert!(viewport.begin_selection(area, start));
+    assert!(viewport.update_selection(area, end));
+    assert_eq!(
+        viewport.finish_selection(area, end),
+        Some(format!("Ω ({destination})"))
+    );
+}
+
+#[test]
+fn agent_tables_require_raw_mode_until_layout_exposes_source_ranges() {
+    let markdown = "| Name | Description |\n| --- | --- |\n| alpha | a value that wraps over several words |\n| beta | short |";
+    let cell = AgentMarkdownCell::new(markdown.to_string(), std::path::Path::new("/tmp"));
+
+    for width in [12, 80] {
+        assert!(
+            cell.selection_projection(width, HistoryRenderMode::Rich)
+                .is_none(),
+            "rich table layout cannot yet expose exact source ranges at width {width}",
+        );
+    }
+    let projection = cell
+        .selection_projection(/*width*/ 24, HistoryRenderMode::Raw)
+        .expect("raw Markdown should remain selectable");
+    assert_eq!(select_entire_projection(projection), markdown);
+}
+
+#[test]
+fn selected_user_prompt_highlights_source_glyphs_without_chrome_or_padding() {
+    let width = 18;
+    let source = "alpha beta gamma delta";
+    let cell: Arc<dyn HistoryCell> = Arc::new(UserHistoryCell {
+        message: source.to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    });
+    let height = cell.desired_height_for_mode(width, HistoryRenderMode::Rich);
+    let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+    let mut viewport = viewport(vec![cell]);
+    viewport.render(area, &mut Buffer::empty(area));
+    assert!(viewport.begin_selection(area, Position::new(/*x*/ 2, /*y*/ 1),));
+    assert!(viewport.update_selection(area, Position::new(/*x*/ 12, /*y*/ 2),));
+
+    let mut highlighted = Buffer::empty(area);
+    viewport.render(area, &mut highlighted);
+    let text = buffer_text(&highlighted, area)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mask = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| {
+                    if highlighted[(x, y)].modifier.contains(Modifier::REVERSED) {
+                        '#'
+                    } else {
+                        '.'
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_snapshot!(format!("text:\n{text}\nselection:\n{mask}"));
+    assert_eq!(
+        viewport.finish_selection(area, Position::new(/*x*/ 12, /*y*/ 2)),
+        Some(source.to_string())
+    );
 }
 
 fn buffer_text(buffer: &Buffer, area: Rect) -> String {
