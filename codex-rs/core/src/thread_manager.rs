@@ -66,6 +66,8 @@ use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::MongoThreadStore;
+use codex_thread_store::MongoThreadStoreConfig;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::StoredThread;
@@ -286,6 +288,15 @@ pub fn thread_store_from_config(
                 LocalThreadStoreConfig::from_config(config),
                 state_db,
             ))
+        }
+        ThreadStoreConfig::Mongodb { database, uri_env } => {
+            let store = MongoThreadStore::new(MongoThreadStoreConfig {
+                codex_home: config.codex_home.to_path_buf(),
+                database: database.clone(),
+                uri_env: uri_env.clone(),
+            })
+            .unwrap_or_else(|err| panic!("failed to configure strict Mongo thread store: {err}"));
+            Arc::new(store)
         }
         ThreadStoreConfig::InMemory { id } => InMemoryThreadStore::for_id(id),
     }

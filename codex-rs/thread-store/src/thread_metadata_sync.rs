@@ -330,7 +330,7 @@ fn strip_user_message_prefix(text: &str) -> &str {
     }
 }
 
-fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
+pub(crate) fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
     let message = strip_user_message_prefix(user.message.as_str());
     if !message.is_empty() {
         return Some(message.to_string());

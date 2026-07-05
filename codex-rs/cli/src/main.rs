@@ -40,6 +40,7 @@ use owo_colors::OwoColorize;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
@@ -191,6 +192,9 @@ enum Subcommand {
 
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
+
+    /// Manage persisted Codex sessions.
+    Sessions(SessionsCommand),
 
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
@@ -345,6 +349,55 @@ struct SessionArchiveCommand {
 
     #[clap(flatten)]
     config_overrides: SessionArchiveConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct SessionsCommand {
+    #[clap(subcommand)]
+    subcommand: SessionsSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum SessionsSubcommand {
+    /// Import local JSONL rollouts into the strict MongoDB thread store.
+    #[clap(name = "migrate-to-mongo")]
+    MigrateToMongo(MigrateToMongoCommand),
+}
+
+#[derive(Debug, Parser)]
+struct MigrateToMongoCommand {
+    /// Mongo database name.
+    #[arg(long = "database", default_value = "codex")]
+    database: String,
+
+    /// Environment variable containing the MongoDB URI. If unset, the local
+    /// default mongodb://127.0.0.1:27017 is used.
+    #[arg(long = "uri-env", default_value = "CODEX_MONGODB_URI")]
+    uri_env: String,
+
+    /// Codex home to import. Defaults to the resolved CODEX_HOME.
+    #[arg(long = "codex-home", value_name = "PATH")]
+    codex_home: Option<PathBuf>,
+
+    /// Validate and count rollouts without writing to MongoDB.
+    #[arg(long = "dry-run", default_value_t = false)]
+    dry_run: bool,
+
+    /// Read each imported history back from MongoDB and verify its item count.
+    #[arg(long = "verify", default_value_t = false)]
+    verify: bool,
+
+    /// Number of rollout files to migrate concurrently.
+    #[arg(long = "jobs", default_value = "2")]
+    jobs: NonZeroUsize,
+
+    /// Import only active sessions.
+    #[arg(long = "active-only", default_value_t = false)]
+    active_only: bool,
+
+    /// Import only archived sessions.
+    #[arg(long = "archived-only", default_value_t = false)]
+    archived_only: bool,
 }
 
 #[derive(Debug, Args, Clone, Default)]
@@ -1309,6 +1362,103 @@ async fn cli_main(
             .await?;
             println!("{output}");
         }
+        Some(Subcommand::Sessions(SessionsCommand {
+            subcommand:
+                SessionsSubcommand::MigrateToMongo(MigrateToMongoCommand {
+                    database,
+                    uri_env,
+                    codex_home,
+                    dry_run,
+                    verify,
+                    jobs,
+                    active_only,
+                    archived_only,
+                }),
+        })) => {
+            if active_only && archived_only {
+                anyhow::bail!("--active-only and --archived-only cannot be used together");
+            }
+            let codex_home = match codex_home {
+                Some(path) => path,
+                None => find_codex_home()?.to_path_buf(),
+            };
+            let store = codex_thread_store::MongoThreadStore::new(
+                codex_thread_store::MongoThreadStoreConfig {
+                    codex_home,
+                    database,
+                    uri_env,
+                },
+            )
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+            if store
+                .namespace_has_data()
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))?
+            {
+                if dry_run {
+                    eprintln!(
+                        "MongoDB already contains data for this Codex-home namespace; --dry-run leaves it unchanged."
+                    );
+                } else {
+                    let clear_existing = confirm(
+                        "MongoDB already contains data for this Codex-home namespace. Clear it before migration? [y/N]",
+                    )?;
+                    if !clear_existing {
+                        anyhow::bail!(
+                            "migration cancelled because existing MongoDB namespace data was not cleared"
+                        );
+                    }
+                    eprintln!("Clearing existing MongoDB namespace data...");
+                    store
+                        .clear_namespace_data()
+                        .await
+                        .map_err(|err| anyhow::anyhow!("{err}"))?;
+                }
+            }
+            let show_progress = std::io::stderr().is_terminal();
+            let progress_verb = if dry_run { "Validating" } else { "Migrating" };
+            let migration_result = store
+                .migrate_codex_home_with_progress_and_jobs(
+                    codex_thread_store::MongoMigrationOptions {
+                        include_active: !archived_only,
+                        include_archived: !active_only,
+                        dry_run,
+                        verify,
+                        jobs: jobs.get(),
+                    },
+                    |progress| {
+                        if show_progress {
+                            eprint!(
+                                "\r{}",
+                                mongo_migration_progress_line(progress_verb, progress)
+                            );
+                            let _ = std::io::stderr().flush();
+                        }
+                    },
+                    |warning| {
+                        if show_progress {
+                            eprintln!("\r{warning}");
+                        } else {
+                            eprintln!("{warning}");
+                        }
+                    },
+                )
+                .await;
+            if show_progress {
+                eprintln!();
+            }
+            let report = migration_result.map_err(|err| anyhow::anyhow!("{err}"))?;
+            let action = if dry_run { "validated" } else { "migrated" };
+            let completion = if dry_run {
+                "Validation complete"
+            } else {
+                "Migration complete"
+            };
+            println!(
+                "{completion}: {} total rollouts, {} {action}, {} skipped, {} rollout items",
+                report.scanned, report.imported, report.skipped, report.items
+            );
+        }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
             last,
@@ -2113,6 +2263,7 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Delete(_))
         | Some(Subcommand::Unarchive(_))
         | Some(Subcommand::Fork(_))
+        | Some(Subcommand::Sessions(_))
         | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
         Some(Subcommand::AppServer(app_server)) => {
@@ -2356,6 +2507,32 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim();
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+}
+
+fn mongo_migration_progress_line(
+    verb: &str,
+    progress: codex_thread_store::MongoMigrationProgress,
+) -> String {
+    const BAR_WIDTH: usize = 30;
+    let filled = progress
+        .completed
+        .saturating_mul(BAR_WIDTH)
+        .checked_div(progress.total)
+        .unwrap_or(BAR_WIDTH);
+    let percent = progress
+        .completed
+        .saturating_mul(100)
+        .checked_div(progress.total)
+        .unwrap_or(100);
+    let bar = format!(
+        "{}{}",
+        "=".repeat(filled),
+        "-".repeat(BAR_WIDTH.saturating_sub(filled))
+    );
+    format!(
+        "{verb} sessions [{bar}] {}/{} ({percent:>3}%)",
+        progress.completed, progress.total
+    )
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.
@@ -4068,6 +4245,20 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Unknown feature flag: multi_agent_v2.subagent_usage_hint_text"
+        );
+    }
+
+    #[test]
+    fn mongo_migration_progress_line_renders_rollout_completion() {
+        assert_eq!(
+            mongo_migration_progress_line(
+                "Migrating",
+                codex_thread_store::MongoMigrationProgress {
+                    completed: 1,
+                    total: 3,
+                }
+            ),
+            "Migrating sessions [==========--------------------] 1/3 ( 33%)"
         );
     }
 

@@ -2906,6 +2906,29 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "description": "Store all thread metadata and replay history in MongoDB.",
+          "properties": {
+            "database": {
+              "description": "Mongo database name. Defaults to `codex`.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mongodb"
+              ],
+              "type": "string"
+            },
+            "uri_env": {
+              "description": "Environment variable containing the Mongo URI. When unset, the backend uses mongodb://127.0.0.1:27017.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
