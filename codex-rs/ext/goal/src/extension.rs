@@ -310,7 +310,7 @@ where
                         .accounting_state()
                         .turn_is_current_active_goal(input.turn_id) =>
                 {
-                    runtime.defer_capacity_retry();
+                    runtime.defer_retry();
                     return;
                 }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
