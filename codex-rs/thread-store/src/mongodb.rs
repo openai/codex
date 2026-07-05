@@ -629,6 +629,14 @@ impl MongoThreadStore {
                         .keys(doc! { "codex_home_namespace": 1, "thread_id": 1, "sequence": 1 })
                         .options(unique)
                         .build(),
+                    IndexModel::builder()
+                        .keys(doc! {
+                            "codex_home_namespace": 1,
+                            "thread_id": 1,
+                            "item.type": 1,
+                            "sequence": -1,
+                        })
+                        .build(),
                 ],
                 None,
             )
@@ -683,6 +691,90 @@ impl MongoThreadStore {
             .await
             .map_err(mongo_error)?;
         let docs = cursor.try_collect::<Vec<_>>().await.map_err(mongo_error)?;
+        self.hydrate_history_documents(docs)
+    }
+
+    async fn resume_history(&self, thread_id: ThreadId) -> ThreadStoreResult<Vec<RolloutItem>> {
+        let key = self.key(thread_id);
+        let checkpoint = self
+            .items()
+            .await?
+            .find_one(
+                doc! {
+                    "codex_home_namespace": &self.namespace,
+                    "thread_id": thread_id.to_string(),
+                    "item.type": "compacted",
+                    "item.payload.replacement_history": { "$exists": true, "$ne": Bson::Null },
+                    "item.payload.window_number": { "$exists": true, "$ne": Bson::Null },
+                },
+                FindOneOptions::builder()
+                    .sort(doc! { "sequence": -1 })
+                    .build(),
+            )
+            .await
+            .map_err(mongo_error)?;
+        let mut docs = Vec::new();
+        let filter = if let Some(checkpoint) = checkpoint {
+            if let Some(session_meta) = self
+                .items()
+                .await?
+                .find_one(
+                    doc! {
+                        "codex_home_namespace": &self.namespace,
+                        "thread_id": thread_id.to_string(),
+                        "item.type": "session_meta",
+                    },
+                    FindOneOptions::builder()
+                        .sort(doc! { "sequence": 1 })
+                        .build(),
+                )
+                .await
+                .map_err(mongo_error)?
+            {
+                docs.push(session_meta);
+            }
+            if let Some(turn_context) = self
+                .items()
+                .await?
+                .find_one(
+                    doc! {
+                        "codex_home_namespace": &self.namespace,
+                        "thread_id": thread_id.to_string(),
+                        "item.type": "turn_context",
+                        "sequence": { "$lt": checkpoint.sequence },
+                    },
+                    FindOneOptions::builder()
+                        .sort(doc! { "sequence": -1 })
+                        .build(),
+                )
+                .await
+                .map_err(mongo_error)?
+            {
+                docs.push(turn_context);
+            }
+            doc! {
+                "codex_home_namespace": &self.namespace,
+                "thread_id": thread_id.to_string(),
+                "sequence": { "$gte": checkpoint.sequence },
+            }
+        } else {
+            key
+        };
+        let options = FindOptions::builder().sort(doc! { "sequence": 1 }).build();
+        let cursor = self
+            .items()
+            .await?
+            .find(filter, options)
+            .await
+            .map_err(mongo_error)?;
+        docs.extend(cursor.try_collect::<Vec<_>>().await.map_err(mongo_error)?);
+        self.hydrate_history_documents(docs)
+    }
+
+    fn hydrate_history_documents(
+        &self,
+        docs: Vec<ItemDocument>,
+    ) -> ThreadStoreResult<Vec<RolloutItem>> {
         let mut items = Vec::with_capacity(docs.len());
         for mut doc in docs {
             hydrate_rollout_item(&self.config.codex_home, &mut doc.item, &doc.external_fields)?;
@@ -892,6 +984,21 @@ impl MongoThreadStore {
         Ok(stored)
     }
 
+    async fn read_resume_impl(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
+        let mut stored = self
+            .thread_doc(params.thread_id, params.include_archived)
+            .await?
+            .stored;
+        if params.include_history {
+            reject_paginated_history_mode(stored.history_mode)?;
+            stored.history = Some(StoredThreadHistory {
+                thread_id: params.thread_id,
+                items: self.resume_history(params.thread_id).await?,
+            });
+        }
+        Ok(stored)
+    }
+
     async fn list_impl(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
         if params.cwd_filters.as_ref().is_some_and(Vec::is_empty) {
             return Ok(ThreadPage {
@@ -1066,6 +1173,9 @@ impl ThreadStore for MongoThreadStore {
     }
     fn read_thread(&self, p: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
         Box::pin(self.read_impl(p))
+    }
+    fn read_thread_for_resume(&self, p: ReadThreadParams) -> ThreadStoreFuture<'_, StoredThread> {
+        Box::pin(self.read_resume_impl(p))
     }
     fn read_thread_by_rollout_path(
         &self,

@@ -3186,7 +3186,7 @@ impl ThreadRequestProcessor {
                 include_archived: true,
                 include_history,
             };
-            self.thread_store.read_thread(params).await
+            self.thread_store.read_thread_for_resume(params).await
         };
 
         let stored_thread = result.map_err(thread_store_resume_read_error)?;
