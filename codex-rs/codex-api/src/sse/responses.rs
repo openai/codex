@@ -231,8 +231,18 @@ impl ResponsesStreamEvent {
             .map(|metadata| TurnModerationMetadataEvent { metadata })
     }
 
-    pub(crate) fn safety_buffering(&self) -> Option<SafetyBuffering> {
-        serde_json::from_value(self.safety_buffering.as_ref()?.clone()).ok()
+    pub(crate) fn safety_buffering(
+        &self,
+        treatment: &SafetyBufferingTreatment,
+    ) -> Option<SafetyBuffering> {
+        let value = self.safety_buffering.as_ref()?;
+        let faster_model_present = value.as_object()?.contains_key("faster_model");
+        let mut buffering: SafetyBuffering = serde_json::from_value(value.clone()).ok()?;
+        buffering.show_buffering_ui = true;
+        if !faster_model_present {
+            buffering.faster_model.clone_from(&treatment.faster_model);
+        }
+        Some(buffering)
     }
 }
 
@@ -515,9 +525,7 @@ async fn process_sse_with_treatment(
         };
         let model_verifications = event.model_verifications();
         let turn_moderation_metadata = event.turn_moderation_metadata();
-        let safety_buffering = event
-            .safety_buffering()
-            .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
+        let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -1354,7 +1362,8 @@ mod tests {
                 "delta": "hello",
                 "safety_buffering": {
                     "use_cases": ["cyber"],
-                    "reasons": ["user_risk"]
+                    "reasons": ["user_risk"],
+                    "faster_model": "gpt-fast-wire"
                 }
             }),
             json!({
@@ -1381,7 +1390,10 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::SafetyBuffering(buffering)
-                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+                if buffering.use_cases == ["cyber"]
+                    && buffering.reasons == ["user_risk"]
+                    && buffering.show_buffering_ui
+                    && buffering.faster_model.as_deref() == Some("gpt-fast-wire")
         );
         assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
         assert_matches!(
@@ -1396,6 +1408,46 @@ mod tests {
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
         assert_matches!(&events[6], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
+    }
+
+    #[test]
+    fn safety_buffering_prefers_wire_faster_model_and_only_falls_back_when_omitted() {
+        let treatment = SafetyBufferingTreatment {
+            faster_model: Some("gpt-fast-header".to_string()),
+        };
+
+        for (faster_model, expected_faster_model) in [
+            (None, Some("gpt-fast-header")),
+            (Some(Value::Null), None),
+            (Some(json!("gpt-fast-wire")), Some("gpt-fast-wire")),
+        ] {
+            let mut event = json!({
+                "type": "response.output_text.delta",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            });
+            if let Some(faster_model) = faster_model {
+                event["safety_buffering"]["faster_model"] = faster_model;
+            }
+            let event: ResponsesStreamEvent =
+                serde_json::from_value(event).expect("deserialize safety buffering event");
+
+            let buffering = event
+                .safety_buffering(&treatment)
+                .expect("expected safety buffering payload");
+
+            assert_eq!(
+                buffering,
+                SafetyBuffering {
+                    use_cases: vec!["cyber".to_string()],
+                    reasons: vec!["user_risk".to_string()],
+                    show_buffering_ui: true,
+                    faster_model: expected_faster_model.map(str::to_string),
+                }
+            );
+        }
     }
 
     #[test]
