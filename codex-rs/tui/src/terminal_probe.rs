@@ -426,6 +426,15 @@ mod imp {
                     }
                     index = end;
                 }
+                Some(b'O') => {
+                    let Some(final_byte) = buffer.get(index + 2) else {
+                        break;
+                    };
+                    if !(0x40..=0x7e).contains(final_byte) {
+                        break;
+                    }
+                    index += 3;
+                }
                 Some(_) => index += 2,
                 None => break,
             }
@@ -625,6 +634,11 @@ mod imp {
                 ),
                 b"draft text"
             );
+        }
+
+        #[test]
+        fn extracts_plain_input_around_ss3_key_sequences() {
+            assert_eq!(extract_plain_input(b"draft\x1BOP text"), b"draft text");
         }
     }
 }
