@@ -115,6 +115,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "terminal-browser",
     "terminal-detection",
     "test-binary-support",
     "thread-manager-sample",
@@ -226,6 +227,7 @@ codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
+codex-terminal-browser = { path = "terminal-browser" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }

@@ -1,0 +1,37 @@
+[package]
+name = "codex-terminal-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_terminal_browser"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-protocol = { workspace = true }
+codex-sandboxing = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-path-uri = { workspace = true }
+codex-utils-pty = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "process", "rt", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vt100 = { workspace = true }
+which = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

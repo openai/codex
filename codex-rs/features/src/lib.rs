@@ -186,6 +186,8 @@ pub enum Feature {
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
     BrowserUseExternal,
+    /// Allow the agent to control a Carbonyl browser rendered in the terminal.
+    TerminalBrowser,
     /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -1135,6 +1137,20 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "browser_use_external",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::TerminalBrowser,
+        key: "terminal_browser",
+        stage: if cfg!(any(target_os = "macos", target_os = "linux")) {
+            Stage::Experimental {
+                name: "Terminal browser",
+                menu_description: "Let Codex browse with Carbonyl in the right terminal panel.",
+                announcement: "",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ComputerUse,
