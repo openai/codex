@@ -91,6 +91,37 @@ fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>
     lines
 }
 
+fn line_has_no_content(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|span| span.content.is_empty())
+}
+
+fn prefix_message_hyperlink_lines(
+    lines: Vec<HyperlinkLine>,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+) -> Vec<HyperlinkLine> {
+    let empty_rows_with_whitespace_prefix = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let prefix = if index == 0 {
+                &initial_prefix
+            } else {
+                &subsequent_prefix
+            };
+            line_has_no_content(&line.line) && prefix.content.chars().all(char::is_whitespace)
+        })
+        .collect::<Vec<_>>();
+    let mut lines = prefix_hyperlink_lines(lines, initial_prefix, subsequent_prefix);
+    for (line, should_clear) in lines.iter_mut().zip(empty_rows_with_whitespace_prefix) {
+        if should_clear {
+            line.line = Line::default().style(line.line.style);
+            line.hyperlinks.clear();
+        }
+    }
+    lines
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let wrap_width = width
@@ -274,12 +305,25 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        adaptive_wrap_lines(
-            &summary_lines,
-            RtOptions::new(width as usize)
-                .initial_indent("• ".dim().into())
-                .subsequent_indent("  ".into()),
-        )
+        let options = RtOptions::new(width as usize)
+            .initial_indent("• ".dim().into())
+            .subsequent_indent("  ".into());
+        let mut lines = Vec::new();
+        for (index, line) in summary_lines.iter().enumerate() {
+            if index > 0 && line_has_no_content(line) {
+                lines.push(Line::default().style(line.style));
+                continue;
+            }
+            let line_options = if index == 0 {
+                options.clone()
+            } else {
+                options
+                    .clone()
+                    .initial_indent(options.subsequent_indent.clone())
+            };
+            lines.extend(adaptive_wrap_lines([line], line_options));
+        }
+        lines
     }
 }
 
@@ -503,7 +547,7 @@ impl HistoryCell for AgentMarkdownCell {
             Some(wrap_width),
             Some(self.cwd.as_path()),
         );
-        prefix_hyperlink_lines(lines, "• ".dim(), "  ".into())
+        prefix_message_hyperlink_lines(lines, "• ".dim(), "  ".into())
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
@@ -590,7 +634,7 @@ impl HistoryCell for StreamingAgentTailCell {
     fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         // Tail lines are already rendered at the controller's current stream width.
         // Re-wrapping them here can split table borders and produce malformed in-flight rows.
-        let mut lines = prefix_hyperlink_lines(
+        prefix_message_hyperlink_lines(
             self.lines.clone(),
             if self.is_first_line {
                 "• ".dim()
@@ -598,19 +642,7 @@ impl HistoryCell for StreamingAgentTailCell {
                 "  ".into()
             },
             "  ".into(),
-        );
-        for line in &mut lines {
-            if line
-                .line
-                .spans
-                .iter()
-                .all(|span| span.content.chars().all(char::is_whitespace))
-            {
-                line.line = Line::default().style(line.line.style);
-                line.hyperlinks.clear();
-            }
-        }
-        lines
+        )
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {

@@ -15,6 +15,7 @@ use ratatui::text::Line;
 
 use super::*;
 use crate::history_cell::AgentMarkdownCell;
+use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::SelectionContribution;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::selection_contribution_from_display_lines;
@@ -230,6 +231,45 @@ fn renders_main_display_and_live_tail_without_pager_chrome() {
 "                                "
 "                                "
 "                                "
+"###);
+}
+
+#[test]
+fn markdown_cells_use_single_blank_rows_inside_and_between_cells() {
+    let cwd = std::env::temp_dir();
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        Arc::new(ReasoningSummaryCell::new(
+            "reasoning".to_string(),
+            "first thought\n\nsecond thought".to_string(),
+            &cwd,
+            /*transcript_only*/ false,
+        )),
+        Arc::new(AgentMarkdownCell::new(
+            "first answer\n\nsecond answer".to_string(),
+            &cwd,
+        )),
+    ];
+    let mut viewport = viewport(cells);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 7,
+    );
+    let mut buffer = Buffer::empty(area);
+
+    viewport.render(area, &mut buffer);
+
+    let text = buffer_text(&buffer, area)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(text, @r###"
+• first thought
+
+  second thought
+
+• first answer
+
+  second answer
 "###);
 }
 
@@ -989,6 +1029,25 @@ fn agent_markdown_selection_is_semantic_and_width_invariant() {
             .expect("agent Markdown should be selectable");
         assert_eq!(select_entire_projection(projection), expected);
     }
+}
+
+#[test]
+fn agent_markdown_preserves_whitespace_only_code_line() {
+    let markdown = "```text\none\n \t \ntwo\n```";
+    let cell = AgentMarkdownCell::new(markdown.to_string(), &std::env::temp_dir());
+    let lines = cell.display_lines(/*width*/ 80);
+    let authored_line = lines[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    let projection = cell
+        .selection_contribution(/*width*/ 80, HistoryRenderMode::Rich)
+        .into_projection()
+        .expect("agent Markdown should be selectable");
+
+    assert_eq!(authored_line, "   \t ");
+    assert_eq!(select_entire_projection(projection), "one\n \t \ntwo");
 }
 
 #[test]
