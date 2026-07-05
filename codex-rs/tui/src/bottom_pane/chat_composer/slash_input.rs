@@ -214,6 +214,18 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
+        if self.startup_draft_submission_blocked
+            && matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+            )
+        {
+            return (InputResult::None, false);
+        }
         if key_event.code == KeyCode::Esc {
             let next_mode = esc_hint_mode(self.footer.mode, self.is_task_running);
             if next_mode != self.footer.mode {
@@ -273,6 +285,9 @@ impl ChatComposer {
                     if selected_command_dispatches_immediately_on_tab(&selected_cmd)
                         && let CommandItem::Builtin(cmd) = &selected_cmd
                     {
+                        if self.startup_draft_submission_blocked {
+                            return (InputResult::None, false);
+                        }
                         self.stage_selected_slash_command_history(&selected_cmd);
                         self.draft.textarea.set_text_clearing_elements("");
                         self.draft.is_bash_mode = false;

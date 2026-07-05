@@ -8520,6 +8520,51 @@ mod tests {
     }
 
     #[test]
+    fn startup_draft_protection_blocks_slash_popup_dispatch() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.insert_str("/diff");
+        composer.set_startup_draft_submission_blocked(/*blocked*/ true);
+
+        let (blocked_result, blocked_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(blocked_result, InputResult::None);
+        assert!(!blocked_redraw);
+        assert_eq!(composer.draft.textarea.text(), "/diff");
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+
+        composer.set_startup_draft_submission_blocked(/*blocked*/ false);
+        let (dispatched_result, dispatched_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(dispatched_result, InputResult::Command(SlashCommand::Diff));
+        assert!(dispatched_redraw);
+        assert!(composer.is_empty());
+
+        composer.insert_str("/skills");
+        composer.set_startup_draft_submission_blocked(/*blocked*/ true);
+        let (blocked_tab_result, blocked_tab_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(blocked_tab_result, InputResult::None);
+        assert!(!blocked_tab_redraw);
+        assert_eq!(composer.draft.textarea.text(), "/skills");
+        assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+    }
+
+    #[test]
     fn remapped_queue_does_not_fall_back_to_tab() {
         use crate::key_hint;
         use crate::keymap::RuntimeKeymap;
