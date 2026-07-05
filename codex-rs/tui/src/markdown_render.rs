@@ -77,7 +77,11 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
+mod selection;
 mod table_key_value;
+
+pub(crate) use selection::render_markdown_selection_text;
+pub(crate) use selection::selection_text_contains_table;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;

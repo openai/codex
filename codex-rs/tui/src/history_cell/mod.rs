@@ -10,6 +10,7 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::conversation_selection::CellSelectionProjection;
 use crate::diff_model::FileChange;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
@@ -177,6 +178,28 @@ pub(crate) fn plain_lines(lines: impl IntoIterator<Item = Line<'static>>) -> Vec
         .collect()
 }
 
+pub(crate) fn selection_text_from_lines(lines: &[Line<'_>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn selection_projection_from_lines(
+    text: String,
+    lines: Vec<Line<'static>>,
+    width: u16,
+    first_row_prefix_columns: u16,
+) -> Option<CellSelectionProjection> {
+    CellSelectionProjection::from_display_lines(text, lines, width, first_row_prefix_columns)
+}
+
 /// A single renderable unit of conversation history.
 ///
 /// Each cell produces logical `Line`s and reports how many viewport
@@ -222,6 +245,33 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             HistoryRenderMode::Rich => self.display_hyperlink_lines(width),
             HistoryRenderMode::Raw => plain_hyperlink_lines(self.raw_lines()),
         }
+    }
+
+    /// Maps rendered cell coordinates back to semantic text for app-owned mouse selection.
+    ///
+    /// Raw mode uses the cell's copy-friendly lines directly. Rich mode is selectable by default
+    /// only when its visible text exactly matches those canonical lines; cells with presentation
+    /// chrome or alternate semantics must provide an explicit projection.
+    fn selection_projection(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Option<CellSelectionProjection> {
+        let raw_lines = self.raw_lines();
+        let text = selection_text_from_lines(&raw_lines);
+        let display_lines = match mode {
+            HistoryRenderMode::Rich => visible_lines(self.display_hyperlink_lines(width)),
+            HistoryRenderMode::Raw => raw_lines,
+        };
+        if mode == HistoryRenderMode::Rich && selection_text_from_lines(&display_lines) != text {
+            return None;
+        }
+        selection_projection_from_lines(
+            text,
+            display_lines,
+            width,
+            /*first_row_prefix_columns*/ 0,
+        )
     }
 
     /// Returns the number of viewport rows needed to render this cell.

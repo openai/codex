@@ -86,7 +86,7 @@ pub(crate) fn render_markdown_agent_with_links_and_cwd(
 /// The fence unwrapping is intentionally conservative: it buffers the entire fence body before
 /// deciding, and an unclosed fence at end-of-input is re-emitted with its opening line so partial
 /// streams degrade to code display.
-fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
+pub(crate) fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
     // Zero-copy fast path: most messages contain no fences at all.
     if !markdown_source.contains("```") && !markdown_source.contains("~~~") {
         return Cow::Borrowed(markdown_source);
