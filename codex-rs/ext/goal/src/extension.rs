@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
@@ -44,6 +45,13 @@ use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
+
+// Capacity failures do not consume user tokens, but retrying immediately can
+// create a tight loop of failed turns. Keep the retry cadence deliberately low.
+const SERVER_OVERLOADED_GOAL_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+
+// A thread-scoped one-shot marker consumed by the next idle lifecycle callback.
+struct DeferredCapacityRetry;
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -156,6 +164,26 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+
+            if input
+                .thread_store
+                .remove::<DeferredCapacityRetry>()
+                .is_some()
+            {
+                // Detach the delay so terminal turn cleanup is not held open.
+                // continue_if_idle rechecks the goal, thread, and queued work,
+                // so a stale wakeup after pause, completion, or user input is harmless.
+                drop(tokio::spawn(async move {
+                    tokio::time::sleep(SERVER_OVERLOADED_GOAL_RETRY_DELAY).await;
+                    if let Err(err) = runtime.continue_if_idle().await {
+                        tracing::warn!(
+                            "failed to continue active goal after capacity retry delay for {}: {err}",
+                            runtime.thread_id()
+                        );
+                    }
+                }));
+                return;
+            }
 
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
@@ -304,8 +332,11 @@ where
 
             let reason = match input.error {
                 // Capacity retries do not consume the user's token budget, so
-                // leave the goal active for the idle continuation.
-                CodexErrorInfo::ServerOverloaded => return,
+                // leave the goal active for a delayed idle continuation.
+                CodexErrorInfo::ServerOverloaded => {
+                    let _ = input.thread_store.insert(DeferredCapacityRetry);
+                    return;
+                }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
                 // retries were exhausted. Block the goal to prevent automatic

@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
@@ -624,6 +625,7 @@ async fn server_overloaded_error_keeps_goal_active() -> anyhow::Result<()> {
         .notify_turn_error("turn-1", CodexErrorInfo::ServerOverloaded)
         .await;
     harness.stop_turn("turn-1").await;
+    tokio::time::timeout(Duration::from_secs(1), harness.notify_thread_idle()).await?;
 
     let goal = runtime
         .thread_goals()
@@ -1271,6 +1273,17 @@ impl GoalExtensionHarness {
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                     turn_store: &turn_store,
+                })
+                .await;
+        }
+    }
+
+    async fn notify_thread_idle(&self) {
+        for contributor in self.registry.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_idle(ThreadIdleInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
                 })
                 .await;
         }
