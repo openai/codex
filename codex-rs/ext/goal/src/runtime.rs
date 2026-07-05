@@ -122,6 +122,9 @@ impl GoalRuntimeHandle {
         self.is_enabled() && self.inner.tools_available_for_thread
     }
 
+    // Schedule at most one deferred retry for this live runtime. Idle
+    // continuation stays suppressed until the timer fires, and unloading the
+    // runtime cancels the retry by invalidating the weak reference.
     pub(crate) fn defer_retry(&self) {
         if self.inner.retry_pending.swap(true, Ordering::Relaxed) {
             return;
