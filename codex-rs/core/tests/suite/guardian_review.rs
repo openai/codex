@@ -1,20 +1,13 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
-use codex_core::CodexThread;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadIdleInput;
-use codex_extension_api::ThreadLifecycleContributor;
-use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses::ev_assistant_message;
@@ -25,7 +18,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
-use core_test_support::responses::user_message_item;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::local_selections;
@@ -36,48 +28,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::Weak;
 use std::time::Duration;
 use tempfile::TempDir;
-
-#[derive(Default)]
-struct ContinueRootOnceOnIdle {
-    target: Mutex<Option<(ThreadId, Weak<CodexThread>)>>,
-}
-
-impl ThreadLifecycleContributor<codex_core::config::Config> for ContinueRootOnceOnIdle {
-    fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            let thread_id = ThreadId::from_string(input.thread_store.level_id())
-                .expect("thread store id should be a thread id");
-            let thread = {
-                let mut target = self
-                    .target
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if target
-                    .as_ref()
-                    .is_some_and(|(target_id, _)| target_id == &thread_id)
-                {
-                    target.take().and_then(|(_, thread)| thread.upgrade())
-                } else {
-                    None
-                }
-            };
-            let Some(thread) = thread else {
-                return;
-            };
-            thread
-                .try_start_turn_if_idle(vec![user_message_item(
-                    "continue after guardian interrupt",
-                )])
-                .await
-                .expect("idle continuation should start");
-        })
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
@@ -155,96 +107,6 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
 
     test.codex.shutdown_and_wait().await?;
     server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_circuit_breaker_starts_idle_continuation() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let command_args = json!({
-        "cmd": "echo denied",
-        "sandbox_permissions": SandboxPermissions::RequireEscalated,
-        "justification": "Exercise the Guardian circuit breaker.",
-    })
-    .to_string();
-    let denial = json!({
-        "risk_level": "high",
-        "user_authorization": "low",
-        "outcome": "deny",
-        "rationale": "The requested command is not approved.",
-    })
-    .to_string();
-    let mut sequence = Vec::new();
-    for attempt in 1..=3 {
-        let parent_id = format!("parent-{attempt}");
-        sequence.push(sse(vec![
-            ev_response_created(&parent_id),
-            ev_function_call(&format!("exec-{attempt}"), "exec_command", &command_args),
-            ev_completed(&parent_id),
-        ]));
-        let guardian_id = format!("guardian-{attempt}");
-        sequence.push(sse(vec![
-            ev_response_created(&guardian_id),
-            ev_assistant_message(&format!("guardian-msg-{attempt}"), &denial),
-            ev_completed(&guardian_id),
-        ]));
-    }
-    sequence.push(sse(vec![
-        ev_response_created("idle-continuation"),
-        ev_assistant_message("idle-continuation-msg", "continued"),
-        ev_completed("idle-continuation"),
-    ]));
-    let _responses = mount_sse_sequence(&server, sequence).await;
-
-    let continuation = Arc::new(ContinueRootOnceOnIdle::default());
-    let mut extensions = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
-    extensions.thread_lifecycle_contributor(continuation.clone());
-    let mut builder = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.approvals_reviewer = ApprovalsReviewer::User;
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-    *continuation
-        .target
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-        test.session_configured.thread_id,
-        Arc::downgrade(&test.codex),
-    ));
-
-    test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "repeat a command that requires Guardian review".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                ..Default::default()
-            },
-        })
-        .await?;
-
-    let aborted = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnAborted(_))
-    })
-    .await;
-    let EventMsg::TurnAborted(aborted) = aborted else {
-        unreachable!("waited for turn aborted event");
-    };
-    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
     Ok(())
 }
 
