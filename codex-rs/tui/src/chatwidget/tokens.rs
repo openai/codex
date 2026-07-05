@@ -28,8 +28,12 @@ use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SelectionContribution;
 use crate::history_cell::plain_lines;
+use crate::history_cell::selection_contribution_from_semantic_text;
+use crate::history_cell::selection_text_from_lines;
 
 pub(crate) use chart::TokenActivityView;
 
@@ -144,6 +148,22 @@ impl HistoryCell for TokenActivityHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.display_lines(u16::MAX))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let lines = self.display_lines_for_mode(width, mode);
+        let text = lines
+            .iter()
+            .map(|line| {
+                selection_text_from_lines(std::slice::from_ref(line))
+                    .trim_start()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        selection_contribution_from_semantic_text(
+            text, lines, width, /*first_row_prefix_columns*/ 0,
+        )
     }
 }
 

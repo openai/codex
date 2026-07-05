@@ -11,7 +11,10 @@
 //!    first drawn.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
+use super::HistoryRenderMode;
+use super::SelectionContribution;
 use super::plain_lines;
+use super::selection_contribution_from_semantic_text;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -180,6 +183,72 @@ impl HookCell {
         self.runs.iter().any(|run| run.state.is_running_visible())
     }
 
+    fn selection_text(&self) -> String {
+        let mut blocks = Vec::new();
+        let mut running_group: Option<RunningHookGroup> = None;
+        let push_running_group = |blocks: &mut Vec<String>, group: RunningHookGroup| {
+            let label = hook_event_label(group.key.event_name);
+            let mut text = if group.count == 1 {
+                format!("Running {label} hook")
+            } else {
+                format!("Running {} {label} hooks", group.count)
+            };
+            if let Some(status) = group
+                .key
+                .status_message
+                .as_deref()
+                .filter(|status| !status.is_empty())
+            {
+                text.push_str(": ");
+                text.push_str(status);
+            }
+            blocks.push(text);
+        };
+
+        for run in &self.runs {
+            if !run.state.should_render() {
+                continue;
+            }
+            if let Some(key) = run.running_group_key() {
+                if let Some(group) = running_group.as_mut()
+                    && group.key == key
+                {
+                    group.count += 1;
+                    continue;
+                }
+                if let Some(group) =
+                    running_group.replace(RunningHookGroup::new(key, run.state.start_time()))
+                {
+                    push_running_group(&mut blocks, group);
+                }
+                continue;
+            }
+
+            if let Some(group) = running_group.take() {
+                push_running_group(&mut blocks, group);
+            }
+            let HookRunState::Completed { status, entries } = &run.state else {
+                continue;
+            };
+            let label = hook_event_label(run.event_name);
+            let status_text = format!("{status:?}").to_lowercase();
+            let mut lines = vec![format!("{label} hook ({status_text})")];
+            for entry in entries {
+                let prefix = hook_output_prefix(entry.kind);
+                let mut output_lines = entry.text.split('\n');
+                if let Some(first) = output_lines.next() {
+                    lines.push(format!("{prefix}{first}"));
+                }
+                lines.extend(output_lines.map(str::to_string));
+            }
+            blocks.push(lines.join("\n"));
+        }
+        if let Some(group) = running_group {
+            push_running_group(&mut blocks, group);
+        }
+        blocks.join("\n\n")
+    }
+
     /// Advances reveal/removal timers and reports whether rendering should be refreshed.
     pub(crate) fn advance_time(&mut self, now: Instant) -> bool {
         let old_len = self.runs.len();
@@ -346,6 +415,15 @@ impl HistoryCell for HookCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.display_lines(u16::MAX))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_semantic_text(
+            self.selection_text(),
+            self.display_lines_for_mode(width, mode),
+            width,
+            /*first_row_prefix_columns*/ 0,
+        )
     }
 
     /// Produces a coarse cache key for transcript overlays while hook animations are active.

@@ -3864,6 +3864,12 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
         .active_cell_display_hyperlink_lines(/*width*/ 80)
         .expect("active exec display lines");
     assert_eq!(hidden_hook_display.len(), exec_only_display_line_count);
+    assert_eq!(
+        chat.active_cell_display_snapshots(/*width*/ 80)
+            .expect("active exec display snapshot")
+            .len(),
+        1
+    );
 
     reveal_running_hooks(&mut chat);
     let visible_hook_lines = chat
@@ -3883,6 +3889,17 @@ async fn hidden_active_hook_does_not_add_transcript_separator() {
             &visible_hook_transcript[exec_only_line_count..exec_only_line_count + 1],
         ),
         "\n"
+    );
+    let visible_display_snapshots = chat
+        .active_cell_display_snapshots(/*width*/ 80)
+        .expect("active exec and hook display snapshots");
+    assert_eq!(visible_display_snapshots.len(), 2);
+    assert_eq!(
+        visible_display_snapshots
+            .last()
+            .and_then(|snapshot| snapshot.selection_projection.as_ref())
+            .map(crate::conversation_selection::CellSelectionProjection::text),
+        Some("Running PostToolUse hook: checking output policy")
     );
 }
 

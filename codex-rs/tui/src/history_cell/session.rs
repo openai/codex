@@ -79,13 +79,13 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 }
 
 #[derive(Debug)]
-struct TooltipHistoryCell {
+pub(super) struct TooltipHistoryCell {
     tip: String,
     cwd: PathBuf,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: String, cwd: &Path) -> Self {
+    pub(super) fn new(tip: String, cwd: &Path) -> Self {
         Self {
             tip,
             cwd: cwd.to_path_buf(),
@@ -114,6 +114,31 @@ impl HistoryCell for TooltipHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![Line::from(format!("Tip: {}", self.tip))]
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let source = format!("**Tip:** {}", self.tip);
+                let indent_width = UnicodeWidthStr::width("  ");
+                let markdown_width = usize::from(width.max(/*other*/ 1))
+                    .saturating_sub(indent_width)
+                    .max(/*other*/ 1);
+                crate::markdown_render::render_markdown_selection_projection(
+                    &source,
+                    markdown_width,
+                    Some(self.cwd.as_path()),
+                    self.display_lines(width),
+                    width,
+                    /*outer_prefix_columns*/ 2,
+                )
+                .map(SelectionContribution::Selectable)
+                .unwrap_or(SelectionContribution::Transparent)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -134,6 +159,10 @@ impl HistoryCell for SessionInfoCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         self.0.raw_lines()
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        self.0.selection_contribution(width, mode)
     }
 }
 
@@ -194,7 +223,22 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+        let help_selection_text = [
+            "To get started, describe a task or try one of these commands:",
+            "",
+            "/init - create an AGENTS.md file with instructions for Codex",
+            "/status - show current session configuration",
+            "/permissions - choose what Codex is allowed to do",
+            "/model - choose what model and reasoning effort to use",
+            "/review - review any changes and find issues",
+        ]
+        .join("\n");
+        parts.push(Box::new(
+            PlainHistoryCell::new(help_lines).with_selection_text(
+                help_selection_text,
+                /*first_row_prefix_columns*/ vec![2, 0, 2, 2, 2, 2, 2],
+            ),
+        ));
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
@@ -209,7 +253,7 @@ pub(crate) fn new_session_info(
                 format!("requested: {requested_model}").into(),
                 format!("used: {}", session.model).into(),
             ];
-            parts.push(Box::new(PlainHistoryCell { lines }));
+            parts.push(Box::new(PlainHistoryCell::new(lines)));
         }
     }
 
@@ -419,5 +463,50 @@ impl HistoryCell for SessionHeaderHistoryCell {
             lines.push(Line::from("permissions: YOLO mode"));
         }
         lines
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let display_lines = self.display_lines(width);
+                let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH)
+                else {
+                    return SelectionContribution::Transparent;
+                };
+                let mut model = self.model.clone();
+                if let Some(reasoning) = self.reasoning_label() {
+                    model.push(' ');
+                    model.push_str(reasoning);
+                }
+                if self.show_fast_status {
+                    model.push_str(" fast");
+                }
+                let dir_prefix_width = if self.yolo_mode {
+                    UnicodeWidthStr::width("directory:   ")
+                } else {
+                    UnicodeWidthStr::width("directory: ")
+                };
+                let directory =
+                    self.format_directory(Some(inner_width.saturating_sub(dir_prefix_width)));
+                let mut semantic_lines = vec![
+                    format!("OpenAI Codex (v{})", self.version),
+                    String::new(),
+                    format!("model: {model} /model to change"),
+                    format!("directory: {directory}"),
+                ];
+                if self.yolo_mode {
+                    semantic_lines.push("permissions: YOLO mode".to_string());
+                }
+                selection_contribution_from_semantic_text(
+                    semantic_lines.join("\n"),
+                    display_lines,
+                    width,
+                    /*first_row_prefix_columns*/ 0,
+                )
+            }
+        }
     }
 }

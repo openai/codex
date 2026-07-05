@@ -35,8 +35,10 @@
 //! - During confirmed table streaming, only lines from the table header onward
 //!   are forced into tail; pre-table lines may remain stable.
 
+use crate::conversation_selection::CellSelectionProjection;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::StreamSelectionFragment;
 use crate::history_cell::raw_lines_from_source;
 use crate::history_cell::{self};
 use crate::markdown::render_markdown_agent_with_links_and_cwd;
@@ -44,10 +46,15 @@ use crate::style::proposed_plan_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
+use crate::terminal_hyperlinks::visible_lines;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -85,6 +92,8 @@ struct StreamCore {
     /// Session cwd used to keep local file-link display stable during stream re-renders.
     cwd: PathBuf,
     render_mode: HistoryRenderMode,
+    /// Lazily built source mapping for the current raw-source/render snapshot.
+    selection_projection_cache: OnceLock<Option<StreamSelectionProjection>>,
     /// Cached rendered line count for prefix-before-table keyed by source start and width.
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
@@ -103,6 +112,13 @@ struct StablePrefixLenCache {
     stable_prefix_len: usize,
 }
 
+struct StreamSelectionProjection {
+    projection: CellSelectionProjection,
+    /// Terminal-row offsets for every boundary in `rendered_lines`.
+    row_offsets: Vec<usize>,
+    body_width: u16,
+}
+
 impl StreamCore {
     fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
@@ -114,6 +130,7 @@ impl StreamCore {
             emitted_stable_len: 0,
             cwd: cwd.to_path_buf(),
             render_mode,
+            selection_projection_cache: OnceLock::new(),
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
         }
@@ -157,11 +174,12 @@ impl StreamCore {
             self.raw_source.push_str(&remainder_source);
             self.holdback_scanner.push_source_chunk(&remainder_source);
         }
-        let rendered = self.render_source(&self.raw_source);
-        if self.emitted_stable_len >= rendered.len() {
+        self.rendered_lines = self.render_source(&self.raw_source);
+        self.selection_projection_cache.take();
+        if self.emitted_stable_len >= self.rendered_lines.len() {
             Vec::new()
         } else {
-            rendered[self.emitted_stable_len..].to_vec()
+            self.rendered_lines[self.emitted_stable_len..].to_vec()
         }
     }
 
@@ -214,6 +232,25 @@ impl StreamCore {
     fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
         self.rendered_lines[start..].to_vec()
+    }
+
+    fn selection_fragment(&self, rendered_range: Range<usize>) -> Option<StreamSelectionFragment> {
+        let selection = self
+            .selection_projection_cache
+            .get_or_init(|| self.build_selection_projection())
+            .as_ref()?;
+        let logical_start = rendered_range.start.min(self.rendered_lines.len());
+        let logical_end = rendered_range.end.min(self.rendered_lines.len());
+        let row_start = *selection.row_offsets.get(logical_start)?;
+        let row_end = *selection.row_offsets.get(logical_end)?;
+        selection
+            .projection
+            .slice_rows(row_start..row_end)
+            .map(|projection| StreamSelectionFragment::new(projection, selection.body_width))
+    }
+
+    fn current_tail_selection_fragment(&self) -> Option<StreamSelectionFragment> {
+        self.selection_fragment(self.enqueued_stable_len..self.rendered_lines.len())
     }
 
     #[inline]
@@ -271,6 +308,7 @@ impl StreamCore {
         self.rendered_lines.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
+        self.selection_projection_cache.take();
         self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
     }
@@ -286,8 +324,69 @@ impl StreamCore {
         }
     }
 
+    fn build_selection_projection(&self) -> Option<StreamSelectionProjection> {
+        if self.raw_source.is_empty() || self.rendered_lines.is_empty() {
+            return None;
+        }
+        let body_width = self
+            .width
+            .and_then(|width| u16::try_from(width).ok())
+            .unwrap_or(u16::MAX)
+            .max(/*other*/ 1);
+        let display_lines = visible_lines(self.rendered_lines.clone());
+        let projection = match self.render_mode {
+            HistoryRenderMode::Rich => {
+                let normalized = crate::markdown::unwrap_markdown_fences(&self.raw_source);
+                crate::markdown_render::render_markdown_selection_projection(
+                    &normalized,
+                    self.width.unwrap_or(usize::from(body_width)),
+                    Some(self.cwd.as_path()),
+                    display_lines.clone(),
+                    body_width,
+                    /*outer_prefix_columns*/ 0,
+                )?
+            }
+            HistoryRenderMode::Raw => CellSelectionProjection::from_display_lines(
+                self.raw_source.clone(),
+                display_lines.clone(),
+                body_width,
+                /*first_row_prefix_columns*/ 0,
+            )?,
+        };
+        let mut row_offsets: Vec<usize> =
+            Vec::with_capacity(display_lines.len().saturating_add(/*rhs*/ 1));
+        row_offsets.push(/*value*/ 0);
+        for line in display_lines {
+            let row_count = Paragraph::new(line)
+                .wrap(Wrap { trim: false })
+                .line_count(body_width)
+                .max(/*other*/ 1);
+            let next = row_offsets
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .saturating_add(row_count);
+            row_offsets.push(next);
+        }
+        if row_offsets.last().copied() != Some(projection.rows().len()) {
+            tracing::debug!(
+                rendered_lines = self.rendered_lines.len(),
+                projected_rows = projection.rows().len(),
+                mapped_rows = row_offsets.last().copied().unwrap_or_default(),
+                "stream selection projection row mapping diverged",
+            );
+            return None;
+        }
+        Some(StreamSelectionProjection {
+            projection,
+            row_offsets,
+            body_width,
+        })
+    }
+
     fn recompute_streaming_render(&mut self) {
         self.rendered_lines = self.render_source(&self.raw_source);
+        self.selection_projection_cache.take();
     }
 
     fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
@@ -484,30 +583,42 @@ impl StreamController {
     /// Finalize the active stream. Returns the final cell (if any remaining lines) and the raw
     /// markdown source for consolidation.
     pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
+        let rendered_start = self.core.emitted_stable_len;
         let remaining = self.core.finalize_remaining();
         if self.core.raw_source.is_empty() {
             self.core.reset();
             return (None, None);
         }
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.rendered_lines.len());
 
         // Move ownership — source is consumed before reset() clears it.
         let source = std::mem::take(&mut self.core.raw_source);
-        let out = self.emit(remaining);
+        let out = self.emit(remaining, selection_fragment);
         self.core.reset();
         (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
+        let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick();
-        (self.emit(step), self.core.is_idle())
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.emitted_stable_len);
+        (self.emit(step, selection_fragment), self.core.is_idle())
     }
 
     pub(crate) fn on_commit_tick_batch(
         &mut self,
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
+        let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick_batch(max_lines);
-        (self.emit(step), self.core.is_idle())
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.emitted_stable_len);
+        (self.emit(step, selection_fragment), self.core.is_idle())
     }
 
     // Thin StreamController accessors inlined — one-liner delegates called
@@ -525,6 +636,11 @@ impl StreamController {
     #[inline]
     pub(crate) fn current_tail_lines(&self) -> Vec<HyperlinkLine> {
         self.core.current_tail_lines()
+    }
+
+    #[inline]
+    pub(crate) fn current_tail_selection_fragment(&self) -> Option<StreamSelectionFragment> {
+        self.core.current_tail_selection_fragment()
     }
 
     #[inline]
@@ -550,16 +666,24 @@ impl StreamController {
         self.core.set_render_mode(render_mode);
     }
 
-    fn emit(&mut self, lines: Vec<HyperlinkLine>) -> Option<Box<dyn HistoryCell>> {
+    fn emit(
+        &mut self,
+        lines: Vec<HyperlinkLine>,
+        selection_fragment: Option<StreamSelectionFragment>,
+    ) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
         }
         Some(Box::new(
-            history_cell::AgentMessageCell::new_hyperlink_lines(lines, {
-                let header_emitted = self.header_emitted;
-                self.header_emitted = true;
-                !header_emitted
-            }),
+            history_cell::AgentMessageCell::new_source_backed_hyperlink_lines(
+                lines,
+                {
+                    let header_emitted = self.header_emitted;
+                    self.header_emitted = true;
+                    !header_emitted
+                },
+                selection_fragment,
+            ),
         ))
     }
 }
@@ -575,6 +699,17 @@ pub(crate) struct PlanStreamController {
     core: StreamCore,
     header_emitted: bool,
     top_padding_emitted: bool,
+}
+
+pub(crate) struct PlanStreamTailDisplay {
+    pub(crate) lines: Vec<HyperlinkLine>,
+    pub(crate) body_line_range: Range<usize>,
+    pub(crate) selection_fragment: Option<StreamSelectionFragment>,
+}
+
+struct RenderedPlanStreamLines {
+    lines: Vec<HyperlinkLine>,
+    body_line_range: Range<usize>,
 }
 
 impl PlanStreamController {
@@ -598,23 +733,39 @@ impl PlanStreamController {
     /// Finalize the active stream. Returns the final cell (if any remaining
     /// lines) plus raw markdown source for consolidation.
     pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
+        let rendered_start = self.core.emitted_stable_len;
         let remaining = self.core.finalize_remaining();
         if self.core.raw_source.is_empty() {
             self.core.reset();
             return (None, None);
         }
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.rendered_lines.len());
 
         // Move ownership — source is consumed before reset() clears it.
         let source = std::mem::take(&mut self.core.raw_source);
-        let out = self.emit(remaining, /*include_bottom_padding*/ true);
+        let out = self.emit(
+            remaining,
+            selection_fragment,
+            /*include_bottom_padding*/ true,
+        );
         self.core.reset();
         (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
+        let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick();
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.emitted_stable_len);
         (
-            self.emit(step, /*include_bottom_padding*/ false),
+            self.emit(
+                step,
+                selection_fragment,
+                /*include_bottom_padding*/ false,
+            ),
             self.core.is_idle(),
         )
     }
@@ -623,9 +774,17 @@ impl PlanStreamController {
         &mut self,
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
+        let rendered_start = self.core.emitted_stable_len;
         let step = self.core.tick_batch(max_lines);
+        let selection_fragment = self
+            .core
+            .selection_fragment(rendered_start..self.core.emitted_stable_len);
         (
-            self.emit(step, /*include_bottom_padding*/ false),
+            self.emit(
+                step,
+                selection_fragment,
+                /*include_bottom_padding*/ false,
+            ),
             self.core.is_idle(),
         )
     }
@@ -650,12 +809,17 @@ impl PlanStreamController {
         !self.header_emitted && self.core.enqueued_stable_len == 0
     }
 
-    pub(crate) fn current_tail_display_lines(&self) -> Vec<HyperlinkLine> {
+    pub(crate) fn current_tail_display(&self) -> Option<PlanStreamTailDisplay> {
         let lines = self.current_tail_lines();
         if lines.is_empty() {
-            return Vec::new();
+            return None;
         }
-        self.render_display_lines(lines, /*include_bottom_padding*/ false)
+        let rendered = self.render_display_lines(lines, /*include_bottom_padding*/ false);
+        Some(PlanStreamTailDisplay {
+            lines: rendered.lines,
+            body_line_range: rendered.body_line_range,
+            selection_fragment: self.core.current_tail_selection_fragment(),
+        })
     }
 
     pub(crate) fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
@@ -678,6 +842,7 @@ impl PlanStreamController {
     fn emit(
         &mut self,
         lines: Vec<HyperlinkLine>,
+        selection_fragment: Option<StreamSelectionFragment>,
         include_bottom_padding: bool,
     ) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() && !include_bottom_padding {
@@ -685,21 +850,25 @@ impl PlanStreamController {
         }
 
         let is_stream_continuation = self.header_emitted;
-        let out_lines = self.render_display_lines(lines, include_bottom_padding);
+        let rendered = self.render_display_lines(lines, include_bottom_padding);
         self.header_emitted = true;
         self.top_padding_emitted = true;
 
-        Some(Box::new(history_cell::new_proposed_plan_stream(
-            out_lines,
-            is_stream_continuation,
-        )))
+        Some(Box::new(
+            history_cell::new_source_backed_proposed_plan_stream(
+                rendered.lines,
+                is_stream_continuation,
+                selection_fragment,
+                rendered.body_line_range,
+            ),
+        ))
     }
 
     fn render_display_lines(
         &self,
         lines: Vec<HyperlinkLine>,
         include_bottom_padding: bool,
-    ) -> Vec<HyperlinkLine> {
+    ) -> RenderedPlanStreamLines {
         let mut out_lines: Vec<HyperlinkLine> = Vec::with_capacity(/*capacity*/ 4);
         if !self.header_emitted {
             out_lines.push(HyperlinkLine::new(
@@ -712,6 +881,8 @@ impl PlanStreamController {
         if !self.top_padding_emitted {
             plan_lines.push(HyperlinkLine::new(Line::from(" ")));
         }
+        let body_line_start = out_lines.len().saturating_add(plan_lines.len());
+        let body_line_end = body_line_start.saturating_add(lines.len());
         plan_lines.extend(lines);
         if include_bottom_padding {
             plan_lines.push(HyperlinkLine::new(Line::from(" ")));
@@ -723,7 +894,10 @@ impl PlanStreamController {
             .map(|line| line.style(plan_style))
             .collect::<Vec<_>>();
         out_lines.extend(plan_lines);
-        out_lines
+        RenderedPlanStreamLines {
+            lines: out_lines,
+            body_line_range: body_line_start..body_line_end,
+        }
     }
 }
 
@@ -763,6 +937,12 @@ mod tests {
 
     fn hyperlink_lines_to_plain_strings(lines: &[HyperlinkLine]) -> Vec<String> {
         lines_to_plain_strings(&visible_lines(lines.to_vec()))
+    }
+
+    fn selection_text(cell: &dyn HistoryCell, width: u16) -> Option<String> {
+        cell.selection_contribution(width, HistoryRenderMode::Rich)
+            .into_projection()
+            .map(|projection| projection.text().to_string())
     }
 
     fn collect_streamed_lines(deltas: &[&str], width: Option<usize>) -> Vec<String> {
@@ -911,6 +1091,65 @@ mod tests {
             "expected no live tail outside table holdback state",
         );
         assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
+    fn emitted_selection_fragments_preserve_soft_wraps_and_authored_newlines() {
+        let collect = |source: &str| {
+            let mut ctrl = stream_controller(/*width*/ Some(12));
+            assert!(ctrl.push(source));
+            let mut fragments = Vec::new();
+            loop {
+                let (cell, idle) = ctrl.on_commit_tick();
+                if let Some(cell) = cell {
+                    fragments.push(
+                        selection_text(cell.as_ref(), /*width*/ 14)
+                            .expect("emitted stream cell should be selectable"),
+                    );
+                }
+                if idle {
+                    break;
+                }
+            }
+            fragments
+        };
+
+        let soft_wrapped = collect("alpha beta gamma delta epsilon\n");
+        assert!(soft_wrapped.len() > 1);
+        assert_eq!(soft_wrapped.concat(), "alpha beta gamma delta epsilon");
+
+        let hard_wrapped = collect("alpha\nbeta\n");
+        assert_eq!(hard_wrapped.concat(), "alpha\nbeta");
+    }
+
+    #[test]
+    fn agent_and_plan_table_tails_keep_explicit_semantic_projection() {
+        let source = "| A | B |\n| --- | --- |\n| one | two |\n";
+        let mut agent = stream_controller(/*width*/ Some(40));
+        agent.push(source);
+        let agent_tail = history_cell::StreamingAgentTailCell::new_source_backed(
+            agent.current_tail_lines(),
+            agent.tail_starts_stream(),
+            agent.current_tail_selection_fragment(),
+        );
+        assert_eq!(
+            selection_text(&agent_tail, /*width*/ 42).as_deref(),
+            Some("A\tB\none\ttwo")
+        );
+
+        let mut plan = plan_stream_controller(/*width*/ Some(40));
+        plan.push(source);
+        let tail = plan.current_tail_display().expect("plan table tail");
+        let plan_tail = history_cell::StreamingPlanTailCell::new_source_backed(
+            tail.lines,
+            !plan.tail_starts_stream(),
+            tail.selection_fragment,
+            tail.body_line_range,
+        );
+        assert_eq!(
+            selection_text(&plan_tail, /*width*/ 44).as_deref(),
+            Some("Proposed Plan\n\nA\tB\none\ttwo")
+        );
     }
 
     #[test]

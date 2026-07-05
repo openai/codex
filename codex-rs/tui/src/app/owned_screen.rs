@@ -84,7 +84,7 @@ impl OwnedScreen {
         let active_key = chat_widget.active_cell_render_key();
         self.viewport
             .sync_live_tail(conversation_area.width, active_key, |width| {
-                chat_widget.active_cell_display_hyperlink_lines(width)
+                chat_widget.active_cell_display_snapshots(width)
             });
         self.viewport.render(conversation_area, buffer);
         bottom_pane.render(bottom_area, buffer);
@@ -117,6 +117,11 @@ impl OwnedScreen {
 
     fn handle_mouse_scroll(&mut self, event: MouseScrollEvent) -> bool {
         if self.viewport.selection_is_active() {
+            self.viewport.handle_selection_mouse_scroll(
+                self.last_conversation_area,
+                event.direction,
+                Position::new(event.column, event.row),
+            );
             return true;
         }
         if !self
@@ -130,8 +135,18 @@ impl OwnedScreen {
     }
 
     fn begin_selection(&mut self, position: Position) -> bool {
-        self.viewport
-            .begin_selection(self.last_conversation_area, position)
+        let conversation_area = self.last_conversation_area;
+        let position = if !conversation_area.is_empty()
+            && self.last_pane_area.contains(position)
+            && position.y >= conversation_area.y
+            && position.y < conversation_area.bottom()
+            && position.x >= conversation_area.right()
+        {
+            Position::new(conversation_area.right().saturating_sub(1), position.y)
+        } else {
+            position
+        };
+        self.viewport.begin_selection(conversation_area, position)
     }
 
     fn update_selection(&mut self, position: Position) -> bool {
@@ -366,14 +381,26 @@ impl App {
         tui: &mut tui::Tui,
         event: MouseScrollEvent,
     ) -> bool {
-        let selection_is_active = [PaneSlot::Parent, PaneSlot::Side].into_iter().any(|slot| {
+        if self.chat_widget.owned_screen_split_is_dragging() {
+            return true;
+        }
+        let active_selection_slot = [PaneSlot::Parent, PaneSlot::Side].into_iter().find(|slot| {
             self.chat_widget
-                .by_slot(slot)
+                .by_slot(*slot)
                 .and_then(|pane| pane.owned_screen.as_ref())
                 .is_some_and(OwnedScreen::selection_is_active)
         });
-        if self.chat_widget.owned_screen_split_is_dragging() || selection_is_active {
-            return true;
+        if let Some(slot) = active_selection_slot {
+            let handled = self
+                .chat_widget
+                .by_slot_mut(slot)
+                .and_then(|pane| pane.owned_screen.as_mut())
+                .is_some_and(|screen| screen.handle_mouse_scroll(event));
+            if handled {
+                tui.frame_requester()
+                    .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+            }
+            return handled;
         }
         for slot in [PaneSlot::Parent, PaneSlot::Side] {
             let handled = self.chat_widget.by_slot_mut(slot).is_some_and(|pane| {

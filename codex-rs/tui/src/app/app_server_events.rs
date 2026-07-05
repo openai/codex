@@ -138,8 +138,15 @@ impl App {
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
-                    self.chat_widget.add_plain_history_lines(
-                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
+                    let lines = crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification);
+                    let (selection_text, prefix_columns) =
+                        crate::external_agent_config_migration_flow::external_agent_config_migration_selection(
+                            &lines,
+                        );
+                    self.chat_widget.add_semantic_history_lines(
+                        lines,
+                        selection_text,
+                        prefix_columns,
                     );
                 }
                 return;

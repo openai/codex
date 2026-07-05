@@ -14,6 +14,10 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![Line::from("tool result (image output)")]
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
+    }
 }
 fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
     match status {
@@ -22,6 +26,26 @@ fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
         McpAuthStatus::BearerToken => "Bearer token",
         McpAuthStatus::OAuth => "OAuth",
     }
+}
+
+fn mcp_inventory_cell(lines: Vec<Line<'static>>) -> PlainHistoryCell {
+    let mut selection_lines = Vec::with_capacity(lines.len());
+    let mut prefix_columns = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let rendered = selection_text_from_lines(std::slice::from_ref(line));
+        let (content, prefix) = ["🔌  ", "    • ", "  • ", "    "]
+            .into_iter()
+            .find_map(|prefix| {
+                rendered
+                    .strip_prefix(prefix)
+                    .map(|content| (content, prefix))
+            })
+            .unwrap_or((rendered.as_str(), ""));
+        selection_lines.push(content.to_string());
+        prefix_columns.push(u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX));
+    }
+
+    PlainHistoryCell::new(lines).with_selection_text(selection_lines.join("\n"), prefix_columns)
 }
 #[derive(Debug)]
 pub(crate) struct McpToolCallCell {
@@ -113,6 +137,50 @@ impl McpToolCallCell {
             }
             rmcp::model::RawContent::ResourceLink(link) => format!("link: {}", link.uri),
         }
+    }
+
+    fn rich_selection_text(&self, width: u16) -> String {
+        let header = if self.success().is_some() {
+            "Called"
+        } else {
+            "Calling"
+        };
+        let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
+        let invocation = selection_text_from_lines(std::slice::from_ref(&invocation_line));
+        let reserved = UnicodeWidthStr::width("• ")
+            .saturating_add(UnicodeWidthStr::width(header))
+            .saturating_add(UnicodeWidthStr::width(" "));
+        let inline_invocation =
+            invocation_line.width() <= usize::from(width).saturating_sub(reserved);
+
+        let mut text = if inline_invocation {
+            format!("{header} {invocation}")
+        } else {
+            format!("{header}\n{invocation}")
+        };
+        let detail_width = usize::from(width).saturating_sub(4).max(1);
+        let mut details = Vec::new();
+        if let Some(result) = &self.result {
+            match result {
+                Ok(codex_protocol::mcp::CallToolResult { content, .. }) => {
+                    details.extend(
+                        content
+                            .iter()
+                            .map(|block| Self::render_content_block(block, detail_width)),
+                    );
+                }
+                Err(err) => details.push(format_and_truncate_tool_result(
+                    &format!("Error: {err}"),
+                    TOOL_CALL_MAX_LINES,
+                    usize::from(width),
+                )),
+            }
+        }
+        if !details.is_empty() {
+            text.push('\n');
+            text.push_str(&details.join("\n"));
+        }
+        text
     }
 }
 
@@ -238,6 +306,20 @@ impl HistoryCell for McpToolCallCell {
         lines
     }
 
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Rich => selection_contribution_from_semantic_text(
+                self.rich_selection_text(width),
+                self.display_lines(width),
+                width,
+                /*first_row_prefix_columns*/ 2,
+            ),
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+        }
+    }
+
     fn transcript_animation_tick(&self) -> Option<u64> {
         if !self.animations_enabled || self.result.is_some() {
             return None;
@@ -335,7 +417,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         .style(Style::default().add_modifier(Modifier::DIM)),
     ];
 
-    PlainHistoryCell::new(lines)
+    mcp_inventory_cell(lines)
 }
 
 #[cfg(test)]
@@ -509,7 +591,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(Line::from(""));
     }
 
-    PlainHistoryCell { lines }
+    mcp_inventory_cell(lines)
 }
 
 /// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
@@ -612,7 +694,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         lines.push(Line::from(""));
     }
 
-    PlainHistoryCell { lines }
+    mcp_inventory_cell(lines)
 }
 /// A transient history cell that shows an animated spinner while the MCP
 /// inventory RPC is in flight.
@@ -656,6 +738,20 @@ impl HistoryCell for McpInventoryLoadingCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![Line::from("Loading MCP inventory...")]
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Rich => selection_contribution_from_semantic_text(
+                "Loading MCP inventory…".to_string(),
+                self.display_lines(width),
+                width,
+                /*first_row_prefix_columns*/ 2,
+            ),
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+        }
     }
 
     fn transcript_animation_tick(&self) -> Option<u64> {

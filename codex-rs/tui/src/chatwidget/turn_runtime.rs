@@ -37,9 +37,12 @@ impl ChatWidget {
 
     pub(super) fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
         if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
-            self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
-            ]);
+            let selection_text = format!("WebSocket timing: {label}");
+            self.add_semantic_history_lines(
+                vec![vec!["• ".dim(), selection_text.clone().dark_gray()].into()],
+                selection_text,
+                /*first_row_prefix_columns*/ vec![2],
+            );
         }
     }
 

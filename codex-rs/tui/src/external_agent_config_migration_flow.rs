@@ -183,6 +183,34 @@ pub(crate) fn external_agent_config_migration_finished_lines(
     lines
 }
 
+/// Returns clipboard text and per-line presentation-prefix widths for an import status message.
+pub(crate) fn external_agent_config_migration_selection(
+    lines: &[Line<'static>],
+) -> (String, Vec<u16>) {
+    let mut selection_lines = Vec::with_capacity(lines.len());
+    let mut prefix_columns = Vec::with_capacity(lines.len());
+    for line in lines {
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let (semantic, prefix_columns_for_line) =
+            if let Some(semantic) = rendered.strip_prefix("    ") {
+                (semantic, 4)
+            } else if let Some(semantic) = rendered.strip_prefix("• ") {
+                (semantic, 2)
+            } else if let Some(semantic) = rendered.strip_prefix("  ") {
+                (semantic, 2)
+            } else {
+                (rendered.as_str(), 0)
+            };
+        selection_lines.push(semantic.to_string());
+        prefix_columns.push(prefix_columns_for_line);
+    }
+    (selection_lines.join("\n"), prefix_columns)
+}
+
 fn remaining_items_handoff(remaining_item_count: usize) -> Option<String> {
     match remaining_item_count {
         0 => None,

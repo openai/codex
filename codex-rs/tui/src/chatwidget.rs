@@ -53,6 +53,7 @@ use crate::bottom_pane::StatusSurfacePreviewData;
 use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
+use crate::conversation_selection::CellSelectionProjection;
 use crate::diff_model::FileChange;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::legacy_core::config::Config;
@@ -780,6 +781,16 @@ pub(crate) struct ActiveCellRenderKey {
     /// are unchanged, which is how shimmer/spinner visuals can animate in the overlay without any
     /// underlying data change.
     pub(crate) animation_tick: Option<u64>,
+}
+
+/// One width-specific active history cell prepared for the application-owned viewport.
+///
+/// Keeping active cells separate lets the viewport preserve history-cell spacing and selection
+/// mappings instead of flattening all in-flight output into presentation-only terminal lines.
+pub(crate) struct ActiveCellDisplaySnapshot {
+    pub(crate) lines: Vec<HyperlinkLine>,
+    pub(crate) selection_projection: Option<CellSelectionProjection>,
+    pub(crate) is_stream_continuation: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1548,8 +1559,21 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
+    pub(crate) fn add_literal_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_semantic_history_lines(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        selection_text: String,
+        first_row_prefix_columns: Vec<u16>,
+    ) {
+        self.add_boxed_history(Box::new(
+            PlainHistoryCell::new(lines)
+                .with_selection_text(selection_text, first_row_prefix_columns),
+        ));
         self.request_redraw();
     }
 
@@ -1577,7 +1601,11 @@ impl ChatWidget {
         if let Some(hint) = resume_hint(Some(name), thread_id) {
             line.extend([". To resume this session run ".into(), hint.cyan()]);
         }
-        PlainHistoryCell::new(vec![line.into()])
+        let line = Line::from(line);
+        let rendered = history_cell::selection_text_from_lines(std::slice::from_ref(&line));
+        let selection_text = rendered.strip_prefix("• ").unwrap_or(&rendered).to_string();
+        PlainHistoryCell::new(vec![line])
+            .with_selection_text(selection_text, /*first_row_prefix_columns*/ vec![2])
     }
 
     /// Begin the asynchronous MCP inventory flow: show a loading spinner and
@@ -2000,19 +2028,26 @@ impl ChatWidget {
         (!lines.is_empty()).then_some(lines)
     }
 
-    /// Returns the active cells' main-viewport lines for a given terminal width.
-    pub(crate) fn active_cell_display_hyperlink_lines(
+    /// Returns the active history cells prepared for the application-owned viewport.
+    ///
+    /// Each item retains its own selection projection and stream-continuation state so the
+    /// retained viewport can treat live output exactly like committed history cells.
+    pub(crate) fn active_cell_display_snapshots(
         &self,
         width: u16,
-    ) -> Option<Vec<HyperlinkLine>> {
+    ) -> Option<Vec<ActiveCellDisplaySnapshot>> {
         let mode = self.history_render_mode();
-        let mut lines = Vec::new();
+        let mut snapshots = Vec::new();
         let mut append = |cell: &dyn HistoryCell| {
-            let cell_lines = cell.display_hyperlink_lines_for_mode(width, mode);
-            if !cell_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
+            let lines = cell.display_hyperlink_lines_for_mode(width, mode);
+            if lines.is_empty() {
+                return;
             }
-            lines.extend(cell_lines);
+            snapshots.push(ActiveCellDisplaySnapshot {
+                lines,
+                selection_projection: cell.selection_contribution(width, mode).into_projection(),
+                is_stream_continuation: cell.is_stream_continuation(),
+            });
         };
         if let Some(cell) = self.transcript.active_cell.as_deref() {
             append(cell);
@@ -2029,6 +2064,26 @@ impl ChatWidget {
         }
         if let Some(cell) = self.pending_rate_limit_reset_hint() {
             append(cell);
+        }
+        (!snapshots.is_empty()).then_some(snapshots)
+    }
+
+    /// Returns the active cells' flattened main-viewport lines for a given terminal width.
+    ///
+    /// The application-owned viewport uses [`Self::active_cell_display_snapshots`] so it can
+    /// preserve per-cell selection metadata. This compatibility view remains useful to tests and
+    /// callers that only need the rendered text.
+    #[cfg(test)]
+    pub(crate) fn active_cell_display_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<HyperlinkLine>> {
+        let mut lines = Vec::new();
+        for snapshot in self.active_cell_display_snapshots(width)? {
+            if !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(snapshot.lines);
         }
         (!lines.is_empty()).then_some(lines)
     }

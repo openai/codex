@@ -71,6 +71,24 @@ impl HistoryCell for FinalMessageSeparator {
             vec![Line::from(label_parts.join(" • "))]
         }
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let lines = self.raw_lines();
+        match mode {
+            HistoryRenderMode::Raw => selection_contribution_from_display_lines(lines, width),
+            HistoryRenderMode::Rich => {
+                let semantic = selection_text_from_lines(&lines);
+                let semantic_width = usize::from(width.saturating_sub(2));
+                let (visible_semantic, _, _) = take_prefix_by_width(&semantic, semantic_width);
+                selection_contribution_from_semantic_text(
+                    visible_semantic,
+                    self.display_lines(width),
+                    width,
+                    /*first_row_prefix_columns*/ 2,
+                )
+            }
+        }
+    }
 }
 
 pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {

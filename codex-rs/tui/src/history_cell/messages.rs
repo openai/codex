@@ -196,15 +196,11 @@ impl HistoryCell for UserHistoryCell {
         lines
     }
 
-    fn selection_projection(
-        &self,
-        width: u16,
-        mode: HistoryRenderMode,
-    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
         match mode {
             HistoryRenderMode::Raw => {
                 let lines = self.raw_lines();
-                selection_projection_from_lines(
+                selection_contribution_from_semantic_text(
                     selection_text_from_lines(&lines),
                     lines,
                     width,
@@ -225,7 +221,7 @@ impl HistoryCell for UserHistoryCell {
                     }
                     sections.push(message.to_string());
                 }
-                selection_projection_from_lines(
+                selection_contribution_from_semantic_text(
                     sections.join("\n"),
                     self.display_lines(width),
                     width,
@@ -308,18 +304,14 @@ impl HistoryCell for ReasoningSummaryCell {
         }
     }
 
-    fn selection_projection(
-        &self,
-        width: u16,
-        mode: HistoryRenderMode,
-    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
         if self.transcript_only {
-            return None;
+            return SelectionContribution::Transparent;
         }
         match mode {
             HistoryRenderMode::Raw => {
                 let lines = self.raw_lines();
-                selection_projection_from_lines(
+                selection_contribution_from_semantic_text(
                     selection_text_from_lines(&lines),
                     lines,
                     width,
@@ -327,18 +319,21 @@ impl HistoryCell for ReasoningSummaryCell {
                 )
             }
             HistoryRenderMode::Rich => {
-                if crate::markdown_render::selection_text_contains_table(&self.content) {
-                    return None;
-                }
-                selection_projection_from_lines(
-                    crate::markdown_render::render_markdown_selection_text(
-                        &self.content,
-                        Some(self.cwd.as_path()),
-                    ),
+                let Some(markdown_width) =
+                    crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+                else {
+                    return SelectionContribution::Transparent;
+                };
+                crate::markdown_render::render_markdown_selection_projection(
+                    &self.content,
+                    markdown_width,
+                    Some(self.cwd.as_path()),
                     self.display_lines(width),
                     width,
-                    /*first_row_prefix_columns*/ 2,
+                    /*outer_prefix_columns*/ 2,
                 )
+                .map(SelectionContribution::Selectable)
+                .unwrap_or(SelectionContribution::Transparent)
             }
         }
     }
@@ -348,6 +343,7 @@ impl HistoryCell for ReasoningSummaryCell {
 pub(crate) struct AgentMessageCell {
     lines: Vec<HyperlinkLine>,
     is_first_line: bool,
+    selection_fragment: Option<StreamSelectionFragment>,
 }
 
 impl AgentMessageCell {
@@ -356,13 +352,19 @@ impl AgentMessageCell {
         Self {
             lines: plain_hyperlink_lines(lines),
             is_first_line,
+            selection_fragment: None,
         }
     }
 
-    pub(crate) fn new_hyperlink_lines(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
+    pub(crate) fn new_source_backed_hyperlink_lines(
+        lines: Vec<HyperlinkLine>,
+        is_first_line: bool,
+        selection_fragment: Option<StreamSelectionFragment>,
+    ) -> Self {
         Self {
             lines,
             is_first_line,
+            selection_fragment,
         }
     }
 }
@@ -399,26 +401,47 @@ impl HistoryCell for AgentMessageCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(visible_lines(self.lines.clone()))
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| raw_lines_from_source(fragment.text()))
+            .unwrap_or_else(|| plain_lines(visible_lines(self.lines.clone())))
     }
 
-    fn selection_projection(
-        &self,
-        width: u16,
-        mode: HistoryRenderMode,
-    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
-        match mode {
-            HistoryRenderMode::Rich => None,
-            HistoryRenderMode::Raw => {
-                let lines = self.raw_lines();
-                selection_projection_from_lines(
-                    selection_text_from_lines(&lines),
-                    lines,
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let Some(fragment) = self.selection_fragment.as_ref() else {
+            return SelectionContribution::Transparent;
+        };
+        let projection = match mode {
+            HistoryRenderMode::Rich => {
+                let Some(body_width) =
+                    crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+                else {
+                    return SelectionContribution::Transparent;
+                };
+                fragment.projection_for_display(
+                    u16::try_from(body_width).unwrap_or(u16::MAX),
+                    self.display_lines(width),
                     width,
-                    /*first_row_prefix_columns*/ 0,
+                    /*outer_prefix_columns*/ 2,
                 )
             }
-        }
+            HistoryRenderMode::Raw => fragment.projection_for_display(
+                width,
+                self.raw_lines(),
+                width,
+                /*outer_prefix_columns*/ 0,
+            ),
+        };
+        projection
+            .map(|projection| {
+                if self.is_stream_continuation() {
+                    projection.with_separator_before("")
+                } else {
+                    projection
+                }
+            })
+            .map(SelectionContribution::Selectable)
+            .unwrap_or(SelectionContribution::Transparent)
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -491,15 +514,11 @@ impl HistoryCell for AgentMarkdownCell {
         raw_lines_from_source(&self.markdown_source)
     }
 
-    fn selection_projection(
-        &self,
-        width: u16,
-        mode: HistoryRenderMode,
-    ) -> Option<crate::conversation_selection::CellSelectionProjection> {
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
         match mode {
             HistoryRenderMode::Raw => {
                 let lines = self.raw_lines();
-                selection_projection_from_lines(
+                selection_contribution_from_semantic_text(
                     selection_text_from_lines(&lines),
                     lines,
                     width,
@@ -508,18 +527,21 @@ impl HistoryCell for AgentMarkdownCell {
             }
             HistoryRenderMode::Rich => {
                 let normalized = crate::markdown::unwrap_markdown_fences(&self.markdown_source);
-                if crate::markdown_render::selection_text_contains_table(&normalized) {
-                    return None;
-                }
-                selection_projection_from_lines(
-                    crate::markdown_render::render_markdown_selection_text(
-                        &normalized,
-                        Some(self.cwd.as_path()),
-                    ),
+                let Some(markdown_width) =
+                    crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+                else {
+                    return SelectionContribution::Transparent;
+                };
+                crate::markdown_render::render_markdown_selection_projection(
+                    &normalized,
+                    markdown_width,
+                    Some(self.cwd.as_path()),
                     self.display_lines(width),
                     width,
-                    /*first_row_prefix_columns*/ 2,
+                    /*outer_prefix_columns*/ 2,
                 )
+                .map(SelectionContribution::Selectable)
+                .unwrap_or(SelectionContribution::Transparent)
             }
         }
     }
@@ -534,13 +556,28 @@ impl HistoryCell for AgentMarkdownCell {
 pub(crate) struct StreamingAgentTailCell {
     lines: Vec<HyperlinkLine>,
     is_first_line: bool,
+    selection_fragment: Option<StreamSelectionFragment>,
 }
 
 impl StreamingAgentTailCell {
+    #[cfg(test)]
     pub(crate) fn new(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
         Self {
             lines,
             is_first_line,
+            selection_fragment: None,
+        }
+    }
+
+    pub(crate) fn new_source_backed(
+        lines: Vec<HyperlinkLine>,
+        is_first_line: bool,
+        selection_fragment: Option<StreamSelectionFragment>,
+    ) -> Self {
+        Self {
+            lines,
+            is_first_line,
+            selection_fragment,
         }
     }
 }
@@ -581,7 +618,47 @@ impl HistoryCell for StreamingAgentTailCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.display_lines(/*width*/ u16::MAX))
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| raw_lines_from_source(fragment.text()))
+            .unwrap_or_else(|| plain_lines(visible_lines(self.lines.clone())))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let Some(fragment) = self.selection_fragment.as_ref() else {
+            return SelectionContribution::Transparent;
+        };
+        let projection = match mode {
+            HistoryRenderMode::Rich => {
+                let Some(body_width) =
+                    crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+                else {
+                    return SelectionContribution::Transparent;
+                };
+                fragment.projection_for_display(
+                    u16::try_from(body_width).unwrap_or(u16::MAX),
+                    self.display_lines(width),
+                    width,
+                    /*outer_prefix_columns*/ 2,
+                )
+            }
+            HistoryRenderMode::Raw => fragment.projection_for_display(
+                width,
+                self.raw_lines(),
+                width,
+                /*outer_prefix_columns*/ 0,
+            ),
+        };
+        projection
+            .map(|projection| {
+                if self.is_stream_continuation() {
+                    projection.with_separator_before("")
+                } else {
+                    projection
+                }
+            })
+            .map(SelectionContribution::Selectable)
+            .unwrap_or(SelectionContribution::Transparent)
     }
 
     fn is_stream_continuation(&self) -> bool {

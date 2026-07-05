@@ -2,6 +2,23 @@
 
 use super::*;
 
+fn rendered_line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn selection_prefix_width(line: &Line<'_>, prefixes: &[&str]) -> u16 {
+    let rendered = rendered_line_text(line);
+    for prefix in prefixes {
+        if rendered.starts_with(prefix) {
+            return u16::try_from(UnicodeWidthStr::width(*prefix)).unwrap_or(u16::MAX);
+        }
+    }
+    0
+}
+
 #[derive(Debug)]
 pub(crate) struct UnifiedExecInteractionCell {
     command_display: Option<String>,
@@ -14,6 +31,29 @@ impl UnifiedExecInteractionCell {
             command_display,
             stdin,
         }
+    }
+
+    fn rich_selection_text(&self) -> String {
+        let waited_only = self.stdin.is_empty();
+        let mut header = if waited_only {
+            "Waited for background terminal".to_string()
+        } else {
+            "Interacted with background terminal".to_string()
+        };
+        if let Some(command) = self
+            .command_display
+            .as_ref()
+            .filter(|command| !command.is_empty())
+        {
+            header.push_str(" · ");
+            header.push_str(command);
+        }
+
+        let mut lines = vec![Line::from(header)];
+        if !waited_only {
+            lines.extend(raw_lines_from_source(&self.stdin));
+        }
+        selection_text_from_lines(&lines)
     }
 }
 
@@ -93,6 +133,27 @@ impl HistoryCell for UnifiedExecInteractionCell {
         out.extend(raw_lines_from_source(&self.stdin));
         out
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let prefix_columns = lines
+                    .iter()
+                    .map(|line| selection_prefix_width(line, &["  └ ", "    ", "↳ ", "• "]))
+                    .collect::<Vec<_>>();
+                selection_contribution_from_semantic_rows(
+                    self.rich_selection_text(),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
+    }
 }
 
 pub(crate) fn new_unified_exec_interaction(
@@ -108,6 +169,26 @@ struct UnifiedExecProcessesCell {
 }
 
 impl UnifiedExecProcessesCell {
+    fn rich_selection_text(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let rendered = rendered_line_text(line);
+                if index == 0 {
+                    return rendered;
+                }
+                for prefix in ["    ↳ ", "      ", "  • "] {
+                    if let Some(content) = rendered.strip_prefix(prefix) {
+                        return content.to_string();
+                    }
+                }
+                rendered
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
         Self { processes }
     }
@@ -226,6 +307,27 @@ impl HistoryCell for UnifiedExecProcessesCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.display_lines(u16::MAX))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let prefix_columns = lines
+                    .iter()
+                    .map(|line| selection_prefix_width(line, &["    ↳ ", "      ", "  • "]))
+                    .collect::<Vec<_>>();
+                selection_contribution_from_semantic_rows(
+                    Self::rich_selection_text(&lines),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {

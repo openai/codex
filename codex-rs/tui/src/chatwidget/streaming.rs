@@ -442,27 +442,32 @@ impl ChatWidget {
             }
 
             self.bottom_pane.hide_status_indicator();
-            self.transcript.active_cell =
-                Some(Box::new(history_cell::StreamingAgentTailCell::new(
+            self.transcript.active_cell = Some(Box::new(
+                history_cell::StreamingAgentTailCell::new_source_backed(
                     tail_lines,
                     controller.tail_starts_stream(),
-                )));
+                    controller.current_tail_selection_fragment(),
+                ),
+            ));
             self.bump_active_cell_revision();
             return;
         }
 
         if let Some(controller) = self.plan_stream_controller.as_ref() {
-            let tail_lines = controller.current_tail_display_lines();
-            if tail_lines.is_empty() {
+            let Some(tail) = controller.current_tail_display() else {
                 self.clear_active_stream_tail();
                 return;
-            }
+            };
 
             self.bottom_pane.hide_status_indicator();
-            self.transcript.active_cell = Some(Box::new(history_cell::StreamingPlanTailCell::new(
-                tail_lines,
-                !controller.tail_starts_stream(),
-            )));
+            self.transcript.active_cell = Some(Box::new(
+                history_cell::StreamingPlanTailCell::new_source_backed(
+                    tail.lines,
+                    !controller.tail_starts_stream(),
+                    tail.selection_fragment,
+                    tail.body_line_range,
+                ),
+            ));
             self.bump_active_cell_revision();
             return;
         }

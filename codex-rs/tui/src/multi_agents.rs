@@ -454,11 +454,36 @@ fn resume_end(
 }
 
 fn collab_event(title: Line<'static>, details: Vec<Line<'static>>) -> PlainHistoryCell {
+    let title_text = title
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    let title_text = title_text.strip_prefix("• ").unwrap_or(&title_text);
+    let mut selection_text = title_text.to_string();
+    let mut prefix_columns = vec![2];
+    if !details.is_empty() {
+        selection_text.push('\n');
+        selection_text.push_str(
+            &details
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        prefix_columns.extend(std::iter::repeat_n(/*element*/ 4, details.len()));
+    }
+
     let mut lines: Vec<Line<'static>> = vec![title];
     if !details.is_empty() {
         lines.extend(prefix_lines(details, "  └ ".dim(), "    ".into()));
     }
-    PlainHistoryCell::new(lines)
+    PlainHistoryCell::new(lines).with_selection_text(selection_text, prefix_columns)
 }
 
 fn title_text(title: impl Into<String>) -> Line<'static> {
@@ -785,6 +810,19 @@ mod tests {
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("close item renders");
+
+        let selected = spawn
+            .selection_contribution(
+                /*width*/ 24,
+                crate::history_cell::HistoryRenderMode::Rich,
+            )
+            .into_projection()
+            .expect("collaboration event should be selectable")
+            .text()
+            .to_string();
+        assert!(selected.contains("Compute 11! and reply with just the integer result."));
+        assert!(!selected.contains('•'));
+        assert!(!selected.contains("  └ "));
 
         let snapshot = [spawn, send, waiting, finished, close]
             .iter()

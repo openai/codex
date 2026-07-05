@@ -73,6 +73,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
@@ -80,8 +81,9 @@ use url::Url;
 mod selection;
 mod table_key_value;
 
+pub(crate) use selection::render_markdown_selection_projection;
+#[cfg(test)]
 pub(crate) use selection::render_markdown_selection_text;
-pub(crate) use selection::selection_text_contains_table;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -201,6 +203,20 @@ impl TableCell {
         }
         buf
     }
+
+    fn selection_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| {
+                line.line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 /// Accumulates pulldown-cmark table events into a structured representation.
@@ -250,6 +266,150 @@ struct RenderedTableLines {
     table_lines: Vec<HyperlinkLine>,
     table_lines_prewrapped: bool,
     spillover_lines: Vec<HyperlinkLine>,
+    selection: Option<TableSelectionLayout>,
+}
+
+#[derive(Clone, Debug)]
+struct TableSelectionLayout {
+    text: String,
+    rows: Vec<crate::conversation_selection::SelectionRow>,
+    source_rows: Vec<Range<usize>>,
+}
+
+impl TableSelectionLayout {
+    fn new(
+        text: String,
+        rows: Vec<crate::conversation_selection::SelectionRow>,
+        source_rows: Vec<Range<usize>>,
+    ) -> Self {
+        Self {
+            text,
+            rows,
+            source_rows,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MarkdownTableSelectionLayout {
+    text: String,
+    row_start: usize,
+    rows: Vec<crate::conversation_selection::SelectionRow>,
+}
+
+#[derive(Clone, Debug)]
+struct MarkdownTableSourceLayout {
+    text: String,
+    row_start: usize,
+    source_rows: Vec<Range<usize>>,
+}
+
+struct RenderedTableRow {
+    line: HyperlinkLine,
+    selection: crate::conversation_selection::SelectionRow,
+}
+
+struct TableSelectionSource {
+    text: String,
+    header: Vec<Range<usize>>,
+    rows: Vec<Vec<Range<usize>>>,
+}
+
+fn table_cell_selection_segments(
+    source: &str,
+    wrapped_lines: &[HyperlinkLine],
+    source_range: Range<usize>,
+) -> Vec<Vec<crate::conversation_selection::SelectionSegment>> {
+    let source_graphemes = source
+        .grapheme_indices(/*is_extended*/ true)
+        .map(|(start, grapheme)| (grapheme, start..start + grapheme.len()))
+        .collect::<Vec<_>>();
+    let mut source_cursor = 0usize;
+
+    wrapped_lines
+        .iter()
+        .map(|line| {
+            let mut segments = Vec::new();
+            let mut column = 0u16;
+            for span in &line.line.spans {
+                for grapheme in span.content.graphemes(/*is_extended*/ true) {
+                    let width = grapheme.width().max(/*other*/ 1).min(usize::from(u16::MAX)) as u16;
+                    let mut source_index = None;
+                    for (index, (candidate, _)) in
+                        source_graphemes.iter().enumerate().skip(source_cursor)
+                    {
+                        if *candidate == grapheme {
+                            source_index = Some(index);
+                            break;
+                        }
+                        if !candidate.chars().all(char::is_whitespace) {
+                            break;
+                        }
+                    }
+                    if let Some(source_index) = source_index {
+                        let local_bytes = &source_graphemes[source_index].1;
+                        segments.push(crate::conversation_selection::SelectionSegment {
+                            columns: column..column.saturating_add(width),
+                            bytes: local_bytes.start.saturating_add(source_range.start)
+                                ..local_bytes.end.saturating_add(source_range.start),
+                        });
+                        source_cursor = source_index.saturating_add(/*rhs*/ 1);
+                    }
+                    column = column.saturating_add(width);
+                }
+            }
+            segments
+        })
+        .collect()
+}
+
+impl TableSelectionSource {
+    fn new(header: &[TableCell], rows: &[Vec<TableCell>]) -> Self {
+        let mut text = String::new();
+        let header = Self::append_row(&mut text, header);
+        let rows = rows
+            .iter()
+            .map(|row| {
+                text.push('\n');
+                Self::append_row(&mut text, row)
+            })
+            .collect();
+        Self { text, header, rows }
+    }
+
+    fn append_row(text: &mut String, row: &[TableCell]) -> Vec<Range<usize>> {
+        let mut ranges = Vec::with_capacity(row.len());
+        for (column, cell) in row.iter().enumerate() {
+            if column > 0 {
+                text.push('\t');
+            }
+            let start = text.len();
+            text.push_str(&cell.selection_text());
+            ranges.push(start..text.len());
+        }
+        ranges
+    }
+
+    fn into_layout(
+        self,
+        rows: Vec<crate::conversation_selection::SelectionRow>,
+    ) -> TableSelectionLayout {
+        let source_rows = std::iter::once(&self.header)
+            .chain(&self.rows)
+            .map(|row| {
+                let start = row.first().map_or(/*default*/ 0, |range| range.start);
+                let end = row.last().map_or(start, |range| range.end);
+                start..end
+            })
+            .collect();
+        TableSelectionLayout::new(self.text, rows, source_rows)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TablePresentation {
+    Display,
+    Selection,
 }
 
 /// Classification of a table column for width-allocation priority.
@@ -328,9 +488,42 @@ pub(crate) fn render_markdown_lines_with_width_and_cwd(
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     let parser = DecodedTextMerge::new(Parser::new_ext(input, options).into_offset_iter());
-    let mut w = Writer::new(input, parser, width, cwd);
+    let mut w = Writer::new(input, parser, width, cwd, TablePresentation::Display);
     w.run();
     w.text
+}
+
+fn render_markdown_lines_with_table_selection_and_cwd(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> (Vec<HyperlinkLine>, Vec<MarkdownTableSelectionLayout>) {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TABLES);
+    let parser = DecodedTextMerge::new(Parser::new_ext(input, options).into_offset_iter());
+    let mut writer = Writer::new(input, parser, width, cwd, TablePresentation::Display);
+    writer.run();
+    (writer.text, writer.table_selection_layouts)
+}
+
+fn render_markdown_selection_lines_with_cwd(
+    input: &str,
+    cwd: Option<&Path>,
+) -> (Vec<HyperlinkLine>, Vec<MarkdownTableSourceLayout>) {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TABLES);
+    let parser = DecodedTextMerge::new(Parser::new_ext(input, options).into_offset_iter());
+    let mut writer = Writer::new(
+        input,
+        parser,
+        /*wrap_width*/ None,
+        cwd,
+        TablePresentation::Selection,
+    );
+    writer.run();
+    (writer.text, writer.table_source_layouts)
 }
 
 #[derive(Clone, Debug)]
@@ -399,13 +592,22 @@ where
     current_line_style: Style,
     current_line_in_code_block: bool,
     table_state: Option<TableState>,
+    table_presentation: TablePresentation,
+    table_selection_layouts: Vec<MarkdownTableSelectionLayout>,
+    table_source_layouts: Vec<MarkdownTableSourceLayout>,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(input: &'a str, iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
+    fn new(
+        input: &'a str,
+        iter: I,
+        wrap_width: Option<usize>,
+        cwd: Option<&Path>,
+        table_presentation: TablePresentation,
+    ) -> Self {
         Self {
             input,
             iter,
@@ -433,6 +635,9 @@ where
             current_line_style: Style::default(),
             current_line_in_code_block: false,
             table_state: None,
+            table_presentation,
+            table_selection_layouts: Vec::new(),
+            table_source_layouts: Vec::new(),
         }
     }
 
@@ -886,9 +1091,25 @@ where
             table_lines,
             table_lines_prewrapped,
             spillover_lines,
-        } = self.render_table_lines(table_state);
+            mut selection,
+        } = match self.table_presentation {
+            TablePresentation::Display => self.render_table_lines(table_state),
+            TablePresentation::Selection => self.render_table_selection_lines(table_state),
+        };
+        let row_start = self.text.len();
         let mut pending_marker_line = self.pending_marker_line;
-        for line in table_lines {
+        for (row_index, line) in table_lines.into_iter().enumerate() {
+            if let Some(selection) = selection.as_mut()
+                && let Some(row) = selection.rows.get_mut(row_index)
+            {
+                let prefix_width =
+                    Self::spans_display_width(&self.prefix_spans(pending_marker_line))
+                        .min(usize::from(u16::MAX)) as u16;
+                for segment in &mut row.segments {
+                    segment.columns = segment.columns.start.saturating_add(prefix_width)
+                        ..segment.columns.end.saturating_add(prefix_width);
+                }
+            }
             if table_lines_prewrapped {
                 self.push_prewrapped_line(line, pending_marker_line);
             } else {
@@ -897,12 +1118,90 @@ where
             }
             pending_marker_line = false;
         }
+        if let Some(selection) = selection {
+            match self.table_presentation {
+                TablePresentation::Display => {
+                    self.table_selection_layouts
+                        .push(MarkdownTableSelectionLayout {
+                            text: selection.text,
+                            row_start,
+                            rows: selection.rows,
+                        });
+                }
+                TablePresentation::Selection => {
+                    self.table_source_layouts.push(MarkdownTableSourceLayout {
+                        text: selection.text,
+                        row_start,
+                        source_rows: selection.source_rows,
+                    });
+                }
+            }
+        }
         self.pending_marker_line = false;
         for spillover_line in spillover_lines {
             self.push_hyperlink_line(spillover_line);
             self.flush_current_line();
         }
         self.needs_newline = true;
+    }
+
+    /// Render a table as canonical clipboard text.
+    ///
+    /// Tabs preserve logical cell boundaries, while newlines preserve logical table-row
+    /// boundaries. Generated padding and separator rules never enter this representation.
+    fn render_table_selection_lines(&self, table_state: TableState) -> RenderedTableLines {
+        let column_count = table_state.alignments.len();
+        if column_count == 0 {
+            return RenderedTableLines {
+                table_lines: Vec::new(),
+                table_lines_prewrapped: true,
+                spillover_lines: Vec::new(),
+                selection: None,
+            };
+        }
+
+        let mut spillover_rows = Vec::with_capacity(/*capacity*/ 4);
+        let mut rows = Vec::with_capacity(table_state.rows.len());
+        for (row_index, row) in table_state.rows.iter().enumerate() {
+            let next_row = table_state.rows.get(row_index.saturating_add(/*rhs*/ 1));
+            if column_count > 1 && Self::is_spillover_row(row, next_row) {
+                if let Some(cell) = row.cells.first().cloned() {
+                    spillover_rows.push(cell);
+                }
+            } else {
+                rows.push(row.cells.clone());
+            }
+        }
+
+        let mut header = table_state
+            .header
+            .unwrap_or_else(|| vec![TableCell::default(); column_count]);
+        Self::normalize_row(&mut header, column_count);
+        for row in &mut rows {
+            Self::normalize_row(row, column_count);
+        }
+        let selection_source = TableSelectionSource::new(&header, &rows);
+        let table_lines = std::iter::once(header)
+            .chain(rows)
+            .map(|row| {
+                let text = row
+                    .iter()
+                    .map(TableCell::selection_text)
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                HyperlinkLine::new(Line::from(text))
+            })
+            .collect();
+        let spillover_lines = spillover_rows
+            .into_iter()
+            .flat_map(|spillover| spillover.lines)
+            .collect();
+        RenderedTableLines {
+            table_lines,
+            table_lines_prewrapped: true,
+            spillover_lines,
+            selection: Some(selection_source.into_layout(Vec::new())),
+        }
     }
 
     fn start_table_head(&mut self) {
@@ -1063,6 +1362,7 @@ where
                 table_lines: Vec::new(),
                 table_lines_prewrapped: true,
                 spillover_lines: Vec::new(),
+                selection: None,
             };
         }
 
@@ -1090,6 +1390,7 @@ where
         for row in &mut rows {
             Self::normalize_row(row, column_count);
         }
+        let selection_source = TableSelectionSource::new(&header, &rows);
 
         let metrics = Self::collect_table_column_metrics(&header, &rows, column_count);
         let available_width = self.available_table_width(column_count);
@@ -1107,17 +1408,26 @@ where
 
         let Some(column_widths) = widths else {
             if !rows.is_empty() {
+                let rendered = table_key_value::render_records(
+                    &header,
+                    &rows,
+                    &metrics,
+                    self.available_record_width(),
+                    header_style,
+                    separator_style,
+                    table_key_value::TableSelectionRanges {
+                        headers: &selection_source.header,
+                        rows: &selection_source.rows,
+                    },
+                );
                 return RenderedTableLines {
-                    table_lines: table_key_value::render_records(
-                        &header,
-                        &rows,
-                        &metrics,
-                        self.available_record_width(),
-                        header_style,
-                        separator_style,
-                    ),
+                    table_lines: rendered.iter().map(|row| row.line.clone()).collect(),
                     table_lines_prewrapped: true,
                     spillover_lines,
+                    selection: Some(
+                        selection_source
+                            .into_layout(rendered.into_iter().map(|row| row.selection).collect()),
+                    ),
                 };
             }
             return RenderedTableLines {
@@ -1128,55 +1438,77 @@ where
                 ),
                 table_lines_prewrapped: false,
                 spillover_lines,
+                selection: None,
             };
         };
 
         if table_key_value::should_render_records(&rows, &column_widths, &metrics) {
+            let rendered = table_key_value::render_records(
+                &header,
+                &rows,
+                &metrics,
+                self.available_record_width(),
+                header_style,
+                separator_style,
+                table_key_value::TableSelectionRanges {
+                    headers: &selection_source.header,
+                    rows: &selection_source.rows,
+                },
+            );
             return RenderedTableLines {
-                table_lines: table_key_value::render_records(
-                    &header,
-                    &rows,
-                    &metrics,
-                    self.available_record_width(),
-                    header_style,
-                    separator_style,
-                ),
+                table_lines: rendered.iter().map(|row| row.line.clone()).collect(),
                 table_lines_prewrapped: true,
                 spillover_lines,
+                selection: Some(
+                    selection_source
+                        .into_layout(rendered.into_iter().map(|row| row.selection).collect()),
+                ),
             };
         }
 
         let mut out = Vec::with_capacity(2 + rows.len() * 2);
-        out.extend(self.render_table_row(
+        let mut selection_rows = Vec::with_capacity(/*capacity*/ 2 + rows.len() * 2);
+        for rendered in self.render_table_row(
             &header,
             &column_widths,
             &table_state.alignments,
             header_style,
-        ));
+            &selection_source.header,
+        ) {
+            out.push(rendered.line);
+            selection_rows.push(rendered.selection);
+        }
         out.push(Self::render_table_separator(
             &column_widths,
             TABLE_HEADER_SEPARATOR_CHAR,
             separator_style,
         ));
+        selection_rows.push(crate::conversation_selection::SelectionRow::default());
         for (row_idx, row) in rows.iter().enumerate() {
-            out.extend(self.render_table_row(
+            for rendered in self.render_table_row(
                 row,
                 &column_widths,
                 &table_state.alignments,
                 Style::default(),
-            ));
+                &selection_source.rows[row_idx],
+            ) {
+                out.push(rendered.line);
+                selection_rows.push(rendered.selection);
+            }
             if row_idx + 1 < rows.len() {
                 out.push(Self::render_table_separator(
                     &column_widths,
                     TABLE_BODY_SEPARATOR_CHAR,
                     separator_style,
                 ));
+                selection_rows.push(crate::conversation_selection::SelectionRow::default());
             }
         }
         RenderedTableLines {
             table_lines: out,
             table_lines_prewrapped: true,
             spillover_lines,
+            selection: Some(selection_source.into_layout(selection_rows)),
         }
     }
 
@@ -1415,12 +1747,21 @@ where
         column_widths: &[usize],
         alignments: &[Alignment],
         row_style: Style,
-    ) -> Vec<HyperlinkLine> {
+        selection_ranges: &[Range<usize>],
+    ) -> Vec<RenderedTableRow> {
         let wrapped_cells: Vec<Vec<HyperlinkLine>> = row
             .iter()
             .zip(column_widths)
             .map(|(cell, width)| self.wrap_cell(cell, *width))
             .collect();
+        let wrapped_selection = row
+            .iter()
+            .zip(&wrapped_cells)
+            .zip(selection_ranges)
+            .map(|((cell, lines), range)| {
+                table_cell_selection_segments(&cell.selection_text(), lines, range.clone())
+            })
+            .collect::<Vec<_>>();
         let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
 
         let mut out = Vec::with_capacity(row_height);
@@ -1430,7 +1771,10 @@ where
                     .get(row_line)
                     .is_some_and(|line| Self::line_display_width(&line.line) > 0)
             }) else {
-                out.push(HyperlinkLine::new(Line::default().style(row_style)));
+                out.push(RenderedTableRow {
+                    line: HyperlinkLine::new(Line::default().style(row_style)),
+                    selection: crate::conversation_selection::SelectionRow::default(),
+                });
                 continue;
             };
             let mut spans = Vec::new();
@@ -1467,6 +1811,7 @@ where
                 }
             }
             let mut out_line = HyperlinkLine::new(Line::from(spans).style(row_style));
+            let mut selection = crate::conversation_selection::SelectionRow::default();
             let mut column_start = 0usize;
             for (column, width) in column_widths
                 .iter()
@@ -1488,10 +1833,25 @@ where
                                 ..link.columns.end + column_start + left_padding;
                             link
                         }));
+                    let content_start = column_start.saturating_add(left_padding);
+                    let content_start = content_start.min(usize::from(u16::MAX)) as u16;
+                    if let Some(segments) = wrapped_selection[column].get(row_line) {
+                        selection
+                            .segments
+                            .extend(segments.iter().cloned().map(|mut segment| {
+                                segment.columns =
+                                    segment.columns.start.saturating_add(content_start)
+                                        ..segment.columns.end.saturating_add(content_start);
+                                segment
+                            }));
+                    }
                 }
                 column_start += *width + TABLE_CELL_PADDING + TABLE_COLUMN_GAP;
             }
-            out.push(out_line);
+            out.push(RenderedTableRow {
+                line: out_line,
+                selection,
+            });
         }
         out
     }
@@ -2408,7 +2768,13 @@ mod tests {
         cell.hard_break();
         cell.push_span("second line".into());
 
-        let writer = W::new("", std::iter::empty(), Some(80), /*cwd*/ None);
+        let writer = W::new(
+            "",
+            std::iter::empty(),
+            /*wrap_width*/ Some(80),
+            /*cwd*/ None,
+            TablePresentation::Display,
+        );
         let wrapped = writer.wrap_cell(&cell, /*width*/ 40);
         let rendered = wrapped
             .iter()

@@ -3,13 +3,18 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use super::selection::ExecDisplay;
+use super::selection::ExecDisplayLine;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::SelectionContribution;
 use crate::history_cell::plain_lines;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 use crate::render::highlight::highlight_bash_to_lines;
+#[cfg(test)]
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::wrapping::RtOptions;
@@ -98,6 +103,12 @@ fn summarize_interaction_input(input: &str) -> String {
 pub(crate) struct OutputLines {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) omitted: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MiddleTruncationLine {
+    Keep(usize),
+    Ellipsis(usize),
 }
 
 pub(crate) fn output_lines(
@@ -248,6 +259,21 @@ impl HistoryCell for ExecCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.transcript_lines(u16::MAX))
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                crate::history_cell::selection_contribution_from_display_lines(
+                    self.raw_lines(),
+                    width,
+                )
+            }
+            HistoryRenderMode::Rich if self.is_exploring_cell() => {
+                self.exploring_display(width).selection_contribution(width)
+            }
+            HistoryRenderMode::Rich => self.command_display(width).selection_contribution(width),
+        }
+    }
 }
 
 impl ExecCell {
@@ -260,23 +286,35 @@ impl ExecCell {
     }
 
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(Line::from(vec![
+        self.exploring_display(width).into_lines()
+    }
+
+    fn exploring_display(&self, width: u16) -> ExecDisplay {
+        let status = if self.is_active() {
+            "Exploring"
+        } else {
+            "Explored"
+        };
+        let header = Line::from(vec![
             if self.is_active() {
                 activity_marker(self.active_start_time(), self.animations_enabled())
             } else {
                 "•".dim()
             },
             " ".into(),
-            if self.is_active() {
-                "Exploring".bold()
-            } else {
-                "Explored".bold()
-            },
-        ]));
+            status.bold(),
+        ]);
+        let mut rows = vec![
+            ExecDisplayLine::generated(Line::default(), String::new()).with_header(
+                header,
+                /*presentation_prefix_columns*/ 2,
+                status.to_string(),
+            ),
+        ];
 
         let mut calls = self.calls.clone();
-        let mut out_indented = Vec::new();
+        let mut detail_rows = Vec::new();
+        let mut next_source_id = 0usize;
         while !calls.is_empty() {
             let mut call = calls.remove(0);
             if call
@@ -347,22 +385,42 @@ impl ExecCell {
             for (title, line) in call_lines {
                 let line = Line::from(line);
                 let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
-                let subsequent_indent = " ".repeat(initial_indent.width()).into();
+                let continuation_prefix = " ".repeat(initial_indent.width());
+                let subsequent_indent = Line::from(continuation_prefix.clone());
                 let wrapped = adaptive_wrap_line(
                     &line,
                     RtOptions::new(width as usize)
-                        .initial_indent(initial_indent)
+                        .initial_indent(initial_indent.clone())
                         .subsequent_indent(subsequent_indent),
                 );
-                push_owned_lines(&wrapped, &mut out_indented);
+                let mut wrapped_owned = Vec::new();
+                push_owned_lines(&wrapped, &mut wrapped_owned);
+                let mut source_line = initial_indent;
+                source_line.extend(line);
+                detail_rows.extend(
+                    ExecDisplayLine::from_wrapped_source_with_continuation_prefix(
+                        next_source_id,
+                        &source_line,
+                        wrapped_owned,
+                        &continuation_prefix,
+                    ),
+                );
+                next_source_id = next_source_id.saturating_add(1);
             }
         }
 
-        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
-        out
+        rows.extend(detail_rows.into_iter().enumerate().map(|(index, line)| {
+            let prefix = if index == 0 { "  └ " } else { "    " };
+            line.with_prefix(Line::from(prefix.dim()))
+        }));
+        ExecDisplay::new(rows)
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.command_display(width).into_lines()
+    }
+
+    fn command_display(&self, width: u16) -> ExecDisplay {
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
@@ -384,10 +442,17 @@ impl ExecCell {
             "Ran"
         };
 
-        let mut header_line = if is_interaction {
+        let header_line = if is_interaction {
             Line::from(vec![bullet.clone(), " ".into()])
         } else {
             Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()])
+        };
+        let presentation_prefix_columns =
+            u16::try_from(bullet.width().saturating_add(1)).unwrap_or(u16::MAX);
+        let semantic_header = if is_interaction {
+            String::new()
+        } else {
+            format!("{title} ")
         };
         let header_prefix_width = header_line.width();
 
@@ -402,7 +467,9 @@ impl ExecCell {
         let continuation_opts =
             RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
 
-        let mut continuation_lines: Vec<Line<'static>> = Vec::new();
+        let mut continuation_lines: Vec<ExecDisplayLine> = Vec::new();
+        let mut next_source_id = 0usize;
+        let header_row;
 
         if let Some((first, rest)) = highlighted_lines.split_first() {
             let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
@@ -411,32 +478,57 @@ impl ExecCell {
 
             let mut first_wrapped: Vec<Line<'static>> = Vec::new();
             push_owned_lines(&adaptive_wrap_line(first, first_opts), &mut first_wrapped);
-            let mut first_wrapped_iter = first_wrapped.into_iter();
-            if let Some(first_segment) = first_wrapped_iter.next() {
-                header_line.extend(first_segment);
-            }
-            continuation_lines.extend(first_wrapped_iter);
+            let mut first_rows =
+                ExecDisplayLine::from_wrapped_source(next_source_id, first, first_wrapped)
+                    .into_iter();
+            next_source_id = next_source_id.saturating_add(1);
+            header_row = first_rows
+                .next()
+                .unwrap_or_else(|| ExecDisplayLine::generated(Line::default(), String::new()))
+                .with_header(header_line, presentation_prefix_columns, semantic_header);
+            continuation_lines.extend(first_rows);
 
             for line in rest {
+                let mut wrapped = Vec::new();
                 push_owned_lines(
                     &adaptive_wrap_line(line, continuation_opts.clone()),
-                    &mut continuation_lines,
+                    &mut wrapped,
                 );
+                continuation_lines.extend(ExecDisplayLine::from_wrapped_source(
+                    next_source_id,
+                    line,
+                    wrapped,
+                ));
+                next_source_id = next_source_id.saturating_add(1);
             }
+        } else {
+            header_row = ExecDisplayLine::generated(Line::default(), String::new()).with_header(
+                header_line,
+                presentation_prefix_columns,
+                semantic_header,
+            );
         }
 
-        let mut lines: Vec<Line<'static>> = vec![header_line];
+        let mut rows = vec![header_row];
 
-        let continuation_lines = Self::limit_lines_from_start(
+        let continuation_lines = Self::limit_exec_lines_from_start(
             &continuation_lines,
             layout.command_continuation_max_lines,
         );
         if !continuation_lines.is_empty() {
-            lines.extend(prefix_lines(
-                continuation_lines,
-                Span::from(layout.command_continuation.initial_prefix).dim(),
-                Span::from(layout.command_continuation.subsequent_prefix).dim(),
-            ));
+            rows.extend(
+                continuation_lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        let prefix = if index == 0 {
+                            layout.command_continuation.initial_prefix
+                        } else {
+                            layout.command_continuation.subsequent_prefix
+                        };
+                        line.with_prefix(Line::from(Span::from(prefix).dim()))
+                    }),
+            );
         }
 
         if let Some(output) = call.output.as_ref() {
@@ -462,33 +554,48 @@ impl ExecCell {
 
             if raw_output.lines.is_empty() {
                 if !call.is_unified_exec_interaction() {
-                    lines.extend(prefix_lines(
-                        vec![Line::from("(no output)".dim())],
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
-                    ));
+                    rows.push(
+                        ExecDisplayLine::generated(
+                            Line::from("(no output)".dim()),
+                            "(no output)".to_string(),
+                        )
+                        .with_prefix(Line::from(
+                            Span::from(layout.output_block.initial_prefix).dim(),
+                        )),
+                    );
                 }
             } else {
                 // Wrap first so that truncation is applied to on-screen lines
                 // rather than logical lines. This ensures that a small number
                 // of very long lines cannot flood the viewport.
-                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                let mut wrapped_output: Vec<ExecDisplayLine> = Vec::new();
                 let output_wrap_width = layout.output_block.wrap_width(width);
                 let output_opts =
                     RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
                 for line in &raw_output.lines {
-                    push_owned_lines(
-                        &adaptive_wrap_line(line, output_opts.clone()),
-                        &mut wrapped_output,
-                    );
+                    let mut wrapped = Vec::new();
+                    push_owned_lines(&adaptive_wrap_line(line, output_opts.clone()), &mut wrapped);
+                    wrapped_output.extend(ExecDisplayLine::from_wrapped_source(
+                        next_source_id,
+                        line,
+                        wrapped,
+                    ));
+                    next_source_id = next_source_id.saturating_add(1);
                 }
 
-                let prefixed_output = prefix_lines(
-                    wrapped_output,
-                    Span::from(layout.output_block.initial_prefix).dim(),
-                    Span::from(layout.output_block.subsequent_prefix),
-                );
-                let trimmed_output = Self::truncate_lines_middle(
+                let prefixed_output = wrapped_output
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        let prefix = if index == 0 {
+                            layout.output_block.initial_prefix
+                        } else {
+                            layout.output_block.subsequent_prefix
+                        };
+                        line.with_prefix(Line::from(Span::from(prefix).dim()))
+                    })
+                    .collect::<Vec<_>>();
+                let trimmed_output = Self::truncate_exec_lines_middle(
                     &prefixed_output,
                     display_limit,
                     width,
@@ -499,14 +606,36 @@ impl ExecCell {
                 );
 
                 if !trimmed_output.is_empty() {
-                    lines.extend(trimmed_output);
+                    rows.extend(trimmed_output);
                 }
             }
         }
 
-        lines
+        ExecDisplay::new(rows)
     }
 
+    fn limit_exec_lines_from_start(lines: &[ExecDisplayLine], keep: usize) -> Vec<ExecDisplayLine> {
+        if lines.len() <= keep {
+            return lines.to_vec();
+        }
+        if keep == 0 {
+            let text = Self::ellipsis_text(lines.len());
+            return vec![ExecDisplayLine::generated(
+                Line::from(text.clone().dim()),
+                text,
+            )];
+        }
+
+        let mut out = lines[..keep].to_vec();
+        let text = Self::ellipsis_text(lines.len() - keep);
+        out.push(ExecDisplayLine::generated(
+            Line::from(text.clone().dim()),
+            text,
+        ));
+        out
+    }
+
+    #[cfg(test)]
     fn limit_lines_from_start(lines: &[Line<'static>], keep: usize) -> Vec<Line<'static>> {
         if lines.len() <= keep {
             return lines.to_vec();
@@ -536,6 +665,7 @@ impl ExecCell {
     /// widths. `omitted_hint` carries forward any previously reported
     /// omitted count (from upstream truncation); `ellipsis_prefix`
     /// prepends the output gutter prefix to the ellipsis line.
+    #[cfg(test)]
     fn truncate_lines_middle(
         lines: &[Line<'static>],
         max_rows: usize,
@@ -543,6 +673,64 @@ impl ExecCell {
         omitted_hint: Option<usize>,
         ellipsis_prefix: Option<Line<'static>>,
     ) -> Vec<Line<'static>> {
+        Self::middle_truncation_plan(
+            lines,
+            max_rows,
+            width,
+            omitted_hint,
+            ellipsis_prefix.as_ref(),
+        )
+        .into_iter()
+        .map(|selection| match selection {
+            MiddleTruncationLine::Keep(index) => lines[index].clone(),
+            MiddleTruncationLine::Ellipsis(omitted) => {
+                Self::output_ellipsis_line_with_prefix(omitted, ellipsis_prefix.as_ref())
+            }
+        })
+        .collect()
+    }
+
+    fn truncate_exec_lines_middle(
+        lines: &[ExecDisplayLine],
+        max_rows: usize,
+        width: u16,
+        omitted_hint: Option<usize>,
+        ellipsis_prefix: Option<Line<'static>>,
+    ) -> Vec<ExecDisplayLine> {
+        let display_lines = lines
+            .iter()
+            .map(|line| line.line().clone())
+            .collect::<Vec<_>>();
+        Self::middle_truncation_plan(
+            &display_lines,
+            max_rows,
+            width,
+            omitted_hint,
+            ellipsis_prefix.as_ref(),
+        )
+        .into_iter()
+        .map(|selection| match selection {
+            MiddleTruncationLine::Keep(index) => lines[index].clone(),
+            MiddleTruncationLine::Ellipsis(omitted) => {
+                let text = Self::output_ellipsis_text(omitted);
+                let line = ExecDisplayLine::generated(Self::output_ellipsis_line(omitted), text);
+                if let Some(prefix) = ellipsis_prefix.clone() {
+                    line.with_prefix(prefix)
+                } else {
+                    line
+                }
+            }
+        })
+        .collect()
+    }
+
+    fn middle_truncation_plan(
+        lines: &[Line<'static>],
+        max_rows: usize,
+        width: u16,
+        omitted_hint: Option<usize>,
+        ellipsis_prefix: Option<&Line<'static>>,
+    ) -> Vec<MiddleTruncationLine> {
         let width = width.max(1);
         if max_rows == 0 {
             return Vec::new();
@@ -566,7 +754,7 @@ impl ExecCell {
             .collect();
         let total_rows: usize = line_rows.iter().sum();
         if total_rows <= max_rows {
-            return lines.to_vec();
+            return (0..lines.len()).map(MiddleTruncationLine::Keep).collect();
         }
         // Reserve space for the transcript hint itself so the returned output
         // still respects the row budget on narrow terminals.
@@ -575,18 +763,14 @@ impl ExecCell {
                 .len()
                 .saturating_sub(usize::from(omitted_hint.is_some()));
         let ellipsis_rows =
-            Self::output_ellipsis_row_count(estimated_omitted, width, ellipsis_prefix.as_ref());
+            Self::output_ellipsis_row_count(estimated_omitted, width, ellipsis_prefix);
         if ellipsis_rows >= max_rows {
-            return vec![Self::output_ellipsis_line_with_prefix(
-                estimated_omitted,
-                ellipsis_prefix.as_ref(),
-            )];
+            return vec![MiddleTruncationLine::Ellipsis(estimated_omitted)];
         }
 
         let available_rows = max_rows - ellipsis_rows;
         let head_budget = available_rows / 2;
         let tail_budget = available_rows - head_budget;
-        let mut head_lines: Vec<Line<'static>> = Vec::new();
         let mut head_rows = 0usize;
         let mut head_end = 0usize;
         while head_end < lines.len() {
@@ -595,11 +779,9 @@ impl ExecCell {
                 break;
             }
             head_rows += line_row_count;
-            head_lines.push(lines[head_end].clone());
             head_end += 1;
         }
 
-        let mut tail_lines_reversed: Vec<Line<'static>> = Vec::new();
         let mut tail_rows = 0usize;
         let mut tail_start = lines.len();
         while tail_start > head_end {
@@ -609,28 +791,30 @@ impl ExecCell {
                 break;
             }
             tail_rows += line_row_count;
-            tail_lines_reversed.push(lines[idx].clone());
             tail_start -= 1;
         }
 
-        let mut out = head_lines;
         let base = omitted_hint.unwrap_or(0);
         let additional = lines
             .len()
-            .saturating_sub(out.len() + tail_lines_reversed.len())
+            .saturating_sub(head_end + lines.len().saturating_sub(tail_start))
             .saturating_sub(usize::from(omitted_hint.is_some()));
-        out.push(Self::output_ellipsis_line_with_prefix(
-            base + additional,
-            ellipsis_prefix.as_ref(),
-        ));
-
-        out.extend(tail_lines_reversed.into_iter().rev());
+        let mut out = (0..head_end)
+            .map(MiddleTruncationLine::Keep)
+            .collect::<Vec<_>>();
+        out.push(MiddleTruncationLine::Ellipsis(base + additional));
+        out.extend((tail_start..lines.len()).map(MiddleTruncationLine::Keep));
 
         out
     }
 
+    #[cfg(test)]
     fn ellipsis_line(omitted: usize) -> Line<'static> {
-        Line::from(vec![format!("… +{omitted} lines").dim()])
+        Line::from(vec![Self::ellipsis_text(omitted).dim()])
+    }
+
+    fn ellipsis_text(omitted: usize) -> String {
+        format!("… +{omitted} lines")
     }
 
     fn output_ellipsis_row_count(
@@ -721,6 +905,14 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    fn rich_selection_text(cell: &ExecCell, width: u16) -> String {
+        cell.selection_contribution(width, HistoryRenderMode::Rich)
+            .into_projection()
+            .expect("exec display should be selectable")
+            .text()
+            .to_string()
     }
 
     #[test]
@@ -1090,6 +1282,83 @@ mod tests {
         assert!(
             wrapped_height > logical_height,
             "expected transcript height to account for wrapped URL-like rows, logical_height={logical_height}, wrapped_height={wrapped_height}"
+        );
+    }
+
+    #[test]
+    fn rich_selection_restores_spaces_removed_at_soft_wraps() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo words".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: String::new(),
+                aggregated_output: "alpha beta gamma delta epsilon".to_string(),
+            }),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+
+        assert_eq!(
+            rich_selection_text(&cell, /*width*/ 16),
+            "Ran echo words\nalpha beta gamma delta epsilon"
+        );
+    }
+
+    #[test]
+    fn rich_selection_excludes_output_hidden_by_middle_truncation() {
+        let output = (1..=20)
+            .map(|line| format!("visible-line-{line:02}"))
+            .join("\n");
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo many".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: String::new(),
+                aggregated_output: output,
+            }),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+
+        let selected = rich_selection_text(&cell, /*width*/ 40);
+        assert!(selected.contains("visible-line-01"));
+        assert!(selected.contains("visible-line-20"));
+        assert!(selected.contains("ctrl + t to view transcript"));
+        assert!(!selected.contains("visible-line-08"));
+    }
+
+    #[test]
+    fn exploring_selection_restores_wrapped_query_spacing() {
+        let query = "alpha beta gamma delta epsilon";
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["rg".into(), query.into()],
+            parsed: vec![ParsedCommand::Search {
+                cmd: format!("rg {query}"),
+                query: Some(query.to_string()),
+                path: None,
+            }],
+            output: Some(CommandOutput::default()),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+
+        assert_eq!(
+            rich_selection_text(&cell, /*width*/ 18),
+            "Explored\nSearch alpha beta gamma delta epsilon"
         );
     }
 }

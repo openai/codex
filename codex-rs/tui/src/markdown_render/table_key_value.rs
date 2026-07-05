@@ -1,9 +1,15 @@
 //! Vertical key/value rendering for markdown tables that no longer scan well as grids.
 
+use std::ops::Range;
+
+use super::RenderedTableRow;
 use super::TABLE_BODY_SEPARATOR_CHAR;
 use super::TableCell;
 use super::TableColumnKind;
 use super::TableColumnMetrics;
+use super::table_cell_selection_segments;
+use crate::conversation_selection::SelectionRow;
+use crate::conversation_selection::SelectionSegment;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::push_owned_lines;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -25,6 +31,16 @@ const MIN_SCANNABLE_TOKEN_HEAVY_WIDTH: usize = 12;
 const CRAMPED_EXPANSIVE_CELL_LINES: usize = 4;
 const CATASTROPHIC_NARRATIVE_CELL_LINES: usize = 7;
 const STACKED_VALUE_INDENT: usize = 2;
+
+pub(super) struct TableSelectionRanges<'a> {
+    pub(super) headers: &'a [Range<usize>],
+    pub(super) rows: &'a [Vec<Range<usize>>],
+}
+
+struct FieldSelectionRanges {
+    header: Range<usize>,
+    value: Range<usize>,
+}
 
 /// Switch modes after enough records contain values the grid can no longer
 /// present in useful chunks or expansive content collapses into tall strips.
@@ -102,7 +118,8 @@ pub(super) fn render_records(
     available_width: Option<usize>,
     label_style: Style,
     separator_style: Style,
-) -> Vec<HyperlinkLine> {
+    selection_ranges: TableSelectionRanges<'_>,
+) -> Vec<RenderedTableRow> {
     let label_width = headers
         .iter()
         .map(|header| header.plain_text().width())
@@ -122,7 +139,11 @@ pub(super) fn render_records(
     let mut out = Vec::new();
 
     for (row_index, row) in rows.iter().enumerate() {
-        for (header, value) in headers.iter().zip(row) {
+        for (column, (header, value)) in headers.iter().zip(row).enumerate() {
+            let field_selection_ranges = FieldSelectionRanges {
+                header: selection_ranges.headers[column].clone(),
+                value: selection_ranges.rows[row_index][column].clone(),
+            };
             if aligned_fields {
                 render_aligned_field(
                     &mut out,
@@ -131,17 +152,28 @@ pub(super) fn render_records(
                     label_width,
                     available_width,
                     label_style,
+                    field_selection_ranges,
                 );
             } else {
-                render_stacked_field(&mut out, header, value, available_width, label_style);
+                render_stacked_field(
+                    &mut out,
+                    header,
+                    value,
+                    available_width,
+                    label_style,
+                    field_selection_ranges,
+                );
             }
         }
         if row_index + 1 < rows.len() {
             let width = available_width.unwrap_or_else(|| widest_line_width(&out));
-            out.push(HyperlinkLine::new(Line::from(Span::styled(
-                TABLE_BODY_SEPARATOR_CHAR.to_string().repeat(width),
-                separator_style,
-            ))));
+            out.push(RenderedTableRow {
+                line: HyperlinkLine::new(Line::from(Span::styled(
+                    TABLE_BODY_SEPARATOR_CHAR.to_string().repeat(width),
+                    separator_style,
+                ))),
+                selection: SelectionRow::default(),
+            });
         }
     }
 
@@ -149,40 +181,67 @@ pub(super) fn render_records(
 }
 
 fn render_aligned_field(
-    out: &mut Vec<HyperlinkLine>,
+    out: &mut Vec<RenderedTableRow>,
     header: &TableCell,
     value: &TableCell,
     label_width: usize,
     available_width: Option<usize>,
     label_style: Style,
+    selection_ranges: FieldSelectionRanges,
 ) {
     let value_indent = FIELD_LEADING_PADDING + label_width + FIELD_GAP;
     let value_width = available_width
         .map(|width| width.saturating_sub(value_indent).max(MIN_VALUE_WIDTH))
         .unwrap_or_else(|| cell_width(value).max(MIN_VALUE_WIDTH));
     let wrapped_value = wrap_cell(value, value_width);
+    let wrapped_value_selection = table_cell_selection_segments(
+        &value.selection_text(),
+        &wrapped_value,
+        selection_ranges.value,
+    );
     for (line_index, value_line) in wrapped_value.into_iter().enumerate() {
         let mut spans = Vec::new();
+        let mut selection = SelectionRow::default();
         if line_index == 0 {
             let label = header.plain_text();
+            let label_line = HyperlinkLine::new(Line::from(label.clone()));
+            let label_selection = table_cell_selection_segments(
+                &header.selection_text(),
+                std::slice::from_ref(&label_line),
+                selection_ranges.header.clone(),
+            );
             spans.push(Span::raw(" ".repeat(FIELD_LEADING_PADDING)));
             spans.push(Span::styled(label.clone(), label_style));
             spans.push(Span::raw(
                 " ".repeat(label_width.saturating_sub(label.width()) + FIELD_GAP),
             ));
+            if let Some(label_selection) = label_selection.first() {
+                selection
+                    .segments
+                    .extend(shift_segments(label_selection, FIELD_LEADING_PADDING));
+            }
         } else {
             spans.push(Span::raw(" ".repeat(value_indent)));
         }
-        push_prefixed_value_line(out, spans, value_line);
+        if let Some(value_selection) = wrapped_value_selection.get(line_index) {
+            selection
+                .segments
+                .extend(shift_segments(value_selection, value_indent));
+        }
+        out.push(RenderedTableRow {
+            line: prefixed_value_line(spans, value_line),
+            selection,
+        });
     }
 }
 
 fn render_stacked_field(
-    out: &mut Vec<HyperlinkLine>,
+    out: &mut Vec<RenderedTableRow>,
     header: &TableCell,
     value: &TableCell,
     available_width: Option<usize>,
     label_style: Style,
+    selection_ranges: FieldSelectionRanges,
 ) {
     let label_width = available_width
         .map(|width| width.saturating_sub(FIELD_LEADING_PADDING).max(1))
@@ -193,29 +252,59 @@ fn render_stacked_field(
         &word_wrap_line(&label, RtOptions::new(label_width)),
         &mut wrapped_labels,
     );
-    for label_line in wrapped_labels {
+    let label_hyperlink_lines = wrapped_labels
+        .iter()
+        .cloned()
+        .map(HyperlinkLine::new)
+        .collect::<Vec<_>>();
+    let wrapped_label_selection = table_cell_selection_segments(
+        &header.plain_text(),
+        &label_hyperlink_lines,
+        selection_ranges.header,
+    );
+    for (line_index, label_line) in wrapped_labels.into_iter().enumerate() {
         let mut spans = vec![Span::raw(" ".repeat(FIELD_LEADING_PADDING))];
         spans.extend(label_line.spans);
-        out.push(HyperlinkLine::new(Line::from(spans)));
+        out.push(RenderedTableRow {
+            line: HyperlinkLine::new(Line::from(spans)),
+            selection: SelectionRow {
+                segments: wrapped_label_selection
+                    .get(line_index)
+                    .map(|segments| shift_segments(segments, FIELD_LEADING_PADDING))
+                    .unwrap_or_default(),
+            },
+        });
     }
 
     let value_width = available_width
         .map(|width| width.saturating_sub(STACKED_VALUE_INDENT).max(1))
         .unwrap_or_else(|| cell_width(value).max(1));
-    for value_line in wrap_cell(value, value_width) {
-        push_prefixed_value_line(
-            out,
-            vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))],
-            value_line,
-        );
+    let wrapped_value = wrap_cell(value, value_width);
+    let wrapped_value_selection = table_cell_selection_segments(
+        &value.selection_text(),
+        &wrapped_value,
+        selection_ranges.value,
+    );
+    for (line_index, value_line) in wrapped_value.into_iter().enumerate() {
+        out.push(RenderedTableRow {
+            line: prefixed_value_line(
+                vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))],
+                value_line,
+            ),
+            selection: SelectionRow {
+                segments: wrapped_value_selection
+                    .get(line_index)
+                    .map(|segments| shift_segments(segments, STACKED_VALUE_INDENT))
+                    .unwrap_or_default(),
+            },
+        });
     }
 }
 
-fn push_prefixed_value_line(
-    out: &mut Vec<HyperlinkLine>,
+fn prefixed_value_line(
     mut prefix: Vec<Span<'static>>,
     mut value_line: HyperlinkLine,
-) {
+) -> HyperlinkLine {
     let shift = prefix
         .iter()
         .map(|span| span.content.width())
@@ -228,7 +317,20 @@ fn push_prefixed_value_line(
             link.columns = link.columns.start + shift..link.columns.end + shift;
             link
         }));
-    out.push(output_line);
+    output_line
+}
+
+fn shift_segments(segments: &[SelectionSegment], shift: usize) -> Vec<SelectionSegment> {
+    let shift = shift.min(usize::from(u16::MAX)) as u16;
+    segments
+        .iter()
+        .cloned()
+        .map(|mut segment| {
+            segment.columns = segment.columns.start.saturating_add(shift)
+                ..segment.columns.end.saturating_add(shift);
+            segment
+        })
+        .collect()
 }
 
 fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {
@@ -268,11 +370,12 @@ fn cell_width(cell: &TableCell) -> usize {
         .unwrap_or(0)
 }
 
-fn widest_line_width(lines: &[HyperlinkLine]) -> usize {
+fn widest_line_width(lines: &[RenderedTableRow]) -> usize {
     lines
         .iter()
         .map(|line| {
             line.line
+                .line
                 .spans
                 .iter()
                 .map(|span| span.content.width())

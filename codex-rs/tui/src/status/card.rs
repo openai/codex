@@ -1,7 +1,11 @@
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SelectionContribution;
 use crate::history_cell::plain_lines;
+use crate::history_cell::selection_contribution_from_semantic_text;
+use crate::history_cell::selection_text_from_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
 use crate::token_usage::TokenUsage;
@@ -875,6 +879,34 @@ impl HistoryCell for StatusHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.display_lines(u16::MAX))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let lines = self.display_lines_for_mode(width, mode);
+        let inner_lines = lines
+            .iter()
+            .skip(/*n*/ 1)
+            .take(lines.len().saturating_sub(/*rhs*/ 2))
+            .map(|line| {
+                let visible = selection_text_from_lines(std::slice::from_ref(line));
+                let content = visible
+                    .strip_prefix("│ ")
+                    .and_then(|content| content.strip_suffix(" │"))
+                    .unwrap_or(&visible)
+                    .trim_end();
+                content
+                    .trim_start()
+                    .strip_prefix(">_ ")
+                    .unwrap_or(content.trim_start())
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        selection_contribution_from_semantic_text(
+            inner_lines.join("\n"),
+            lines,
+            width,
+            /*first_row_prefix_columns*/ 2,
+        )
     }
 
     fn display_hyperlink_lines(

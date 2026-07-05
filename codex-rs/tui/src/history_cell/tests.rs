@@ -1,6 +1,7 @@
 //! Coverage for history-cell rendering, wrapping, and transcript behavior.
 
 use super::*;
+use crate::conversation_selection::CellSelectionProjection;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCall;
 use crate::exec_cell::ExecCell;
@@ -45,6 +46,142 @@ fn test_cwd() -> PathBuf {
     // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
     // Windows-specific root semantics into the fixtures.
     std::env::temp_dir()
+}
+
+#[test]
+fn display_backed_selection_contribution_uses_visible_text() {
+    let contribution = selection_contribution_from_display_lines(
+        vec![Line::from("alpha"), Line::from("beta")],
+        /*width*/ 80,
+    );
+
+    let SelectionContribution::Selectable(projection) = contribution else {
+        panic!("display text should be selectable");
+    };
+    assert_eq!(projection.text(), "alpha\nbeta");
+}
+
+#[test]
+fn semantic_selection_contribution_excludes_presentation_prefix() {
+    let contribution = selection_contribution_from_semantic_text(
+        "alpha".to_string(),
+        vec![Line::from("• alpha")],
+        /*width*/ 80,
+        /*first_row_prefix_columns*/ 2,
+    );
+
+    let SelectionContribution::Selectable(projection) = contribution else {
+        panic!("semantic text should be selectable");
+    };
+    assert_eq!(projection.text(), "alpha");
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 0), None);
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 2), Some(0..1));
+}
+
+#[test]
+fn semantic_selection_contribution_supports_per_line_prefixes() {
+    let contribution = selection_contribution_from_semantic_rows(
+        " one\ntwo".to_string(),
+        vec![Line::from(">  one"), Line::from("    two")],
+        /*width*/ 80,
+        /*first_row_prefix_columns*/ &[2, 4],
+    );
+
+    let SelectionContribution::Selectable(projection) = contribution else {
+        panic!("semantic rows should be selectable");
+    };
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 1), None);
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 2), Some(0..1));
+    assert_eq!(projection.hit(/*row*/ 1, /*column*/ 3), None);
+    assert_eq!(projection.hit(/*row*/ 1, /*column*/ 4), Some(5..6));
+}
+
+#[test]
+fn empty_selection_contribution_is_transparent() {
+    assert_eq!(
+        selection_contribution_from_display_lines(Vec::new(), /*width*/ 80),
+        SelectionContribution::Transparent
+    );
+}
+
+#[test]
+fn plain_cell_can_use_semantic_selection_text() {
+    let cell = PlainHistoryCell::new(vec![Line::from("• alpha"), Line::from("  beta")])
+        .with_selection_text(
+            "alpha\nbeta".to_string(),
+            /*first_row_prefix_columns*/ vec![2, 2],
+        );
+
+    for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
+        let SelectionContribution::Selectable(projection) =
+            cell.selection_contribution(/*width*/ 80, mode)
+        else {
+            panic!("semantic plain text should be selectable");
+        };
+        assert_eq!(projection.text(), "alpha\nbeta");
+        assert_eq!(projection.hit(/*row*/ 0, /*column*/ 0), None);
+        assert_eq!(projection.hit(/*row*/ 0, /*column*/ 2), Some(0..1));
+    }
+}
+
+#[test]
+fn prefixed_cell_selection_excludes_each_rendered_prefix() {
+    let cell = PrefixedWrappedHistoryCell::new(
+        Text::from(vec![Line::from("alpha"), Line::from("beta")]),
+        "> ",
+        ".... ",
+    );
+
+    let SelectionContribution::Selectable(projection) =
+        cell.selection_contribution(/*width*/ 80, HistoryRenderMode::Rich)
+    else {
+        panic!("prefixed text should be selectable");
+    };
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 1), None);
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 2), Some(0..1));
+    assert_eq!(projection.hit(/*row*/ 1, /*column*/ 4), None);
+    assert_eq!(projection.hit(/*row*/ 1, /*column*/ 5), Some(6..7));
+}
+
+#[test]
+fn composite_selection_preserves_blank_separator_row() {
+    let cell = CompositeHistoryCell::new(vec![
+        Box::new(PlainHistoryCell::new(vec![Line::from("alpha")])),
+        Box::new(PlainHistoryCell::new(vec![Line::from("beta")])),
+    ]);
+
+    let SelectionContribution::Selectable(projection) =
+        cell.selection_contribution(/*width*/ 80, HistoryRenderMode::Rich)
+    else {
+        panic!("composed text should be selectable");
+    };
+    assert_eq!(projection.text(), "alpha\n\nbeta");
+    assert_eq!(projection.rows().len(), 3);
+    assert_eq!(projection.hit(/*row*/ 0, /*column*/ 0), Some(0..1));
+    assert_eq!(projection.hit(/*row*/ 1, /*column*/ 0), None);
+    assert_eq!(projection.hit(/*row*/ 2, /*column*/ 0), Some(7..8));
+}
+
+#[test]
+fn composite_selection_skips_transparent_child_text_but_preserves_its_rows() {
+    let cell = CompositeHistoryCell::new(vec![
+        Box::new(PlainHistoryCell::new(vec![Line::from("alpha")])),
+        Box::new(AgentMessageCell::new(
+            vec![Line::from("hidden")],
+            /*is_first_line*/ false,
+        )),
+        Box::new(PlainHistoryCell::new(vec![Line::from("beta")])),
+    ]);
+
+    let SelectionContribution::Selectable(projection) =
+        cell.selection_contribution(/*width*/ 80, HistoryRenderMode::Rich)
+    else {
+        panic!("selectable children should be composed");
+    };
+    assert_eq!(projection.text(), "alpha\n\nbeta");
+    assert_eq!(projection.rows().len(), 5);
+    assert_eq!(projection.hit(/*row*/ 2, /*column*/ 2), None);
+    assert_eq!(projection.hit(/*row*/ 4, /*column*/ 0), Some(7..8));
 }
 
 #[test]
@@ -161,6 +298,12 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
 
 fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
     render_lines(&cell.transcript_lines(u16::MAX))
+}
+
+fn selectable_text(cell: &dyn HistoryCell, width: u16, mode: HistoryRenderMode) -> Option<String> {
+    cell.selection_contribution(width, mode)
+        .into_projection()
+        .map(|projection| projection.text().to_string())
 }
 
 fn assert_unstyled_lines(lines: &[Line<'static>]) {
@@ -918,8 +1061,13 @@ fn mcp_tools_output_from_statuses_renders_status_only_servers() {
     let cell =
         new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::ToolsAndAuthOnly);
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+    let selected = selectable_text(&cell, /*width*/ 24, HistoryRenderMode::Rich)
+        .expect("MCP inventory should be selectable");
 
     insta::assert_snapshot!(rendered);
+    assert!(selected.contains("MCP Tools\n\nplugin_docs\nAuth: Unsupported\nTools: lookup"));
+    assert!(!selected.contains('•'));
+    assert!(!selected.contains('🔌'));
 }
 
 #[test]
@@ -2400,6 +2548,33 @@ fn agent_markdown_cell_renders_source_at_different_widths() {
 }
 
 #[test]
+fn agent_markdown_table_selection_excludes_layout_chrome_at_wide_and_narrow_widths() {
+    let source = "| Name | Description |\n| --- | --- |\n| alpha | a deliberately long description that wraps |\n";
+    let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
+    let expected = "Name\tDescription\nalpha\ta deliberately long description that wraps";
+
+    assert_eq!(
+        selectable_text(&cell, /*width*/ 80, HistoryRenderMode::Rich).as_deref(),
+        Some(expected)
+    );
+    assert_eq!(
+        selectable_text(&cell, /*width*/ 28, HistoryRenderMode::Rich).as_deref(),
+        Some(expected)
+    );
+}
+
+#[test]
+fn agent_markdown_fenced_table_selection_uses_rendered_inline_text() {
+    let source = "```markdown\n| Kind | Target |\n| --- | --- |\n| **docs** | [guide](https://example.com/guide) |\n```";
+    let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
+
+    assert_eq!(
+        selectable_text(&cell, /*width*/ 80, HistoryRenderMode::Rich).as_deref(),
+        Some("Kind\tTarget\ndocs\tguide (https://example.com/guide)")
+    );
+}
+
+#[test]
 fn agent_markdown_cell_does_not_split_words_after_inline_markdown() {
     let source = "This paragraph is intentionally long so you can inspect soft wrapping behavior while also checking inline formatting like **bold text**, *italic text*, ***bold italic text***, `inline code`, ~~strikethrough~~, a [link to example.com](https://example.com), and a literal path like [README.md](/Users/felipe.coury/code/codex.fcoury-worktrees/README.md) without introducing manual line breaks.\n";
     let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
@@ -2621,4 +2796,322 @@ fn consolidation_walker_replaces_agent_message_cells() {
         transcript_cells[1].as_any().is::<AgentMarkdownCell>(),
         "second cell should be AgentMarkdownCell"
     );
+}
+
+#[test]
+fn unified_exec_interaction_selection_excludes_tree_gutters_and_soft_wraps() {
+    let stdin = "first input line that wraps at this width\n  indented input";
+    let cell = UnifiedExecInteractionCell::new(Some("worker 7".to_string()), stdin.to_string());
+
+    assert_eq!(
+        selectable_text(&cell, /*width*/ 24, HistoryRenderMode::Rich),
+        Some(format!(
+            "Interacted with background terminal · worker 7\n{stdin}"
+        ))
+    );
+}
+
+#[test]
+fn request_user_input_selection_uses_visible_secret_mask_without_gutters() {
+    let questions = vec![
+        ToolRequestUserInputQuestion {
+            id: "target".to_string(),
+            header: "Target".to_string(),
+            question: "Which target should be used?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: None,
+        },
+        ToolRequestUserInputQuestion {
+            id: "secret".to_string(),
+            header: "Secret".to_string(),
+            question: "Secret value?".to_string(),
+            is_other: false,
+            is_secret: true,
+            options: None,
+        },
+    ];
+    let answers = HashMap::from([
+        (
+            "target".to_string(),
+            ToolRequestUserInputAnswer {
+                answers: vec!["production".to_string()],
+            },
+        ),
+        (
+            "secret".to_string(),
+            ToolRequestUserInputAnswer {
+                answers: vec!["not copied".to_string()],
+            },
+        ),
+    ]);
+    let cell = RequestUserInputResultCell {
+        questions,
+        answers,
+        interrupted: false,
+    };
+
+    assert_eq!(
+        selectable_text(&cell, /*width*/ 28, HistoryRenderMode::Rich),
+        Some(
+            "Questions 2/2 answered\nWhich target should be used?\nanswer: production\nSecret value?\nanswer: ••••••"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn informational_cells_expose_semantic_text_without_card_chrome() {
+    let info = new_info_event(
+        "Saved settings.".to_string(),
+        Some("Restart Codex.".to_string()),
+    );
+    assert_eq!(
+        selectable_text(&info, /*width*/ 40, HistoryRenderMode::Rich),
+        Some("Saved settings. Restart Codex.".to_string())
+    );
+
+    let error = new_error_event("Could not connect.".to_string());
+    assert_eq!(
+        selectable_text(&error, /*width*/ 40, HistoryRenderMode::Rich),
+        Some("Could not connect.".to_string())
+    );
+
+    let search = new_web_search_call(
+        "call-1".to_string(),
+        "selection behavior".to_string(),
+        WebSearchAction::Search {
+            query: Some("selection behavior".to_string()),
+            queries: None,
+        },
+    );
+    assert_eq!(
+        selectable_text(&search, /*width*/ 20, HistoryRenderMode::Rich),
+        Some("Searched the web for selection behavior".to_string())
+    );
+
+    let update =
+        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneUnix));
+    let update_text = selectable_text(&update, /*width*/ 48, HistoryRenderMode::Rich)
+        .expect("update notice should be selectable");
+    assert!(update_text.starts_with(&format!("Update available! {CODEX_CLI_VERSION} -> 9.9.9")));
+    assert!(!update_text.contains('│'));
+
+    let safety = new_safety_access_block_event();
+    let safety_text = selectable_text(&safety, /*width*/ 42, HistoryRenderMode::Rich)
+        .expect("safety notice should be selectable");
+    assert!(safety_text.starts_with("This content can't be shown"));
+    assert!(!safety_text.contains('ⓘ'));
+}
+
+#[test]
+fn image_and_patch_failure_selection_excludes_tree_gutters() {
+    let image = new_image_generation_call(
+        "call-image".to_string(),
+        "completed",
+        Some("A blue square".to_string()),
+        /*saved_path*/ None,
+    );
+    assert_eq!(
+        selectable_text(&image, /*width*/ 40, HistoryRenderMode::Rich),
+        Some("Generated Image:\nA blue square".to_string())
+    );
+
+    let patch_failure = new_patch_apply_failure("bad hunk\ntry again".to_string());
+    assert_eq!(
+        selectable_text(&patch_failure, /*width*/ 40, HistoryRenderMode::Rich),
+        Some("Failed to apply patch\nbad hunk\ntry again".to_string())
+    );
+}
+
+#[test]
+fn plan_selection_uses_semantic_markdown_and_step_text() {
+    let proposed = new_proposed_plan("**Ship it**\n\nThen verify".to_string(), &test_cwd());
+    assert_eq!(
+        selectable_text(&proposed, /*width*/ 28, HistoryRenderMode::Rich),
+        Some("Proposed Plan\n\nShip it\n\nThen verify".to_string())
+    );
+
+    let update = new_plan_update(UpdatePlanArgs {
+        explanation: Some("Check the current behavior first.".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Inspect rendering".to_string(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement selection".to_string(),
+                status: StepStatus::InProgress,
+            },
+        ],
+    });
+    assert_eq!(
+        selectable_text(&update, /*width*/ 24, HistoryRenderMode::Rich),
+        Some(
+            "Updated Plan\nCheck the current behavior first.\nInspect rendering\nImplement selection"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn source_backed_plan_and_tooltip_tables_are_selectable_without_chrome() {
+    let table = "| Name | Value |\n| --- | --- |\n| alpha | a value that wraps |";
+    let proposed = new_proposed_plan(table.to_string(), &test_cwd());
+    assert_eq!(
+        selectable_text(&proposed, /*width*/ 20, HistoryRenderMode::Rich),
+        Some("Proposed Plan\n\nName\tValue\nalpha\ta value that wraps".to_string())
+    );
+
+    let tip_source = format!("\n\n{table}");
+    let tooltip = TooltipHistoryCell::new(tip_source.clone(), &test_cwd());
+    let expected = crate::markdown_render::render_markdown_selection_text(
+        &format!("**Tip:** {tip_source}"),
+        Some(test_cwd().as_path()),
+    );
+    assert_eq!(
+        selectable_text(&tooltip, /*width*/ 20, HistoryRenderMode::Rich),
+        Some(expected)
+    );
+
+    let reasoning = ReasoningSummaryCell::new(
+        "Table review".to_string(),
+        table.to_string(),
+        &test_cwd(),
+        /*transcript_only*/ false,
+    );
+    assert_eq!(
+        selectable_text(&reasoning, /*width*/ 20, HistoryRenderMode::Rich),
+        Some("Name\tValue\nalpha\ta value that wraps".to_string())
+    );
+}
+
+#[test]
+fn session_header_selection_excludes_border_and_hidden_directory_text() {
+    let directory = test_path_buf("/tmp/a-very-long-project-directory").abs();
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*show_fast_status*/ true,
+        directory.to_path_buf(),
+        "test",
+    );
+    let text = selectable_text(&cell, /*width*/ 32, HistoryRenderMode::Rich)
+        .expect("session header should be selectable");
+
+    assert!(text.starts_with("OpenAI Codex (vtest)\n\nmodel: gpt-5 high fast /model to change"));
+    assert!(text.contains("\ndirectory: "));
+    assert!(text.contains('…'));
+    assert!(!text.contains('╭'));
+}
+
+#[test]
+fn patch_history_selection_uses_unwrapped_semantic_rows() {
+    let patch = new_patch_event(HashMap::<PathBuf, FileChange>::new(), &test_cwd());
+    assert_eq!(
+        selectable_text(&patch, /*width*/ 80, HistoryRenderMode::Rich),
+        Some("Edited 0 files (+0 -0)".to_string())
+    );
+}
+
+#[test]
+fn patch_history_selection_does_not_wrap_lines_wider_than_ten_thousand_columns() {
+    let long_line = "x".repeat(10_050);
+    let patch = new_patch_event(
+        HashMap::from([(
+            PathBuf::from("long.txt"),
+            FileChange::Add {
+                content: long_line.clone(),
+            },
+        )]),
+        &test_cwd(),
+    );
+    let selected = selectable_text(&patch, /*width*/ 80, HistoryRenderMode::Rich)
+        .expect("patch should be selectable");
+
+    assert!(selected.contains(&long_line));
+}
+
+#[test]
+fn final_separator_selection_excludes_metrics_hidden_by_width() {
+    let separator = FinalMessageSeparator::new(
+        /*elapsed_seconds*/ Some(120),
+        /*runtime_metrics*/ None,
+    );
+
+    assert_eq!(
+        selectable_text(&separator, /*width*/ 8, HistoryRenderMode::Rich),
+        Some("Worked".to_string())
+    );
+}
+
+#[test]
+fn structurally_unmapped_stream_cell_is_explicitly_transparent() {
+    let stream = new_proposed_plan_stream(
+        vec![HyperlinkLine::from("already rendered")],
+        /*is_stream_continuation*/ false,
+    );
+    assert_eq!(
+        stream.selection_contribution(/*width*/ 80, HistoryRenderMode::Rich),
+        SelectionContribution::Transparent
+    );
+}
+
+#[test]
+fn source_backed_agent_and_plan_stream_cells_exclude_display_chrome() {
+    let body_width = 20;
+    let body_lines = vec![Line::from("alpha beta")];
+    let fragment = StreamSelectionFragment::new(
+        CellSelectionProjection::from_display_lines(
+            "alpha beta".to_string(),
+            body_lines.clone(),
+            body_width,
+            /*first_row_prefix_columns*/ 0,
+        )
+        .expect("stream fragment projection"),
+        body_width,
+    );
+    let agent = AgentMessageCell::new_source_backed_hyperlink_lines(
+        vec![HyperlinkLine::from("alpha beta")],
+        /*is_first_line*/ true,
+        Some(fragment.clone()),
+    );
+    let agent_tail = StreamingAgentTailCell::new_source_backed(
+        vec![HyperlinkLine::from("alpha beta")],
+        /*is_first_line*/ true,
+        Some(fragment.clone()),
+    );
+    let plan_lines = vec![
+        HyperlinkLine::from("• Proposed Plan"),
+        HyperlinkLine::from(" "),
+        HyperlinkLine::from("   "),
+        HyperlinkLine::from("  alpha beta"),
+    ];
+    let plan = new_source_backed_proposed_plan_stream(
+        plan_lines.clone(),
+        /*is_stream_continuation*/ false,
+        Some(fragment.clone()),
+        /*body_line_range*/ 3..4,
+    );
+    let plan_tail = StreamingPlanTailCell::new_source_backed(
+        plan_lines,
+        /*is_stream_continuation*/ false,
+        Some(fragment),
+        /*body_line_range*/ 3..4,
+    );
+
+    assert_eq!(
+        selectable_text(&agent, /*width*/ 22, HistoryRenderMode::Rich).as_deref(),
+        Some("alpha beta")
+    );
+    assert_eq!(
+        selectable_text(&agent_tail, /*width*/ 22, HistoryRenderMode::Rich).as_deref(),
+        Some("alpha beta")
+    );
+    for cell in [&plan as &dyn HistoryCell, &plan_tail as &dyn HistoryCell] {
+        assert_eq!(
+            selectable_text(cell, /*width*/ 24, HistoryRenderMode::Rich).as_deref(),
+            Some("Proposed Plan\n\nalpha beta")
+        );
+    }
 }

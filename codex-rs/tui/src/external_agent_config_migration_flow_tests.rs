@@ -257,3 +257,25 @@ fn external_agent_config_migration_status_lines_use_semantic_colors() {
         ]
     );
 }
+
+#[test]
+fn external_agent_config_migration_selection_excludes_bullets_and_indentation() {
+    let started = external_agent_config_migration_started_lines(
+        &selected_items(),
+        /*remaining_item_count*/ 0,
+    );
+    let (started_text, started_prefixes) = external_agent_config_migration_selection(&started);
+    assert_eq!(started_prefixes, vec![2, 2, 2, 4, 4, 4, 4, 4]);
+    assert!(started_text.starts_with("Claude Code import started."));
+    assert!(started_text.contains("\nSettings: 1"));
+    assert!(!started_text.contains("\n  "));
+    assert!(!started_text.contains('•'));
+
+    let finished = external_agent_config_migration_finished_lines(&completed_notification());
+    let (finished_text, finished_prefixes) = external_agent_config_migration_selection(&finished);
+    assert_eq!(finished_prefixes, vec![2, 2, 4, 4, 2]);
+    assert!(finished_text.starts_with("Claude Code import finished:"));
+    assert!(finished_text.contains("\nPlugins: 1 imported, 1 failed"));
+    assert!(!finished_text.contains("\n  "));
+    assert!(!finished_text.contains('•'));
+}

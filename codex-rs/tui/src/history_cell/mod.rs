@@ -10,7 +10,6 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
-use crate::conversation_selection::CellSelectionProjection;
 use crate::diff_model::FileChange;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
@@ -106,7 +105,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
 
-const RAW_DIFF_SUMMARY_WIDTH: usize = 10_000;
+// Patch selection reuses the raw renderer as its unwrapped semantic source. Use an effectively
+// unbounded width so even very long authored lines never acquire synthetic clipboard newlines.
+const RAW_DIFF_SUMMARY_WIDTH: usize = usize::MAX;
 const RAW_TOOL_OUTPUT_WIDTH: usize = 10_000;
 
 mod approvals;
@@ -120,6 +121,7 @@ mod patches;
 mod plans;
 mod request_user_input;
 mod search;
+mod selection;
 mod separators;
 mod session;
 
@@ -136,6 +138,7 @@ pub(crate) use patches::*;
 pub(crate) use plans::*;
 pub(crate) use request_user_input::*;
 pub(crate) use search::*;
+pub(crate) use selection::*;
 pub(crate) use separators::*;
 pub(crate) use session::*;
 
@@ -176,28 +179,6 @@ pub(crate) fn plain_lines(lines: impl IntoIterator<Item = Line<'static>>) -> Vec
             Line::from(text)
         })
         .collect()
-}
-
-pub(crate) fn selection_text_from_lines(lines: &[Line<'_>]) -> String {
-    lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub(crate) fn selection_projection_from_lines(
-    text: String,
-    lines: Vec<Line<'static>>,
-    width: u16,
-    first_row_prefix_columns: u16,
-) -> Option<CellSelectionProjection> {
-    CellSelectionProjection::from_display_lines(text, lines, width, first_row_prefix_columns)
 }
 
 /// A single renderable unit of conversation history.
@@ -247,32 +228,12 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
-    /// Maps rendered cell coordinates back to semantic text for app-owned mouse selection.
+    /// Describes the semantic text this cell contributes to app-owned mouse selection.
     ///
-    /// Raw mode uses the cell's copy-friendly lines directly. Rich mode is selectable by default
-    /// only when its visible text exactly matches those canonical lines; cells with presentation
-    /// chrome or alternate semantics must provide an explicit projection.
-    fn selection_projection(
-        &self,
-        width: u16,
-        mode: HistoryRenderMode,
-    ) -> Option<CellSelectionProjection> {
-        let raw_lines = self.raw_lines();
-        let text = selection_text_from_lines(&raw_lines);
-        let display_lines = match mode {
-            HistoryRenderMode::Rich => visible_lines(self.display_hyperlink_lines(width)),
-            HistoryRenderMode::Raw => raw_lines,
-        };
-        if mode == HistoryRenderMode::Rich && selection_text_from_lines(&display_lines) != text {
-            return None;
-        }
-        selection_projection_from_lines(
-            text,
-            display_lines,
-            width,
-            /*first_row_prefix_columns*/ 0,
-        )
-    }
+    /// Implementations must explicitly choose between source-backed selectable text and
+    /// presentation-only output. Transparent cells may be crossed without contributing clipboard
+    /// text.
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution;
 
     /// Returns the number of viewport rows needed to render this cell.
     ///

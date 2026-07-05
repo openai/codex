@@ -1,6 +1,9 @@
 //! Proposed-plan and plan-update history cells.
 
 use super::*;
+use crate::conversation_selection::CellSelectionProjection;
+use crate::conversation_selection::CellSelectionProjectionPart;
+use std::ops::Range;
 
 /// Transient active-cell representation of the mutable tail of a proposed-plan stream.
 ///
@@ -11,13 +14,22 @@ use super::*;
 pub(crate) struct StreamingPlanTailCell {
     lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
+    selection_fragment: Option<StreamSelectionFragment>,
+    body_line_range: Range<usize>,
 }
 
 impl StreamingPlanTailCell {
-    pub(crate) fn new(lines: Vec<HyperlinkLine>, is_stream_continuation: bool) -> Self {
+    pub(crate) fn new_source_backed(
+        lines: Vec<HyperlinkLine>,
+        is_stream_continuation: bool,
+        selection_fragment: Option<StreamSelectionFragment>,
+        body_line_range: Range<usize>,
+    ) -> Self {
         Self {
             lines,
             is_stream_continuation,
+            selection_fragment,
+            body_line_range,
         }
     }
 }
@@ -36,7 +48,26 @@ impl HistoryCell for StreamingPlanTailCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(visible_lines(self.lines.clone()))
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| raw_lines_from_source(fragment.text()))
+            .unwrap_or_else(|| plain_lines(visible_lines(self.lines.clone())))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| {
+                stream_plan_selection_contribution(
+                    &self.lines,
+                    self.body_line_range.clone(),
+                    fragment,
+                    self.is_stream_continuation,
+                    width,
+                    mode,
+                )
+            })
+            .unwrap_or(SelectionContribution::Transparent)
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -65,13 +96,32 @@ pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPl
 ///
 /// Stream cells are display fragments, not source-backed history. They should be replaced by
 /// `ProposedPlanCell` during consolidation before relying on resize reflow for finalized history.
+#[cfg(test)]
 pub(crate) fn new_proposed_plan_stream(
     lines: Vec<impl Into<HyperlinkLine>>,
     is_stream_continuation: bool,
 ) -> ProposedPlanStreamCell {
+    let lines = lines.into_iter().map(Into::into).collect::<Vec<_>>();
+    let body_line_range = 0..lines.len();
     ProposedPlanStreamCell {
-        lines: lines.into_iter().map(Into::into).collect(),
+        lines,
         is_stream_continuation,
+        selection_fragment: None,
+        body_line_range,
+    }
+}
+
+pub(crate) fn new_source_backed_proposed_plan_stream(
+    lines: Vec<HyperlinkLine>,
+    is_stream_continuation: bool,
+    selection_fragment: Option<StreamSelectionFragment>,
+    body_line_range: Range<usize>,
+) -> ProposedPlanStreamCell {
+    ProposedPlanStreamCell {
+        lines,
+        is_stream_continuation,
+        selection_fragment,
+        body_line_range,
     }
 }
 
@@ -95,6 +145,113 @@ pub(crate) struct ProposedPlanCell {
 pub(crate) struct ProposedPlanStreamCell {
     lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
+    selection_fragment: Option<StreamSelectionFragment>,
+    body_line_range: Range<usize>,
+}
+
+fn stream_plan_selection_contribution(
+    lines: &[HyperlinkLine],
+    body_line_range: Range<usize>,
+    fragment: &StreamSelectionFragment,
+    is_stream_continuation: bool,
+    width: u16,
+    mode: HistoryRenderMode,
+) -> SelectionContribution {
+    if width == 0 {
+        return SelectionContribution::Transparent;
+    }
+    if mode == HistoryRenderMode::Raw {
+        return fragment
+            .projection_for_display(
+                width,
+                raw_lines_from_source(fragment.text()),
+                width,
+                /*outer_prefix_columns*/ 0,
+            )
+            .map(|projection| {
+                if is_stream_continuation {
+                    projection.with_separator_before("")
+                } else {
+                    projection
+                }
+            })
+            .map(SelectionContribution::Selectable)
+            .unwrap_or(SelectionContribution::Transparent);
+    }
+
+    let body_start = body_line_range.start.min(lines.len());
+    let body_end = body_line_range.end.min(lines.len()).max(body_start);
+    let body_width = width.saturating_sub(/*rhs*/ 4).max(/*other*/ 1);
+    let body_projection = fragment.projection_for_display(
+        body_width,
+        visible_lines(lines[body_start..body_end].to_vec()),
+        width,
+        /*outer_prefix_columns*/ 2,
+    );
+    let display_row_count = |lines: &[HyperlinkLine]| {
+        visible_lines(lines.to_vec())
+            .into_iter()
+            .map(|line| {
+                Paragraph::new(line)
+                    .wrap(Wrap { trim: false })
+                    .line_count(width)
+                    .max(/*other*/ 1)
+            })
+            .sum::<usize>()
+    };
+    let leading_rows = display_row_count(&lines[..body_start]);
+    let trailing_rows = display_row_count(&lines[body_end..]);
+    let mut parts = Vec::new();
+    if !is_stream_continuation && let Some(header_line) = lines.first() {
+        let header_rows = display_row_count(std::slice::from_ref(header_line));
+        let header = CellSelectionProjection::from_display_lines(
+            "Proposed Plan".to_string(),
+            visible_lines(vec![header_line.clone()]),
+            width,
+            /*first_row_prefix_columns*/ 2,
+        );
+        parts.push(
+            header
+                .map(CellSelectionProjectionPart::Selectable)
+                .unwrap_or(CellSelectionProjectionPart::Transparent {
+                    row_count: header_rows,
+                }),
+        );
+        let remaining_leading_rows = leading_rows.saturating_sub(header_rows);
+        if remaining_leading_rows > 0 {
+            parts.push(CellSelectionProjectionPart::Transparent {
+                row_count: remaining_leading_rows,
+            });
+        }
+    } else if leading_rows > 0 {
+        parts.push(CellSelectionProjectionPart::Transparent {
+            row_count: leading_rows,
+        });
+    }
+    parts.push(
+        body_projection
+            .map(CellSelectionProjectionPart::Selectable)
+            .unwrap_or(CellSelectionProjectionPart::Transparent {
+                row_count: display_row_count(&lines[body_start..body_end]),
+            }),
+    );
+    if trailing_rows > 0 {
+        parts.push(CellSelectionProjectionPart::Transparent {
+            row_count: trailing_rows,
+        });
+    }
+    CellSelectionProjection::compose(
+        parts, /*blank_rows_between*/ 0, /*text_separator*/ "\n\n",
+    )
+    .map(|projection| {
+        if is_stream_continuation {
+            projection.with_separator_before("")
+        } else {
+            projection
+        }
+    })
+    .map(SelectionContribution::Selectable)
+    .unwrap_or(SelectionContribution::Transparent)
 }
 
 impl HistoryCell for ProposedPlanCell {
@@ -133,6 +290,66 @@ impl HistoryCell for ProposedPlanCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         raw_lines_from_source(&self.plan_markdown)
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let normalized = crate::markdown::unwrap_markdown_fences(&self.plan_markdown);
+                let markdown_width = width.saturating_sub(/*rhs*/ 4).max(/*other*/ 1) as usize;
+                let mut body_lines = crate::markdown::render_markdown_agent_with_links_and_cwd(
+                    &self.plan_markdown,
+                    Some(markdown_width),
+                    Some(self.cwd.as_path()),
+                );
+                let body_row_count = body_lines.len().max(/*other*/ 1);
+                let body_projection = if body_lines.is_empty() {
+                    let lines = vec![Line::from("  (empty)")];
+                    CellSelectionProjection::from_display_lines(
+                        "(empty)".to_string(),
+                        lines,
+                        width,
+                        /*first_row_prefix_columns*/ 2,
+                    )
+                } else {
+                    body_lines = prefix_hyperlink_lines(body_lines, "  ".into(), "  ".into());
+                    crate::markdown_render::render_markdown_selection_projection(
+                        &normalized,
+                        markdown_width,
+                        Some(self.cwd.as_path()),
+                        visible_lines(body_lines),
+                        width,
+                        /*outer_prefix_columns*/ 2,
+                    )
+                };
+                let header = CellSelectionProjection::from_display_lines(
+                    "Proposed Plan".to_string(),
+                    vec![vec!["• ".dim(), "Proposed Plan".bold()].into()],
+                    width,
+                    /*first_row_prefix_columns*/ 2,
+                );
+                let parts = vec![
+                    header
+                        .map(CellSelectionProjectionPart::Selectable)
+                        .unwrap_or(CellSelectionProjectionPart::Transparent { row_count: 1 }),
+                    CellSelectionProjectionPart::Transparent { row_count: 2 },
+                    body_projection
+                        .map(CellSelectionProjectionPart::Selectable)
+                        .unwrap_or(CellSelectionProjectionPart::Transparent {
+                            row_count: body_row_count,
+                        }),
+                    CellSelectionProjectionPart::Transparent { row_count: 1 },
+                ];
+                CellSelectionProjection::compose(
+                    parts, /*blank_rows_between*/ 0, /*text_separator*/ "\n\n",
+                )
+                .map(SelectionContribution::Selectable)
+                .unwrap_or(SelectionContribution::Transparent)
+            }
+        }
+    }
 }
 
 impl HistoryCell for ProposedPlanStreamCell {
@@ -149,7 +366,26 @@ impl HistoryCell for ProposedPlanStreamCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(visible_lines(self.lines.clone()))
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| raw_lines_from_source(fragment.text()))
+            .unwrap_or_else(|| plain_lines(visible_lines(self.lines.clone())))
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        self.selection_fragment
+            .as_ref()
+            .map(|fragment| {
+                stream_plan_selection_contribution(
+                    &self.lines,
+                    self.body_line_range.clone(),
+                    fragment,
+                    self.is_stream_continuation,
+                    width,
+                    mode,
+                )
+            })
+            .unwrap_or(SelectionContribution::Transparent)
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -234,5 +470,64 @@ impl HistoryCell for PlanUpdateCell {
             }
         }
         lines
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let mut lines = vec!["Updated Plan".to_string()];
+                if let Some(explanation) = self
+                    .explanation
+                    .as_ref()
+                    .map(|explanation| explanation.trim())
+                    .filter(|explanation| !explanation.is_empty())
+                {
+                    lines.push(explanation.to_string());
+                }
+                if self.plan.is_empty() {
+                    lines.push("(no steps provided)".to_string());
+                } else {
+                    lines.extend(self.plan.iter().map(|item| item.step.clone()));
+                }
+                let display_lines = self.display_lines(width);
+                let prefix_columns = display_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        if index == 0 {
+                            return 2;
+                        }
+                        let rendered = line
+                            .spans
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>();
+                        let after_outer_prefix = rendered
+                            .strip_prefix("  └ ")
+                            .or_else(|| rendered.strip_prefix("    "));
+                        match after_outer_prefix {
+                            Some(rest)
+                                if rest.starts_with("✔ ")
+                                    || rest.starts_with("□ ")
+                                    || rest.starts_with("  ") =>
+                            {
+                                6
+                            }
+                            Some(_) => 4,
+                            None => 0,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                selection_contribution_from_semantic_rows(
+                    lines.join("\n"),
+                    display_lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
     }
 }

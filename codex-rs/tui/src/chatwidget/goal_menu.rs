@@ -7,7 +7,7 @@ use crate::status::format_tokens_compact;
 
 impl ChatWidget {
     pub(crate) fn show_goal_summary(&mut self, goal: AppThreadGoal) {
-        self.add_plain_history_lines(goal_summary_lines(&goal));
+        self.add_literal_history_lines(goal_summary_lines(&goal));
     }
 
     pub(crate) fn show_goal_edit_prompt(&mut self, thread_id: ThreadId, goal: AppThreadGoal) {

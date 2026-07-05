@@ -1,15 +1,43 @@
 //! Shared history-cell building blocks reused across transcript concerns.
 
 use super::*;
+use crate::conversation_selection::CellSelectionProjection;
+use crate::conversation_selection::CellSelectionProjectionPart;
 
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     pub(super) lines: Vec<Line<'static>>,
+    selection: PlainHistoryCellSelection,
+}
+
+#[derive(Debug)]
+enum PlainHistoryCellSelection {
+    DisplayText,
+    Semantic {
+        text: String,
+        first_row_prefix_columns: Vec<u16>,
+    },
 }
 
 impl PlainHistoryCell {
     pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
-        Self { lines }
+        Self {
+            lines,
+            selection: PlainHistoryCellSelection::DisplayText,
+        }
+    }
+
+    /// Uses semantic clipboard text instead of copying presentation chrome from rendered lines.
+    pub(crate) fn with_selection_text(
+        mut self,
+        text: String,
+        first_row_prefix_columns: Vec<u16>,
+    ) -> Self {
+        self.selection = PlainHistoryCellSelection::Semantic {
+            text,
+            first_row_prefix_columns,
+        };
+        self
     }
 }
 
@@ -20,6 +48,24 @@ impl HistoryCell for PlainHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.lines.clone())
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let lines = self.display_lines_for_mode(width, mode);
+        match &self.selection {
+            PlainHistoryCellSelection::DisplayText => {
+                selection_contribution_from_display_lines(lines, width)
+            }
+            PlainHistoryCellSelection::Semantic {
+                text,
+                first_row_prefix_columns,
+            } => selection_contribution_from_semantic_rows(
+                text.clone(),
+                lines,
+                width,
+                first_row_prefix_columns,
+            ),
+        }
     }
 }
 
@@ -49,6 +95,10 @@ impl HistoryCell for WebHyperlinkHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.lines.clone())
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        selection_contribution_from_display_lines(self.display_lines_for_mode(width, mode), width)
     }
 }
 #[derive(Debug)]
@@ -85,6 +135,36 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(self.text.clone().lines)
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let initial_prefix_width =
+                    u16::try_from(self.initial_prefix.width()).unwrap_or(u16::MAX);
+                let subsequent_prefix_width =
+                    u16::try_from(self.subsequent_prefix.width()).unwrap_or(u16::MAX);
+                let prefix_columns = (0..lines.len())
+                    .map(|index| {
+                        if index == 0 {
+                            initial_prefix_width
+                        } else {
+                            subsequent_prefix_width
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                selection_contribution_from_semantic_rows(
+                    selection_text_from_lines(&self.text.lines),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
     }
 }
 #[derive(Debug)]
@@ -161,5 +241,35 @@ impl HistoryCell for CompositeHistoryCell {
             }
         }
         out
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        let parts = self
+            .parts
+            .iter()
+            .filter_map(|part| {
+                let display_lines = part.display_lines_for_mode(width, mode);
+                if display_lines.is_empty() {
+                    return None;
+                }
+                let row_count = Paragraph::new(Text::from(display_lines))
+                    .wrap(Wrap { trim: false })
+                    .line_count(width);
+                Some(match part.selection_contribution(width, mode) {
+                    SelectionContribution::Selectable(projection) => {
+                        CellSelectionProjectionPart::Selectable(projection)
+                    }
+                    SelectionContribution::Transparent => {
+                        CellSelectionProjectionPart::Transparent { row_count }
+                    }
+                })
+            })
+            .collect();
+        match CellSelectionProjection::compose(
+            parts, /*blank_rows_between*/ 1, /*text_separator*/ "\n\n",
+        ) {
+            Some(projection) => SelectionContribution::Selectable(projection),
+            None => SelectionContribution::Transparent,
+        }
     }
 }

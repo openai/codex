@@ -120,6 +120,20 @@ impl HistoryCell for WebSearchCell {
             vec![Line::from(format!("{header}{separator}{detail}"))]
         }
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => selection_contribution_from_semantic_text(
+                selection_text_from_lines(&self.raw_lines()),
+                self.display_lines(width),
+                width,
+                /*first_row_prefix_columns*/ 2,
+            ),
+        }
+    }
 }
 
 pub(crate) fn new_active_web_search_call(

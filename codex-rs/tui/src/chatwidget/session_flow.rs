@@ -204,8 +204,11 @@ impl ChatWidget {
             ]
             .into()
         };
+        let rendered = history_cell::selection_text_from_lines(std::slice::from_ref(&line));
+        let selection_text = rendered.strip_prefix("• ").unwrap_or(&rendered).to_string();
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            PlainHistoryCell::new(vec![line]),
+            PlainHistoryCell::new(vec![line])
+                .with_selection_text(selection_text, /*first_row_prefix_columns*/ vec![2]),
         )));
     }
 

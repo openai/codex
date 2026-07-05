@@ -162,7 +162,15 @@ impl App {
                 .await
                 {
                     Ok(ExternalAgentConfigMigrationFlowOutcome::Started(lines)) => {
-                        self.chat_widget.add_plain_history_lines(lines);
+                        let (selection_text, prefix_columns) =
+                            crate::external_agent_config_migration_flow::external_agent_config_migration_selection(
+                                &lines,
+                            );
+                        self.chat_widget.add_semantic_history_lines(
+                            lines,
+                            selection_text,
+                            prefix_columns,
+                        );
                     }
                     Ok(ExternalAgentConfigMigrationFlowOutcome::NoItems) => {
                         self.chat_widget.add_info_message(
@@ -211,7 +219,7 @@ impl App {
                     self.chat_widget.rollout_path().as_deref(),
                 );
                 self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                    .add_literal_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
@@ -237,7 +245,7 @@ impl App {
                                             ];
                                             lines.push(spans.into());
                                         }
-                                        self.chat_widget.add_plain_history_lines(lines);
+                                        self.chat_widget.add_literal_history_lines(lines);
                                     }
                                 }
                                 Err(err) => {
@@ -1547,14 +1555,14 @@ impl App {
                                 if self.apply_permission_profile_selection(selection).await {
                                     self.chat_widget.submit_initial_user_message_if_pending();
                                 }
-                                self.chat_widget.add_plain_history_lines(vec![
+                                self.chat_widget.add_semantic_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
                                         "  ".into(),
                                         "Codex can now safely edit files and execute commands in your computer"
                                             .dark_gray(),
                                     ]),
-                                ]);
+                                ], "Sandbox ready\nCodex can now safely edit files and execute commands in your computer".to_string(), /*first_row_prefix_columns*/ vec![2, 2]);
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
@@ -1580,14 +1588,14 @@ impl App {
                                     .send(AppEvent::UpdateActivePermissionProfile(
                                         preset.active_permission_profile.clone(),
                                     ));
-                                self.chat_widget.add_plain_history_lines(vec![
+                                self.chat_widget.add_semantic_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
                                         "  ".into(),
                                         "Codex can now safely edit files and execute commands in your computer"
                                             .dark_gray(),
                                     ]),
-                                ]);
+                                ], "Sandbox ready\nCodex can now safely edit files and execute commands in your computer".to_string(), /*first_row_prefix_columns*/ vec![2, 2]);
                             }
                         }
                         Err(err) => {

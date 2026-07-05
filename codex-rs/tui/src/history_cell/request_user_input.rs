@@ -10,6 +10,69 @@ pub(crate) struct RequestUserInputResultCell {
     pub(crate) interrupted: bool,
 }
 
+impl RequestUserInputResultCell {
+    fn rich_selection_text(&self) -> String {
+        let total = self.questions.len();
+        let answered = self
+            .questions
+            .iter()
+            .filter(|question| {
+                self.answers
+                    .get(&question.id)
+                    .is_some_and(|answer| !answer.answers.is_empty())
+            })
+            .count();
+        let unanswered = total.saturating_sub(answered);
+        let interrupted = if self.interrupted {
+            " (interrupted)"
+        } else {
+            ""
+        };
+        let mut lines = vec![format!(
+            "Questions {answered}/{total} answered{interrupted}"
+        )];
+
+        for question in &self.questions {
+            let answer = self.answers.get(&question.id);
+            let answer_missing = answer.is_none_or(|answer| answer.answers.is_empty());
+            let mut question_text = question.question.clone();
+            if answer_missing {
+                question_text.push_str(" (unanswered)");
+            }
+            lines.push(question_text);
+
+            let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
+                continue;
+            };
+            if question.is_secret {
+                lines.push("answer: ••••••".to_string());
+                continue;
+            }
+
+            let (options, note) = split_request_user_input_answer(answer);
+            lines.extend(
+                options
+                    .into_iter()
+                    .map(|option| format!("answer: {option}")),
+            );
+            if let Some(note) = note {
+                let label = if question.options.is_some() {
+                    "note"
+                } else {
+                    "answer"
+                };
+                lines.push(format!("{label}: {note}"));
+            }
+        }
+
+        if self.interrupted && unanswered > 0 {
+            lines.push(format!("interrupted with {unanswered} unanswered"));
+        }
+
+        lines.join("\n")
+    }
+}
+
 impl HistoryCell for RequestUserInputResultCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let width = width.max(1) as usize;
@@ -148,6 +211,49 @@ impl HistoryCell for RequestUserInputResultCell {
             }
         }
         lines
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let prefix_columns = lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        if index == 0 {
+                            return 2;
+                        }
+                        let rendered = line
+                            .spans
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>();
+                        if rendered.starts_with("            ") {
+                            12
+                        } else if rendered.starts_with("          ") {
+                            10
+                        } else if rendered.starts_with("  • ")
+                            || rendered.starts_with("  ↳ ")
+                            || rendered.starts_with("    ")
+                        {
+                            4
+                        } else {
+                            0
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                selection_contribution_from_semantic_rows(
+                    self.rich_selection_text(),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
     }
 }
 

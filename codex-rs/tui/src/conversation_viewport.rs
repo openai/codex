@@ -18,9 +18,11 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::chatwidget::ActiveCellDisplaySnapshot;
 use crate::chatwidget::ActiveCellRenderKey;
 use crate::conversation_selection::CellSelectionProjection;
 use crate::conversation_selection::ConversationSelection;
+use crate::conversation_selection::SelectionCellLayout;
 use crate::conversation_selection::SelectionPoint;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
@@ -40,8 +42,10 @@ pub(crate) struct ConversationViewport {
     cells: Vec<Arc<dyn HistoryCell>>,
     render_mode: HistoryRenderMode,
     live_tail_key: Option<LiveTailKey>,
+    live_cells: Vec<ActiveCellDisplaySnapshot>,
+    deferred_cells: Option<Vec<Arc<dyn HistoryCell>>>,
+    deferred_render_mode: Option<HistoryRenderMode>,
     selection: ConversationSelection,
-    selection_scroll_offset: Option<usize>,
     selection_projection_cache: Option<SelectionProjectionCache>,
 }
 
@@ -51,12 +55,6 @@ struct SelectionProjectionCache {
     projections: Vec<Option<CellSelectionProjection>>,
     computed: Vec<bool>,
     layout: Vec<SelectionCellLayout>,
-}
-
-#[derive(Clone, Copy)]
-struct SelectionCellLayout {
-    top: usize,
-    height: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,8 +77,10 @@ impl ConversationViewport {
             cells,
             render_mode,
             live_tail_key: None,
+            live_cells: Vec::new(),
+            deferred_cells: None,
+            deferred_render_mode: None,
             selection: ConversationSelection::default(),
-            selection_scroll_offset: None,
             selection_projection_cache: None,
         }
     }
@@ -92,13 +92,6 @@ impl ConversationViewport {
             BottomFollowMode::Enabled
         };
         self.content.render(area, buf, bottom_follow);
-        if self.selection.is_active()
-            && self
-                .selection_scroll_offset
-                .is_some_and(|offset| offset != self.content.scroll_offset())
-        {
-            self.cancel_selection();
-        }
         if self.selection_projection_cache.is_some() {
             self.ensure_selection_projections(area.width);
             self.ensure_selected_projections();
@@ -118,12 +111,21 @@ impl ConversationViewport {
         self.content.handle_mouse_scroll(direction);
     }
 
+    pub(crate) fn handle_selection_mouse_scroll(
+        &mut self,
+        area: Rect,
+        direction: MouseScrollDirection,
+        position: Position,
+    ) {
+        self.content.handle_mouse_scroll(direction);
+        self.update_selection(area, position);
+    }
+
     pub(crate) fn begin_selection(&mut self, area: Rect, position: Position) -> bool {
         let Some(point) = self.selection_point(area, position, /*clamp*/ false) else {
             return false;
         };
         self.selection.start(point);
-        self.selection_scroll_offset = Some(self.content.scroll_offset());
         true
     }
 
@@ -138,19 +140,19 @@ impl ConversationViewport {
         let point = self.selection_point(area, position, /*clamp*/ true);
         self.selection.set_release_point(point);
         self.ensure_selected_projections();
-        let projections = self
-            .selection_projection_cache
-            .as_ref()
-            .map(|cache| cache.projections.as_slice())
-            .unwrap_or_default();
-        let selected = self.selection.finish(/*point*/ None, projections);
-        self.selection_scroll_offset = None;
+        let selected = if let Some(cache) = self.selection_projection_cache.as_ref() {
+            self.selection
+                .finish(/*point*/ None, &cache.projections, &cache.layout)
+        } else {
+            self.selection.finish(/*point*/ None, &[], &[])
+        };
+        self.apply_deferred_state();
         selected
     }
 
     pub(crate) fn cancel_selection(&mut self) {
         self.selection.cancel();
-        self.selection_scroll_offset = None;
+        self.apply_deferred_state();
     }
 
     pub(crate) fn selection_is_active(&self) -> bool {
@@ -158,10 +160,16 @@ impl ConversationViewport {
     }
 
     pub(crate) fn push_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        if self.selection.is_active() {
+            self.deferred_cells
+                .get_or_insert_with(|| self.cells.clone())
+                .push(cell);
+            return;
+        }
         self.invalidate_selection_projections();
         let follow_bottom = self.content.is_following_bottom();
         let had_prior_cells = !self.cells.is_empty();
-        let tail_renderable = self.take_live_tail_renderable();
+        self.take_live_tail_renderables();
         let renderable = Self::cell_renderable(
             cell.clone(),
             self.render_mode,
@@ -169,29 +177,22 @@ impl ConversationViewport {
         );
         self.cells.push(cell);
         self.content.push(renderable);
-
-        if let Some(tail) = tail_renderable {
-            let tail = if !had_prior_cells
-                && self
-                    .live_tail_key
-                    .is_some_and(|key| !key.is_stream_continuation)
-            {
-                Self::with_leading_spacing(tail)
-            } else {
-                tail
-            };
-            self.content.push(tail);
-        }
+        self.push_live_tail_renderables();
         if follow_bottom {
             self.content.scroll_to_bottom();
         }
     }
 
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
+        if self.selection.is_active() {
+            self.deferred_cells = Some(cells);
+            return;
+        }
         self.invalidate_selection_projections();
         let follow_bottom = self.content.is_following_bottom();
-        self.take_live_tail_renderable();
+        self.take_live_tail_renderables();
         self.live_tail_key = None;
+        self.live_cells.clear();
         self.cells = cells;
         self.content
             .replace(Self::render_cells(&self.cells, self.render_mode));
@@ -201,13 +202,19 @@ impl ConversationViewport {
     }
 
     pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
-        if self.render_mode == render_mode {
+        let effective_render_mode = self.deferred_render_mode.unwrap_or(self.render_mode);
+        if effective_render_mode == render_mode {
+            return;
+        }
+        if self.selection.is_active() {
+            self.deferred_render_mode = Some(render_mode);
             return;
         }
         self.invalidate_selection_projections();
         let follow_bottom = self.content.is_following_bottom();
-        self.take_live_tail_renderable();
+        self.take_live_tail_renderables();
         self.live_tail_key = None;
+        self.live_cells.clear();
         self.render_mode = render_mode;
         self.content
             .replace(Self::render_cells(&self.cells, self.render_mode));
@@ -220,8 +227,21 @@ impl ConversationViewport {
         &mut self,
         width: u16,
         active_key: Option<ActiveCellRenderKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
+        compute_cells: impl FnOnce(u16) -> Option<Vec<ActiveCellDisplaySnapshot>>,
     ) {
+        // A drag's screen coordinates and source projections must describe the same immutable
+        // content. Active cells can mutate on every output delta or animation tick, so defer all
+        // live-tail changes until the drag completes or is cancelled.
+        if self.selection.is_active() {
+            let width_is_stable = self
+                .selection_projection_cache
+                .as_ref()
+                .is_some_and(|cache| cache.width == width);
+            if width_is_stable {
+                return;
+            }
+            self.cancel_selection();
+        }
         let next_key = active_key.map(|key| LiveTailKey {
             width,
             revision: key.revision,
@@ -232,18 +252,14 @@ impl ConversationViewport {
             return;
         }
 
-        let follow_bottom = !self.selection.is_active() && self.content.is_following_bottom();
-        self.take_live_tail_renderable();
+        let follow_bottom = self.content.is_following_bottom();
+        self.take_live_tail_renderables();
+        self.selection_projection_cache = None;
         self.live_tail_key = next_key;
-        if let Some(key) = next_key {
-            let lines = compute_lines(width).unwrap_or_default();
-            if !lines.is_empty() {
-                self.content.push(Self::live_tail_renderable(
-                    lines,
-                    !self.cells.is_empty(),
-                    key.is_stream_continuation,
-                ));
-            }
+        self.live_cells.clear();
+        if next_key.is_some() {
+            self.live_cells = compute_cells(width).unwrap_or_default();
+            self.push_live_tail_renderables();
         }
         if follow_bottom {
             self.content.scroll_to_bottom();
@@ -308,6 +324,18 @@ impl ConversationViewport {
         }
     }
 
+    fn push_live_tail_renderables(&mut self) {
+        let mut has_prior_cells = !self.cells.is_empty();
+        for cell in &self.live_cells {
+            self.content.push(Self::live_tail_renderable(
+                cell.lines.clone(),
+                has_prior_cells,
+                cell.is_stream_continuation,
+            ));
+            has_prior_cells = true;
+        }
+    }
+
     fn with_leading_spacing(renderable: Box<dyn Renderable>) -> Box<dyn Renderable> {
         Box::new(InsetRenderable::new(
             renderable,
@@ -317,8 +345,10 @@ impl ConversationViewport {
         ))
     }
 
-    fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
-        (self.content.len() > self.cells.len()).then(|| self.content.pop())?
+    fn take_live_tail_renderables(&mut self) {
+        while self.content.len() > self.cells.len() {
+            self.content.pop();
+        }
     }
 
     fn invalidate_selection_projections(&mut self) {
@@ -326,49 +356,99 @@ impl ConversationViewport {
         self.selection_projection_cache = None;
     }
 
+    fn apply_deferred_state(&mut self) {
+        let deferred_cells = self.deferred_cells.take();
+        let deferred_render_mode = self.deferred_render_mode.take();
+        if deferred_cells.is_none() && deferred_render_mode.is_none() {
+            return;
+        }
+
+        let follow_bottom = self.content.is_following_bottom();
+        self.take_live_tail_renderables();
+        self.live_tail_key = None;
+        self.live_cells.clear();
+        if let Some(cells) = deferred_cells {
+            self.cells = cells;
+        }
+        if let Some(render_mode) = deferred_render_mode {
+            self.render_mode = render_mode;
+        }
+        self.content
+            .replace(Self::render_cells(&self.cells, self.render_mode));
+        self.selection_projection_cache = None;
+        if follow_bottom {
+            self.content.scroll_to_bottom();
+        }
+    }
+
     fn ensure_selection_projections(&mut self, width: u16) {
+        let current_cell_count = self.cells.len().saturating_add(self.live_cells.len());
         let cache_matches = self
             .selection_projection_cache
             .as_ref()
             .is_some_and(|cache| {
                 cache.width == width
                     && cache.render_mode == self.render_mode
-                    && cache.projections.len() == self.cells.len()
+                    && cache.projections.len() == current_cell_count
             });
         if cache_matches {
             return;
         }
         self.cancel_selection();
+        let selection_cell_count = self.cells.len().saturating_add(self.live_cells.len());
         let renderable_heights = self.content.renderable_heights(width);
         let mut content_top = 0usize;
-        let layout = self
-            .cells
-            .iter()
-            .enumerate()
-            .map(|(index, cell)| {
-                let leading_spacing = usize::from(index > 0 && !cell.is_stream_continuation());
-                let renderable_height = renderable_heights
-                    .get(index)
-                    .copied()
-                    .map(usize::from)
-                    .unwrap_or_else(|| {
-                        leading_spacing.saturating_add(usize::from(
-                            cell.desired_height_for_mode(width, self.render_mode),
-                        ))
-                    });
-                let cell_layout = SelectionCellLayout {
-                    top: content_top.saturating_add(leading_spacing),
-                    height: renderable_height.saturating_sub(leading_spacing),
+        let mut layout = Vec::with_capacity(selection_cell_count);
+        for index in 0..selection_cell_count {
+            let (is_stream_continuation, desired_height) = if let Some(cell) = self.cells.get(index)
+            {
+                (
+                    cell.is_stream_continuation(),
+                    cell.desired_height_for_mode(width, self.render_mode),
+                )
+            } else {
+                let Some(cell) = self.live_cells.get(index.saturating_sub(self.cells.len())) else {
+                    return;
                 };
-                content_top = content_top.saturating_add(renderable_height);
-                cell_layout
-            })
-            .collect();
+                (
+                    cell.is_stream_continuation,
+                    HyperlinkLinesRenderable {
+                        lines: cell.lines.clone(),
+                    }
+                    .desired_height(width),
+                )
+            };
+            let leading_spacing = usize::from(index > 0 && !is_stream_continuation);
+            let renderable_height = renderable_heights
+                .get(index)
+                .copied()
+                .unwrap_or(desired_height);
+            layout.push(SelectionCellLayout {
+                top: content_top.saturating_add(leading_spacing),
+                height: usize::from(renderable_height).saturating_sub(leading_spacing),
+            });
+            content_top = content_top.saturating_add(usize::from(renderable_height));
+        }
+        let mut projections = vec![None; selection_cell_count];
+        let mut computed = vec![false; selection_cell_count];
+        for (live_index, cell) in self.live_cells.iter().enumerate() {
+            let index = self.cells.len().saturating_add(live_index);
+            let separator = if index > 0 && cell.is_stream_continuation {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            projections[index] = cell
+                .selection_projection
+                .clone()
+                .map(|projection| projection.with_default_separator_before(separator));
+            computed[index] = true;
+        }
         self.selection_projection_cache = Some(SelectionProjectionCache {
             width,
             render_mode: self.render_mode,
-            projections: vec![None; self.cells.len()],
-            computed: vec![false; self.cells.len()],
+            projections,
+            computed,
             layout,
         });
     }
@@ -394,8 +474,9 @@ impl ConversationViewport {
             "\n\n"
         };
         let projection = cell
-            .selection_projection(cache.width, cache.render_mode)
-            .map(|projection| projection.with_separator_before(separator));
+            .selection_contribution(cache.width, cache.render_mode)
+            .into_projection()
+            .map(|projection| projection.with_default_separator_before(separator));
         if let Some(cache) = self.selection_projection_cache.as_mut() {
             cache.projections[index] = projection;
             cache.computed[index] = true;
@@ -403,7 +484,14 @@ impl ConversationViewport {
     }
 
     fn ensure_selected_projections(&mut self) {
-        let Some(selected_cells) = self.selection.selected_cell_span() else {
+        let Some(layout) = self
+            .selection_projection_cache
+            .as_ref()
+            .map(|cache| cache.layout.as_slice())
+        else {
+            return;
+        };
+        let Some(selected_cells) = self.selection.selected_cell_span(layout) else {
             return;
         };
         for index in selected_cells {
@@ -436,79 +524,17 @@ impl ConversationViewport {
             .content
             .scroll_offset()
             .saturating_add(usize::from(screen_row));
-        let target = self
-            .selection_projection_cache
-            .as_ref()?
-            .layout
-            .iter()
-            .position(|layout| {
-                layout.height > 0
-                    && content_row >= layout.top
-                    && content_row < layout.top.saturating_add(layout.height)
-            });
-        if let Some(index) = target {
-            self.ensure_cell_projection(index);
-            let cache = self.selection_projection_cache.as_ref()?;
-            let layout = cache.layout[index];
-            let projection = cache.projections[index].as_ref();
-            let local_row = content_row.saturating_sub(layout.top);
-            let bytes = projection.and_then(|projection| {
-                if clamp {
-                    projection
-                        .closest_hit(local_row, column)
-                        .or_else(|| projection.closest_hit_in_any_row(local_row, column))
-                } else {
-                    projection.hit(local_row, column)
-                }
-            });
-            if let Some(bytes) = bytes {
-                return Some(SelectionPoint { cell: index, bytes });
-            }
-        }
-        if !clamp {
-            return None;
-        }
-
-        let mut candidates = self
-            .selection_projection_cache
-            .as_ref()?
-            .layout
-            .iter()
-            .enumerate()
-            .filter(|(index, layout)| Some(*index) != target && layout.height > 0)
-            .map(|(index, layout)| {
-                let distance = if content_row < layout.top {
-                    layout.top - content_row
-                } else {
-                    content_row
-                        .saturating_sub(layout.top.saturating_add(layout.height).saturating_sub(1))
-                };
-                (distance, index)
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_unstable();
-        for (_, index) in candidates {
-            self.ensure_cell_projection(index);
-            let cache = self.selection_projection_cache.as_ref()?;
-            let layout = cache.layout[index];
-            let local_row = content_row
-                .saturating_sub(layout.top)
-                .min(layout.height.saturating_sub(1));
-            if let Some(bytes) = cache.projections[index]
-                .as_ref()
-                .and_then(|projection| projection.closest_hit_in_any_row(local_row, column))
-            {
-                return Some(SelectionPoint { cell: index, bytes });
-            }
-        }
-        None
+        Some(SelectionPoint {
+            row: content_row,
+            column,
+        })
     }
 
     fn render_selection(&self, area: Rect, buf: &mut Buffer) {
         let Some(cache) = self.selection_projection_cache.as_ref() else {
             return;
         };
-        let Some(selected_cells) = self.selection.selected_cell_span() else {
+        let Some(selected_cells) = self.selection.selected_cell_span(&cache.layout) else {
             return;
         };
         let scroll_offset = self.content.scroll_offset();
@@ -517,12 +543,6 @@ impl ConversationViewport {
                 continue;
             };
             let Some(projection) = cache.projections.get(cell_index).and_then(Option::as_ref)
-            else {
-                continue;
-            };
-            let Some(selected_bytes) = self
-                .selection
-                .selected_bytes_for_cell(cell_index, projection.text().len())
             else {
                 continue;
             };
@@ -538,8 +558,9 @@ impl ConversationViewport {
                     continue;
                 }
                 for segment in &row.segments {
-                    if segment.bytes.start >= selected_bytes.end
-                        || segment.bytes.end <= selected_bytes.start
+                    if !self
+                        .selection
+                        .segment_is_selected(layout, row_index, &segment.columns)
                     {
                         continue;
                     }

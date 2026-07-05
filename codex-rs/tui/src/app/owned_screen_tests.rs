@@ -34,6 +34,17 @@ impl HistoryCell for TestCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![self.0.into()]
     }
+
+    fn selection_contribution(
+        &self,
+        width: u16,
+        mode: crate::history_cell::HistoryRenderMode,
+    ) -> crate::history_cell::SelectionContribution {
+        crate::history_cell::selection_contribution_from_display_lines(
+            self.display_lines_for_mode(width, mode),
+            width,
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -49,6 +60,17 @@ impl HistoryCell for RenderModeCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![self.raw.into()]
+    }
+
+    fn selection_contribution(
+        &self,
+        width: u16,
+        mode: crate::history_cell::HistoryRenderMode,
+    ) -> crate::history_cell::SelectionContribution {
+        crate::history_cell::selection_contribution_from_display_lines(
+            self.display_lines_for_mode(width, mode),
+            width,
+        )
     }
 }
 
@@ -420,6 +442,63 @@ async fn primary_drag_selects_text_in_a_single_owned_pane() {
             "column {column} should be highlighted"
         );
     }
+}
+
+#[tokio::test]
+async fn primary_drag_can_start_in_pet_reserved_right_padding() {
+    let mut app = app_with_owned_parent().await;
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    seed_pane(&mut app, PaneSlot::Parent, "", &["selectable"]);
+    let _terminal = render_app(&mut app, /*width*/ 40, /*height*/ 10);
+    let (pane_area, conversation_area) = {
+        let screen = app
+            .chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen");
+        (screen.last_pane_area, screen.last_conversation_area)
+    };
+    assert!(conversation_area.right() < pane_area.right());
+    let padding_column = pane_area.right().saturating_sub(/*rhs*/ 1);
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_press(padding_column, conversation_area.y),
+    ));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(
+            MousePrimaryEventKind::Drag,
+            conversation_area.x,
+            conversation_area.y,
+        ),
+    ));
+    assert!(
+        app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen")
+            .selection_is_active()
+    );
+
+    app.cancel_owned_screen_selection();
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_press(padding_column, conversation_area.bottom()),
+    ));
+    assert!(
+        !app.chat_widget
+            .owned_screen
+            .as_ref()
+            .expect("parent owned screen")
+            .selection_is_active()
+    );
 }
 
 #[tokio::test]
@@ -941,6 +1020,63 @@ async fn mouse_wheel_routes_by_pointer_without_changing_focus() {
     ));
     assert_eq!(app.chat_widget.focused_slot(), PaneSlot::Parent);
     assert!(!is_following_bottom(&app, PaneSlot::Side));
+}
+
+#[tokio::test]
+async fn mouse_wheel_routes_to_the_pane_with_an_active_selection() {
+    let mut app = app_with_owned_side().await;
+    let cells = [
+        "one", "two", "three", "four", "five", "six", "seven", "eight",
+    ];
+    seed_pane(&mut app, PaneSlot::Parent, "", &cells);
+    seed_pane(&mut app, PaneSlot::Side, "", &cells);
+    let _terminal = render_app(&mut app, /*width*/ 83, /*height*/ 8);
+    let (parent_area, side_area) = {
+        let parent = app
+            .chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent screen")
+            .last_conversation_area;
+        let side = app
+            .chat_widget
+            .by_slot(PaneSlot::Side)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("side screen")
+            .last_conversation_area;
+        (parent, side)
+    };
+    let mut tui = crate::tui::test_support::make_test_tui().expect("create test TUI");
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_press(
+            parent_area.x,
+            parent_area.bottom().saturating_sub(/*rhs*/ 1),
+        ),
+    ));
+    assert!(app.handle_owned_screen_mouse_primary(
+        &mut tui,
+        primary_event(MousePrimaryEventKind::Drag, parent_area.x, parent_area.y,),
+    ));
+
+    assert!(app.handle_owned_screen_mouse_scroll(
+        &mut tui,
+        MouseScrollEvent {
+            direction: MouseScrollDirection::Up,
+            column: side_area.x,
+            row: side_area.y,
+        },
+    ));
+
+    assert!(!is_following_bottom(&app, PaneSlot::Parent));
+    assert!(is_following_bottom(&app, PaneSlot::Side));
+    assert!(
+        app.chat_widget
+            .by_slot(PaneSlot::Parent)
+            .and_then(|pane| pane.owned_screen.as_ref())
+            .expect("parent screen")
+            .selection_is_active()
+    );
 }
 
 #[tokio::test]

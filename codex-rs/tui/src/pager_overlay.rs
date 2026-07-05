@@ -1132,6 +1132,17 @@ mod tests {
             self.lines.clone()
         }
 
+        fn selection_contribution(
+            &self,
+            width: u16,
+            mode: crate::history_cell::HistoryRenderMode,
+        ) -> crate::history_cell::SelectionContribution {
+            crate::history_cell::selection_contribution_from_display_lines(
+                self.display_lines_for_mode(width, mode),
+                width,
+            )
+        }
+
         fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
         }

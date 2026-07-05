@@ -1,5 +1,6 @@
 use pretty_assertions::assert_eq;
 
+use super::render_markdown_selection_projection;
 use super::render_markdown_selection_text;
 
 #[test]
@@ -151,4 +152,71 @@ fn agent_markdown_table_fence_uses_the_same_normalization_as_display() {
         "```markdown\n| Name | Value |\n| --- | --- |\n| alpha | one |\n```",
     );
     assert!(super::selection_text_contains_table(&normalized));
+}
+
+#[test]
+fn table_selection_uses_logical_cell_and_row_separators() {
+    assert_eq!(
+        render_markdown_selection_text(
+            "| Name | Value |\n| --- | --- |\n| alpha | one |\n| beta | two |\n",
+            /*cwd*/ None,
+        ),
+        "Name\tValue\nalpha\tone\nbeta\ttwo"
+    );
+}
+
+#[test]
+fn table_selection_preserves_rendered_inline_semantics_without_chrome() {
+    assert_eq!(
+        render_markdown_selection_text(
+            "| Kind | Target |\n| --- | --- |\n| **docs** | [guide](https://example.com/guide) |\n",
+            /*cwd*/ None,
+        ),
+        "Kind\tTarget\ndocs\tguide (https://example.com/guide)"
+    );
+}
+
+#[test]
+fn table_projection_uses_structural_occurrences_instead_of_matching_cell_text() {
+    let canonical = "A\tB\n1\t2";
+    let table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    let markdown = format!("```text\n{canonical}\n```\n\n{table}\n\n{table}");
+    let width = 48usize;
+    let display_width = u16::try_from(width).expect("fixture width should fit in u16");
+    let display_lines = super::super::render_markdown_lines_with_width_and_cwd(
+        &markdown,
+        Some(width),
+        /*cwd*/ None,
+    )
+    .into_iter()
+    .map(|line| line.line)
+    .collect();
+    let projection = render_markdown_selection_projection(
+        &markdown,
+        width,
+        /*cwd*/ None,
+        display_lines,
+        display_width,
+        /*outer_prefix_columns*/ 0,
+    )
+    .expect("markdown containing tables should expose a selection projection");
+    let occurrence_starts = projection
+        .text()
+        .match_indices(canonical)
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    assert_eq!(occurrence_starts.len(), 3);
+
+    let mapped_starts = projection
+        .rows()
+        .iter()
+        .flat_map(|row| row.segments.iter())
+        .map(|segment| segment.bytes.start)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        occurrence_starts[1..]
+            .iter()
+            .all(|start| mapped_starts.contains(start)),
+        "each repeated table should map to its own structural source occurrence"
+    );
 }

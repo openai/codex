@@ -139,28 +139,37 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
             exit_code,
             ..
         } => {
-            let mut lines: Vec<Line<'static>> =
-                vec![vec!["$ ".dim(), command.clone().into()].into()];
-            lines.push(
-                format!(
-                    "status: {status:?}{}",
-                    exit_code
-                        .map(|code| format!(" · exit {code}"))
-                        .unwrap_or_default()
-                )
-                .dim()
-                .into(),
+            let mut lines = Vec::<Line<'static>>::new();
+            let mut selection_lines = Vec::new();
+            let mut prefix_columns = Vec::new();
+            for (index, command_line) in command.split('\n').enumerate() {
+                let prefix = if index == 0 { "$ " } else { "  " };
+                lines.push(vec![prefix.dim(), command_line.to_string().into()].into());
+                selection_lines.push(command_line.to_string());
+                prefix_columns.push(2);
+            }
+            let status_line = format!(
+                "status: {status:?}{}",
+                exit_code
+                    .map(|code| format!(" · exit {code}"))
+                    .unwrap_or_default()
             );
+            lines.push(status_line.clone().dim().into());
+            selection_lines.push(status_line);
+            prefix_columns.push(0);
             if let Some(output) = aggregated_output.as_deref()
                 && !output.trim().is_empty()
             {
-                lines.extend(
-                    output
-                        .lines()
-                        .map(|line| vec!["  ".dim(), line.trim_end().to_string().dim()].into()),
-                );
+                for output_line in output.lines() {
+                    lines.push(vec!["  ".dim(), output_line.to_string().dim()].into());
+                    selection_lines.push(output_line.to_string());
+                    prefix_columns.push(2);
+                }
             }
-            lines
+            return Some(
+                PlainHistoryCell::new(lines)
+                    .with_selection_text(selection_lines.join("\n"), prefix_columns),
+            );
         }
         ThreadItem::FileChange {
             changes, status, ..
@@ -232,3 +241,7 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
     };
     (!lines.is_empty()).then(|| PlainHistoryCell::new(lines))
 }
+
+#[cfg(test)]
+#[path = "thread_transcript_tests.rs"]
+mod tests;

@@ -17,6 +17,18 @@ impl UpdateAvailableHistoryCell {
             update_action,
         }
     }
+
+    fn rich_selection_text(&self) -> String {
+        let update_instruction = if let Some(update_action) = self.update_action {
+            format!("Run {} to update.", update_action.command_str())
+        } else {
+            "See https://github.com/openai/codex for installation options.".to_string()
+        };
+        format!(
+            "Update available! {CODEX_CLI_VERSION} -> {}\n{update_instruction}\n\nSee full release notes:\nhttps://github.com/openai/codex/releases/latest",
+            self.latest_version
+        )
+    }
 }
 
 impl HistoryCell for UpdateAvailableHistoryCell {
@@ -78,6 +90,20 @@ impl HistoryCell for UpdateAvailableHistoryCell {
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.display_hyperlink_lines(width)
+    }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => selection_contribution_from_semantic_text(
+                self.rich_selection_text(),
+                self.display_lines(width),
+                width,
+                /*first_row_prefix_columns*/ 0,
+            ),
+        }
     }
 }
 #[allow(clippy::disallowed_methods)]
@@ -161,6 +187,24 @@ impl HistoryCell for SafetyAccessBlockCell {
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.display_hyperlink_lines(width)
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let prefix_columns = vec![2; lines.len()];
+                selection_contribution_from_semantic_rows(
+                    selection_text_from_lines(&self.raw_lines()),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -199,15 +243,40 @@ impl HistoryCell for DeprecationNoticeCell {
         }
         lines
     }
+
+    fn selection_contribution(&self, width: u16, mode: HistoryRenderMode) -> SelectionContribution {
+        match mode {
+            HistoryRenderMode::Raw => {
+                selection_contribution_from_display_lines(self.raw_lines(), width)
+            }
+            HistoryRenderMode::Rich => {
+                let lines = self.display_lines(width);
+                let mut prefix_columns = vec![0; lines.len()];
+                if let Some(first) = prefix_columns.first_mut() {
+                    *first = 2;
+                }
+                selection_contribution_from_semantic_rows(
+                    selection_text_from_lines(&self.raw_lines()),
+                    lines,
+                    width,
+                    &prefix_columns,
+                )
+            }
+        }
+    }
 }
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
+    let mut selection_text = message.clone();
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
+        selection_text.push(' ');
+        selection_text.push_str(&hint);
         line.push(" ".into());
         line.push(hint.dark_gray());
     }
     let lines: Vec<Line<'static>> = vec![line.into()];
-    PlainHistoryCell { lines }
+    PlainHistoryCell::new(lines)
+        .with_selection_text(selection_text, /*first_row_prefix_columns*/ vec![2])
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
@@ -215,5 +284,6 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
-    PlainHistoryCell { lines }
+    PlainHistoryCell::new(lines)
+        .with_selection_text(message, /*first_row_prefix_columns*/ vec![2])
 }
