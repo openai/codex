@@ -310,9 +310,6 @@ where
                         .accounting_state()
                         .turn_is_current_active_goal(input.turn_id) =>
                 {
-                    runtime
-                        .accounting_state()
-                        .reset_idle_progress_baseline_and_clear_active_goal();
                     runtime.defer_capacity_retry();
                     return;
                 }
