@@ -200,6 +200,30 @@ async fn interrupted_review_restores_queued_input_without_submitting() {
 }
 
 #[tokio::test]
+async fn review_exit_preserves_parent_mcp_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["pending".to_string()]);
+    notify_mcp_status(&mut chat, "pending", McpServerStartupState::Starting);
+
+    handle_entered_review_mode(&mut chat, "current changes");
+    handle_exited_review_mode(&mut chat);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+
+    notify_mcp_status_error(&mut chat, "pending", "parent MCP refresh failed");
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(history.contains("parent MCP refresh failed"));
+    assert!(history.contains("MCP startup incomplete (failed: pending)"));
+}
+
+#[tokio::test]
 async fn replayed_review_exit_preserves_live_mcp_startup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["pending".to_string()]);

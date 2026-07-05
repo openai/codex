@@ -596,6 +596,9 @@ pub(crate) struct ChatWidget {
     /// as "running" while this is populated, even if no agent turn is currently
     /// executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Monotonically identifies startup rounds so review cleanup only clears a round it observed
+    /// starting after review entry.
+    mcp_startup_generation: u64,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
@@ -1243,8 +1246,11 @@ impl ChatWidget {
         if self.review.pre_review_token_info.is_none() {
             self.review.pre_review_token_info = Some(self.token_info.clone());
         }
-        if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
+        if !from_replay {
+            self.review.mcp_startup_generation_at_entry = Some(self.mcp_startup_generation);
+            if !self.bottom_pane.is_task_running() {
+                self.bottom_pane.set_task_running(/*running*/ true);
+            }
         }
         self.review.is_review_mode = true;
         let banner = format!(">> Code review started: {hint} <<");
@@ -1256,12 +1262,16 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
-        // A live review cannot start while another MCP startup round owns the task indicator, so
-        // any round opened during review belongs to its child session. Interrupting the review can
-        // close the child event stream before terminal startup updates arrive; clear that round so
-        // it cannot leave the TUI permanently busy. Replayed review items must not clear newer live
-        // startup state.
-        if !from_replay && self.review.is_review_mode && self.mcp_startup_status.is_some() {
+        let mcp_startup_generation_at_entry = self.review.mcp_startup_generation_at_entry.take();
+        // Interrupting a live review can close its child event stream before terminal startup
+        // updates arrive. Clear only a startup round first observed after entering review; an
+        // inherited generation belongs to the parent runtime and must finish normally. Replayed
+        // review items must not clear newer live startup state.
+        if !from_replay
+            && self.review.is_review_mode
+            && self.mcp_startup_status.is_some()
+            && mcp_startup_generation_at_entry != Some(self.mcp_startup_generation)
+        {
             self.clear_mcp_startup_state();
         }
         self.review.is_review_mode = false;
