@@ -196,6 +196,10 @@ impl ChatWidget {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
         }
 
+        self.clear_mcp_startup_state();
+    }
+
+    pub(super) fn clear_mcp_startup_state(&mut self) {
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
         self.mcp_startup_ignore_updates_until_next_start = true;

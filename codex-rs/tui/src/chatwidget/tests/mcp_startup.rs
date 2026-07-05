@@ -143,6 +143,60 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 }
 
 #[tokio::test]
+async fn interrupted_review_clears_mcp_startup_and_reenables_review() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["pending".to_string()]);
+    handle_turn_started(&mut chat, "turn-1");
+    handle_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "pending", McpServerStartupState::Starting);
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+
+    handle_exited_review_mode(&mut chat);
+    handle_turn_interrupted(&mut chat, "turn-1");
+
+    assert!(chat.mcp_startup_status.is_none());
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.bottom_pane
+        .set_composer_text("/review".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_chatwidget_snapshot!(
+        "interrupted_review_reenables_review",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn replayed_review_exit_preserves_live_mcp_startup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["pending".to_string()]);
+    replay_entered_review_mode(&mut chat, "current changes");
+    notify_mcp_status(&mut chat, "pending", McpServerStartupState::Starting);
+
+    chat.replay_thread_item(
+        AppServerThreadItem::ExitedReviewMode {
+            id: "review-end".to_string(),
+            review: String::new(),
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    assert!(chat.mcp_startup_status.is_some());
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn turn_start_preserves_active_mcp_startup_header() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);

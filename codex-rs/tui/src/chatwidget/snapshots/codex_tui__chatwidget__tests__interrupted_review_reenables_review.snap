@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/mcp_startup.rs
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                                                "
+"  Select a review preset                                                        "
+"                                                                                "
+"› 1. Review against a base branch  (PR Style)                                   "
+"  2. Review uncommitted changes                                                 "
+"  3. Review a commit                                                            "
+"  4. Custom review instructions                                                 "
+"                                                                                "
+"  Press enter to confirm or esc to go back                                      "

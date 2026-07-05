@@ -1252,10 +1252,18 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn exit_review_mode_after_item(&mut self) {
+    fn exit_review_mode_after_item(&mut self, from_replay: bool) {
         self.flush_answer_stream_with_separator();
         self.flush_interrupt_queue();
         self.flush_active_cell();
+        // A live review cannot start while another MCP startup round owns the task indicator, so
+        // any round opened during review belongs to its child session. Interrupting the review can
+        // close the child event stream before terminal startup updates arrive; clear that round so
+        // it cannot leave the TUI permanently busy. Replayed review items must not clear newer live
+        // startup state.
+        if !from_replay && self.review.is_review_mode && self.mcp_startup_status.is_some() {
+            self.clear_mcp_startup_state();
+        }
         self.review.is_review_mode = false;
         self.restore_pre_review_token_info();
         self.add_to_history(history_cell::new_review_status_line(
