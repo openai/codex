@@ -1761,7 +1761,7 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
     )
     .await??;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    wait_for_responses_request_count(&server, 3).await?;
+    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
 
     Ok(())
 }

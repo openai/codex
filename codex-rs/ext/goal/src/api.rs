@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
+use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
@@ -19,6 +20,11 @@ use crate::tool::fill_empty_thread_preview_if_possible;
 use crate::tool::protocol_goal_from_state;
 use crate::tool::state_status_from_protocol;
 use crate::tool::validate_goal_budget;
+use tokio::time::Instant;
+
+// Capacity failures do not consume user tokens, but retrying immediately can
+// create a tight loop of failed turns. Keep the retry cadence deliberately low.
+const SERVER_OVERLOADED_GOAL_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalServiceError {
@@ -86,6 +92,9 @@ impl GoalSetOutcome {
 #[derive(Debug, Default)]
 pub struct GoalService {
     runtimes: Mutex<HashMap<String, Weak<GoalRuntimeHandle>>>,
+    // Keep this above the per-thread runtime lifecycle so unloading and
+    // resuming a thread cannot bypass its pending backoff.
+    capacity_retry_deadlines: Mutex<HashMap<String, Instant>>,
 }
 
 impl GoalService {
@@ -240,6 +249,7 @@ impl GoalService {
         if objective.is_some() {
             fill_empty_thread_preview_if_possible(state_db, thread_id, &goal).await;
         }
+        self.clear_capacity_retry(thread_id);
         Ok(GoalSetOutcome {
             goal: protocol_goal_from_state(goal.clone()),
             state_goal: goal,
@@ -278,6 +288,7 @@ impl GoalService {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
             })?;
         let cleared = cleared_goal.is_some();
+        self.clear_capacity_retry(thread_id);
         drop(goal_state_permit);
         drop(runtime);
 
@@ -307,6 +318,47 @@ impl GoalService {
         }
     }
 
+    pub(crate) fn defer_capacity_retry(self: &Arc<Self>, thread_id: ThreadId) {
+        let deadline = Instant::now() + SERVER_OVERLOADED_GOAL_RETRY_DELAY;
+        self.capacity_retry_deadlines()
+            .insert(thread_id.to_string(), deadline);
+
+        let service = Arc::downgrade(self);
+        drop(tokio::spawn(async move {
+            tokio::time::sleep_until(deadline).await;
+            let Some(service) = service.upgrade() else {
+                return;
+            };
+            let key = thread_id.to_string();
+            let retry_is_current = {
+                let mut deadlines = service.capacity_retry_deadlines();
+                let retry_is_current = deadlines.get(&key) == Some(&deadline);
+                if retry_is_current {
+                    deadlines.remove(&key);
+                }
+                retry_is_current
+            };
+            if retry_is_current
+                && let Some(runtime) = service.runtime_for_thread(thread_id)
+                && let Err(err) = runtime.continue_if_idle().await
+            {
+                tracing::warn!(
+                    "failed to continue active goal after capacity retry delay for {thread_id}: {err}"
+                );
+            }
+        }));
+    }
+
+    pub(crate) fn capacity_retry_pending(&self, thread_id: ThreadId) -> bool {
+        self.capacity_retry_deadlines()
+            .contains_key(&thread_id.to_string())
+    }
+
+    fn clear_capacity_retry(&self, thread_id: ThreadId) {
+        self.capacity_retry_deadlines()
+            .remove(&thread_id.to_string());
+    }
+
     fn runtime_for_thread(&self, thread_id: ThreadId) -> Option<Arc<GoalRuntimeHandle>> {
         let key = thread_id.to_string();
         let mut runtimes = self.runtimes();
@@ -319,5 +371,11 @@ impl GoalService {
 
     fn runtimes(&self) -> std::sync::MutexGuard<'_, HashMap<String, Weak<GoalRuntimeHandle>>> {
         self.runtimes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn capacity_retry_deadlines(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
+        self.capacity_retry_deadlines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }

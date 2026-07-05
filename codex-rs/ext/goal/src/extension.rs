@@ -156,6 +156,12 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            if self
+                .goal_service
+                .capacity_retry_pending(runtime.thread_id())
+            {
+                return;
+            }
 
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
@@ -305,8 +311,12 @@ where
             let reason = match input.error {
                 // Capacity retries do not consume the user's token budget, so
                 // leave the goal active for a delayed idle continuation.
-                CodexErrorInfo::ServerOverloaded => {
-                    runtime.defer_capacity_retry();
+                CodexErrorInfo::ServerOverloaded
+                    if runtime
+                        .accounting_state()
+                        .turn_is_current_active_goal(input.turn_id) =>
+                {
+                    self.goal_service.defer_capacity_retry(runtime.thread_id());
                     return;
                 }
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
